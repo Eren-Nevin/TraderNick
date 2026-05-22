@@ -1,0 +1,6 @@
+sanic>=23.0
+defistream>=2.8.0,<3.0.0
+clickhouse-connect[async]>=0.7.20
+python-dotenv>=1.0
+polars>=1.0
+pyarrow>=14.0

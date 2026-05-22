@@ -1,0 +1,64 @@
+services:
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.8
+    volumes:
+      - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+      - clickhouse-data:/var/lib/clickhouse
+    environment:
+      CLICKHOUSE_DB: tradernick
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
+    ports:
+      - "10003:8123"
+      - "10004:9000"
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:8123/ping"]
+      interval: 5s
+      retries: 30
+
+  ingestion:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGEST_TOKENS: ${INGEST_TOKENS:-BTC,ETH,SOL,ARB,OP}
+    ports:
+      - "10001:8000"
+    restart: unless-stopped
+
+  data_server:
+    build: ./services/data_server
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+    ports:
+      - "10002:8000"
+    restart: unless-stopped
+
+  dashboard:
+    build: ./dashboard
+    depends_on:
+      - data_server
+    environment:
+      INTERNAL_DATA_SERVER_URL: http://data_server:8000
+    ports:
+      - "10000:3000"
+    restart: unless-stopped
+
+volumes:
+  clickhouse-data:
