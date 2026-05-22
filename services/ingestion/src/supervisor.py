@@ -9,6 +9,9 @@ log = logging.getLogger("supervisor")
 GROUP_MODULES = {
     "binance_ohlcv": "groups.binance_ohlcv",
     "binance_raw_trades": "groups.binance_raw_trades",
+    "binance_open_interest": "groups.binance_open_interest",
+    "binance_long_short_ratios": "groups.binance_long_short_ratios",
+    "binance_funding_rate": "groups.binance_funding_rate",
 }
 
 

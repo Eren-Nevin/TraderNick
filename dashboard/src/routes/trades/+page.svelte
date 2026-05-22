@@ -2,8 +2,33 @@
   import * as d3 from 'd3';
   import CandlestickChart from '$lib/components/CandlestickChart.svelte';
   import StackedBarChart from '$lib/components/StackedBarChart.svelte';
-  import { INTERVALS, type Candle, type Interval, type VolumeBucket } from '$lib/api';
+  import LineChart from '$lib/components/LineChart.svelte';
+  import SignedBarChart from '$lib/components/SignedBarChart.svelte';
+  import {
+    INTERVALS,
+    type Candle,
+    type FundingRateRow,
+    type Interval,
+    type LongShortRow,
+    type OpenInterestRow,
+    type VolumeBucket
+  } from '$lib/api';
   import type { PageData } from './$types';
+
+  function fmtUsdAxis(v: number) {
+    const abs = Math.abs(v);
+    if (abs >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
+    if (abs >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+    if (abs >= 1e3) return `$${(v / 1e3).toFixed(0)}K`;
+    return `$${v.toFixed(0)}`;
+  }
+  function fmtUsdTooltip(v: number) {
+    const abs = Math.abs(v);
+    if (abs >= 1e9) return `$${(v / 1e9).toFixed(3)}B`;
+    if (abs >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
+    if (abs >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
+    return `$${v.toFixed(2)}`;
+  }
 
   let { data }: { data: PageData } = $props();
 
@@ -16,6 +41,9 @@
 
   let candles = $state<Candle[]>(data.candles);
   let buckets = $state<VolumeBucket[]>(data.buckets);
+  let openInterest = $state<OpenInterestRow[]>(data.openInterest);
+  let longShort = $state<LongShortRow[]>(data.longShort);
+  let fundingRate = $state<FundingRateRow[]>(data.fundingRate);
   let loading = $state(false);
   let error = $state<string | null>(null);
 
@@ -24,11 +52,19 @@
   let ohlcvTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
   let bsTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
   let szTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
+  let oiTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
+  let lsTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
+  let frTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
 
   let sharedHoverTime = $state<number | null>(null);
   let ohlcvHoverTime = $state<number | null>(null);
   let bsHoverTime = $state<number | null>(null);
   let szHoverTime = $state<number | null>(null);
+  let oiHoverTime = $state<number | null>(null);
+  let lsHoverTime = $state<number | null>(null);
+  let frHoverTime = $state<number | null>(null);
+
+  type ChartId = 'ohlcv' | 'bs' | 'sz' | 'oi' | 'ls' | 'fr';
 
   let showBSPctLines = $state(true);
   let showSZPctLines = $state(true);
@@ -217,6 +253,48 @@
 
   let szLines = $derived([...(showSZPctLines ? sizeLines : []), ...szCumulativeLines]);
 
+  const OI_LINES = [
+    {
+      key: 'oi_usd',
+      label: 'OI (USD)',
+      color: '#06b6d4',
+      compute: (d: OpenInterestRow) => d.open_interest_value
+    }
+  ];
+
+  const LS_LINES = [
+    {
+      key: 'top_ct',
+      label: 'Top traders (count)',
+      color: '#fbbf24',
+      compute: (d: LongShortRow) => d.top_trader_count_ratio
+    },
+    {
+      key: 'top_vol',
+      label: 'Top traders (vol)',
+      color: '#06b6d4',
+      compute: (d: LongShortRow) => d.top_trader_vol_ratio
+    },
+    {
+      key: 'all_ct',
+      label: 'All (L/S count)',
+      color: '#84cc16',
+      compute: (d: LongShortRow) => d.long_short_count_ratio
+    },
+    {
+      key: 'taker_vol',
+      label: 'Taker L/S vol',
+      color: '#a855f7',
+      compute: (d: LongShortRow) => d.taker_long_short_vol_ratio
+    }
+  ];
+
+  const LS_REF_LINES = [{ value: 1 }];
+
+  let fundingRateBps = $derived(
+    fundingRate.map((d) => ({ ...d, rate_bps: d.rate * 10000 }))
+  );
+
   function applyCumulativeSettings() {
     const n = Math.max(2, Math.min(500, Math.round(Number(cumulativeLengthInput) || 9)));
     cumulativeLength = n;
@@ -240,6 +318,9 @@
     ohlcvTransform = d3.zoomIdentity;
     bsTransform = d3.zoomIdentity;
     szTransform = d3.zoomIdentity;
+    oiTransform = d3.zoomIdentity;
+    lsTransform = d3.zoomIdentity;
+    frTransform = d3.zoomIdentity;
   }
 
   async function reload(t: string, iv: Interval, u: number, o: number) {
@@ -262,16 +343,35 @@
         under: String(u),
         over: String(o)
       });
-      const [ohlcvRes, tvRes] = await Promise.all([
+      const derivQS = new URLSearchParams({
+        token: t,
+        interval: iv,
+        since: since.toISOString(),
+        until: until.toISOString(),
+        limit: '5000'
+      });
+      const [ohlcvRes, tvRes, oiRes, lsRes, frRes] = await Promise.all([
         fetch(`/api/ohlcv?${ohlcvQS}`),
-        fetch(`/api/trade_volume?${tvQS}`)
+        fetch(`/api/trade_volume?${tvQS}`),
+        fetch(`/api/open_interest?${derivQS}`),
+        fetch(`/api/long_short_ratios?${derivQS}`),
+        fetch(`/api/funding_rate?${derivQS}`)
       ]);
       if (!ohlcvRes.ok) throw new Error(`ohlcv ${ohlcvRes.status}`);
       if (!tvRes.ok) throw new Error(`trade_volume ${tvRes.status}`);
+      if (!oiRes.ok) throw new Error(`open_interest ${oiRes.status}`);
+      if (!lsRes.ok) throw new Error(`long_short_ratios ${lsRes.status}`);
+      if (!frRes.ok) throw new Error(`funding_rate ${frRes.status}`);
       const ohlcvBody = await ohlcvRes.json();
       const tvBody = await tvRes.json();
+      const oiBody = await oiRes.json();
+      const lsBody = await lsRes.json();
+      const frBody = await frRes.json();
       candles = ohlcvBody.candles ?? [];
       buckets = tvBody.buckets ?? [];
+      openInterest = oiBody.series ?? [];
+      longShort = lsBody.series ?? [];
+      fundingRate = frBody.series ?? [];
       data.since = since.toISOString();
       data.until = until.toISOString();
       resetAllTransforms();
@@ -293,28 +393,30 @@
     over = o;
   }
 
-  function handleZoom(target: 'ohlcv' | 'bs' | 'sz', t: d3.ZoomTransform) {
+  function handleZoom(target: ChartId, t: d3.ZoomTransform) {
     if (syncZoom) {
       sharedTransform = t;
-    } else if (target === 'ohlcv') {
-      ohlcvTransform = t;
-    } else if (target === 'bs') {
-      bsTransform = t;
-    } else {
-      szTransform = t;
+      return;
     }
+    if (target === 'ohlcv') ohlcvTransform = t;
+    else if (target === 'bs') bsTransform = t;
+    else if (target === 'sz') szTransform = t;
+    else if (target === 'oi') oiTransform = t;
+    else if (target === 'ls') lsTransform = t;
+    else frTransform = t;
   }
 
-  function handleHover(target: 'ohlcv' | 'bs' | 'sz', t: number | null) {
+  function handleHover(target: ChartId, t: number | null) {
     if (syncZoom) {
       sharedHoverTime = t;
-    } else if (target === 'ohlcv') {
-      ohlcvHoverTime = t;
-    } else if (target === 'bs') {
-      bsHoverTime = t;
-    } else {
-      szHoverTime = t;
+      return;
     }
+    if (target === 'ohlcv') ohlcvHoverTime = t;
+    else if (target === 'bs') bsHoverTime = t;
+    else if (target === 'sz') szHoverTime = t;
+    else if (target === 'oi') oiHoverTime = t;
+    else if (target === 'ls') lsHoverTime = t;
+    else frHoverTime = t;
   }
 
   function toggleSync(next: boolean) {
@@ -324,6 +426,9 @@
       ohlcvTransform = sharedTransform;
       bsTransform = sharedTransform;
       szTransform = sharedTransform;
+      oiTransform = sharedTransform;
+      lsTransform = sharedTransform;
+      frTransform = sharedTransform;
     }
     syncZoom = next;
   }
@@ -517,8 +622,74 @@
     {/if}
   </div>
 
+  <div class="rounded border border-zinc-800 bg-zinc-950">
+    {#if openInterest.length === 0}
+      <div class="p-4 text-sm text-zinc-400">
+        No open-interest data yet — start the binance_open_interest live poller or run the backfill.
+      </div>
+    {:else}
+      <LineChart
+        data={openInterest}
+        lines={OI_LINES}
+        title="Open Interest (USD)"
+        {xExtent}
+        transform={syncZoom ? sharedTransform : oiTransform}
+        onZoom={(t) => handleZoom('oi', t)}
+        hoverTime={syncZoom ? sharedHoverTime : oiHoverTime}
+        onHover={(t) => handleHover('oi', t)}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
+      />
+    {/if}
+  </div>
+
+  <div class="rounded border border-zinc-800 bg-zinc-950">
+    {#if longShort.length === 0}
+      <div class="p-4 text-sm text-zinc-400">
+        No long/short data yet — start the binance_long_short_ratios live poller or run the backfill.
+      </div>
+    {:else}
+      <LineChart
+        data={longShort}
+        lines={LS_LINES}
+        refLines={LS_REF_LINES}
+        title="Long/Short Ratios"
+        {xExtent}
+        transform={syncZoom ? sharedTransform : lsTransform}
+        onZoom={(t) => handleZoom('ls', t)}
+        hoverTime={syncZoom ? sharedHoverTime : lsHoverTime}
+        onHover={(t) => handleHover('ls', t)}
+        formatY={(v) => v.toFixed(2)}
+        formatTooltip={(v) => v.toFixed(4)}
+      />
+    {/if}
+  </div>
+
+  <div class="rounded border border-zinc-800 bg-zinc-950">
+    {#if fundingRate.length === 0}
+      <div class="p-4 text-sm text-zinc-400">
+        No funding-rate data yet — start the binance_funding_rate live poller or run the backfill.
+      </div>
+    {:else}
+      <SignedBarChart
+        data={fundingRateBps}
+        valueKey="rate_bps"
+        title="Funding Rate (bps)"
+        valueLabel="Rate"
+        {xExtent}
+        transform={syncZoom ? sharedTransform : frTransform}
+        onZoom={(t) => handleZoom('fr', t)}
+        hoverTime={syncZoom ? sharedHoverTime : frHoverTime}
+        onHover={(t) => handleHover('fr', t)}
+        formatY={(v) => v.toFixed(2)}
+        formatTooltip={(v) => `${v.toFixed(2)} bps`}
+        minBarWidthPx={3}
+      />
+    {/if}
+  </div>
+
   <div class="text-[11px] text-zinc-500">
     Scroll to zoom, drag to pan, double-click to reset, hover for tooltips. Toggle Sync zoom to
-    couple/uncouple the three charts' x-axis.
+    couple/uncouple all six charts' x-axis.
   </div>
 </div>

@@ -40,3 +40,22 @@ export type TradeVolumeResponse = {
   over: number;
   buckets: VolumeBucket[];
 };
+
+export type OpenInterestRow = {
+  time: number;
+  open_interest: number;
+  open_interest_value: number;
+};
+
+export type LongShortRow = {
+  time: number;
+  top_trader_count_ratio: number;
+  top_trader_vol_ratio: number;
+  long_short_count_ratio: number;
+  taker_long_short_vol_ratio: number;
+};
+
+export type FundingRateRow = {
+  time: number;
+  rate: number;
+};

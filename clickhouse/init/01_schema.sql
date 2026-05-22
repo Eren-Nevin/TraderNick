@@ -34,6 +34,46 @@ PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, id)
 TTL toDateTime(time) + INTERVAL 30 DAY;
 
+CREATE TABLE IF NOT EXISTS tradernick.binance_open_interest
+(
+    token                LowCardinality(String),
+    time                 DateTime  CODEC(DoubleDelta, ZSTD(3)),
+    open_interest        Float64   CODEC(Gorilla, ZSTD(3)),
+    open_interest_value  Float64   CODEC(Gorilla, ZSTD(3)),
+    ingested_at          DateTime  DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (token, time)
+TTL time + INTERVAL 30 DAY;
+
+CREATE TABLE IF NOT EXISTS tradernick.binance_long_short_ratios
+(
+    token                       LowCardinality(String),
+    time                        DateTime  CODEC(DoubleDelta, ZSTD(3)),
+    top_trader_count_ratio      Float32   CODEC(Gorilla, ZSTD(3)),
+    top_trader_vol_ratio        Float32   CODEC(Gorilla, ZSTD(3)),
+    long_short_count_ratio      Float32   CODEC(Gorilla, ZSTD(3)),
+    taker_long_short_vol_ratio  Float32   CODEC(Gorilla, ZSTD(3)),
+    ingested_at                 DateTime  DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (token, time)
+TTL time + INTERVAL 30 DAY;
+
+CREATE TABLE IF NOT EXISTS tradernick.binance_funding_rate
+(
+    token        LowCardinality(String),
+    time         DateTime  CODEC(DoubleDelta, ZSTD(3)),
+    rate         Float32   CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime  DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (token, time)
+TTL time + INTERVAL 30 DAY;
+
 CREATE TABLE IF NOT EXISTS tradernick.ingestion_jobs
 (
     job_id       String,

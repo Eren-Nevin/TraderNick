@@ -5,7 +5,14 @@ import logging
 from sanic import Sanic, response
 
 import config
-from jobs.manager import JOB_TYPE_BACKFILL_OHLCV, JOB_TYPE_BACKFILL_RAW_TRADES, JobManager
+from jobs.manager import (
+    JOB_TYPE_BACKFILL_FUNDING_RATE,
+    JOB_TYPE_BACKFILL_LONG_SHORT_RATIOS,
+    JOB_TYPE_BACKFILL_OHLCV,
+    JOB_TYPE_BACKFILL_OPEN_INTEREST,
+    JOB_TYPE_BACKFILL_RAW_TRADES,
+    JobManager,
+)
 from supervisor import Supervisor
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [ingestion] %(levelname)s %(message)s")
@@ -49,7 +56,13 @@ async def basic_auth(request):
 @app.before_server_start
 async def startup(app_, _loop):
     app_.ctx.supervisor = Supervisor()
-    app_.ctx.supervisor.start(["binance_ohlcv", "binance_raw_trades"])
+    app_.ctx.supervisor.start([
+        "binance_ohlcv",
+        "binance_raw_trades",
+        "binance_open_interest",
+        "binance_long_short_ratios",
+        "binance_funding_rate",
+    ])
     app_.ctx.jobs = JobManager()
     try:
         await app_.ctx.jobs.resume_inflight()
@@ -112,3 +125,18 @@ async def backfill_ohlcv(request):
 @app.post("/jobs/backfill/binance_raw_trades")
 async def backfill_raw_trades(request):
     return await _create_backfill(request, JOB_TYPE_BACKFILL_RAW_TRADES)
+
+
+@app.post("/jobs/backfill/binance_open_interest")
+async def backfill_open_interest(request):
+    return await _create_backfill(request, JOB_TYPE_BACKFILL_OPEN_INTEREST)
+
+
+@app.post("/jobs/backfill/binance_long_short_ratios")
+async def backfill_long_short_ratios(request):
+    return await _create_backfill(request, JOB_TYPE_BACKFILL_LONG_SHORT_RATIOS)
+
+
+@app.post("/jobs/backfill/binance_funding_rate")
+async def backfill_funding_rate(request):
+    return await _create_backfill(request, JOB_TYPE_BACKFILL_FUNDING_RATE)

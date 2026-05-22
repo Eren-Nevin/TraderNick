@@ -30,6 +30,14 @@ OHLCV_COLUMNS = [
 
 RAW_TRADE_COLUMNS = ["token", "time", "amount", "price", "buy", "id"]
 
+OPEN_INTEREST_COLUMNS = ["token", "time", "open_interest", "open_interest_value"]
+LONG_SHORT_COLUMNS = [
+    "token", "time",
+    "top_trader_count_ratio", "top_trader_vol_ratio",
+    "long_short_count_ratio", "taker_long_short_vol_ratio",
+]
+FUNDING_RATE_COLUMNS = ["token", "time", "rate"]
+
 
 def _to_naive_utc(t):
     if hasattr(t, "to_pydatetime"):
@@ -53,6 +61,43 @@ def ohlcv_df_to_rows(df):
             float(r["buyer_taker_volume"]),
             float(r["seller_taker_volume"]),
             int(r["trade_count"]),
+        ])
+    return rows
+
+
+def open_interest_df_to_rows(df: pl.DataFrame, token: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            token,
+            _to_naive_utc(r["time"]),
+            float(r["open_interest"]),
+            float(r["open_interest_value"]),
+        ])
+    return rows
+
+
+def long_short_df_to_rows(df: pl.DataFrame, token: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            token,
+            _to_naive_utc(r["time"]),
+            float(r["top_trader_count_ratio"]),
+            float(r["top_trader_vol_ratio"]),
+            float(r["long_short_count_ratio"]),
+            float(r["taker_long_short_vol_ratio"]),
+        ])
+    return rows
+
+
+def funding_rate_df_to_rows(df: pl.DataFrame, token: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            token,
+            _to_naive_utc(r["time"]),
+            float(r["rate"]),
         ])
     return rows
 

@@ -1,5 +1,13 @@
 import { INTERNAL_DATA_SERVER_URL } from '$lib/server/env';
-import { INTERVALS, type Candle, type Interval, type VolumeBucket } from '$lib/api';
+import {
+  INTERVALS,
+  type Candle,
+  type FundingRateRow,
+  type Interval,
+  type LongShortRow,
+  type OpenInterestRow,
+  type VolumeBucket
+} from '$lib/api';
 import type { PageServerLoad } from './$types';
 
 const DEFAULT_LOOKBACK_DAYS: Record<Interval, number> = {
@@ -39,15 +47,29 @@ export const load: PageServerLoad = async ({ url, fetch }) => {
     over: String(over)
   });
 
-  const [ohlcvRes, tokensRes, tvRes] = await Promise.all([
+  const derivQS = new URLSearchParams({
+    token,
+    interval,
+    since: since.toISOString(),
+    until: until.toISOString(),
+    limit: '5000'
+  });
+
+  const [ohlcvRes, tokensRes, tvRes, oiRes, lsRes, frRes] = await Promise.all([
     fetch(`${INTERNAL_DATA_SERVER_URL}/ohlcv?${ohlcvQS}`),
     fetch(`${INTERNAL_DATA_SERVER_URL}/tokens`),
-    fetch(`${INTERNAL_DATA_SERVER_URL}/trade_volume?${tvQS}`)
+    fetch(`${INTERNAL_DATA_SERVER_URL}/trade_volume?${tvQS}`),
+    fetch(`${INTERNAL_DATA_SERVER_URL}/open_interest?${derivQS}`),
+    fetch(`${INTERNAL_DATA_SERVER_URL}/long_short_ratios?${derivQS}`),
+    fetch(`${INTERNAL_DATA_SERVER_URL}/funding_rate?${derivQS}`)
   ]);
 
   const candles: Candle[] = ohlcvRes.ok ? (await ohlcvRes.json()).candles : [];
   const tokens: string[] = tokensRes.ok ? (await tokensRes.json()).tokens : [];
   const buckets: VolumeBucket[] = tvRes.ok ? (await tvRes.json()).buckets : [];
+  const openInterest: OpenInterestRow[] = oiRes.ok ? (await oiRes.json()).series : [];
+  const longShort: LongShortRow[] = lsRes.ok ? (await lsRes.json()).series : [];
+  const fundingRate: FundingRateRow[] = frRes.ok ? (await frRes.json()).series : [];
 
   return {
     token,
@@ -56,6 +78,9 @@ export const load: PageServerLoad = async ({ url, fetch }) => {
     over,
     candles,
     buckets,
+    openInterest,
+    longShort,
+    fundingRate,
     tokens: tokens.length ? tokens : [token],
     since: since.toISOString(),
     until: until.toISOString()
