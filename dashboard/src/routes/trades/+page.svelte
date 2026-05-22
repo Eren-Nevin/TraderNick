@@ -451,7 +451,7 @@
   }
 </script>
 
-<div class="p-4 space-y-4">
+<div class="p-4 space-y-6">
   <div class="flex items-end justify-between gap-4 flex-wrap">
     <div>
       <h1 class="text-xl font-semibold">Trades</h1>
@@ -577,7 +577,49 @@
     {/if}
   </div>
 
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <ChartPanel title="Open Interest (USD)" bind:collapsed={oiCollapsed}>
+      {#if openInterest.length === 0}
+        <div class="p-4 text-sm text-zinc-400">
+          No open-interest data yet — start the binance_open_interest live poller or run the backfill.
+        </div>
+      {:else}
+        <LineChart
+          data={openInterest}
+          lines={OI_LINES}
+          {xExtent}
+          transform={syncZoom ? sharedTransform : oiTransform}
+          onZoom={(t) => handleZoom('oi', t)}
+          hoverTime={syncZoom ? sharedHoverTime : oiHoverTime}
+          onHover={(t) => handleHover('oi', t)}
+          formatY={fmtUsdAxis}
+          formatTooltip={fmtUsdTooltip}
+        />
+      {/if}
+    </ChartPanel>
+
+    <ChartPanel title="Funding Rate (bps)" bind:collapsed={frCollapsed}>
+      {#if fundingRate.length === 0}
+        <div class="p-4 text-sm text-zinc-400">
+          No funding-rate data yet — start the binance_funding_rate live poller or run the backfill.
+        </div>
+      {:else}
+        <SignedBarChart
+          data={fundingRateBps}
+          valueKey="rate_bps"
+          valueLabel="Rate"
+          {xExtent}
+          transform={syncZoom ? sharedTransform : frTransform}
+          onZoom={(t) => handleZoom('fr', t)}
+          hoverTime={syncZoom ? sharedHoverTime : frHoverTime}
+          onHover={(t) => handleHover('fr', t)}
+          formatY={(v) => v.toFixed(2)}
+          formatTooltip={(v) => `${v.toFixed(2)} bps`}
+          minBarWidthPx={3}
+        />
+      {/if}
+    </ChartPanel>
+
     <ChartPanel title="Buyer vs Seller Taker Volume (USD)" bind:collapsed={bsCollapsed}>
       {#snippet controls()}
         <label class="text-xs text-zinc-400 flex items-center gap-2">
@@ -678,47 +720,6 @@
       {/if}
     </ChartPanel>
 
-    <ChartPanel title="Open Interest (USD)" bind:collapsed={oiCollapsed}>
-      {#if openInterest.length === 0}
-        <div class="p-4 text-sm text-zinc-400">
-          No open-interest data yet — start the binance_open_interest live poller or run the backfill.
-        </div>
-      {:else}
-        <LineChart
-          data={openInterest}
-          lines={OI_LINES}
-          {xExtent}
-          transform={syncZoom ? sharedTransform : oiTransform}
-          onZoom={(t) => handleZoom('oi', t)}
-          hoverTime={syncZoom ? sharedHoverTime : oiHoverTime}
-          onHover={(t) => handleHover('oi', t)}
-          formatY={fmtUsdAxis}
-          formatTooltip={fmtUsdTooltip}
-        />
-      {/if}
-    </ChartPanel>
-
-    <ChartPanel title="Funding Rate (bps)" bind:collapsed={frCollapsed}>
-      {#if fundingRate.length === 0}
-        <div class="p-4 text-sm text-zinc-400">
-          No funding-rate data yet — start the binance_funding_rate live poller or run the backfill.
-        </div>
-      {:else}
-        <SignedBarChart
-          data={fundingRateBps}
-          valueKey="rate_bps"
-          valueLabel="Rate"
-          {xExtent}
-          transform={syncZoom ? sharedTransform : frTransform}
-          onZoom={(t) => handleZoom('fr', t)}
-          hoverTime={syncZoom ? sharedHoverTime : frHoverTime}
-          onHover={(t) => handleHover('fr', t)}
-          formatY={(v) => v.toFixed(2)}
-          formatTooltip={(v) => `${v.toFixed(2)} bps`}
-          minBarWidthPx={3}
-        />
-      {/if}
-    </ChartPanel>
   </div>
 
   <div class="text-[11px] text-zinc-500">
