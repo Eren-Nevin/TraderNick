@@ -451,7 +451,7 @@
   }
 </script>
 
-<div class="p-4 space-y-6">
+<div class="p-6 space-y-10">
   <div class="flex items-end justify-between gap-4 flex-wrap">
     <div>
       <h1 class="text-xl font-semibold">Trades</h1>
@@ -577,7 +577,7 @@
     {/if}
   </div>
 
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
     <ChartPanel title="Open Interest (USD)" bind:collapsed={oiCollapsed}>
       {#if openInterest.length === 0}
         <div class="p-4 text-sm text-zinc-400">
