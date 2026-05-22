@@ -3,8 +3,18 @@
   import * as d3 from 'd3';
   import type { Candle } from '$lib/api';
 
+  type Line = {
+    key: string;
+    label: string;
+    color: string;
+    compute: (d: Candle, i: number, data: Candle[]) => number;
+    dash?: string;
+  };
+
   let {
     candles = [] as Candle[],
+    lines = [] as Line[],
+    showCandles = true,
     height = 540,
     xExtent,
     transform = d3.zoomIdentity,
@@ -13,6 +23,8 @@
     onHover
   }: {
     candles: Candle[];
+    lines?: Line[];
+    showCandles?: boolean;
     height?: number;
     xExtent?: [number, number];
     transform?: d3.ZoomTransform;
@@ -100,8 +112,26 @@
     const visible = candles.filter((c) => c.time >= v0 && c.time <= v1);
     const ref = visible.length ? visible : candles;
 
-    const yLo = d3.min(ref, (c) => c.low) ?? 0;
-    const yHi = d3.max(ref, (c) => c.high) ?? 1;
+    let yLo = showCandles ? (d3.min(ref, (c) => c.low) ?? Infinity) : Infinity;
+    let yHi = showCandles ? (d3.max(ref, (c) => c.high) ?? -Infinity) : -Infinity;
+    for (const c of ref) {
+      const idx = candles.indexOf(c);
+      for (const ln of lines) {
+        const v = ln.compute(c, idx, candles);
+        if (Number.isFinite(v)) {
+          if (v < yLo) yLo = v;
+          if (v > yHi) yHi = v;
+        }
+      }
+    }
+    if (!Number.isFinite(yLo) || !Number.isFinite(yHi)) {
+      yLo = 0;
+      yHi = 1;
+    }
+    if (yLo === yHi) {
+      yLo -= 1;
+      yHi += 1;
+    }
     const pad = (yHi - yLo) * 0.05 || 1;
     const yScale = d3
       .scaleLinear()
@@ -153,28 +183,50 @@
       .attr('stroke', '#27272a')
       .attr('stroke-dasharray', '2,3');
 
-    const gCandles = g.append('g').attr('class', 'candles').attr('clip-path', `url(#${clipId})`);
-    for (const c of candles) {
-      const x = xScale(new Date(c.time * 1000));
-      if (x < -bw || x > plotW + bw) continue;
-      const up = c.close >= c.open;
-      const color = up ? '#22c55e' : '#ef4444';
-      gCandles
-        .append('line')
-        .attr('x1', x)
-        .attr('x2', x)
-        .attr('y1', yScale(c.high))
-        .attr('y2', yScale(c.low))
-        .attr('stroke', color);
-      const yTop = yScale(Math.max(c.open, c.close));
-      const yBot = yScale(Math.min(c.open, c.close));
-      gCandles
-        .append('rect')
-        .attr('x', x - bw / 2)
-        .attr('y', yTop)
-        .attr('width', bw)
-        .attr('height', Math.max(1, yBot - yTop))
-        .attr('fill', color);
+    if (showCandles) {
+      const gCandles = g.append('g').attr('class', 'candles').attr('clip-path', `url(#${clipId})`);
+      for (const c of candles) {
+        const x = xScale(new Date(c.time * 1000));
+        if (x < -bw || x > plotW + bw) continue;
+        const up = c.close >= c.open;
+        const color = up ? '#22c55e' : '#ef4444';
+        gCandles
+          .append('line')
+          .attr('x1', x)
+          .attr('x2', x)
+          .attr('y1', yScale(c.high))
+          .attr('y2', yScale(c.low))
+          .attr('stroke', color);
+        const yTop = yScale(Math.max(c.open, c.close));
+        const yBot = yScale(Math.min(c.open, c.close));
+        gCandles
+          .append('rect')
+          .attr('x', x - bw / 2)
+          .attr('y', yTop)
+          .attr('width', bw)
+          .attr('height', Math.max(1, yBot - yTop))
+          .attr('fill', color);
+      }
+    }
+
+    if (lines.length) {
+      const lineLayer = g.append('g').attr('class', 'lines').attr('clip-path', `url(#${clipId})`);
+      for (const ln of lines) {
+        const gen = d3
+          .line<Candle>()
+          .x((d) => xScale(new Date(d.time * 1000)))
+          .y((d, i) => yScale(ln.compute(d, i, candles)))
+          .defined((d, i) => Number.isFinite(ln.compute(d, i, candles)))
+          .curve(d3.curveMonotoneX);
+        const path = lineLayer
+          .append('path')
+          .datum(candles)
+          .attr('fill', 'none')
+          .attr('stroke', ln.color)
+          .attr('stroke-width', 1.5)
+          .attr('d', gen);
+        if (ln.dash) path.attr('stroke-dasharray', ln.dash);
+      }
     }
 
     g.append('g')
@@ -186,22 +238,24 @@
         sel.selectAll('line').attr('stroke', '#3f3f46');
       });
 
-    const gVol = g
-      .append('g')
-      .attr('transform', `translate(0,${priceH + GAP})`)
-      .attr('clip-path', `url(#${clipId})`);
-    for (const c of candles) {
-      const x = xScale(new Date(c.time * 1000));
-      if (x < -bw || x > plotW + bw) continue;
-      const up = c.close >= c.open;
-      gVol
-        .append('rect')
-        .attr('x', x - bw / 2)
-        .attr('y', yVol(c.volume))
-        .attr('width', bw)
-        .attr('height', volH - yVol(c.volume))
-        .attr('fill', up ? '#22c55e' : '#ef4444')
-        .attr('fill-opacity', 0.55);
+    if (showCandles) {
+      const gVol = g
+        .append('g')
+        .attr('transform', `translate(0,${priceH + GAP})`)
+        .attr('clip-path', `url(#${clipId})`);
+      for (const c of candles) {
+        const x = xScale(new Date(c.time * 1000));
+        if (x < -bw || x > plotW + bw) continue;
+        const up = c.close >= c.open;
+        gVol
+          .append('rect')
+          .attr('x', x - bw / 2)
+          .attr('y', yVol(c.volume))
+          .attr('width', bw)
+          .attr('height', volH - yVol(c.volume))
+          .attr('fill', up ? '#22c55e' : '#ef4444')
+          .attr('fill-opacity', 0.55);
+      }
     }
 
     g.append('g')
@@ -263,6 +317,8 @@
 
   $effect(() => {
     candles;
+    lines;
+    showCandles;
     xExtent;
     transform;
     width;
@@ -300,6 +356,17 @@
         {hoverCandle.close.toFixed(4)}
       </div>
       <div><span class="text-zinc-400">V</span> {hoverCandle.volume.toFixed(2)}</div>
+      {#if lines.length && hoverIdx !== null}
+        <div class="mt-1 pt-1 border-t border-zinc-800"></div>
+        {#each lines as ln (ln.key)}
+          {@const v = ln.compute(hoverCandle, hoverIdx, candles)}
+          <div class="flex items-center gap-2">
+            <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
+            <span class="text-zinc-400 w-24">{ln.label}</span>
+            <span class="w-20 text-right">{v.toFixed(4)}</span>
+          </div>
+        {/each}
+      {/if}
     </div>
   {/if}
 </div>

@@ -3,10 +3,19 @@
   import * as d3 from 'd3';
 
   type Datum = { time: number } & Record<string, number>;
+  type Line = {
+    key: string;
+    label: string;
+    color: string;
+    compute: (d: Datum, i: number, data: Datum[]) => number;
+    dash?: string;
+  };
 
   let {
     data = [] as Datum[],
     valueKey,
+    lines = [] as Line[],
+    showBars = true,
     height = 220,
     title = '',
     xExtent,
@@ -23,6 +32,8 @@
   }: {
     data: Datum[];
     valueKey: string;
+    lines?: Line[];
+    showBars?: boolean;
     height?: number;
     title?: string;
     xExtent?: [number, number];
@@ -102,10 +113,22 @@
 
     let yMin = 0;
     let yMax = 0;
-    for (const d of ref) {
-      const v = d[valueKey] ?? 0;
-      if (v < yMin) yMin = v;
-      if (v > yMax) yMax = v;
+    if (showBars) {
+      for (const d of ref) {
+        const v = d[valueKey] ?? 0;
+        if (v < yMin) yMin = v;
+        if (v > yMax) yMax = v;
+      }
+    }
+    for (const r of ref) {
+      const idx = data.indexOf(r);
+      for (const ln of lines) {
+        const v = ln.compute(r, idx, data);
+        if (Number.isFinite(v)) {
+          if (v < yMin) yMin = v;
+          if (v > yMax) yMax = v;
+        }
+      }
     }
     const spread = Math.max(Math.abs(yMin), Math.abs(yMax)) || 1;
     yMin = -spread;
@@ -163,21 +186,46 @@
       .attr('stroke', '#52525b')
       .attr('stroke-width', 1);
 
-    const bars = g.append('g').attr('class', 'bars').attr('clip-path', `url(#${clipId})`);
-    for (const d of data) {
-      const x = xScale(new Date(d.time * 1000));
-      if (x < -bw || x > plotW + bw) continue;
-      const v = d[valueKey] ?? 0;
-      const y = yScale(v);
-      const yTop = Math.min(y, zeroY);
-      const h = Math.max(0.5, Math.abs(y - zeroY));
-      bars
-        .append('rect')
-        .attr('x', x - bw / 2)
-        .attr('y', yTop)
-        .attr('width', bw)
-        .attr('height', h)
-        .attr('fill', v >= 0 ? posColor : negColor);
+    if (showBars) {
+      const bars = g.append('g').attr('class', 'bars').attr('clip-path', `url(#${clipId})`);
+      for (const d of data) {
+        const x = xScale(new Date(d.time * 1000));
+        if (x < -bw || x > plotW + bw) continue;
+        const v = d[valueKey] ?? 0;
+        const y = yScale(v);
+        const yTop = Math.min(y, zeroY);
+        const h = Math.max(0.5, Math.abs(y - zeroY));
+        bars
+          .append('rect')
+          .attr('x', x - bw / 2)
+          .attr('y', yTop)
+          .attr('width', bw)
+          .attr('height', h)
+          .attr('fill', v >= 0 ? posColor : negColor);
+      }
+    }
+
+    if (lines.length) {
+      const lineLayer = g
+        .append('g')
+        .attr('class', 'lines')
+        .attr('clip-path', `url(#${clipId})`);
+      for (const ln of lines) {
+        const gen = d3
+          .line<Datum>()
+          .x((d) => xScale(new Date(d.time * 1000)))
+          .y((d, i) => yScale(ln.compute(d, i, data)))
+          .defined((d, i) => Number.isFinite(ln.compute(d, i, data)))
+          .curve(d3.curveMonotoneX);
+        const path = lineLayer
+          .append('path')
+          .datum(data)
+          .attr('fill', 'none')
+          .attr('stroke', ln.color)
+          .attr('stroke-width', 1.5)
+          .attr('d', gen);
+        if (ln.dash) path.attr('stroke-dasharray', ln.dash);
+      }
     }
 
     g.append('g')
@@ -254,6 +302,8 @@
   $effect(() => {
     data;
     valueKey;
+    lines;
+    showBars;
     xExtent;
     transform;
     width;
@@ -295,6 +345,17 @@
         <span class="text-zinc-400 w-20">{valueLabel}</span>
         <span class="w-24 text-right">{formatTooltip(hoverVal)}</span>
       </div>
+      {#if lines.length && hoverIdx !== null}
+        <div class="mt-1 pt-1 border-t border-zinc-800"></div>
+        {#each lines as ln (ln.key)}
+          {@const v = ln.compute(hoverDatum, hoverIdx, data)}
+          <div class="flex items-center gap-2">
+            <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
+            <span class="text-zinc-400 w-20">{ln.label}</span>
+            <span class="w-24 text-right">{formatTooltip(v)}</span>
+          </div>
+        {/each}
+      {/if}
     </div>
   {/if}
 </div>

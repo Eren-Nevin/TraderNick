@@ -76,10 +76,20 @@
   let oiCollapsed = $state(false);
   let frCollapsed = $state(false);
 
-  let showBSPctLines = $state(true);
-  let showSZPctLines = $state(true);
-  let showBSBars = $state(true);
-  let showSZBars = $state(true);
+  let showOHLCVPoint = $state(true);
+  let showOHLCVCumulative = $state(true);
+  let showBSPoint = $state(true);
+  let showBSCumulative = $state(true);
+  let showSZPoint = $state(true);
+  let showSZCumulative = $state(true);
+  let showOIPoint = $state(true);
+  let showOICumulative = $state(true);
+  let showTTPoint = $state(true);
+  let showTTCumulative = $state(true);
+  let showLSPoint = $state(true);
+  let showLSCumulative = $state(true);
+  let showFRPoint = $state(true);
+  let showFRCumulative = $state(true);
 
   let cumulativeEnabled = $state(false);
   let cumulativeLengthInput = $state('9');
@@ -256,12 +266,13 @@
     ];
   });
 
-  let bsLines = $derived([
-    ...(showBSPctLines ? BUYER_SELLER_LINES : []),
-    ...bsCumulativeLines
-  ]);
+  let bsLines = $derived(
+    showBSCumulative ? [...BUYER_SELLER_LINES, ...bsCumulativeLines] : []
+  );
 
-  let szLines = $derived([...(showSZPctLines ? sizeLines : []), ...szCumulativeLines]);
+  let szLines = $derived(
+    showSZCumulative ? [...sizeLines, ...szCumulativeLines] : []
+  );
 
   const OI_LINES = [
     {
@@ -307,6 +318,142 @@
   let fundingRateBps = $derived(
     fundingRate.map((d) => ({ ...d, rate_bps: d.rate * 10000 }))
   );
+
+  let oiCumulativeLines = $derived.by(() => {
+    if (!cumulativeEnabled || openInterest.length === 0) return [];
+    const ma = maArray(
+      openInterest.map((d) => d.open_interest_value),
+      cumulativeLength,
+      cumulativeType
+    );
+    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    return [
+      {
+        key: 'cum_oi',
+        label: `OI ${tag}`,
+        color: '#06b6d4',
+        dash: '5,3',
+        compute: (_d: OpenInterestRow, i: number) => ma[i]
+      }
+    ];
+  });
+
+  let frCumulativeLines = $derived.by(() => {
+    if (!cumulativeEnabled || fundingRateBps.length === 0) return [];
+    const ma = maArray(
+      fundingRateBps.map((d) => d.rate_bps),
+      cumulativeLength,
+      cumulativeType
+    );
+    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    return [
+      {
+        key: 'cum_fr',
+        label: `Rate ${tag}`,
+        color: '#fbbf24',
+        dash: '5,3',
+        compute: (_d: FundingRateRow & { rate_bps: number }, i: number) => ma[i]
+      }
+    ];
+  });
+
+  let oiLines = $derived([
+    ...(showOIPoint ? OI_LINES : []),
+    ...(showOICumulative ? oiCumulativeLines : [])
+  ]);
+
+  let frLines = $derived(showFRCumulative ? frCumulativeLines : []);
+
+  let ohlcvCumulativeLines = $derived.by(() => {
+    if (!cumulativeEnabled || candles.length === 0) return [];
+    const ma = maArray(
+      candles.map((c) => c.close),
+      cumulativeLength,
+      cumulativeType
+    );
+    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    return [
+      {
+        key: 'cum_close',
+        label: `Close ${tag}`,
+        color: '#fbbf24',
+        compute: (_d: Candle, i: number) => ma[i]
+      }
+    ];
+  });
+
+  let ohlcvLines = $derived(showOHLCVCumulative ? ohlcvCumulativeLines : []);
+
+  let ttCumulativeLines = $derived.by(() => {
+    if (!cumulativeEnabled || longShort.length === 0) return [];
+    const countMA = maArray(
+      longShort.map((d) => d.top_trader_count_ratio),
+      cumulativeLength,
+      cumulativeType
+    );
+    const volMA = maArray(
+      longShort.map((d) => d.top_trader_vol_ratio),
+      cumulativeLength,
+      cumulativeType
+    );
+    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    return [
+      {
+        key: 'cum_top_ct',
+        label: `Top count ${tag}`,
+        color: '#fbbf24',
+        dash: '5,3',
+        compute: (_d: LongShortRow, i: number) => countMA[i]
+      },
+      {
+        key: 'cum_top_vol',
+        label: `Top vol ${tag}`,
+        color: '#06b6d4',
+        dash: '5,3',
+        compute: (_d: LongShortRow, i: number) => volMA[i]
+      }
+    ];
+  });
+
+  let lsCumulativeLines = $derived.by(() => {
+    if (!cumulativeEnabled || longShort.length === 0) return [];
+    const allCountMA = maArray(
+      longShort.map((d) => d.long_short_count_ratio),
+      cumulativeLength,
+      cumulativeType
+    );
+    const takerVolMA = maArray(
+      longShort.map((d) => d.taker_long_short_vol_ratio),
+      cumulativeLength,
+      cumulativeType
+    );
+    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    return [
+      {
+        key: 'cum_all_ct',
+        label: `All L/S ct ${tag}`,
+        color: '#84cc16',
+        dash: '5,3',
+        compute: (_d: LongShortRow, i: number) => allCountMA[i]
+      },
+      {
+        key: 'cum_taker_vol',
+        label: `Taker vol ${tag}`,
+        color: '#a855f7',
+        dash: '5,3',
+        compute: (_d: LongShortRow, i: number) => takerVolMA[i]
+      }
+    ];
+  });
+
+  let ttLines = $derived([
+    ...(showTTPoint ? TOP_TRADERS_LINES : []),
+    ...(showTTCumulative ? ttCumulativeLines : [])
+  ]);
+  let lsLines = $derived([
+    ...(showLSPoint ? LS_LINES : []),
+    ...(showLSCumulative ? lsCumulativeLines : [])
+  ]);
 
   function applyCumulativeSettings() {
     const n = Math.max(2, Math.min(500, Math.round(Number(cumulativeLengthInput) || 9)));
@@ -521,7 +668,7 @@
           bind:checked={cumulativeEnabled}
           class="accent-zinc-400"
         />
-        Cumulative
+        MA
       </label>
       <label class="text-xs text-zinc-400">
         N
@@ -558,7 +705,17 @@
     <div class="p-3 rounded border border-red-900 bg-red-950/40 text-sm text-red-300">{error}</div>
   {/if}
 
-  <div class="rounded border border-zinc-800 bg-zinc-950">
+  <ChartPanel title="OHLCV">
+    {#snippet controls()}
+      <label class="text-xs text-zinc-400 flex items-center gap-2">
+        <input type="checkbox" bind:checked={showOHLCVPoint} class="accent-zinc-400" />
+        Point
+      </label>
+      <label class="text-xs text-zinc-400 flex items-center gap-2">
+        <input type="checkbox" bind:checked={showOHLCVCumulative} class="accent-zinc-400" />
+        MA
+      </label>
+    {/snippet}
     {#if loading && candles.length === 0}
       <div class="p-4 text-sm text-zinc-400">Loading…</div>
     {:else if candles.length === 0}
@@ -568,6 +725,8 @@
     {:else}
       <CandlestickChart
         {candles}
+        lines={ohlcvLines}
+        showCandles={showOHLCVPoint}
         {xExtent}
         transform={syncZoom ? sharedTransform : ohlcvTransform}
         onZoom={(t) => handleZoom('ohlcv', t)}
@@ -575,10 +734,20 @@
         onHover={(t) => handleHover('ohlcv', t)}
       />
     {/if}
-  </div>
+  </ChartPanel>
 
   <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
     <ChartPanel title="Open Interest (USD)" bind:collapsed={oiCollapsed}>
+      {#snippet controls()}
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showOIPoint} class="accent-zinc-400" />
+          Point
+        </label>
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showOICumulative} class="accent-zinc-400" />
+          MA
+        </label>
+      {/snippet}
       {#if openInterest.length === 0}
         <div class="p-4 text-sm text-zinc-400">
           No open-interest data yet — start the binance_open_interest live poller or run the backfill.
@@ -586,7 +755,7 @@
       {:else}
         <LineChart
           data={openInterest}
-          lines={OI_LINES}
+          lines={oiLines}
           {xExtent}
           transform={syncZoom ? sharedTransform : oiTransform}
           onZoom={(t) => handleZoom('oi', t)}
@@ -599,6 +768,16 @@
     </ChartPanel>
 
     <ChartPanel title="Funding Rate (bps)" bind:collapsed={frCollapsed}>
+      {#snippet controls()}
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showFRPoint} class="accent-zinc-400" />
+          Point
+        </label>
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showFRCumulative} class="accent-zinc-400" />
+          MA
+        </label>
+      {/snippet}
       {#if fundingRate.length === 0}
         <div class="p-4 text-sm text-zinc-400">
           No funding-rate data yet — start the binance_funding_rate live poller or run the backfill.
@@ -607,6 +786,8 @@
         <SignedBarChart
           data={fundingRateBps}
           valueKey="rate_bps"
+          lines={frLines}
+          showBars={showFRPoint}
           valueLabel="Rate"
           {xExtent}
           transform={syncZoom ? sharedTransform : frTransform}
@@ -623,12 +804,12 @@
     <ChartPanel title="Buyer vs Seller Taker Volume (USD)" bind:collapsed={bsCollapsed}>
       {#snippet controls()}
         <label class="text-xs text-zinc-400 flex items-center gap-2">
-          <input type="checkbox" bind:checked={showBSBars} class="accent-zinc-400" />
-          Bars
+          <input type="checkbox" bind:checked={showBSPoint} class="accent-zinc-400" />
+          Point
         </label>
         <label class="text-xs text-zinc-400 flex items-center gap-2">
-          <input type="checkbox" bind:checked={showBSPctLines} class="accent-zinc-400" />
-          % lines
+          <input type="checkbox" bind:checked={showBSCumulative} class="accent-zinc-400" />
+          MA
         </label>
       {/snippet}
       {#if buckets.length === 0}
@@ -638,7 +819,7 @@
       {:else}
         <StackedBarChart
           data={buckets}
-          series={showBSBars ? BUYER_SELLER_SERIES : []}
+          series={showBSPoint ? BUYER_SELLER_SERIES : []}
           lines={bsLines}
           {xExtent}
           transform={syncZoom ? sharedTransform : bsTransform}
@@ -652,12 +833,12 @@
     <ChartPanel title="Volume by Trade Size (USD)" bind:collapsed={szCollapsed}>
       {#snippet controls()}
         <label class="text-xs text-zinc-400 flex items-center gap-2">
-          <input type="checkbox" bind:checked={showSZBars} class="accent-zinc-400" />
-          Bars
+          <input type="checkbox" bind:checked={showSZPoint} class="accent-zinc-400" />
+          Point
         </label>
         <label class="text-xs text-zinc-400 flex items-center gap-2">
-          <input type="checkbox" bind:checked={showSZPctLines} class="accent-zinc-400" />
-          % lines
+          <input type="checkbox" bind:checked={showSZCumulative} class="accent-zinc-400" />
+          MA
         </label>
       {/snippet}
       {#if buckets.length === 0}
@@ -667,7 +848,7 @@
       {:else}
         <StackedBarChart
           data={buckets}
-          series={showSZBars ? sizeSeries : []}
+          series={showSZPoint ? sizeSeries : []}
           lines={szLines}
           {xExtent}
           transform={syncZoom ? sharedTransform : szTransform}
@@ -679,6 +860,16 @@
     </ChartPanel>
 
     <ChartPanel title="Top Traders L/S Ratios" bind:collapsed={ttCollapsed}>
+      {#snippet controls()}
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showTTPoint} class="accent-zinc-400" />
+          Point
+        </label>
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showTTCumulative} class="accent-zinc-400" />
+          MA
+        </label>
+      {/snippet}
       {#if longShort.length === 0}
         <div class="p-4 text-sm text-zinc-400">
           No long/short data yet — start the binance_long_short_ratios live poller or run the backfill.
@@ -686,7 +877,7 @@
       {:else}
         <LineChart
           data={longShort}
-          lines={TOP_TRADERS_LINES}
+          lines={ttLines}
           refLines={NEUTRAL_REF}
           {xExtent}
           transform={syncZoom ? sharedTransform : ttTransform}
@@ -700,6 +891,16 @@
     </ChartPanel>
 
     <ChartPanel title="Long/Short Ratios" bind:collapsed={lsCollapsed}>
+      {#snippet controls()}
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showLSPoint} class="accent-zinc-400" />
+          Point
+        </label>
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showLSCumulative} class="accent-zinc-400" />
+          MA
+        </label>
+      {/snippet}
       {#if longShort.length === 0}
         <div class="p-4 text-sm text-zinc-400">
           No long/short data yet — start the binance_long_short_ratios live poller or run the backfill.
@@ -707,7 +908,7 @@
       {:else}
         <LineChart
           data={longShort}
-          lines={LS_LINES}
+          lines={lsLines}
           refLines={NEUTRAL_REF}
           {xExtent}
           transform={syncZoom ? sharedTransform : lsTransform}
