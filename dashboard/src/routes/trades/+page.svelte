@@ -4,6 +4,7 @@
   import StackedBarChart from '$lib/components/StackedBarChart.svelte';
   import LineChart from '$lib/components/LineChart.svelte';
   import SignedBarChart from '$lib/components/SignedBarChart.svelte';
+  import ChartPanel from '$lib/components/ChartPanel.svelte';
   import {
     INTERVALS,
     type Candle,
@@ -53,6 +54,7 @@
   let bsTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
   let szTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
   let oiTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
+  let ttTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
   let lsTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
   let frTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
 
@@ -61,10 +63,18 @@
   let bsHoverTime = $state<number | null>(null);
   let szHoverTime = $state<number | null>(null);
   let oiHoverTime = $state<number | null>(null);
+  let ttHoverTime = $state<number | null>(null);
   let lsHoverTime = $state<number | null>(null);
   let frHoverTime = $state<number | null>(null);
 
-  type ChartId = 'ohlcv' | 'bs' | 'sz' | 'oi' | 'ls' | 'fr';
+  type ChartId = 'ohlcv' | 'bs' | 'sz' | 'oi' | 'tt' | 'ls' | 'fr';
+
+  let bsCollapsed = $state(false);
+  let szCollapsed = $state(false);
+  let ttCollapsed = $state(false);
+  let lsCollapsed = $state(false);
+  let oiCollapsed = $state(false);
+  let frCollapsed = $state(false);
 
   let showBSPctLines = $state(true);
   let showSZPctLines = $state(true);
@@ -262,7 +272,7 @@
     }
   ];
 
-  const LS_LINES = [
+  const TOP_TRADERS_LINES = [
     {
       key: 'top_ct',
       label: 'Top traders (count)',
@@ -274,7 +284,10 @@
       label: 'Top traders (vol)',
       color: '#06b6d4',
       compute: (d: LongShortRow) => d.top_trader_vol_ratio
-    },
+    }
+  ];
+
+  const LS_LINES = [
     {
       key: 'all_ct',
       label: 'All (L/S count)',
@@ -289,7 +302,7 @@
     }
   ];
 
-  const LS_REF_LINES = [{ value: 1 }];
+  const NEUTRAL_REF = [{ value: 1 }];
 
   let fundingRateBps = $derived(
     fundingRate.map((d) => ({ ...d, rate_bps: d.rate * 10000 }))
@@ -319,6 +332,7 @@
     bsTransform = d3.zoomIdentity;
     szTransform = d3.zoomIdentity;
     oiTransform = d3.zoomIdentity;
+    ttTransform = d3.zoomIdentity;
     lsTransform = d3.zoomIdentity;
     frTransform = d3.zoomIdentity;
   }
@@ -402,6 +416,7 @@
     else if (target === 'bs') bsTransform = t;
     else if (target === 'sz') szTransform = t;
     else if (target === 'oi') oiTransform = t;
+    else if (target === 'tt') ttTransform = t;
     else if (target === 'ls') lsTransform = t;
     else frTransform = t;
   }
@@ -415,6 +430,7 @@
     else if (target === 'bs') bsHoverTime = t;
     else if (target === 'sz') szHoverTime = t;
     else if (target === 'oi') oiHoverTime = t;
+    else if (target === 'tt') ttHoverTime = t;
     else if (target === 'ls') lsHoverTime = t;
     else frHoverTime = t;
   }
@@ -427,6 +443,7 @@
       bsTransform = sharedTransform;
       szTransform = sharedTransform;
       oiTransform = sharedTransform;
+      ttTransform = sharedTransform;
       lsTransform = sharedTransform;
       frTransform = sharedTransform;
     }
@@ -560,136 +577,153 @@
     {/if}
   </div>
 
-  <div class="flex items-center justify-end gap-3 px-1">
-    <label class="text-xs text-zinc-400 flex items-center gap-2">
-      <input type="checkbox" bind:checked={showBSBars} class="accent-zinc-400" />
-      Show Bars
-    </label>
-    <label class="text-xs text-zinc-400 flex items-center gap-2">
-      <input type="checkbox" bind:checked={showBSPctLines} class="accent-zinc-400" />
-      Show % lines
-    </label>
-  </div>
+  <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+    <ChartPanel title="Buyer vs Seller Taker Volume (USD)" bind:collapsed={bsCollapsed}>
+      {#snippet controls()}
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showBSBars} class="accent-zinc-400" />
+          Bars
+        </label>
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showBSPctLines} class="accent-zinc-400" />
+          % lines
+        </label>
+      {/snippet}
+      {#if buckets.length === 0}
+        <div class="p-4 text-sm text-zinc-400">
+          No raw-trade data yet — start the raw_trades live poller or run the backfill.
+        </div>
+      {:else}
+        <StackedBarChart
+          data={buckets}
+          series={showBSBars ? BUYER_SELLER_SERIES : []}
+          lines={bsLines}
+          {xExtent}
+          transform={syncZoom ? sharedTransform : bsTransform}
+          onZoom={(t) => handleZoom('bs', t)}
+          hoverTime={syncZoom ? sharedHoverTime : bsHoverTime}
+          onHover={(t) => handleHover('bs', t)}
+        />
+      {/if}
+    </ChartPanel>
 
-  <div class="rounded border border-zinc-800 bg-zinc-950">
-    {#if buckets.length === 0}
-      <div class="p-4 text-sm text-zinc-400">
-        No raw-trade data yet — start the raw_trades live poller or run the backfill.
-      </div>
-    {:else}
-      <StackedBarChart
-        data={buckets}
-        series={showBSBars ? BUYER_SELLER_SERIES : []}
-        lines={bsLines}
-        title="Buyer vs Seller Taker Volume (USD)"
-        {xExtent}
-        transform={syncZoom ? sharedTransform : bsTransform}
-        onZoom={(t) => handleZoom('bs', t)}
-        hoverTime={syncZoom ? sharedHoverTime : bsHoverTime}
-        onHover={(t) => handleHover('bs', t)}
-      />
-    {/if}
-  </div>
+    <ChartPanel title="Volume by Trade Size (USD)" bind:collapsed={szCollapsed}>
+      {#snippet controls()}
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showSZBars} class="accent-zinc-400" />
+          Bars
+        </label>
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showSZPctLines} class="accent-zinc-400" />
+          % lines
+        </label>
+      {/snippet}
+      {#if buckets.length === 0}
+        <div class="p-4 text-sm text-zinc-400">
+          No raw-trade data yet — start the raw_trades live poller or run the backfill.
+        </div>
+      {:else}
+        <StackedBarChart
+          data={buckets}
+          series={showSZBars ? sizeSeries : []}
+          lines={szLines}
+          {xExtent}
+          transform={syncZoom ? sharedTransform : szTransform}
+          onZoom={(t) => handleZoom('sz', t)}
+          hoverTime={syncZoom ? sharedHoverTime : szHoverTime}
+          onHover={(t) => handleHover('sz', t)}
+        />
+      {/if}
+    </ChartPanel>
 
-  <div class="flex items-center justify-end gap-3 px-1">
-    <label class="text-xs text-zinc-400 flex items-center gap-2">
-      <input type="checkbox" bind:checked={showSZBars} class="accent-zinc-400" />
-      Show Bars
-    </label>
-    <label class="text-xs text-zinc-400 flex items-center gap-2">
-      <input type="checkbox" bind:checked={showSZPctLines} class="accent-zinc-400" />
-      Show % lines
-    </label>
-  </div>
+    <ChartPanel title="Top Traders L/S Ratios" bind:collapsed={ttCollapsed}>
+      {#if longShort.length === 0}
+        <div class="p-4 text-sm text-zinc-400">
+          No long/short data yet — start the binance_long_short_ratios live poller or run the backfill.
+        </div>
+      {:else}
+        <LineChart
+          data={longShort}
+          lines={TOP_TRADERS_LINES}
+          refLines={NEUTRAL_REF}
+          {xExtent}
+          transform={syncZoom ? sharedTransform : ttTransform}
+          onZoom={(t) => handleZoom('tt', t)}
+          hoverTime={syncZoom ? sharedHoverTime : ttHoverTime}
+          onHover={(t) => handleHover('tt', t)}
+          formatY={(v) => v.toFixed(2)}
+          formatTooltip={(v) => v.toFixed(4)}
+        />
+      {/if}
+    </ChartPanel>
 
-  <div class="rounded border border-zinc-800 bg-zinc-950">
-    {#if buckets.length === 0}
-      <div class="p-4 text-sm text-zinc-400">
-        No raw-trade data yet — start the raw_trades live poller or run the backfill.
-      </div>
-    {:else}
-      <StackedBarChart
-        data={buckets}
-        series={showSZBars ? sizeSeries : []}
-        lines={szLines}
-        title="Volume by Trade Size (USD)"
-        {xExtent}
-        transform={syncZoom ? sharedTransform : szTransform}
-        onZoom={(t) => handleZoom('sz', t)}
-        hoverTime={syncZoom ? sharedHoverTime : szHoverTime}
-        onHover={(t) => handleHover('sz', t)}
-      />
-    {/if}
-  </div>
+    <ChartPanel title="Long/Short Ratios" bind:collapsed={lsCollapsed}>
+      {#if longShort.length === 0}
+        <div class="p-4 text-sm text-zinc-400">
+          No long/short data yet — start the binance_long_short_ratios live poller or run the backfill.
+        </div>
+      {:else}
+        <LineChart
+          data={longShort}
+          lines={LS_LINES}
+          refLines={NEUTRAL_REF}
+          {xExtent}
+          transform={syncZoom ? sharedTransform : lsTransform}
+          onZoom={(t) => handleZoom('ls', t)}
+          hoverTime={syncZoom ? sharedHoverTime : lsHoverTime}
+          onHover={(t) => handleHover('ls', t)}
+          formatY={(v) => v.toFixed(2)}
+          formatTooltip={(v) => v.toFixed(4)}
+        />
+      {/if}
+    </ChartPanel>
 
-  <div class="rounded border border-zinc-800 bg-zinc-950">
-    {#if openInterest.length === 0}
-      <div class="p-4 text-sm text-zinc-400">
-        No open-interest data yet — start the binance_open_interest live poller or run the backfill.
-      </div>
-    {:else}
-      <LineChart
-        data={openInterest}
-        lines={OI_LINES}
-        title="Open Interest (USD)"
-        {xExtent}
-        transform={syncZoom ? sharedTransform : oiTransform}
-        onZoom={(t) => handleZoom('oi', t)}
-        hoverTime={syncZoom ? sharedHoverTime : oiHoverTime}
-        onHover={(t) => handleHover('oi', t)}
-        formatY={fmtUsdAxis}
-        formatTooltip={fmtUsdTooltip}
-      />
-    {/if}
-  </div>
+    <ChartPanel title="Open Interest (USD)" bind:collapsed={oiCollapsed}>
+      {#if openInterest.length === 0}
+        <div class="p-4 text-sm text-zinc-400">
+          No open-interest data yet — start the binance_open_interest live poller or run the backfill.
+        </div>
+      {:else}
+        <LineChart
+          data={openInterest}
+          lines={OI_LINES}
+          {xExtent}
+          transform={syncZoom ? sharedTransform : oiTransform}
+          onZoom={(t) => handleZoom('oi', t)}
+          hoverTime={syncZoom ? sharedHoverTime : oiHoverTime}
+          onHover={(t) => handleHover('oi', t)}
+          formatY={fmtUsdAxis}
+          formatTooltip={fmtUsdTooltip}
+        />
+      {/if}
+    </ChartPanel>
 
-  <div class="rounded border border-zinc-800 bg-zinc-950">
-    {#if longShort.length === 0}
-      <div class="p-4 text-sm text-zinc-400">
-        No long/short data yet — start the binance_long_short_ratios live poller or run the backfill.
-      </div>
-    {:else}
-      <LineChart
-        data={longShort}
-        lines={LS_LINES}
-        refLines={LS_REF_LINES}
-        title="Long/Short Ratios"
-        {xExtent}
-        transform={syncZoom ? sharedTransform : lsTransform}
-        onZoom={(t) => handleZoom('ls', t)}
-        hoverTime={syncZoom ? sharedHoverTime : lsHoverTime}
-        onHover={(t) => handleHover('ls', t)}
-        formatY={(v) => v.toFixed(2)}
-        formatTooltip={(v) => v.toFixed(4)}
-      />
-    {/if}
-  </div>
-
-  <div class="rounded border border-zinc-800 bg-zinc-950">
-    {#if fundingRate.length === 0}
-      <div class="p-4 text-sm text-zinc-400">
-        No funding-rate data yet — start the binance_funding_rate live poller or run the backfill.
-      </div>
-    {:else}
-      <SignedBarChart
-        data={fundingRateBps}
-        valueKey="rate_bps"
-        title="Funding Rate (bps)"
-        valueLabel="Rate"
-        {xExtent}
-        transform={syncZoom ? sharedTransform : frTransform}
-        onZoom={(t) => handleZoom('fr', t)}
-        hoverTime={syncZoom ? sharedHoverTime : frHoverTime}
-        onHover={(t) => handleHover('fr', t)}
-        formatY={(v) => v.toFixed(2)}
-        formatTooltip={(v) => `${v.toFixed(2)} bps`}
-        minBarWidthPx={3}
-      />
-    {/if}
+    <ChartPanel title="Funding Rate (bps)" bind:collapsed={frCollapsed}>
+      {#if fundingRate.length === 0}
+        <div class="p-4 text-sm text-zinc-400">
+          No funding-rate data yet — start the binance_funding_rate live poller or run the backfill.
+        </div>
+      {:else}
+        <SignedBarChart
+          data={fundingRateBps}
+          valueKey="rate_bps"
+          valueLabel="Rate"
+          {xExtent}
+          transform={syncZoom ? sharedTransform : frTransform}
+          onZoom={(t) => handleZoom('fr', t)}
+          hoverTime={syncZoom ? sharedHoverTime : frHoverTime}
+          onHover={(t) => handleHover('fr', t)}
+          formatY={(v) => v.toFixed(2)}
+          formatTooltip={(v) => `${v.toFixed(2)} bps`}
+          minBarWidthPx={3}
+        />
+      {/if}
+    </ChartPanel>
   </div>
 
   <div class="text-[11px] text-zinc-500">
     Scroll to zoom, drag to pan, double-click to reset, hover for tooltips. Toggle Sync zoom to
-    couple/uncouple all six charts' x-axis.
+    couple/uncouple all visible charts' x-axis. Collapse a chart via its ▼/▶ button — when sync is
+    on, expanding it picks up the current shared zoom and hover automatically.
   </div>
 </div>
