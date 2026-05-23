@@ -1,4 +1,5 @@
-from datetime import timezone
+import re
+from datetime import datetime, timezone
 
 import clickhouse_connect
 import polars as pl
@@ -6,6 +7,40 @@ import polars as pl
 import config
 
 _async_client_obj = None
+
+_IDENT_RE = re.compile(r"[A-Za-z0-9_-]{1,32}")
+
+
+def safe_ident(s) -> str:
+    """Validate a chain/token/kind identifier for safe inline-SQL embedding.
+
+    Allows the character set we actually use; anything else (quotes, spaces,
+    semicolons, SQL operators) is rejected.
+    """
+    if not isinstance(s, str) or not _IDENT_RE.fullmatch(s):
+        raise ValueError(f"invalid identifier: {s!r}")
+    return s
+
+
+def sql_dt(dt: datetime) -> str:
+    """Format a naive datetime for inline SQL literal."""
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
+async def delete_transfers_range(*, where_extra: str, since: datetime, until: datetime) -> None:
+    """Lightweight DELETE on tradernick.transfers, scoped by a caller-built WHERE clause.
+
+    The caller is responsible for ensuring `where_extra` uses only `safe_ident()`-validated
+    identifiers (i.e. no quoted user strings). Time predicate is appended via AND.
+    """
+    ch = await async_client()
+    sql = (
+        "DELETE FROM tradernick.transfers "
+        f"WHERE ({where_extra}) AND time >= '{sql_dt(since)}' AND time < '{sql_dt(until)}'"
+    )
+    await ch.command(sql)
 
 
 async def async_client():

@@ -116,12 +116,15 @@ async def _create_backfill(request, job_type: str):
     body = request.json or {}
     tokens = body.get("tokens") or config.INGEST_TOKENS
     days = int(body.get("days", 30))
+    force = bool(body.get("force", False))
     if not tokens:
         return response.json({"error": "no tokens"}, status=400)
     if days <= 0 or days > 365:
         return response.json({"error": "days must be in 1..365"}, status=400)
     try:
-        job = await request.app.ctx.jobs.create_backfill(job_type, tokens, days)
+        job = await request.app.ctx.jobs.create_backfill_args(
+            job_type, days, {"tokens": tokens, "force": force}
+        )
     except RuntimeError as exc:
         return response.json({"error": str(exc)}, status=429)
     return response.json(job, status=202)
@@ -155,11 +158,13 @@ async def backfill_funding_rate(request):
 async def _create_transfer_backfill(request, job_type: str, extract_args):
     body = request.json or {}
     days = int(body.get("days", 30))
+    force = bool(body.get("force", False))
     if days <= 0 or days > 365:
         return response.json({"error": "days must be in 1..365"}, status=400)
     err, args_extra = extract_args(body)
     if err:
         return response.json({"error": err}, status=400)
+    args_extra["force"] = force
     try:
         job = await request.app.ctx.jobs.create_backfill_args(job_type, days, args_extra)
     except RuntimeError as exc:

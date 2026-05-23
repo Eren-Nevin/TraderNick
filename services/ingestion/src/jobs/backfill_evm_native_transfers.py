@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 from defistream import AsyncDeFiStream
 
 import config
-from clickhouse import async_client, transfers_df_for_bulk_insert
+from clickhouse import async_client, delete_transfers_range, safe_ident, transfers_df_for_bulk_insert
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [backfill_evm_native_transfers] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -113,7 +113,19 @@ async def main(job_id: str):
 
     await _write_status(job_id=job_id, job_type=job_type, args=args, status="running",
                        progress=(done / total) if total else 1.0, started_at=started_at)
-    log.info("job %s starting: chains=%s chunks=%d resumed_at=%d", job_id, chains, total, done)
+    log.info("job %s starting: chains=%s chunks=%d resumed_at=%d force=%s",
+             job_id, chains, total, done, bool(args.get("force")))
+
+    if args.get("force") and chains and done == 0:
+        chain_clauses = " OR ".join(f"chain = '{safe_ident(c)}'" for c in chains)
+        log.info("job %s force=true: purging existing native rows for chains=%s in [%s, %s)",
+                 job_id, chains, since, until)
+        await delete_transfers_range(
+            where_extra=f"kind = 'native' AND ({chain_clauses})",
+            since=since,
+            until=until,
+        )
+        log.info("job %s force purge done", job_id)
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     try:
