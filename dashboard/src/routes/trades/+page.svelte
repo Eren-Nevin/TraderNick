@@ -1,5 +1,4 @@
 <script lang="ts">
-  import * as d3 from 'd3';
   import CandlestickChart from '$lib/components/CandlestickChart.svelte';
   import StackedBarChart from '$lib/components/StackedBarChart.svelte';
   import LineChart from '$lib/components/LineChart.svelte';
@@ -48,15 +47,17 @@
   let loading = $state(false);
   let error = $state<string | null>(null);
 
+  type View = [number, number] | null;
+
   let syncZoom = $state(true);
-  let sharedTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
-  let ohlcvTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
-  let bsTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
-  let szTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
-  let oiTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
-  let ttTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
-  let lsTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
-  let frTransform = $state<d3.ZoomTransform>(d3.zoomIdentity);
+  let sharedView = $state<View>(null);
+  let ohlcvView = $state<View>(null);
+  let bsView = $state<View>(null);
+  let szView = $state<View>(null);
+  let oiView = $state<View>(null);
+  let ttView = $state<View>(null);
+  let lsView = $state<View>(null);
+  let frView = $state<View>(null);
 
   let sharedHoverTime = $state<number | null>(null);
   let ohlcvHoverTime = $state<number | null>(null);
@@ -474,14 +475,14 @@
   });
 
   function resetAllTransforms() {
-    sharedTransform = d3.zoomIdentity;
-    ohlcvTransform = d3.zoomIdentity;
-    bsTransform = d3.zoomIdentity;
-    szTransform = d3.zoomIdentity;
-    oiTransform = d3.zoomIdentity;
-    ttTransform = d3.zoomIdentity;
-    lsTransform = d3.zoomIdentity;
-    frTransform = d3.zoomIdentity;
+    sharedView = null;
+    ohlcvView = null;
+    bsView = null;
+    szView = null;
+    oiView = null;
+    ttView = null;
+    lsView = null;
+    frView = null;
   }
 
   async function reload(t: string, iv: Interval, u: number, o: number) {
@@ -554,18 +555,18 @@
     over = o;
   }
 
-  function handleZoom(target: ChartId, t: d3.ZoomTransform) {
+  function handleView(target: ChartId, v: View) {
     if (syncZoom) {
-      sharedTransform = t;
+      sharedView = v;
       return;
     }
-    if (target === 'ohlcv') ohlcvTransform = t;
-    else if (target === 'bs') bsTransform = t;
-    else if (target === 'sz') szTransform = t;
-    else if (target === 'oi') oiTransform = t;
-    else if (target === 'tt') ttTransform = t;
-    else if (target === 'ls') lsTransform = t;
-    else frTransform = t;
+    if (target === 'ohlcv') ohlcvView = v;
+    else if (target === 'bs') bsView = v;
+    else if (target === 'sz') szView = v;
+    else if (target === 'oi') oiView = v;
+    else if (target === 'tt') ttView = v;
+    else if (target === 'ls') lsView = v;
+    else frView = v;
   }
 
   function handleHover(target: ChartId, t: number | null) {
@@ -584,15 +585,15 @@
 
   function toggleSync(next: boolean) {
     if (next) {
-      sharedTransform = ohlcvTransform;
+      sharedView = ohlcvView;
     } else {
-      ohlcvTransform = sharedTransform;
-      bsTransform = sharedTransform;
-      szTransform = sharedTransform;
-      oiTransform = sharedTransform;
-      ttTransform = sharedTransform;
-      lsTransform = sharedTransform;
-      frTransform = sharedTransform;
+      ohlcvView = sharedView;
+      bsView = sharedView;
+      szView = sharedView;
+      oiView = sharedView;
+      ttView = sharedView;
+      lsView = sharedView;
+      frView = sharedView;
     }
     syncZoom = next;
   }
@@ -728,8 +729,8 @@
         lines={ohlcvLines}
         showCandles={showOHLCVPoint}
         {xExtent}
-        transform={syncZoom ? sharedTransform : ohlcvTransform}
-        onZoom={(t) => handleZoom('ohlcv', t)}
+        view={syncZoom ? sharedView : ohlcvView}
+        onView={(v) => handleView('ohlcv', v)}
         hoverTime={syncZoom ? sharedHoverTime : ohlcvHoverTime}
         onHover={(t) => handleHover('ohlcv', t)}
       />
@@ -757,8 +758,8 @@
           data={openInterest}
           lines={oiLines}
           {xExtent}
-          transform={syncZoom ? sharedTransform : oiTransform}
-          onZoom={(t) => handleZoom('oi', t)}
+          view={syncZoom ? sharedView : oiView}
+          onView={(v) => handleView('oi', v)}
           hoverTime={syncZoom ? sharedHoverTime : oiHoverTime}
           onHover={(t) => handleHover('oi', t)}
           formatY={fmtUsdAxis}
@@ -790,8 +791,8 @@
           showBars={showFRPoint}
           valueLabel="Rate"
           {xExtent}
-          transform={syncZoom ? sharedTransform : frTransform}
-          onZoom={(t) => handleZoom('fr', t)}
+          view={syncZoom ? sharedView : frView}
+          onView={(v) => handleView('fr', v)}
           hoverTime={syncZoom ? sharedHoverTime : frHoverTime}
           onHover={(t) => handleHover('fr', t)}
           formatY={(v) => v.toFixed(2)}
@@ -822,8 +823,8 @@
           series={showBSPoint ? BUYER_SELLER_SERIES : []}
           lines={bsLines}
           {xExtent}
-          transform={syncZoom ? sharedTransform : bsTransform}
-          onZoom={(t) => handleZoom('bs', t)}
+          view={syncZoom ? sharedView : bsView}
+          onView={(v) => handleView('bs', v)}
           hoverTime={syncZoom ? sharedHoverTime : bsHoverTime}
           onHover={(t) => handleHover('bs', t)}
         />
@@ -851,8 +852,8 @@
           series={showSZPoint ? sizeSeries : []}
           lines={szLines}
           {xExtent}
-          transform={syncZoom ? sharedTransform : szTransform}
-          onZoom={(t) => handleZoom('sz', t)}
+          view={syncZoom ? sharedView : szView}
+          onView={(v) => handleView('sz', v)}
           hoverTime={syncZoom ? sharedHoverTime : szHoverTime}
           onHover={(t) => handleHover('sz', t)}
         />
@@ -880,8 +881,8 @@
           lines={ttLines}
           refLines={NEUTRAL_REF}
           {xExtent}
-          transform={syncZoom ? sharedTransform : ttTransform}
-          onZoom={(t) => handleZoom('tt', t)}
+          view={syncZoom ? sharedView : ttView}
+          onView={(v) => handleView('tt', v)}
           hoverTime={syncZoom ? sharedHoverTime : ttHoverTime}
           onHover={(t) => handleHover('tt', t)}
           formatY={(v) => v.toFixed(2)}
@@ -911,8 +912,8 @@
           lines={lsLines}
           refLines={NEUTRAL_REF}
           {xExtent}
-          transform={syncZoom ? sharedTransform : lsTransform}
-          onZoom={(t) => handleZoom('ls', t)}
+          view={syncZoom ? sharedView : lsView}
+          onView={(v) => handleView('ls', v)}
           hoverTime={syncZoom ? sharedHoverTime : lsHoverTime}
           onHover={(t) => handleHover('ls', t)}
           formatY={(v) => v.toFixed(2)}

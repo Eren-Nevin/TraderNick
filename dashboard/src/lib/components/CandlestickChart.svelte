@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as d3 from 'd3';
   import type { Candle } from '$lib/api';
+  import { transformToView, viewToTransform, type View } from '$lib/chart-zoom';
 
   type Line = {
     key: string;
@@ -17,8 +18,8 @@
     showCandles = true,
     height = 540,
     xExtent,
-    transform = d3.zoomIdentity,
-    onZoom,
+    view = null as View,
+    onView,
     hoverTime = null,
     onHover
   }: {
@@ -27,8 +28,8 @@
     showCandles?: boolean;
     height?: number;
     xExtent?: [number, number];
-    transform?: d3.ZoomTransform;
-    onZoom?: (t: d3.ZoomTransform) => void;
+    view?: View;
+    onView?: (v: View) => void;
     hoverTime?: number | null;
     onHover?: (t: number | null) => void;
   } = $props();
@@ -46,6 +47,8 @@
   let chartYScale: d3.ScaleLinear<number, number> | null = null;
   let chartPlotH = 0;
   let chartPlotW = 0;
+  let chartBaseStart = 0;
+  let chartBaseEnd = 0;
 
   let hoverIdx = $derived.by(() => {
     if (hoverTime === null || !candles.length) return null;
@@ -101,11 +104,14 @@
     const priceH = Math.floor(plotH * PRICE_FRACTION);
     const volH = Math.max(0, plotH - priceH - GAP);
 
-    const xDomain: [Date, Date] = xExtent
-      ? [new Date(xExtent[0] * 1000), new Date(xExtent[1] * 1000)]
-      : [new Date(candles[0].time * 1000), new Date(candles[candles.length - 1].time * 1000)];
-    const xBase = d3.scaleTime().domain(xDomain).range([0, plotW]);
-    const xScale = transform.rescaleX(xBase);
+    const baseStart = xExtent ? xExtent[0] : candles[0].time;
+    const baseEnd = xExtent ? xExtent[1] : candles[candles.length - 1].time;
+    const visibleStart = view ? view[0] : baseStart;
+    const visibleEnd = view ? view[1] : baseEnd;
+    const xScale = d3
+      .scaleTime()
+      .domain([new Date(visibleStart * 1000), new Date(visibleEnd * 1000)])
+      .range([0, plotW]);
 
     const v0 = xScale.invert(0).getTime() / 1000;
     const v1 = xScale.invert(plotW).getTime() / 1000;
@@ -156,6 +162,8 @@
     chartYScale = yScale;
     chartPlotH = priceH;
     chartPlotW = plotW;
+    chartBaseStart = baseStart;
+    chartBaseEnd = baseEnd;
 
     const g = root
       .append('g')
@@ -297,16 +305,20 @@
       .scaleExtent([0.5, 80])
       .filter((event) => {
         if (event.type === 'dblclick') return false;
-        if (svgEl) (svgEl as unknown as { __zoom: d3.ZoomTransform }).__zoom = transform;
+        if (svgEl) {
+          const t = viewToTransform(view, chartBaseStart, chartBaseEnd, chartPlotW);
+          (svgEl as unknown as { __zoom: d3.ZoomTransform }).__zoom = t;
+        }
         return true;
       })
       .on('zoom', (event) => {
         if (!event.sourceEvent) return;
-        onZoom?.(event.transform);
+        const v = transformToView(event.transform, chartBaseStart, chartBaseEnd, chartPlotW);
+        onView?.(v);
       });
     const root = d3.select(svgEl);
     root.call(zoomBehavior).on('dblclick.zoom', null);
-    root.on('dblclick', () => onZoom?.(d3.zoomIdentity));
+    root.on('dblclick', () => onView?.(null));
 
     const ro = new ResizeObserver((entries) => {
       const w = entries[0].contentRect.width;
@@ -324,10 +336,11 @@
     lines;
     showCandles;
     xExtent;
-    transform;
+    view;
     width;
     if (svgEl && zoomBehavior) {
-      d3.select(svgEl).call(zoomBehavior.transform, transform);
+      const t = viewToTransform(view, chartBaseStart, chartBaseEnd, chartPlotW);
+      d3.select(svgEl).call(zoomBehavior.transform, t);
     }
     draw();
   });
