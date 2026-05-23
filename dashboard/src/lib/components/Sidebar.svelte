@@ -6,7 +6,7 @@
 </script>
 
 <aside
-  class="shrink-0 h-full border-r border-zinc-800 bg-zinc-950 flex flex-col transition-[width] duration-150 ease-out"
+  class="shrink-0 h-full border-r border-zinc-800 bg-zinc-950 flex flex-col"
   class:w-56={!collapsed}
   class:w-12={collapsed}
 >
