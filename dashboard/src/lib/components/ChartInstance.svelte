@@ -33,6 +33,7 @@
     sharedHoverTime,
     onSharedView,
     onSharedHover,
+    onTokenChange,
     onRemove,
     onDragStart,
     onDragOver,
@@ -45,6 +46,7 @@
     sharedHoverTime: number | null;
     onSharedView: (v: View) => void;
     onSharedHover: (t: number | null) => void;
+    onTokenChange: (id: string, token: string) => void;
     onRemove: (id: string) => void;
     onDragStart: (e: DragEvent, id: string) => void;
     onDragOver: (e: DragEvent) => void;
@@ -381,7 +383,8 @@
     </div>
     <div class="flex items-center gap-2 flex-wrap">
       <select
-        bind:value={instance.token}
+        value={instance.token}
+        onchange={(e) => onTokenChange(instance.id, e.currentTarget.value)}
         class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
       >
         {#each tokens as t (t)}
@@ -475,6 +478,7 @@
         candles={data as Candle[]}
         lines={ohlcvLinesD}
         showCandles={instance.showPoint}
+        height={540}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -485,6 +489,7 @@
       <LineChart
         data={data as OpenInterestRow[]}
         lines={oiLinesD}
+        height={540}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -500,6 +505,7 @@
         lines={frLinesD}
         showBars={instance.showPoint}
         valueLabel="Rate"
+        height={540}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -514,6 +520,7 @@
         data={data as VolumeBucket[]}
         series={bsBars}
         lines={bsLines}
+        height={540}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -525,6 +532,7 @@
         data={data as VolumeBucket[]}
         series={szBars}
         lines={szLinesD}
+        height={540}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -536,6 +544,7 @@
         data={data as LongShortRow[]}
         lines={ttLinesD}
         refLines={NEUTRAL_REF}
+        height={540}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -549,6 +558,7 @@
         data={data as LongShortRow[]}
         lines={lsLinesD}
         refLines={NEUTRAL_REF}
+        height={540}
         {xExtent}
         view={effectiveView}
         onView={handleView}

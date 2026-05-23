@@ -32,6 +32,7 @@
   let hydrated = $state(false);
 
   let syncZoom = $state(true);
+  let syncToken = $state(false);
   let sharedView = $state<View>(null);
   let sharedHoverTime = $state<number | null>(null);
 
@@ -105,6 +106,23 @@
     // Note: when flipping ON, sharedView keeps its current value (possibly null).
     // When flipping OFF, individual charts continue with whatever local view they had.
     syncZoom = next;
+  }
+
+  function toggleSyncToken(next: boolean) {
+    if (next && instances.length > 0) {
+      const t = instances[0].token;
+      instances = instances.map((i) => ({ ...i, token: t }));
+    }
+    syncToken = next;
+  }
+
+  function onTokenChange(id: string, newToken: string) {
+    if (syncToken) {
+      instances = instances.map((i) => ({ ...i, token: newToken }));
+    } else {
+      const idx = instances.findIndex((i) => i.id === id);
+      if (idx >= 0) instances[idx].token = newToken;
+    }
   }
 
   // ---- persistence ----
@@ -195,6 +213,15 @@
         />
         Sync zoom
       </label>
+      <label class="text-xs text-zinc-400 flex items-center gap-2">
+        <input
+          type="checkbox"
+          checked={syncToken}
+          onchange={(e) => toggleSyncToken(e.currentTarget.checked)}
+          class="accent-zinc-400"
+        />
+        Sync Token
+      </label>
       <button
         type="button"
         onclick={resetLayout}
@@ -213,6 +240,7 @@
         {sharedHoverTime}
         {onSharedView}
         {onSharedHover}
+        {onTokenChange}
         onRemove={removeChart}
         onDragStart={handleDragStart}
         onDragOver={handleDragOver}
