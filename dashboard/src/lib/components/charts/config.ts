@@ -194,7 +194,7 @@ export function sizeLines(under: number, over: number) {
 
 export type FundingRateBpsRow = FundingRateRow & { rate_bps: number };
 
-export type ChartKind = 'ohlcv' | 'oi' | 'fr' | 'bs' | 'sz' | 'tt' | 'ls';
+export type ChartKind = 'ohlcv' | 'oi' | 'fr' | 'bs' | 'sz' | 'tt' | 'ls' | 'transfer';
 
 export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ohlcv: 'OHLCV',
@@ -203,7 +203,8 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   bs: 'Buyer vs Seller',
   sz: 'Volume by Size',
   tt: 'Top Traders L/S',
-  ls: 'Long/Short'
+  ls: 'Long/Short',
+  transfer: 'Transfer Volume'
 };
 
 export type ChartInstance = {
@@ -223,13 +224,21 @@ export type ChartInstance = {
   overInput?: string;
   // ohlcv only
   pin?: boolean;
+  // transfer only
+  chain?: string;
 };
 
-export function newChartInstance(kind: ChartKind, defaults: { token: string }): ChartInstance {
+export function newChartInstance(
+  kind: ChartKind,
+  defaults: { token: string; chain?: string }
+): ChartInstance {
   const base: ChartInstance = {
-    id: typeof crypto !== 'undefined' && 'randomUUID' in crypto ? crypto.randomUUID() : `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id:
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     kind,
-    width: kind === 'ohlcv' ? 2 : 1,
+    width: kind === 'ohlcv' || kind === 'transfer' ? 2 : 1,
     token: defaults.token,
     interval: '1h',
     showPoint: true,
@@ -245,6 +254,9 @@ export function newChartInstance(kind: ChartKind, defaults: { token: string }): 
   }
   if (kind === 'ohlcv') {
     base.pin = false;
+  }
+  if (kind === 'transfer') {
+    base.chain = defaults.chain ?? 'ETH';
   }
   return base;
 }

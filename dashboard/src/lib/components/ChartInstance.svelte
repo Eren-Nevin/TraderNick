@@ -3,7 +3,17 @@
   import StackedBarChart from '$lib/components/StackedBarChart.svelte';
   import LineChart from '$lib/components/LineChart.svelte';
   import SignedBarChart from '$lib/components/SignedBarChart.svelte';
-  import { INTERVALS, type Candle, type FundingRateRow, type Interval, type LongShortRow, type OpenInterestRow, type VolumeBucket } from '$lib/api';
+  import {
+    INTERVALS,
+    type Candle,
+    type FundingRateRow,
+    type Interval,
+    type LongShortRow,
+    type OpenInterestRow,
+    type TransferBucket,
+    type TransferStream,
+    type VolumeBucket
+  } from '$lib/api';
   import {
     BUYER_SELLER_LINES,
     BUYER_SELLER_SERIES,
@@ -24,11 +34,18 @@
   } from '$lib/components/charts/config';
   import type { View } from '$lib/chart-zoom';
 
-  type AnyDatum = Candle | OpenInterestRow | FundingRateRow | LongShortRow | VolumeBucket;
+  type AnyDatum =
+    | Candle
+    | OpenInterestRow
+    | FundingRateRow
+    | LongShortRow
+    | VolumeBucket
+    | TransferBucket;
 
   let {
     instance = $bindable(),
     tokens,
+    streams = [],
     syncZoom,
     sharedView,
     sharedHoverTime,
@@ -39,6 +56,7 @@
   }: {
     instance: ChartInstanceT;
     tokens: string[];
+    streams?: TransferStream[];
     syncZoom: boolean;
     sharedView: View;
     sharedHoverTime: number | null;
@@ -47,6 +65,26 @@
     onTokenChange: (id: string, token: string) => void;
     onRemove: (id: string) => void;
   } = $props();
+
+  // ---- transfer-kind helpers (derived from `streams`) ----
+  let chains = $derived(
+    Array.from(new Set(streams.map((s) => s.chain))).sort()
+  );
+  let tokensForChain = $derived(
+    Array.from(
+      new Set(streams.filter((s) => s.chain === instance.chain).map((s) => s.token))
+    ).sort()
+  );
+  let transferKind = $derived(
+    streams.find((s) => s.chain === instance.chain && s.token === instance.token)?.kind ?? 'erc20'
+  );
+  // Auto-snap token when chain changes and current token isn't on the new chain.
+  $effect(() => {
+    if (instance.kind !== 'transfer') return;
+    if (tokensForChain.length > 0 && !tokensForChain.includes(instance.token)) {
+      instance.token = tokensForChain[0];
+    }
+  });
 
   // ---- transient state (not persisted) ----
   let data = $state<AnyDatum[]>([]);
@@ -78,6 +116,9 @@
     if (instance.kind === 'sz') {
       return `${instance.kind}|${instance.token}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}`;
     }
+    if (instance.kind === 'transfer') {
+      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${instance.interval}`;
+    }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
 
@@ -90,9 +131,21 @@
   async function load() {
     error = null;
     try {
-      const w = lookbackWindow(instance.interval);
-      const sinceIso = w.since.toISOString();
-      const untilIso = w.until.toISOString();
+      // Transfer kind uses a fixed 30-day window regardless of interval; other kinds use
+      // the per-interval lookback window.
+      let sinceIso: string;
+      let untilIso: string;
+      if (instance.kind === 'transfer') {
+        const now = new Date();
+        const tu = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
+        const ts = new Date(tu.getTime() - 30 * 24 * 60 * 60 * 1000);
+        sinceIso = ts.toISOString();
+        untilIso = tu.toISOString();
+      } else {
+        const w = lookbackWindow(instance.interval);
+        sinceIso = w.since.toISOString();
+        untilIso = w.until.toISOString();
+      }
       const baseQS = {
         token: instance.token,
         interval: instance.interval,
@@ -136,6 +189,18 @@
             over: String(instance.over ?? 100000)
           })}`;
           pickArr = (b) => (b.buckets ?? []) as AnyDatum[];
+          break;
+        case 'transfer':
+          url = `/api/transfers/aggregate?${new URLSearchParams({
+            chain: instance.chain ?? 'ETH',
+            kind: transferKind,
+            token: instance.token,
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '10000'
+          })}`;
+          pickArr = (b) => (b.series ?? []) as AnyDatum[];
           break;
       }
       const res = await fetch(url);
@@ -292,9 +357,37 @@
           { key: 'cum_taker_vol', label: `Taker vol ${tag}`, color: '#a855f7', dash: '5,3', compute: (_d: LongShortRow, i: number) => takerVolMA[i] }
         ];
       }
+      case 'transfer': {
+        const arr = data as TransferBucket[];
+        const ma = maArray(arr.map((b) => b.sum_amount), instance.maLength, instance.maType);
+        const tag = `${instance.maType.toUpperCase()}(${instance.maLength})`;
+        return [
+          {
+            key: 'cum_transfer',
+            label: `Amount ${tag}`,
+            color: '#fbbf24',
+            dash: '5,3',
+            compute: (_d: TransferBucket, i: number) => ma[i]
+          }
+        ];
+      }
     }
     return [];
   });
+
+  // Transfer-kind primary line (Point toggle controls visibility).
+  const TRANSFER_LINES = [
+    {
+      key: 'sum_amount',
+      label: 'Amount',
+      color: '#06b6d4',
+      compute: (d: TransferBucket) => d.sum_amount
+    }
+  ];
+  let transferLinesD = $derived([
+    ...(instance.showPoint ? TRANSFER_LINES : []),
+    ...(instance.showCumulative ? cumulativeLines : [])
+  ]);
 
   // bs / sz: bar series (Point toggle controls visibility)
   let bsBars = $derived(instance.showPoint ? BUYER_SELLER_SERIES : []);
@@ -372,6 +465,10 @@
       <span
         class="hidden sm:inline-flex items-center gap-1 ml-1 px-2 py-0.5 rounded-md bg-zinc-800/70 border border-zinc-700/70 text-[10px] uppercase tracking-wider text-zinc-300"
       >
+        {#if instance.kind === 'transfer'}
+          <span class="text-zinc-300">{instance.chain}</span>
+          <span class="text-zinc-500">·</span>
+        {/if}
         <span class="text-zinc-100 font-medium">{instance.token}</span>
         <span class="text-zinc-500">·</span>
         <span>{instance.interval}</span>
@@ -380,15 +477,36 @@
 
     <!-- Primary controls (always visible) -->
     <div class="flex items-center gap-1.5">
-      <select
-        value={instance.token}
-        onchange={(e) => onTokenChange(instance.id, e.currentTarget.value)}
-        class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-      >
-        {#each tokens as t (t)}
-          <option value={t}>{t}</option>
-        {/each}
-      </select>
+      {#if instance.kind === 'transfer'}
+        <select
+          bind:value={instance.chain}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          {#each chains as c (c)}
+            <option value={c}>{c}</option>
+          {/each}
+        </select>
+        <select
+          value={instance.token}
+          onchange={(e) => (instance.token = e.currentTarget.value)}
+          disabled={tokensForChain.length <= 1}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {#each tokensForChain as t (t)}
+            <option value={t}>{t}</option>
+          {/each}
+        </select>
+      {:else}
+        <select
+          value={instance.token}
+          onchange={(e) => onTokenChange(instance.id, e.currentTarget.value)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          {#each tokens as t (t)}
+            <option value={t}>{t}</option>
+          {/each}
+        </select>
+      {/if}
       <select
         bind:value={instance.interval}
         class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -581,6 +699,19 @@
         onHover={handleHover}
         formatY={(v) => v.toFixed(2)}
         formatTooltip={(v) => v.toFixed(4)}
+      />
+    {:else if instance.kind === 'transfer'}
+      <LineChart
+        data={data as TransferBucket[]}
+        lines={transferLinesD}
+        height={540}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
       />
     {/if}
   {/if}
