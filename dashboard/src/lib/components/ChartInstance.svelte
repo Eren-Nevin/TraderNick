@@ -34,10 +34,7 @@
     onSharedView,
     onSharedHover,
     onTokenChange,
-    onRemove,
-    onDragStart,
-    onDragOver,
-    onDrop
+    onRemove
   }: {
     instance: ChartInstanceT;
     tokens: string[];
@@ -48,9 +45,6 @@
     onSharedHover: (t: number | null) => void;
     onTokenChange: (id: string, token: string) => void;
     onRemove: (id: string) => void;
-    onDragStart: (e: DragEvent, id: string) => void;
-    onDragOver: (e: DragEvent) => void;
-    onDrop: (e: DragEvent, id: string) => void;
   } = $props();
 
   // ---- transient state (not persisted) ----
@@ -352,19 +346,14 @@
 </script>
 
 <div
-  class={'rounded border border-zinc-800 bg-zinc-950 overflow-hidden flex flex-col ' +
+  class={'rounded border border-zinc-800 bg-zinc-950 overflow-hidden flex flex-col h-full ' +
     (instance.pin && instance.kind === 'ohlcv' ? 'sticky top-0 z-20 shadow-xl shadow-black/60 ' : '')}
-  style="grid-column: span {instance.width}"
-  ondragover={(e) => onDragOver(e)}
-  ondrop={(e) => onDrop(e, instance.id)}
   role="region"
   aria-label={panelTitle}
 >
   <div class="flex items-center justify-between gap-2 px-3 py-2 border-b border-zinc-900">
     <div class="flex items-center gap-2 min-w-0">
       <div
-        draggable="true"
-        ondragstart={(e) => onDragStart(e, instance.id)}
         title="Drag to reorder"
         class="cursor-grab active:cursor-grabbing flex items-center gap-2 text-zinc-400 hover:text-zinc-100 select-none"
       >

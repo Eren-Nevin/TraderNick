@@ -1,5 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { flip } from 'svelte/animate';
+  import { dndzone, type DndEvent } from 'svelte-dnd-action';
   import ChartInstance from '$lib/components/ChartInstance.svelte';
   import {
     CHART_KIND_LABELS,
@@ -56,43 +58,11 @@
     instances = instances.filter((i) => i.id !== id);
   }
 
-  // ---- drag-drop ----
-  const DRAG_MIME = 'application/x-tradernick-chart';
-  function handleDragStart(e: DragEvent, id: string) {
-    if (!e.dataTransfer) return;
-    e.dataTransfer.setData(DRAG_MIME, id);
-    e.dataTransfer.effectAllowed = 'move';
-  }
-  function handleDragOver(e: DragEvent) {
-    if (!e.dataTransfer) return;
-    if (!Array.from(e.dataTransfer.types).includes(DRAG_MIME)) return;
-    e.preventDefault();
-    e.dataTransfer.dropEffect = 'move';
-  }
-  function handleDrop(e: DragEvent, targetId: string) {
-    if (!e.dataTransfer) return;
-    const sourceId = e.dataTransfer.getData(DRAG_MIME);
-    if (!sourceId || sourceId === targetId) return;
-    e.preventDefault();
-    const next = instances.slice();
-    const fromIdx = next.findIndex((i) => i.id === sourceId);
-    const toIdx = next.findIndex((i) => i.id === targetId);
-    if (fromIdx < 0 || toIdx < 0) return;
-    const [moved] = next.splice(fromIdx, 1);
-    next.splice(toIdx, 0, moved);
-    instances = next;
-  }
-  function handleDropOnInsert(e: DragEvent) {
-    if (!e.dataTransfer) return;
-    const sourceId = e.dataTransfer.getData(DRAG_MIME);
-    if (!sourceId) return;
-    e.preventDefault();
-    const next = instances.slice();
-    const fromIdx = next.findIndex((i) => i.id === sourceId);
-    if (fromIdx < 0) return;
-    const [moved] = next.splice(fromIdx, 1);
-    next.push(moved);
-    instances = next;
+  // ---- drag-drop via svelte-dnd-action ----
+  const FLIP_MS = 250;
+
+  function handleSort(e: CustomEvent<DndEvent<ChartInstanceT>>) {
+    instances = e.detail.items as ChartInstanceT[];
   }
 
   // ---- sync zoom dispatch (consumed by ChartInstance via props) ----
@@ -230,29 +200,37 @@
     </div>
   </div>
 
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-6" style="grid-auto-flow: dense;">
+  <section
+    use:dndzone={{ items: instances, flipDurationMs: FLIP_MS, dropTargetStyle: {} }}
+    onconsider={handleSort}
+    onfinalize={handleSort}
+    class="grid grid-cols-1 md:grid-cols-2 gap-6"
+    style="grid-auto-flow: dense;"
+  >
     {#each instances as inst, idx (inst.id)}
-      <ChartInstance
-        bind:instance={instances[idx]}
-        tokens={data.tokens}
-        {syncZoom}
-        {sharedView}
-        {sharedHoverTime}
-        {onSharedView}
-        {onSharedHover}
-        {onTokenChange}
-        onRemove={removeChart}
-        onDragStart={handleDragStart}
-        onDragOver={handleDragOver}
-        onDrop={handleDrop}
-      />
+      <div
+        animate:flip={{ duration: FLIP_MS }}
+        style="grid-column: span {inst.width}"
+      >
+        <ChartInstance
+          bind:instance={instances[idx]}
+          tokens={data.tokens}
+          {syncZoom}
+          {sharedView}
+          {sharedHoverTime}
+          {onSharedView}
+          {onSharedHover}
+          {onTokenChange}
+          onRemove={removeChart}
+        />
+      </div>
     {/each}
+  </section>
 
-    {#if instances.length < MAX_CHARTS}
+  {#if instances.length < MAX_CHARTS}
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
       <div
         class="relative rounded border border-dashed border-zinc-700 bg-zinc-950/30 min-h-[180px] flex items-center justify-center"
-        ondragover={handleDragOver}
-        ondrop={handleDropOnInsert}
         role="region"
         aria-label="Insert chart"
       >
@@ -283,8 +261,8 @@
           </div>
         {/if}
       </div>
-    {/if}
-  </div>
+    </div>
+  {/if}
 
   <div class="text-[11px] text-zinc-500">
     Drag a panel header to reorder. Click the ⇔ button to expand/shrink between 1 and 2 columns.
