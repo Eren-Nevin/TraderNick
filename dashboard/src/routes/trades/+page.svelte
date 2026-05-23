@@ -32,83 +32,37 @@
 
   let { data }: { data: PageData } = $props();
 
-  let token = $state(data.token);
-  let interval = $state<Interval>(data.interval as Interval);
-  let underInput = $state(String(data.under));
-  let overInput = $state(String(data.over));
-  let under = $state(data.under);
-  let over = $state(data.over);
+  type View = [number, number] | null;
+  type MAType = 'sma' | 'ema' | 'wma';
+  type ChartId = 'ohlcv' | 'bs' | 'sz' | 'oi' | 'tt' | 'ls' | 'fr';
 
-  let candles = $state<Candle[]>(data.candles);
-  let buckets = $state<VolumeBucket[]>(data.buckets);
-  let openInterest = $state<OpenInterestRow[]>(data.openInterest);
-  let longShort = $state<LongShortRow[]>(data.longShort);
-  let fundingRate = $state<FundingRateRow[]>(data.fundingRate);
   let loading = $state(false);
   let error = $state<string | null>(null);
 
-  type View = [number, number] | null;
-
   let syncZoom = $state(true);
   let sharedView = $state<View>(null);
-  let ohlcvView = $state<View>(null);
-  let bsView = $state<View>(null);
-  let szView = $state<View>(null);
-  let oiView = $state<View>(null);
-  let ttView = $state<View>(null);
-  let lsView = $state<View>(null);
-  let frView = $state<View>(null);
-
   let sharedHoverTime = $state<number | null>(null);
-  let ohlcvHoverTime = $state<number | null>(null);
-  let bsHoverTime = $state<number | null>(null);
-  let szHoverTime = $state<number | null>(null);
-  let oiHoverTime = $state<number | null>(null);
-  let ttHoverTime = $state<number | null>(null);
-  let lsHoverTime = $state<number | null>(null);
-  let frHoverTime = $state<number | null>(null);
 
-  type ChartId = 'ohlcv' | 'bs' | 'sz' | 'oi' | 'tt' | 'ls' | 'fr';
+  const LOOKBACK_DAYS: Record<Interval, number> = {
+    '1m': 1,
+    '5m': 3,
+    '15m': 7,
+    '30m': 14,
+    '1h': 14,
+    '4h': 30,
+    '1d': 30
+  };
 
-  let bsCollapsed = $state(false);
-  let szCollapsed = $state(false);
-  let ttCollapsed = $state(false);
-  let lsCollapsed = $state(false);
-  let oiCollapsed = $state(false);
-  let frCollapsed = $state(false);
+  function lookbackWindow(iv: Interval): { since: Date; until: Date } {
+    const now = new Date();
+    const until = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
+    const since = new Date(until.getTime() - LOOKBACK_DAYS[iv] * 24 * 60 * 60 * 1000);
+    return { since, until };
+  }
 
-  let showOHLCVPoint = $state(true);
-  let showOHLCVCumulative = $state(false);
-  let pinOHLCV = $state(false);
-  let showBSPoint = $state(true);
-  let showBSCumulative = $state(false);
-  let showSZPoint = $state(true);
-  let showSZCumulative = $state(false);
-  let showOIPoint = $state(true);
-  let showOICumulative = $state(false);
-  let showTTPoint = $state(true);
-  let showTTCumulative = $state(false);
-  let showLSPoint = $state(true);
-  let showLSCumulative = $state(false);
-  let showFRPoint = $state(true);
-  let showFRCumulative = $state(false);
-
-  type MAType = 'sma' | 'ema' | 'wma';
-
-  let ohlcvMALength = $state(9);
-  let ohlcvMAType = $state<MAType>('sma');
-  let bsMALength = $state(9);
-  let bsMAType = $state<MAType>('sma');
-  let szMALength = $state(9);
-  let szMAType = $state<MAType>('sma');
-  let oiMALength = $state(9);
-  let oiMAType = $state<MAType>('sma');
-  let ttMALength = $state(9);
-  let ttMAType = $state<MAType>('sma');
-  let lsMALength = $state(9);
-  let lsMAType = $state<MAType>('sma');
-  let frMALength = $state(9);
-  let frMAType = $state<MAType>('sma');
+  function unix(iso: string): number {
+    return Math.floor(new Date(iso).getTime() / 1000);
+  }
 
   function smaArray(vals: number[], n: number): number[] {
     const out = new Array<number>(vals.length);
@@ -120,7 +74,6 @@
     }
     return out;
   }
-
   function emaArray(vals: number[], n: number): number[] {
     const out = new Array<number>(vals.length);
     if (!vals.length) return out;
@@ -133,7 +86,6 @@
     }
     return out;
   }
-
   function wmaArray(vals: number[], n: number): number[] {
     const out = new Array<number>(vals.length);
     for (let i = 0; i < vals.length; i++) {
@@ -149,32 +101,292 @@
     }
     return out;
   }
-
   function maArray(vals: number[], n: number, type: MAType): number[] {
     if (type === 'ema') return emaArray(vals, n);
     if (type === 'wma') return wmaArray(vals, n);
     return smaArray(vals, n);
   }
 
-  let sinceUnix = $derived(Math.floor(new Date(data.since).getTime() / 1000));
-  let untilUnix = $derived(Math.floor(new Date(data.until).getTime() / 1000));
-  let xExtent = $derived<[number, number]>([sinceUnix, untilUnix]);
+  // -------- OHLCV ----------
+  let ohlcvToken = $state(data.token);
+  let ohlcvInterval = $state<Interval>(data.interval as Interval);
+  let ohlcvCandles = $state<Candle[]>(data.candles);
+  let ohlcvSince = $state(data.since);
+  let ohlcvUntil = $state(data.until);
+  let ohlcvLoadedKey = $state(`${data.token}|${data.interval}`);
+  let ohlcvView = $state<View>(null);
+  let ohlcvHoverTime = $state<number | null>(null);
+  let ohlcvCollapsed = $state(false);
+  let pinOHLCV = $state(false);
+  let showOHLCVPoint = $state(true);
+  let showOHLCVCumulative = $state(false);
+  let ohlcvMALength = $state(9);
+  let ohlcvMAType = $state<MAType>('sma');
 
-  const LOOKBACK_DAYS: Record<Interval, number> = {
-    '1m': 1,
-    '5m': 3,
-    '15m': 7,
-    '30m': 14,
-    '1h': 14,
-    '4h': 30,
-    '1d': 30
-  };
+  let ohlcvXExtent = $derived<[number, number]>([unix(ohlcvSince), unix(ohlcvUntil)]);
+
+  $effect(() => {
+    const key = `${ohlcvToken}|${ohlcvInterval}`;
+    if (key === ohlcvLoadedKey) return;
+    void loadOhlcv();
+  });
+
+  async function loadOhlcv() {
+    loading = true;
+    error = null;
+    try {
+      const { since, until } = lookbackWindow(ohlcvInterval);
+      const qs = new URLSearchParams({
+        token: ohlcvToken,
+        interval: ohlcvInterval,
+        since: since.toISOString(),
+        until: until.toISOString(),
+        limit: '5000'
+      });
+      const res = await fetch(`/api/ohlcv?${qs}`);
+      if (!res.ok) throw new Error(`ohlcv ${res.status}`);
+      const body = await res.json();
+      ohlcvCandles = body.candles ?? [];
+      ohlcvSince = since.toISOString();
+      ohlcvUntil = until.toISOString();
+      ohlcvLoadedKey = `${ohlcvToken}|${ohlcvInterval}`;
+      ohlcvView = null;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  let ohlcvCumulativeLines = $derived.by(() => {
+    if (ohlcvCandles.length === 0) return [];
+    const ma = maArray(
+      ohlcvCandles.map((c) => c.close),
+      ohlcvMALength,
+      ohlcvMAType
+    );
+    const tag = `${ohlcvMAType.toUpperCase()}(${ohlcvMALength})`;
+    return [
+      {
+        key: 'cum_close',
+        label: `Close ${tag}`,
+        color: '#fbbf24',
+        compute: (_d: Candle, i: number) => ma[i]
+      }
+    ];
+  });
+  let ohlcvLines = $derived(showOHLCVCumulative ? ohlcvCumulativeLines : []);
+
+  // -------- Open Interest ----------
+  let oiToken = $state(data.token);
+  let oiInterval = $state<Interval>(data.interval as Interval);
+  let oiData = $state<OpenInterestRow[]>(data.openInterest);
+  let oiSince = $state(data.since);
+  let oiUntil = $state(data.until);
+  let oiLoadedKey = $state(`${data.token}|${data.interval}`);
+  let oiView = $state<View>(null);
+  let oiHoverTime = $state<number | null>(null);
+  let oiCollapsed = $state(false);
+  let showOIPoint = $state(true);
+  let showOICumulative = $state(false);
+  let oiMALength = $state(9);
+  let oiMAType = $state<MAType>('sma');
+
+  let oiXExtent = $derived<[number, number]>([unix(oiSince), unix(oiUntil)]);
+
+  $effect(() => {
+    const key = `${oiToken}|${oiInterval}`;
+    if (key === oiLoadedKey) return;
+    void loadOi();
+  });
+
+  async function loadOi() {
+    loading = true;
+    error = null;
+    try {
+      const { since, until } = lookbackWindow(oiInterval);
+      const qs = new URLSearchParams({
+        token: oiToken,
+        interval: oiInterval,
+        since: since.toISOString(),
+        until: until.toISOString(),
+        limit: '5000'
+      });
+      const res = await fetch(`/api/open_interest?${qs}`);
+      if (!res.ok) throw new Error(`open_interest ${res.status}`);
+      const body = await res.json();
+      oiData = body.series ?? [];
+      oiSince = since.toISOString();
+      oiUntil = until.toISOString();
+      oiLoadedKey = `${oiToken}|${oiInterval}`;
+      oiView = null;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  const OI_LINES = [
+    {
+      key: 'oi_usd',
+      label: 'OI (USD)',
+      color: '#06b6d4',
+      compute: (d: OpenInterestRow) => d.open_interest_value
+    }
+  ];
+
+  let oiCumulativeLines = $derived.by(() => {
+    if (oiData.length === 0) return [];
+    const ma = maArray(
+      oiData.map((d) => d.open_interest_value),
+      oiMALength,
+      oiMAType
+    );
+    const tag = `${oiMAType.toUpperCase()}(${oiMALength})`;
+    return [
+      {
+        key: 'cum_oi',
+        label: `OI ${tag}`,
+        color: '#06b6d4',
+        dash: '5,3',
+        compute: (_d: OpenInterestRow, i: number) => ma[i]
+      }
+    ];
+  });
+  let oiLines = $derived([
+    ...(showOIPoint ? OI_LINES : []),
+    ...(showOICumulative ? oiCumulativeLines : [])
+  ]);
+
+  // -------- Funding Rate ----------
+  let frToken = $state(data.token);
+  let frInterval = $state<Interval>(data.interval as Interval);
+  let frData = $state<FundingRateRow[]>(data.fundingRate);
+  let frSince = $state(data.since);
+  let frUntil = $state(data.until);
+  let frLoadedKey = $state(`${data.token}|${data.interval}`);
+  let frView = $state<View>(null);
+  let frHoverTime = $state<number | null>(null);
+  let frCollapsed = $state(false);
+  let showFRPoint = $state(true);
+  let showFRCumulative = $state(false);
+  let frMALength = $state(9);
+  let frMAType = $state<MAType>('sma');
+
+  let frXExtent = $derived<[number, number]>([unix(frSince), unix(frUntil)]);
+
+  $effect(() => {
+    const key = `${frToken}|${frInterval}`;
+    if (key === frLoadedKey) return;
+    void loadFr();
+  });
+
+  async function loadFr() {
+    loading = true;
+    error = null;
+    try {
+      const { since, until } = lookbackWindow(frInterval);
+      const qs = new URLSearchParams({
+        token: frToken,
+        interval: frInterval,
+        since: since.toISOString(),
+        until: until.toISOString(),
+        limit: '5000'
+      });
+      const res = await fetch(`/api/funding_rate?${qs}`);
+      if (!res.ok) throw new Error(`funding_rate ${res.status}`);
+      const body = await res.json();
+      frData = body.series ?? [];
+      frSince = since.toISOString();
+      frUntil = until.toISOString();
+      frLoadedKey = `${frToken}|${frInterval}`;
+      frView = null;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  let frDataBps = $derived(frData.map((d) => ({ ...d, rate_bps: d.rate * 10000 })));
+
+  let frCumulativeLines = $derived.by(() => {
+    if (frDataBps.length === 0) return [];
+    const ma = maArray(
+      frDataBps.map((d) => d.rate_bps),
+      frMALength,
+      frMAType
+    );
+    const tag = `${frMAType.toUpperCase()}(${frMALength})`;
+    return [
+      {
+        key: 'cum_fr',
+        label: `Rate ${tag}`,
+        color: '#fbbf24',
+        dash: '5,3',
+        compute: (_d: FundingRateRow & { rate_bps: number }, i: number) => ma[i]
+      }
+    ];
+  });
+  let frLines = $derived(showFRCumulative ? frCumulativeLines : []);
+
+  // -------- Buyer / Seller Taker Volume ----------
+  let bsToken = $state(data.token);
+  let bsInterval = $state<Interval>(data.interval as Interval);
+  let bsBuckets = $state<VolumeBucket[]>(data.buckets);
+  let bsSince = $state(data.since);
+  let bsUntil = $state(data.until);
+  let bsLoadedKey = $state(`${data.token}|${data.interval}|${data.under}|${data.over}`);
+  let bsView = $state<View>(null);
+  let bsHoverTime = $state<number | null>(null);
+  let bsCollapsed = $state(false);
+  let showBSPoint = $state(true);
+  let showBSCumulative = $state(false);
+  let bsMALength = $state(9);
+  let bsMAType = $state<MAType>('sma');
+
+  let bsXExtent = $derived<[number, number]>([unix(bsSince), unix(bsUntil)]);
+
+  $effect(() => {
+    const key = `${bsToken}|${bsInterval}|0|0`;
+    if (key === bsLoadedKey) return;
+    void loadBs();
+  });
+
+  async function loadBs() {
+    loading = true;
+    error = null;
+    try {
+      const { since, until } = lookbackWindow(bsInterval);
+      const qs = new URLSearchParams({
+        token: bsToken,
+        interval: bsInterval,
+        since: since.toISOString(),
+        until: until.toISOString(),
+        under: '10000',
+        over: '100000',
+        limit: '5000'
+      });
+      const res = await fetch(`/api/trade_volume?${qs}`);
+      if (!res.ok) throw new Error(`trade_volume ${res.status}`);
+      const body = await res.json();
+      bsBuckets = body.buckets ?? [];
+      bsSince = since.toISOString();
+      bsUntil = until.toISOString();
+      bsLoadedKey = `${bsToken}|${bsInterval}|0|0`;
+      bsView = null;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
 
   const BUYER_SELLER_SERIES = [
     { key: 'buyer_taker_usd', label: 'Buyer', color: '#22c55e' },
     { key: 'seller_taker_usd', label: 'Seller', color: '#ef4444' }
   ];
-
   const BUYER_SELLER_LINES = [
     {
       key: 'buyer_pct',
@@ -187,42 +399,15 @@
     }
   ];
 
-  let sizeSeries = $derived([
-    { key: 'small_usd', label: `< $${under}`, color: '#3f3f46' },
-    { key: 'mid_usd', label: `$${under}–$${over}`, color: '#3b82f6' },
-    { key: 'large_usd', label: `> $${over}`, color: '#a855f7' }
-  ]);
-
-  let sizeLines = $derived([
-    {
-      key: 'small_pct',
-      label: `% < $${under}`,
-      color: '#fbbf24',
-      compute: (d: VolumeBucket) => {
-        const total = d.small_usd + d.mid_usd + d.large_usd;
-        return total > 0 ? (d.small_usd / total) * 100 : 0;
-      }
-    },
-    {
-      key: 'large_pct',
-      label: `% > $${over}`,
-      color: '#06b6d4',
-      compute: (d: VolumeBucket) => {
-        const total = d.small_usd + d.mid_usd + d.large_usd;
-        return total > 0 ? (d.large_usd / total) * 100 : 0;
-      }
-    }
-  ]);
-
   let bsCumulativeLines = $derived.by(() => {
-    if (buckets.length === 0) return [];
+    if (bsBuckets.length === 0) return [];
     const buyerMA = maArray(
-      buckets.map((b) => b.buyer_taker_usd),
+      bsBuckets.map((b) => b.buyer_taker_usd),
       bsMALength,
       bsMAType
     );
     const totalMA = maArray(
-      buckets.map((b) => b.buyer_taker_usd + b.seller_taker_usd),
+      bsBuckets.map((b) => b.buyer_taker_usd + b.seller_taker_usd),
       bsMALength,
       bsMAType
     );
@@ -238,21 +423,115 @@
       }
     ];
   });
+  let bsLines = $derived(showBSCumulative ? [...BUYER_SELLER_LINES, ...bsCumulativeLines] : []);
+
+  // -------- Volume by Trade Size ----------
+  let szToken = $state(data.token);
+  let szInterval = $state<Interval>(data.interval as Interval);
+  let szBuckets = $state<VolumeBucket[]>(data.buckets);
+  let szUnder = $state(data.under);
+  let szOver = $state(data.over);
+  let szUnderInput = $state(String(data.under));
+  let szOverInput = $state(String(data.over));
+  let szSince = $state(data.since);
+  let szUntil = $state(data.until);
+  let szLoadedKey = $state(`${data.token}|${data.interval}|${data.under}|${data.over}`);
+  let szView = $state<View>(null);
+  let szHoverTime = $state<number | null>(null);
+  let szCollapsed = $state(false);
+  let showSZPoint = $state(true);
+  let showSZCumulative = $state(false);
+  let szMALength = $state(9);
+  let szMAType = $state<MAType>('sma');
+
+  let szXExtent = $derived<[number, number]>([unix(szSince), unix(szUntil)]);
+
+  $effect(() => {
+    const key = `${szToken}|${szInterval}|${szUnder}|${szOver}`;
+    if (key === szLoadedKey) return;
+    void loadSz();
+  });
+
+  async function loadSz() {
+    loading = true;
+    error = null;
+    try {
+      const { since, until } = lookbackWindow(szInterval);
+      const qs = new URLSearchParams({
+        token: szToken,
+        interval: szInterval,
+        since: since.toISOString(),
+        until: until.toISOString(),
+        under: String(szUnder),
+        over: String(szOver),
+        limit: '5000'
+      });
+      const res = await fetch(`/api/trade_volume?${qs}`);
+      if (!res.ok) throw new Error(`trade_volume ${res.status}`);
+      const body = await res.json();
+      szBuckets = body.buckets ?? [];
+      szSince = since.toISOString();
+      szUntil = until.toISOString();
+      szLoadedKey = `${szToken}|${szInterval}|${szUnder}|${szOver}`;
+      szView = null;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
+
+  function applySzThresholds() {
+    const u = Number(szUnderInput);
+    const o = Number(szOverInput);
+    if (!Number.isFinite(u) || !Number.isFinite(o) || u < 0 || u >= o) {
+      error = 'Require 0 ≤ under < over';
+      return;
+    }
+    szUnder = u;
+    szOver = o;
+  }
+
+  let sizeSeries = $derived([
+    { key: 'small_usd', label: `< $${szUnder}`, color: '#3f3f46' },
+    { key: 'mid_usd', label: `$${szUnder}–$${szOver}`, color: '#3b82f6' },
+    { key: 'large_usd', label: `> $${szOver}`, color: '#a855f7' }
+  ]);
+  let sizeLines = $derived([
+    {
+      key: 'small_pct',
+      label: `% < $${szUnder}`,
+      color: '#fbbf24',
+      compute: (d: VolumeBucket) => {
+        const total = d.small_usd + d.mid_usd + d.large_usd;
+        return total > 0 ? (d.small_usd / total) * 100 : 0;
+      }
+    },
+    {
+      key: 'large_pct',
+      label: `% > $${szOver}`,
+      color: '#06b6d4',
+      compute: (d: VolumeBucket) => {
+        const total = d.small_usd + d.mid_usd + d.large_usd;
+        return total > 0 ? (d.large_usd / total) * 100 : 0;
+      }
+    }
+  ]);
 
   let szCumulativeLines = $derived.by(() => {
-    if (buckets.length === 0) return [];
+    if (szBuckets.length === 0) return [];
     const smallMA = maArray(
-      buckets.map((b) => b.small_usd),
+      szBuckets.map((b) => b.small_usd),
       szMALength,
       szMAType
     );
     const largeMA = maArray(
-      buckets.map((b) => b.large_usd),
+      szBuckets.map((b) => b.large_usd),
       szMALength,
       szMAType
     );
     const totalMA = maArray(
-      buckets.map((b) => b.small_usd + b.mid_usd + b.large_usd),
+      szBuckets.map((b) => b.small_usd + b.mid_usd + b.large_usd),
       szMALength,
       szMAType
     );
@@ -260,7 +539,7 @@
     return [
       {
         key: 'cum_small',
-        label: `% < $${under} ${tag}`,
+        label: `% < $${szUnder} ${tag}`,
         color: '#fbbf24',
         dash: '5,3',
         compute: (_d: VolumeBucket, i: number) =>
@@ -268,7 +547,7 @@
       },
       {
         key: 'cum_large',
-        label: `% > $${over} ${tag}`,
+        label: `% > $${szOver} ${tag}`,
         color: '#06b6d4',
         dash: '5,3',
         compute: (_d: VolumeBucket, i: number) =>
@@ -276,23 +555,107 @@
       }
     ];
   });
+  let szLines = $derived(showSZCumulative ? [...sizeLines, ...szCumulativeLines] : []);
 
-  let bsLines = $derived(
-    showBSCumulative ? [...BUYER_SELLER_LINES, ...bsCumulativeLines] : []
-  );
+  // -------- Long/Short ratios (Top Traders + All) ----------
+  // The two charts share the same LSR endpoint shape, but each has its own token+interval.
+  let ttToken = $state(data.token);
+  let ttInterval = $state<Interval>(data.interval as Interval);
+  let ttData = $state<LongShortRow[]>(data.longShort);
+  let ttSince = $state(data.since);
+  let ttUntil = $state(data.until);
+  let ttLoadedKey = $state(`${data.token}|${data.interval}`);
+  let ttView = $state<View>(null);
+  let ttHoverTime = $state<number | null>(null);
+  let ttCollapsed = $state(false);
+  let showTTPoint = $state(true);
+  let showTTCumulative = $state(false);
+  let ttMALength = $state(9);
+  let ttMAType = $state<MAType>('sma');
 
-  let szLines = $derived(
-    showSZCumulative ? [...sizeLines, ...szCumulativeLines] : []
-  );
+  let ttXExtent = $derived<[number, number]>([unix(ttSince), unix(ttUntil)]);
 
-  const OI_LINES = [
-    {
-      key: 'oi_usd',
-      label: 'OI (USD)',
-      color: '#06b6d4',
-      compute: (d: OpenInterestRow) => d.open_interest_value
+  $effect(() => {
+    const key = `${ttToken}|${ttInterval}`;
+    if (key === ttLoadedKey) return;
+    void loadTt();
+  });
+
+  async function loadTt() {
+    loading = true;
+    error = null;
+    try {
+      const { since, until } = lookbackWindow(ttInterval);
+      const qs = new URLSearchParams({
+        token: ttToken,
+        interval: ttInterval,
+        since: since.toISOString(),
+        until: until.toISOString(),
+        limit: '5000'
+      });
+      const res = await fetch(`/api/long_short_ratios?${qs}`);
+      if (!res.ok) throw new Error(`long_short_ratios ${res.status}`);
+      const body = await res.json();
+      ttData = body.series ?? [];
+      ttSince = since.toISOString();
+      ttUntil = until.toISOString();
+      ttLoadedKey = `${ttToken}|${ttInterval}`;
+      ttView = null;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
     }
-  ];
+  }
+
+  let lsToken = $state(data.token);
+  let lsInterval = $state<Interval>(data.interval as Interval);
+  let lsData = $state<LongShortRow[]>(data.longShort);
+  let lsSince = $state(data.since);
+  let lsUntil = $state(data.until);
+  let lsLoadedKey = $state(`${data.token}|${data.interval}`);
+  let lsView = $state<View>(null);
+  let lsHoverTime = $state<number | null>(null);
+  let lsCollapsed = $state(false);
+  let showLSPoint = $state(true);
+  let showLSCumulative = $state(false);
+  let lsMALength = $state(9);
+  let lsMAType = $state<MAType>('sma');
+
+  let lsXExtent = $derived<[number, number]>([unix(lsSince), unix(lsUntil)]);
+
+  $effect(() => {
+    const key = `${lsToken}|${lsInterval}`;
+    if (key === lsLoadedKey) return;
+    void loadLs();
+  });
+
+  async function loadLs() {
+    loading = true;
+    error = null;
+    try {
+      const { since, until } = lookbackWindow(lsInterval);
+      const qs = new URLSearchParams({
+        token: lsToken,
+        interval: lsInterval,
+        since: since.toISOString(),
+        until: until.toISOString(),
+        limit: '5000'
+      });
+      const res = await fetch(`/api/long_short_ratios?${qs}`);
+      if (!res.ok) throw new Error(`long_short_ratios ${res.status}`);
+      const body = await res.json();
+      lsData = body.series ?? [];
+      lsSince = since.toISOString();
+      lsUntil = until.toISOString();
+      lsLoadedKey = `${lsToken}|${lsInterval}`;
+      lsView = null;
+    } catch (e) {
+      error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
+    }
+  }
 
   const TOP_TRADERS_LINES = [
     {
@@ -308,7 +671,6 @@
       compute: (d: LongShortRow) => d.top_trader_vol_ratio
     }
   ];
-
   const LS_LINES = [
     {
       key: 'all_ct',
@@ -323,87 +685,17 @@
       compute: (d: LongShortRow) => d.taker_long_short_vol_ratio
     }
   ];
-
   const NEUTRAL_REF = [{ value: 1 }];
 
-  let fundingRateBps = $derived(
-    fundingRate.map((d) => ({ ...d, rate_bps: d.rate * 10000 }))
-  );
-
-  let oiCumulativeLines = $derived.by(() => {
-    if (openInterest.length === 0) return [];
-    const ma = maArray(
-      openInterest.map((d) => d.open_interest_value),
-      oiMALength,
-      oiMAType
-    );
-    const tag = `${oiMAType.toUpperCase()}(${oiMALength})`;
-    return [
-      {
-        key: 'cum_oi',
-        label: `OI ${tag}`,
-        color: '#06b6d4',
-        dash: '5,3',
-        compute: (_d: OpenInterestRow, i: number) => ma[i]
-      }
-    ];
-  });
-
-  let frCumulativeLines = $derived.by(() => {
-    if (fundingRateBps.length === 0) return [];
-    const ma = maArray(
-      fundingRateBps.map((d) => d.rate_bps),
-      frMALength,
-      frMAType
-    );
-    const tag = `${frMAType.toUpperCase()}(${frMALength})`;
-    return [
-      {
-        key: 'cum_fr',
-        label: `Rate ${tag}`,
-        color: '#fbbf24',
-        dash: '5,3',
-        compute: (_d: FundingRateRow & { rate_bps: number }, i: number) => ma[i]
-      }
-    ];
-  });
-
-  let oiLines = $derived([
-    ...(showOIPoint ? OI_LINES : []),
-    ...(showOICumulative ? oiCumulativeLines : [])
-  ]);
-
-  let frLines = $derived(showFRCumulative ? frCumulativeLines : []);
-
-  let ohlcvCumulativeLines = $derived.by(() => {
-    if (candles.length === 0) return [];
-    const ma = maArray(
-      candles.map((c) => c.close),
-      ohlcvMALength,
-      ohlcvMAType
-    );
-    const tag = `${ohlcvMAType.toUpperCase()}(${ohlcvMALength})`;
-    return [
-      {
-        key: 'cum_close',
-        label: `Close ${tag}`,
-        color: '#fbbf24',
-        compute: (_d: Candle, i: number) => ma[i]
-      }
-    ];
-  });
-
-  let ohlcvLines = $derived(showOHLCVCumulative ? ohlcvCumulativeLines : []);
-
   let ttCumulativeLines = $derived.by(() => {
-    if (longShort.length === 0) return [];
+    if (ttData.length === 0) return [];
     const countMA = maArray(
-      longShort.map((d) => d.top_trader_count_ratio),
+      ttData.map((d) => d.top_trader_count_ratio),
       ttMALength,
       ttMAType
     );
     const volMA = maArray(
-      longShort.map((d) => d.top_trader_vol_ratio),
+      ttData.map((d) => d.top_trader_vol_ratio),
       ttMALength,
       ttMAType
     );
@@ -425,16 +717,15 @@
       }
     ];
   });
-
   let lsCumulativeLines = $derived.by(() => {
-    if (longShort.length === 0) return [];
+    if (lsData.length === 0) return [];
     const allCountMA = maArray(
-      longShort.map((d) => d.long_short_count_ratio),
+      lsData.map((d) => d.long_short_count_ratio),
       lsMALength,
       lsMAType
     );
     const takerVolMA = maArray(
-      longShort.map((d) => d.taker_long_short_vol_ratio),
+      lsData.map((d) => d.taker_long_short_vol_ratio),
       lsMALength,
       lsMAType
     );
@@ -456,7 +747,6 @@
       }
     ];
   });
-
   let ttLines = $derived([
     ...(showTTPoint ? TOP_TRADERS_LINES : []),
     ...(showTTCumulative ? ttCumulativeLines : [])
@@ -466,98 +756,7 @@
     ...(showLSCumulative ? lsCumulativeLines : [])
   ]);
 
-  $effect(() => {
-    if (
-      token === data.token &&
-      interval === data.interval &&
-      under === data.under &&
-      over === data.over
-    )
-      return;
-    void reload(token, interval, under, over);
-  });
-
-  function resetAllTransforms() {
-    sharedView = null;
-    ohlcvView = null;
-    bsView = null;
-    szView = null;
-    oiView = null;
-    ttView = null;
-    lsView = null;
-    frView = null;
-  }
-
-  async function reload(t: string, iv: Interval, u: number, o: number) {
-    loading = true;
-    error = null;
-    try {
-      const now = new Date();
-      const until = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
-      const lookback = LOOKBACK_DAYS[iv];
-      const since = new Date(until.getTime() - lookback * 24 * 60 * 60 * 1000);
-      const ohlcvQS = new URLSearchParams({
-        token: t,
-        interval: iv,
-        since: since.toISOString(),
-        until: until.toISOString(),
-        limit: '5000'
-      });
-      const tvQS = new URLSearchParams({
-        ...Object.fromEntries(ohlcvQS),
-        under: String(u),
-        over: String(o)
-      });
-      const derivQS = new URLSearchParams({
-        token: t,
-        interval: iv,
-        since: since.toISOString(),
-        until: until.toISOString(),
-        limit: '5000'
-      });
-      const [ohlcvRes, tvRes, oiRes, lsRes, frRes] = await Promise.all([
-        fetch(`/api/ohlcv?${ohlcvQS}`),
-        fetch(`/api/trade_volume?${tvQS}`),
-        fetch(`/api/open_interest?${derivQS}`),
-        fetch(`/api/long_short_ratios?${derivQS}`),
-        fetch(`/api/funding_rate?${derivQS}`)
-      ]);
-      if (!ohlcvRes.ok) throw new Error(`ohlcv ${ohlcvRes.status}`);
-      if (!tvRes.ok) throw new Error(`trade_volume ${tvRes.status}`);
-      if (!oiRes.ok) throw new Error(`open_interest ${oiRes.status}`);
-      if (!lsRes.ok) throw new Error(`long_short_ratios ${lsRes.status}`);
-      if (!frRes.ok) throw new Error(`funding_rate ${frRes.status}`);
-      const ohlcvBody = await ohlcvRes.json();
-      const tvBody = await tvRes.json();
-      const oiBody = await oiRes.json();
-      const lsBody = await lsRes.json();
-      const frBody = await frRes.json();
-      candles = ohlcvBody.candles ?? [];
-      buckets = tvBody.buckets ?? [];
-      openInterest = oiBody.series ?? [];
-      longShort = lsBody.series ?? [];
-      fundingRate = frBody.series ?? [];
-      data.since = since.toISOString();
-      data.until = until.toISOString();
-      resetAllTransforms();
-    } catch (e) {
-      error = e instanceof Error ? e.message : String(e);
-    } finally {
-      loading = false;
-    }
-  }
-
-  function applyThresholds() {
-    const u = Number(underInput);
-    const o = Number(overInput);
-    if (!Number.isFinite(u) || !Number.isFinite(o) || u < 0 || u >= o) {
-      error = 'Require 0 ≤ under < over';
-      return;
-    }
-    under = u;
-    over = o;
-  }
-
+  // -------- Sync + view dispatch ----------
   function handleView(target: ChartId, v: View) {
     if (syncZoom) {
       sharedView = v;
@@ -588,7 +787,7 @@
 
   function toggleSync(next: boolean) {
     if (next) {
-      sharedView = ohlcvView;
+      sharedView = ohlcvView ?? bsView ?? szView ?? oiView ?? ttView ?? lsView ?? frView ?? null;
     } else {
       ohlcvView = sharedView;
       bsView = sharedView;
@@ -609,55 +808,7 @@
       <div class="text-xs text-zinc-500">Binance OHLCV + raw trades via DeFiStream</div>
     </div>
     <div class="flex items-end gap-3 flex-wrap">
-      <label class="text-xs text-zinc-400">
-        Token
-        <select
-          bind:value={token}
-          class="ml-2 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"
-        >
-          {#each data.tokens as t (t)}
-            <option value={t}>{t}</option>
-          {/each}
-        </select>
-      </label>
-      <label class="text-xs text-zinc-400">
-        Interval
-        <select
-          bind:value={interval}
-          class="ml-2 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"
-        >
-          {#each INTERVALS as iv (iv)}
-            <option value={iv}>{iv}</option>
-          {/each}
-        </select>
-      </label>
-      <label class="text-xs text-zinc-400">
-        Under
-        <input
-          bind:value={underInput}
-          type="number"
-          step="100"
-          min="0"
-          class="ml-2 w-24 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"
-        />
-      </label>
-      <label class="text-xs text-zinc-400">
-        Over
-        <input
-          bind:value={overInput}
-          type="number"
-          step="100"
-          min="0"
-          class="ml-2 w-24 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"
-        />
-      </label>
-      <button
-        onclick={applyThresholds}
-        class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded px-3 py-1 text-sm"
-      >
-        Apply
-      </button>
-      <label class="text-xs text-zinc-400 flex items-center gap-2 ml-2">
+      <label class="text-xs text-zinc-400 flex items-center gap-2">
         <input
           type="checkbox"
           checked={syncZoom}
@@ -666,6 +817,9 @@
         />
         Sync zoom
       </label>
+      {#if loading}
+        <span class="text-xs text-zinc-500">loading…</span>
+      {/if}
     </div>
   </div>
 
@@ -674,8 +828,24 @@
   {/if}
 
   <div class={pinOHLCV ? 'sticky top-0 z-20 shadow-xl shadow-black/60' : ''}>
-    <ChartPanel title="OHLCV">
+    <ChartPanel title="OHLCV — {ohlcvToken} {ohlcvInterval}" bind:collapsed={ohlcvCollapsed}>
       {#snippet controls()}
+        <select
+          bind:value={ohlcvToken}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each data.tokens as t (t)}
+            <option value={t}>{t}</option>
+          {/each}
+        </select>
+        <select
+          bind:value={ohlcvInterval}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each INTERVALS as iv (iv)}
+            <option value={iv}>{iv}</option>
+          {/each}
+        </select>
         <label class="text-xs text-zinc-400 flex items-center gap-2">
           <input type="checkbox" bind:checked={pinOHLCV} class="accent-zinc-400" />
           Pin
@@ -705,18 +875,14 @@
           <option value="wma">WMA</option>
         </select>
       {/snippet}
-      {#if loading && candles.length === 0}
-        <div class="p-4 text-sm text-zinc-400">Loading…</div>
-      {:else if candles.length === 0}
-        <div class="p-4 text-sm text-zinc-400">
-          No OHLCV data yet — wait for the live poller or fire a backfill.
-        </div>
+      {#if ohlcvCandles.length === 0}
+        <div class="p-4 text-sm text-zinc-400">No OHLCV data.</div>
       {:else}
         <CandlestickChart
-          {candles}
+          candles={ohlcvCandles}
           lines={ohlcvLines}
           showCandles={showOHLCVPoint}
-          {xExtent}
+          xExtent={ohlcvXExtent}
           view={syncZoom ? sharedView : ohlcvView}
           onView={(v) => handleView('ohlcv', v)}
           hoverTime={syncZoom ? sharedHoverTime : ohlcvHoverTime}
@@ -727,8 +893,24 @@
   </div>
 
   <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
-    <ChartPanel title="Open Interest (USD)" bind:collapsed={oiCollapsed}>
+    <ChartPanel title="Open Interest — {oiToken} {oiInterval}" bind:collapsed={oiCollapsed}>
       {#snippet controls()}
+        <select
+          bind:value={oiToken}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each data.tokens as t (t)}
+            <option value={t}>{t}</option>
+          {/each}
+        </select>
+        <select
+          bind:value={oiInterval}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each INTERVALS as iv (iv)}
+            <option value={iv}>{iv}</option>
+          {/each}
+        </select>
         <label class="text-xs text-zinc-400 flex items-center gap-2">
           <input type="checkbox" bind:checked={showOIPoint} class="accent-zinc-400" />
           Point
@@ -754,15 +936,13 @@
           <option value="wma">WMA</option>
         </select>
       {/snippet}
-      {#if openInterest.length === 0}
-        <div class="p-4 text-sm text-zinc-400">
-          No open-interest data yet — start the binance_open_interest live poller or run the backfill.
-        </div>
+      {#if oiData.length === 0}
+        <div class="p-4 text-sm text-zinc-400">No open-interest data.</div>
       {:else}
         <LineChart
-          data={openInterest}
+          data={oiData}
           lines={oiLines}
-          {xExtent}
+          xExtent={oiXExtent}
           view={syncZoom ? sharedView : oiView}
           onView={(v) => handleView('oi', v)}
           hoverTime={syncZoom ? sharedHoverTime : oiHoverTime}
@@ -773,8 +953,24 @@
       {/if}
     </ChartPanel>
 
-    <ChartPanel title="Funding Rate (bps)" bind:collapsed={frCollapsed}>
+    <ChartPanel title="Funding Rate — {frToken} {frInterval} (bps)" bind:collapsed={frCollapsed}>
       {#snippet controls()}
+        <select
+          bind:value={frToken}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each data.tokens as t (t)}
+            <option value={t}>{t}</option>
+          {/each}
+        </select>
+        <select
+          bind:value={frInterval}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each INTERVALS as iv (iv)}
+            <option value={iv}>{iv}</option>
+          {/each}
+        </select>
         <label class="text-xs text-zinc-400 flex items-center gap-2">
           <input type="checkbox" bind:checked={showFRPoint} class="accent-zinc-400" />
           Point
@@ -800,18 +996,16 @@
           <option value="wma">WMA</option>
         </select>
       {/snippet}
-      {#if fundingRate.length === 0}
-        <div class="p-4 text-sm text-zinc-400">
-          No funding-rate data yet — start the binance_funding_rate live poller or run the backfill.
-        </div>
+      {#if frData.length === 0}
+        <div class="p-4 text-sm text-zinc-400">No funding-rate data.</div>
       {:else}
         <SignedBarChart
-          data={fundingRateBps}
+          data={frDataBps}
           valueKey="rate_bps"
           lines={frLines}
           showBars={showFRPoint}
           valueLabel="Rate"
-          {xExtent}
+          xExtent={frXExtent}
           view={syncZoom ? sharedView : frView}
           onView={(v) => handleView('fr', v)}
           hoverTime={syncZoom ? sharedHoverTime : frHoverTime}
@@ -823,8 +1017,27 @@
       {/if}
     </ChartPanel>
 
-    <ChartPanel title="Buyer vs Seller Taker Volume (USD)" bind:collapsed={bsCollapsed}>
+    <ChartPanel
+      title="Buyer vs Seller Taker — {bsToken} {bsInterval}"
+      bind:collapsed={bsCollapsed}
+    >
       {#snippet controls()}
+        <select
+          bind:value={bsToken}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each data.tokens as t (t)}
+            <option value={t}>{t}</option>
+          {/each}
+        </select>
+        <select
+          bind:value={bsInterval}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each INTERVALS as iv (iv)}
+            <option value={iv}>{iv}</option>
+          {/each}
+        </select>
         <label class="text-xs text-zinc-400 flex items-center gap-2">
           <input type="checkbox" bind:checked={showBSPoint} class="accent-zinc-400" />
           Point
@@ -850,16 +1063,14 @@
           <option value="wma">WMA</option>
         </select>
       {/snippet}
-      {#if buckets.length === 0}
-        <div class="p-4 text-sm text-zinc-400">
-          No raw-trade data yet — start the raw_trades live poller or run the backfill.
-        </div>
+      {#if bsBuckets.length === 0}
+        <div class="p-4 text-sm text-zinc-400">No raw-trade data.</div>
       {:else}
         <StackedBarChart
-          data={buckets}
+          data={bsBuckets}
           series={showBSPoint ? BUYER_SELLER_SERIES : []}
           lines={bsLines}
-          {xExtent}
+          xExtent={bsXExtent}
           view={syncZoom ? sharedView : bsView}
           onView={(v) => handleView('bs', v)}
           hoverTime={syncZoom ? sharedHoverTime : bsHoverTime}
@@ -868,8 +1079,49 @@
       {/if}
     </ChartPanel>
 
-    <ChartPanel title="Volume by Trade Size (USD)" bind:collapsed={szCollapsed}>
+    <ChartPanel
+      title="Volume by Trade Size — {szToken} {szInterval}"
+      bind:collapsed={szCollapsed}
+    >
       {#snippet controls()}
+        <select
+          bind:value={szToken}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each data.tokens as t (t)}
+            <option value={t}>{t}</option>
+          {/each}
+        </select>
+        <select
+          bind:value={szInterval}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each INTERVALS as iv (iv)}
+            <option value={iv}>{iv}</option>
+          {/each}
+        </select>
+        <input
+          bind:value={szUnderInput}
+          type="number"
+          step="100"
+          min="0"
+          title="Under threshold (USD)"
+          class="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        />
+        <input
+          bind:value={szOverInput}
+          type="number"
+          step="100"
+          min="0"
+          title="Over threshold (USD)"
+          class="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        />
+        <button
+          onclick={applySzThresholds}
+          class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          Apply
+        </button>
         <label class="text-xs text-zinc-400 flex items-center gap-2">
           <input type="checkbox" bind:checked={showSZPoint} class="accent-zinc-400" />
           Point
@@ -895,16 +1147,14 @@
           <option value="wma">WMA</option>
         </select>
       {/snippet}
-      {#if buckets.length === 0}
-        <div class="p-4 text-sm text-zinc-400">
-          No raw-trade data yet — start the raw_trades live poller or run the backfill.
-        </div>
+      {#if szBuckets.length === 0}
+        <div class="p-4 text-sm text-zinc-400">No raw-trade data.</div>
       {:else}
         <StackedBarChart
-          data={buckets}
+          data={szBuckets}
           series={showSZPoint ? sizeSeries : []}
           lines={szLines}
-          {xExtent}
+          xExtent={szXExtent}
           view={syncZoom ? sharedView : szView}
           onView={(v) => handleView('sz', v)}
           hoverTime={syncZoom ? sharedHoverTime : szHoverTime}
@@ -913,8 +1163,24 @@
       {/if}
     </ChartPanel>
 
-    <ChartPanel title="Top Traders L/S Ratios" bind:collapsed={ttCollapsed}>
+    <ChartPanel title="Top Traders L/S — {ttToken} {ttInterval}" bind:collapsed={ttCollapsed}>
       {#snippet controls()}
+        <select
+          bind:value={ttToken}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each data.tokens as t (t)}
+            <option value={t}>{t}</option>
+          {/each}
+        </select>
+        <select
+          bind:value={ttInterval}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each INTERVALS as iv (iv)}
+            <option value={iv}>{iv}</option>
+          {/each}
+        </select>
         <label class="text-xs text-zinc-400 flex items-center gap-2">
           <input type="checkbox" bind:checked={showTTPoint} class="accent-zinc-400" />
           Point
@@ -940,16 +1206,14 @@
           <option value="wma">WMA</option>
         </select>
       {/snippet}
-      {#if longShort.length === 0}
-        <div class="p-4 text-sm text-zinc-400">
-          No long/short data yet — start the binance_long_short_ratios live poller or run the backfill.
-        </div>
+      {#if ttData.length === 0}
+        <div class="p-4 text-sm text-zinc-400">No long/short data.</div>
       {:else}
         <LineChart
-          data={longShort}
+          data={ttData}
           lines={ttLines}
           refLines={NEUTRAL_REF}
-          {xExtent}
+          xExtent={ttXExtent}
           view={syncZoom ? sharedView : ttView}
           onView={(v) => handleView('tt', v)}
           hoverTime={syncZoom ? sharedHoverTime : ttHoverTime}
@@ -960,8 +1224,24 @@
       {/if}
     </ChartPanel>
 
-    <ChartPanel title="Long/Short Ratios" bind:collapsed={lsCollapsed}>
+    <ChartPanel title="Long/Short — {lsToken} {lsInterval}" bind:collapsed={lsCollapsed}>
       {#snippet controls()}
+        <select
+          bind:value={lsToken}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each data.tokens as t (t)}
+            <option value={t}>{t}</option>
+          {/each}
+        </select>
+        <select
+          bind:value={lsInterval}
+          class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        >
+          {#each INTERVALS as iv (iv)}
+            <option value={iv}>{iv}</option>
+          {/each}
+        </select>
         <label class="text-xs text-zinc-400 flex items-center gap-2">
           <input type="checkbox" bind:checked={showLSPoint} class="accent-zinc-400" />
           Point
@@ -987,16 +1267,14 @@
           <option value="wma">WMA</option>
         </select>
       {/snippet}
-      {#if longShort.length === 0}
-        <div class="p-4 text-sm text-zinc-400">
-          No long/short data yet — start the binance_long_short_ratios live poller or run the backfill.
-        </div>
+      {#if lsData.length === 0}
+        <div class="p-4 text-sm text-zinc-400">No long/short data.</div>
       {:else}
         <LineChart
-          data={longShort}
+          data={lsData}
           lines={lsLines}
           refLines={NEUTRAL_REF}
-          {xExtent}
+          xExtent={lsXExtent}
           view={syncZoom ? sharedView : lsView}
           onView={(v) => handleView('ls', v)}
           hoverTime={syncZoom ? sharedHoverTime : lsHoverTime}
@@ -1006,12 +1284,11 @@
         />
       {/if}
     </ChartPanel>
-
   </div>
 
   <div class="text-[11px] text-zinc-500">
-    Scroll to zoom, drag to pan, double-click to reset, hover for tooltips. Toggle Sync zoom to
-    couple/uncouple all visible charts' x-axis. Collapse a chart via its ▼/▶ button — when sync is
-    on, expanding it picks up the current shared zoom and hover automatically.
+    Each chart has its own Token + Interval. Sync zoom shares the time-range view across all
+    visible charts (still works across charts with different intervals — the X axis is wall-clock
+    time). Under/Over thresholds apply only to Volume by Trade Size.
   </div>
 </div>

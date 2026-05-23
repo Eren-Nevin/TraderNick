@@ -1,3 +1,5 @@
+import asyncio
+import time
 from datetime import datetime, timezone
 
 from sanic import Blueprint, response
@@ -7,35 +9,42 @@ from routes.ohlcv import INTERVAL_SECONDS
 
 bp = Blueprint("transfers")
 
+# Distinct (kind, chain, token) tuples take ~2-5s to compute over the full
+# transfers table once it has 100M+ rows. The list changes only when admin
+# reconfigures ingestion, so cache aggressively with a TTL.
+_STREAMS_CACHE: dict = {"at": 0.0, "value": None}
+_STREAMS_TTL_SECONDS = 60.0
+_streams_lock = asyncio.Lock()
+
 
 def _parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
 
 
-@bp.get("/transfers/streams")
-async def streams(_request):
+async def _fetch_streams() -> list[dict]:
     ch = await client()
     rows = await ch.query(
         """
-        SELECT kind, chain, token, count() AS rows, min(time) AS first_seen, max(time) AS last_seen
+        SELECT DISTINCT chain, token, kind
         FROM tradernick.transfers
-        GROUP BY kind, chain, token
         ORDER BY chain, token
         """
     )
-    return response.json({
-        "streams": [
-            {
-                "kind": r[0],
-                "chain": r[1],
-                "token": r[2],
-                "rows": int(r[3]),
-                "first_seen": r[4].isoformat() if r[4] else None,
-                "last_seen": r[5].isoformat() if r[5] else None,
-            }
-            for r in rows.result_rows
-        ]
-    })
+    return [{"chain": r[0], "token": r[1], "kind": r[2]} for r in rows.result_rows]
+
+
+@bp.get("/transfers/streams")
+async def streams(_request):
+    now = time.monotonic()
+    if _STREAMS_CACHE["value"] is not None and now - _STREAMS_CACHE["at"] < _STREAMS_TTL_SECONDS:
+        return response.json({"streams": _STREAMS_CACHE["value"]})
+    async with _streams_lock:
+        # double-check after acquiring lock — concurrent waiters share the refresh
+        now = time.monotonic()
+        if _STREAMS_CACHE["value"] is None or now - _STREAMS_CACHE["at"] >= _STREAMS_TTL_SECONDS:
+            _STREAMS_CACHE["value"] = await _fetch_streams()
+            _STREAMS_CACHE["at"] = now
+    return response.json({"streams": _STREAMS_CACHE["value"]})
 
 
 @bp.get("/transfers/aggregate")

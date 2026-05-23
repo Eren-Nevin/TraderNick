@@ -71,7 +71,4 @@ export type TransferStream = {
   kind: string;
   chain: string;
   token: string;
-  rows: number;
-  first_seen: string | null;
-  last_seen: string | null;
 };
