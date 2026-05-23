@@ -11,6 +11,7 @@
     color: string;
     compute: (d: Datum, i: number, data: Datum[]) => number;
     dash?: string;
+    scale?: 'pct' | 'value';
   };
 
   let {
@@ -116,8 +117,21 @@
     const visible = data.filter((d) => d.time >= v0 && d.time <= v1);
     const ref = visible.length ? visible : data;
 
-    const yMaxRaw =
-      d3.max(ref, (d) => series.reduce((s, ser) => s + (d[ser.key] || 0), 0)) ?? 1;
+    const valueLines = lines.filter((ln) => ln.scale === 'value');
+    const seriesMax =
+      d3.max(ref, (d) => series.reduce((s, ser) => s + (d[ser.key] || 0), 0)) ?? 0;
+    let lineMax = 0;
+    if (valueLines.length) {
+      for (let i = 0; i < data.length; i++) {
+        const d = data[i];
+        if (d.time < v0 || d.time > v1) continue;
+        for (const ln of valueLines) {
+          const lv = ln.compute(d, i, data);
+          if (Number.isFinite(lv) && lv > lineMax) lineMax = lv;
+        }
+      }
+    }
+    const yMaxRaw = Math.max(seriesMax, lineMax) || 1;
     const yScale = d3
       .scaleLinear()
       .domain([0, yMaxRaw * 1.05 || 1])
@@ -195,10 +209,11 @@
         .attr('class', 'lines')
         .attr('clip-path', `url(#${clipId})`);
       for (const ln of lines) {
+        const yForLine = ln.scale === 'value' ? yScale : yScalePct;
         const gen = d3
           .line<Datum>()
           .x((d) => xScale(new Date(d.time * 1000)))
-          .y((d, i) => yScalePct(ln.compute(d, i, data)))
+          .y((d, i) => yForLine(ln.compute(d, i, data)))
           .defined((d, i) => Number.isFinite(ln.compute(d, i, data)))
           .curve(d3.curveMonotoneX);
         const path = lineLayer
@@ -289,6 +304,14 @@
       .on('zoom', (event) => {
         if (!event.sourceEvent) return;
         const v = transformToView(event.transform, chartBaseStart, chartBaseEnd, chartPlotW);
+        // Drop no-op zooms (stuck touch gestures, FP round-trip noise) — would otherwise
+        // re-render forever because view gets a new array ref with identical numeric values.
+        if (
+          view !== null &&
+          Math.abs(v[0] - view[0]) < 1 &&
+          Math.abs(v[1] - view[1]) < 1
+        )
+          return;
         onView?.(v);
       });
     const root = d3.select(svgEl);
@@ -313,10 +336,6 @@
     xExtent;
     view;
     width;
-    if (svgEl && zoomBehavior) {
-      const t = viewToTransform(view, chartBaseStart, chartBaseEnd, chartPlotW);
-      d3.select(svgEl).call(zoomBehavior.transform, t);
-    }
     draw();
   });
 

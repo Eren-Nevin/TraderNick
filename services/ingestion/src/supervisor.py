@@ -12,6 +12,11 @@ GROUP_MODULES = {
     "binance_open_interest": "groups.binance_open_interest",
     "binance_long_short_ratios": "groups.binance_long_short_ratios",
     "binance_funding_rate": "groups.binance_funding_rate",
+    "evm_erc20_transfers": "groups.evm_erc20_transfers",
+    "evm_native_transfers": "groups.evm_native_transfers",
+    "btc_transfers": "groups.btc_transfers",
+    "tron_native_transfers": "groups.tron_native_transfers",
+    "tron_trc20_transfers": "groups.tron_trc20_transfers",
 }
 
 

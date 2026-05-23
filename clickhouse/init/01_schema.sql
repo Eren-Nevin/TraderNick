@@ -34,6 +34,26 @@ PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, id)
 TTL toDateTime(time) + INTERVAL 30 DAY;
 
+CREATE TABLE IF NOT EXISTS tradernick.transfers
+(
+    kind         LowCardinality(String),
+    chain        LowCardinality(String),
+    token        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    sender       String             CODEC(ZSTD(3)),
+    receiver     String             CODEC(ZSTD(3)),
+    amount       Float64            CODEC(Gorilla, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, sender, receiver, amount, tx_id, log_index)
+TTL time + INTERVAL 30 DAY;
+
 CREATE TABLE IF NOT EXISTS tradernick.binance_open_interest
 (
     token                LowCardinality(String),

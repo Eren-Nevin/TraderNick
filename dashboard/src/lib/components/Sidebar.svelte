@@ -2,7 +2,10 @@
   import { page } from '$app/stores';
 
   let collapsed = $state(false);
-  const links = [{ href: '/trades', label: 'Trades', short: 'T' }];
+  const links = [
+    { href: '/trades', label: 'Trades', short: 'T' },
+    { href: '/flows', label: 'Flows', short: 'F' }
+  ];
 </script>
 
 <aside

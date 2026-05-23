@@ -16,12 +16,22 @@ JOB_TYPE_BACKFILL_RAW_TRADES = "backfill_binance_raw_trades"
 JOB_TYPE_BACKFILL_OPEN_INTEREST = "backfill_binance_open_interest"
 JOB_TYPE_BACKFILL_LONG_SHORT_RATIOS = "backfill_binance_long_short_ratios"
 JOB_TYPE_BACKFILL_FUNDING_RATE = "backfill_binance_funding_rate"
+JOB_TYPE_BACKFILL_EVM_ERC20_TRANSFERS = "backfill_evm_erc20_transfers"
+JOB_TYPE_BACKFILL_EVM_NATIVE_TRANSFERS = "backfill_evm_native_transfers"
+JOB_TYPE_BACKFILL_BTC_TRANSFERS = "backfill_btc_transfers"
+JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS = "backfill_tron_native_transfers"
+JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS = "backfill_tron_trc20_transfers"
 JOB_MODULES = {
     JOB_TYPE_BACKFILL_OHLCV: "jobs.backfill_binance_ohlcv",
     JOB_TYPE_BACKFILL_RAW_TRADES: "jobs.backfill_binance_raw_trades",
     JOB_TYPE_BACKFILL_OPEN_INTEREST: "jobs.backfill_binance_open_interest",
     JOB_TYPE_BACKFILL_LONG_SHORT_RATIOS: "jobs.backfill_binance_long_short_ratios",
     JOB_TYPE_BACKFILL_FUNDING_RATE: "jobs.backfill_binance_funding_rate",
+    JOB_TYPE_BACKFILL_EVM_ERC20_TRANSFERS: "jobs.backfill_evm_erc20_transfers",
+    JOB_TYPE_BACKFILL_EVM_NATIVE_TRANSFERS: "jobs.backfill_evm_native_transfers",
+    JOB_TYPE_BACKFILL_BTC_TRANSFERS: "jobs.backfill_btc_transfers",
+    JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS: "jobs.backfill_tron_native_transfers",
+    JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS: "jobs.backfill_tron_trc20_transfers",
 }
 
 
@@ -67,6 +77,9 @@ class JobManager:
         )
 
     async def create_backfill(self, job_type: str, tokens: list[str], days: int) -> dict:
+        return await self.create_backfill_args(job_type, days, {"tokens": tokens})
+
+    async def create_backfill_args(self, job_type: str, days: int, args_extra: dict) -> dict:
         if job_type not in JOB_MODULES:
             raise ValueError(f"unknown job_type {job_type}")
         if len(self._procs) >= config.MAX_CONCURRENT_BACKFILLS:
@@ -78,7 +91,7 @@ class JobManager:
         since = until - timedelta(days=days)
         job_id = uuid.uuid4().hex
         args = {
-            "tokens": tokens,
+            **args_extra,
             "since": since.isoformat(),
             "until": until.isoformat(),
             "completed_chunks": [],

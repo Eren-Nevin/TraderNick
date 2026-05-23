@@ -38,6 +38,11 @@ LONG_SHORT_COLUMNS = [
 ]
 FUNDING_RATE_COLUMNS = ["token", "time", "rate"]
 
+TRANSFER_COLUMNS = [
+    "kind", "chain", "token", "time", "block_number",
+    "sender", "receiver", "amount", "tx_id", "log_index", "value_usd",
+]
+
 
 def _to_naive_utc(t):
     if hasattr(t, "to_pydatetime"):
@@ -100,6 +105,69 @@ def funding_rate_df_to_rows(df: pl.DataFrame, token: str):
             float(r["rate"]),
         ])
     return rows
+
+
+def transfers_df_to_rows(df: pl.DataFrame, *, kind: str, chain: str, token_override: str | None = None):
+    rows = []
+    cols = set(df.columns)
+    has_tx_id = "tx_id" in cols
+    has_log_index = "log_index" in cols
+    has_value_usd = "value_usd" in cols
+    has_token_col = "token" in cols
+    for r in df.iter_rows(named=True):
+        token = token_override or (r["token"] if has_token_col else "")
+        v_usd = None
+        if has_value_usd:
+            raw = r.get("value_usd")
+            if raw is not None and raw != "":
+                try:
+                    v_usd = float(raw)
+                except (TypeError, ValueError):
+                    v_usd = None
+        rows.append([
+            kind,
+            chain,
+            str(token).upper(),
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["sender"]) if r.get("sender") is not None else "",
+            str(r["receiver"]) if r.get("receiver") is not None else "",
+            float(r["amount"]),
+            str(r["tx_id"]) if has_tx_id and r.get("tx_id") is not None else "",
+            int(r["log_index"]) if has_log_index and r.get("log_index") is not None else 0,
+            v_usd,
+        ])
+    return rows
+
+
+def transfers_df_for_bulk_insert(df: pl.DataFrame, *, kind: str, chain: str, token_override: str | None = None):
+    cols = set(df.columns)
+    if "tx_id" not in cols:
+        df = df.with_columns(pl.lit("").alias("tx_id"))
+    if "log_index" not in cols:
+        df = df.with_columns(pl.lit(0).alias("log_index"))
+    if "value_usd" not in cols:
+        df = df.with_columns(pl.lit(None).cast(pl.Float64).alias("value_usd"))
+
+    df = df.with_columns([
+        pl.lit(kind).alias("kind"),
+        pl.lit(chain).alias("chain"),
+    ])
+    if token_override is not None:
+        df = df.with_columns(pl.lit(str(token_override).upper()).alias("token"))
+
+    df = df.with_columns([
+        pl.col("time").dt.convert_time_zone("UTC").dt.replace_time_zone(None).cast(pl.Datetime("ms")),
+        pl.col("block_number").cast(pl.UInt64),
+        pl.col("sender").cast(pl.Utf8).fill_null(""),
+        pl.col("receiver").cast(pl.Utf8).fill_null(""),
+        pl.col("amount").cast(pl.Float64),
+        pl.col("tx_id").cast(pl.Utf8).fill_null(""),
+        pl.col("log_index").cast(pl.UInt32),
+        pl.col("value_usd").cast(pl.Float64, strict=False),
+    ])
+
+    return df.select(TRANSFER_COLUMNS).to_pandas()
 
 
 def raw_trades_df_for_insert(df: pl.DataFrame, token: str):

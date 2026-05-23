@@ -59,3 +59,19 @@ export type FundingRateRow = {
   time: number;
   rate: number;
 };
+
+export type TransferBucket = {
+  time: number;
+  sum_amount: number;
+  sum_value_usd: number;
+  count: number;
+};
+
+export type TransferStream = {
+  kind: string;
+  chain: string;
+  token: string;
+  rows: number;
+  first_seen: string | null;
+  last_seen: string | null;
+};
