@@ -11,6 +11,7 @@
   } from '$lib/api';
   import type { PageData } from './$types';
   import type { View } from '$lib/chart-zoom';
+  import { defaultView } from '$lib/components/charts/config';
 
   let { data }: { data: PageData } = $props();
 
@@ -128,7 +129,7 @@
       ohlcvSince = since.toISOString();
       ohlcvUntil = until.toISOString();
       ohlcvLoadedKey = `${ohlcvToken}|${ohlcvInterval}`;
-      ohlcvView = null;
+      ohlcvView = defaultView(ohlcvSince, ohlcvUntil);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {
@@ -219,7 +220,7 @@
       flowSince = since.toISOString();
       flowUntil = until.toISOString();
       flowLoadedKey = `${chain}|${token}|${interval}`;
-      flowView = null;
+      flowView = defaultView(flowSince, flowUntil);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     } finally {

@@ -1,3 +1,77 @@
 @import "tailwindcss";
 
 html, body { height: 100%; }
+
+/* ============================================================================
+ * Theming
+ *
+ * Defaults are the existing dark palette. When `<html>` has the `light` class
+ * we (a) flip a set of CSS variables consumed by SVG chart code, and (b)
+ * override the most-used Tailwind `zinc-*` utility classes via more-specific
+ * selectors so we don't have to rewrite every component to use dark: modifiers.
+ * ============================================================================ */
+
+:root {
+  --chart-bg: #09090b;          /* zinc-950 */
+  --chart-grid: #27272a;        /* zinc-800 */
+  --chart-axis-line: #3f3f46;   /* zinc-700 */
+  --chart-axis-text: #a1a1aa;   /* zinc-400 */
+  --chart-crosshair: #71717a;   /* zinc-500 */
+  --chart-tooltip-bg: #18181b;  /* zinc-900 */
+  --chart-tooltip-text: #e4e4e7; /* zinc-200 */
+}
+
+html.light {
+  color-scheme: light;
+  --chart-bg: #ffffff;
+  --chart-grid: #e4e4e7;        /* zinc-200 */
+  --chart-axis-line: #d4d4d8;   /* zinc-300 */
+  --chart-axis-text: #52525b;   /* zinc-600 */
+  --chart-crosshair: #71717a;
+  --chart-tooltip-bg: #f4f4f5;
+  --chart-tooltip-text: #18181b;
+  background-color: #fafafa;
+  color: #18181b;
+}
+
+html.light body {
+  background-color: #fafafa;
+  color: #18181b;
+}
+
+/* --- Tailwind zinc background overrides (light) --- */
+html.light .bg-zinc-950 { background-color: #ffffff; }
+html.light .bg-zinc-900 { background-color: #f4f4f5; }
+html.light .bg-zinc-800 { background-color: #e4e4e7; }
+html.light .bg-zinc-700 { background-color: #d4d4d8; }
+html.light .bg-zinc-950\/30 { background-color: rgba(255, 255, 255, 0.4); }
+
+/* --- Borders --- */
+html.light .border-zinc-800 { border-color: #e4e4e7; }
+html.light .border-zinc-900 { border-color: #f4f4f5; }
+html.light .border-zinc-700 { border-color: #d4d4d8; }
+
+/* --- Text --- */
+html.light .text-zinc-50 { color: #18181b; }
+html.light .text-zinc-100 { color: #18181b; }
+html.light .text-zinc-200 { color: #27272a; }
+html.light .text-zinc-300 { color: #3f3f46; }
+html.light .text-zinc-400 { color: #52525b; }
+html.light .text-zinc-500 { color: #71717a; }
+
+/* --- Hover backgrounds --- */
+html.light .hover\:bg-zinc-900:hover { background-color: #f4f4f5; }
+html.light .hover\:bg-zinc-800:hover { background-color: #e4e4e7; }
+html.light .hover\:bg-zinc-700:hover { background-color: #d4d4d8; }
+
+/* --- Hover text --- */
+html.light .hover\:text-zinc-50:hover { color: #18181b; }
+html.light .hover\:text-zinc-100:hover { color: #18181b; }
+html.light .hover\:text-zinc-200:hover { color: #27272a; }
+html.light .hover\:text-zinc-300:hover { color: #3f3f46; }
+html.light .hover\:text-red-300:hover { color: #b91c1c; }
+
+/* --- Error block (red-tinted) --- */
+html.light .bg-red-950\/40 { background-color: #fee2e2; }
+html.light .border-red-900 { border-color: #fecaca; }
+html.light .text-red-300 { color: #b91c1c; }

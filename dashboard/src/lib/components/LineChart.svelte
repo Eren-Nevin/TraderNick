@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import * as d3 from 'd3';
+  import { cssVar, themeStore } from '$lib/stores/theme.svelte';
   import { transformToView, viewToTransform, type View } from '$lib/chart-zoom';
 
   type Datum = { time: number } & Record<string, number>;
@@ -82,7 +83,7 @@
       .attr('x2', cx)
       .attr('y1', 0)
       .attr('y2', chartPlotH)
-      .attr('stroke', '#71717a')
+      .attr('stroke', cssVar('--chart-crosshair', '#71717a'))
       .attr('stroke-dasharray', '3,3');
   }
 
@@ -169,7 +170,7 @@
       )
       .call((sel) => sel.select('.domain').remove())
       .selectAll('line')
-      .attr('stroke', '#27272a')
+      .attr('stroke', cssVar('--chart-grid', '#27272a'))
       .attr('stroke-dasharray', '2,3');
 
     const refLayer = g.append('g').attr('class', 'refs').attr('clip-path', `url(#${clipId})`);
@@ -212,8 +213,8 @@
       )
       .call((sel) => {
         sel.select('.domain').remove();
-        sel.selectAll('text').attr('fill', '#a1a1aa').attr('font-size', '10px');
-        sel.selectAll('line').attr('stroke', '#3f3f46');
+        sel.selectAll('text').attr('fill', cssVar('--chart-axis-text', '#a1a1aa')).attr('font-size', '10px');
+        sel.selectAll('line').attr('stroke', cssVar('--chart-axis-line', '#3f3f46'));
       });
 
     g.append('g')
@@ -221,8 +222,8 @@
       .call(d3.axisBottom(xScale).ticks(Math.max(2, Math.floor(plotW / 110))))
       .call((sel) => {
         sel.select('.domain').remove();
-        sel.selectAll('text').attr('fill', '#a1a1aa').attr('font-size', '10px');
-        sel.selectAll('line').attr('stroke', '#3f3f46');
+        sel.selectAll('text').attr('fill', cssVar('--chart-axis-text', '#a1a1aa')).attr('font-size', '10px');
+        sel.selectAll('line').attr('stroke', cssVar('--chart-axis-line', '#3f3f46'));
       });
 
     const overlay = g
@@ -288,6 +289,7 @@
     xExtent;
     view;
     width;
+    void themeStore.theme;
     if (svgEl && zoomBehavior) {
       const t = viewToTransform(view, chartBaseStart, chartBaseEnd, chartPlotW);
       d3.select(svgEl).call(zoomBehavior.transform, t);
@@ -297,6 +299,7 @@
 
   $effect(() => {
     hoverTime;
+    void themeStore.theme;
     drawCrosshair();
   });
 </script>

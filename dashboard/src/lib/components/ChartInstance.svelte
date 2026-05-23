@@ -12,6 +12,7 @@
     NEUTRAL_REF,
     OI_LINES,
     TOP_TRADERS_LINES,
+    defaultView,
     fmtUsdAxis,
     fmtUsdTooltip,
     lookbackWindow,
@@ -144,7 +145,7 @@
       since = sinceIso;
       until = untilIso;
       loadedKey = loadKey();
-      localView = null;
+      localView = defaultView(sinceIso, untilIso);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
     }

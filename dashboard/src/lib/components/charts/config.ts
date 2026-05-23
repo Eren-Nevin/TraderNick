@@ -29,6 +29,18 @@ export function unixSec(iso: string): number {
   return Math.floor(new Date(iso).getTime() / 1000);
 }
 
+export const DEFAULT_VIEW_DAYS = 14;
+
+/** Return a [start, end] view tuple that frames the most recent DEFAULT_VIEW_DAYS
+ *  of data, or `null` (= full xExtent) if the loaded range is already shorter. */
+export function defaultView(sinceIso: string, untilIso: string): [number, number] | null {
+  const untilU = unixSec(untilIso);
+  const sinceU = unixSec(sinceIso);
+  const window = DEFAULT_VIEW_DAYS * 24 * 60 * 60;
+  if (untilU - sinceU <= window) return null;
+  return [untilU - window, untilU];
+}
+
 export function smaArray(vals: number[], n: number): number[] {
   const out = new Array<number>(vals.length);
   let sum = 0;

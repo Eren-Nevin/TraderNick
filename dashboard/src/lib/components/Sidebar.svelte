@@ -1,11 +1,15 @@
 <script lang="ts">
+  import { onMount } from 'svelte';
   import { page } from '$app/stores';
+  import { themeStore } from '$lib/stores/theme.svelte';
 
   let collapsed = $state(false);
   const links = [
     { href: '/trades', label: 'Trades', short: 'T' },
     { href: '/flows', label: 'Flows', short: 'F' }
   ];
+
+  onMount(() => themeStore.hydrate());
 </script>
 
 <aside
@@ -47,4 +51,17 @@
       </a>
     {/each}
   </nav>
+  <div class="px-2 py-3 border-t border-zinc-800">
+    <button
+      type="button"
+      onclick={() => themeStore.toggle()}
+      title={themeStore.theme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
+      class="w-full flex items-center justify-center gap-2 rounded text-sm text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 {collapsed ? 'px-0 py-2' : 'px-3 py-2'}"
+    >
+      <span class="text-base leading-none">{themeStore.theme === 'dark' ? '☀' : '🌙'}</span>
+      {#if !collapsed}
+        <span class="text-xs">{themeStore.theme === 'dark' ? 'Light' : 'Dark'}</span>
+      {/if}
+    </button>
+  </div>
 </aside>

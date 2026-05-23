@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as d3 from 'd3';
   import { transformToView, viewToTransform, type View } from '$lib/chart-zoom';
+  import { cssVar, themeStore } from '$lib/stores/theme.svelte';
 
   type Datum = { time: number } & Record<string, number>;
   type Series = { key: string; label: string; color: string };
@@ -90,7 +91,7 @@
       .attr('x2', cx)
       .attr('y1', 0)
       .attr('y2', chartPlotH)
-      .attr('stroke', '#71717a')
+      .attr('stroke', cssVar('--chart-crosshair', '#71717a'))
       .attr('stroke-dasharray', '3,3');
   }
 
@@ -99,6 +100,13 @@
     const root = d3.select(svgEl);
     root.selectAll('*').remove();
     if (!data.length || (!series.length && !lines.length)) return;
+
+    // subscribe to theme changes via $effect — read so this redraw triggers when toggled
+    void themeStore.theme;
+    const C_GRID = cssVar('--chart-grid', '#27272a');
+    const C_AXIS_LINE = cssVar('--chart-axis-line', '#3f3f46');
+    const C_AXIS_TEXT = cssVar('--chart-axis-text', '#a1a1aa');
+    const C_CROSSHAIR = cssVar('--chart-crosshair', '#71717a');
 
     const plotW = Math.max(0, width - MARGIN.left - MARGIN.right);
     const plotH = Math.max(0, height - MARGIN.top - MARGIN.bottom);
@@ -179,7 +187,7 @@
       )
       .call((sel) => sel.select('.domain').remove())
       .selectAll('line')
-      .attr('stroke', '#27272a')
+      .attr('stroke', C_GRID)
       .attr('stroke-dasharray', '2,3');
 
     const bars = g.append('g').attr('class', 'bars').attr('clip-path', `url(#${clipId})`);
@@ -238,8 +246,8 @@
         )
         .call((sel) => {
           sel.select('.domain').remove();
-          sel.selectAll('text').attr('fill', '#a1a1aa').attr('font-size', '10px');
-          sel.selectAll('line').attr('stroke', '#3f3f46');
+          sel.selectAll('text').attr('fill', C_AXIS_TEXT).attr('font-size', '10px');
+          sel.selectAll('line').attr('stroke', C_AXIS_LINE);
         });
     }
 
@@ -252,8 +260,8 @@
       )
       .call((sel) => {
         sel.select('.domain').remove();
-        sel.selectAll('text').attr('fill', '#a1a1aa').attr('font-size', '10px');
-        sel.selectAll('line').attr('stroke', '#3f3f46');
+        sel.selectAll('text').attr('fill', C_AXIS_TEXT).attr('font-size', '10px');
+        sel.selectAll('line').attr('stroke', C_AXIS_LINE);
       });
 
     g.append('g')
@@ -261,8 +269,8 @@
       .call(d3.axisBottom(xScale).ticks(Math.max(2, Math.floor(plotW / 110))))
       .call((sel) => {
         sel.select('.domain').remove();
-        sel.selectAll('text').attr('fill', '#a1a1aa').attr('font-size', '10px');
-        sel.selectAll('line').attr('stroke', '#3f3f46');
+        sel.selectAll('text').attr('fill', C_AXIS_TEXT).attr('font-size', '10px');
+        sel.selectAll('line').attr('stroke', C_AXIS_LINE);
       });
 
     const overlay = g
@@ -336,11 +344,13 @@
     xExtent;
     view;
     width;
+    void themeStore.theme;
     draw();
   });
 
   $effect(() => {
     hoverTime;
+    void themeStore.theme;
     drawCrosshair();
   });
 </script>
