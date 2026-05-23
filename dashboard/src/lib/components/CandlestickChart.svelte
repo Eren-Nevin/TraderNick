@@ -295,7 +295,11 @@
     zoomBehavior = d3
       .zoom<SVGSVGElement, unknown>()
       .scaleExtent([0.5, 80])
-      .filter((event) => event.type !== 'dblclick')
+      .filter((event) => {
+        if (event.type === 'dblclick') return false;
+        if (svgEl) (svgEl as unknown as { __zoom: d3.ZoomTransform }).__zoom = transform;
+        return true;
+      })
       .on('zoom', (event) => {
         if (!event.sourceEvent) return;
         onZoom?.(event.transform);
