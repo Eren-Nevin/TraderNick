@@ -5,9 +5,12 @@
   import ChartInstance from '$lib/components/ChartInstance.svelte';
   import {
     CHART_KIND_LABELS,
+    MAX_MAS,
+    defaultMAs,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
-    type ChartKind
+    type ChartKind,
+    type MAConfig
   } from '$lib/components/charts/config';
   import type { Interval, TransferStream } from '$lib/api';
   import type { View } from '$lib/chart-zoom';
@@ -97,6 +100,37 @@
   function isChartKind(s: unknown): s is ChartKind {
     return typeof s === 'string' && (KNOWN_KINDS as string[]).includes(s);
   }
+  function migrateMAs(r: Record<string, unknown>): MAConfig[] {
+    const fresh = defaultMAs();
+    if (Array.isArray(r.mas)) {
+      const out: MAConfig[] = [];
+      for (const m of r.mas) {
+        if (!m || typeof m !== 'object') continue;
+        const mm = m as Record<string, unknown>;
+        out.push({
+          enabled: mm.enabled === true,
+          length: typeof mm.length === 'number' ? mm.length : 9,
+          type:
+            mm.type === 'ema' || mm.type === 'wma' || mm.type === 'sma'
+              ? (mm.type as MAConfig['type'])
+              : 'sma'
+        });
+        if (out.length >= MAX_MAS) break;
+      }
+      while (out.length < MAX_MAS) out.push(fresh[out.length]);
+      return out;
+    }
+    // Legacy single-MA fields.
+    const length = typeof r.maLength === 'number' ? r.maLength : 9;
+    const type =
+      r.maType === 'ema' || r.maType === 'wma' || r.maType === 'sma'
+        ? (r.maType as MAConfig['type'])
+        : 'sma';
+    const enabled = r.showCumulative === true;
+    fresh[0] = { enabled, length, type };
+    return fresh;
+  }
+
   function sanitize(arr: unknown): ChartInstanceT[] | null {
     if (!Array.isArray(arr)) return null;
     const out: ChartInstanceT[] = [];
@@ -114,10 +148,7 @@
         token: r.token,
         interval: r.interval as Interval,
         showPoint: r.showPoint !== false,
-        showCumulative: r.showCumulative === true,
-        maLength: typeof r.maLength === 'number' ? r.maLength : 9,
-        maType:
-          r.maType === 'ema' || r.maType === 'wma' || r.maType === 'sma' ? r.maType : 'sma'
+        mas: migrateMAs(r)
       };
       if (inst.kind === 'sz') {
         inst.under = typeof r.under === 'number' ? r.under : 10000;

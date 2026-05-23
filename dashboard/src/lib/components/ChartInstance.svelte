@@ -19,6 +19,7 @@
     BUYER_SELLER_SERIES,
     CHART_KIND_LABELS,
     LS_LINES,
+    MA_COLORS,
     NEUTRAL_REF,
     OI_LINES,
     TOP_TRADERS_LINES,
@@ -223,156 +224,166 @@
       : []
   );
 
+  // Per-MA sub-line dash patterns (for kinds where one MA config emits multiple lines).
+  const SUB_DASH = ['5,3', '2,2', '6,2,2,2'];
+
+  let anyMaEnabled = $derived(instance.mas.some((m) => m.enabled));
+
   let cumulativeLines = $derived.by(() => {
-    if (!instance.showCumulative || data.length === 0) return [] as unknown[];
-    const tag = `${instance.maType.toUpperCase()}(${instance.maLength})`;
-    switch (instance.kind) {
-      case 'ohlcv': {
-        const ma = maArray(
-          (data as Candle[]).map((c) => c.close),
-          instance.maLength,
-          instance.maType
-        );
-        return [
-          {
-            key: 'cum_close',
+    if (data.length === 0 || !anyMaEnabled) return [] as unknown[];
+    const out: unknown[] = [];
+    for (let idx = 0; idx < instance.mas.length; idx++) {
+      const ma = instance.mas[idx];
+      if (!ma.enabled) continue;
+      const color = MA_COLORS[idx] ?? '#fbbf24';
+      const tag = `${ma.type.toUpperCase()}(${ma.length})`;
+      switch (instance.kind) {
+        case 'ohlcv': {
+          const arr = maArray((data as Candle[]).map((c) => c.close), ma.length, ma.type);
+          out.push({
+            key: `cum_close_${idx}`,
             label: `Close ${tag}`,
-            color: '#fbbf24',
-            compute: (_d: Candle, i: number) => ma[i]
-          }
-        ];
-      }
-      case 'oi': {
-        const ma = maArray(
-          (data as OpenInterestRow[]).map((d) => d.open_interest_value),
-          instance.maLength,
-          instance.maType
-        );
-        return [
-          {
-            key: 'cum_oi',
+            color,
+            compute: (_d: Candle, i: number) => arr[i]
+          });
+          break;
+        }
+        case 'oi': {
+          const arr = maArray(
+            (data as OpenInterestRow[]).map((d) => d.open_interest_value),
+            ma.length,
+            ma.type
+          );
+          out.push({
+            key: `cum_oi_${idx}`,
             label: `OI ${tag}`,
-            color: '#06b6d4',
-            dash: '5,3',
-            compute: (_d: OpenInterestRow, i: number) => ma[i]
-          }
-        ];
-      }
-      case 'fr': {
-        const ma = maArray(
-          frBpsData.map((d) => d.rate_bps),
-          instance.maLength,
-          instance.maType
-        );
-        return [
-          {
-            key: 'cum_fr',
+            color,
+            dash: SUB_DASH[0],
+            compute: (_d: OpenInterestRow, i: number) => arr[i]
+          });
+          break;
+        }
+        case 'fr': {
+          const arr = maArray(frBpsData.map((d) => d.rate_bps), ma.length, ma.type);
+          out.push({
+            key: `cum_fr_${idx}`,
             label: `Rate ${tag}`,
-            color: '#fbbf24',
-            dash: '5,3',
-            compute: (_d: FundingRateRow, i: number) => ma[i]
-          }
-        ];
-      }
-      case 'bs': {
-        const arr = data as VolumeBucket[];
-        const buyerMA = maArray(arr.map((b) => b.buyer_taker_usd), instance.maLength, instance.maType);
-        const totalMA = maArray(
-          arr.map((b) => b.buyer_taker_usd + b.seller_taker_usd),
-          instance.maLength,
-          instance.maType
-        );
-        return [
-          {
-            key: 'cum_buyer',
+            color,
+            dash: SUB_DASH[0],
+            compute: (_d: FundingRateRow, i: number) => arr[i]
+          });
+          break;
+        }
+        case 'bs': {
+          const arr = data as VolumeBucket[];
+          const buyerMA = maArray(arr.map((b) => b.buyer_taker_usd), ma.length, ma.type);
+          const totalMA = maArray(
+            arr.map((b) => b.buyer_taker_usd + b.seller_taker_usd),
+            ma.length,
+            ma.type
+          );
+          out.push({
+            key: `cum_buyer_${idx}`,
             label: `% Buyer ${tag}`,
-            color: '#fbbf24',
-            dash: '5,3',
+            color,
+            dash: SUB_DASH[0],
             compute: (_d: VolumeBucket, i: number) =>
               totalMA[i] > 0 ? (buyerMA[i] / totalMA[i]) * 100 : 0
-          }
-        ];
-      }
-      case 'sz': {
-        const arr = data as VolumeBucket[];
-        const u = instance.under ?? 10000;
-        const o = instance.over ?? 100000;
-        const smallMA = maArray(arr.map((b) => b.small_usd), instance.maLength, instance.maType);
-        const largeMA = maArray(arr.map((b) => b.large_usd), instance.maLength, instance.maType);
-        const totalMA = maArray(
-          arr.map((b) => b.small_usd + b.mid_usd + b.large_usd),
-          instance.maLength,
-          instance.maType
-        );
-        return [
-          {
-            key: 'cum_small',
+          });
+          break;
+        }
+        case 'sz': {
+          const arr = data as VolumeBucket[];
+          const u = instance.under ?? 10000;
+          const o = instance.over ?? 100000;
+          const smallMA = maArray(arr.map((b) => b.small_usd), ma.length, ma.type);
+          const largeMA = maArray(arr.map((b) => b.large_usd), ma.length, ma.type);
+          const totalMA = maArray(
+            arr.map((b) => b.small_usd + b.mid_usd + b.large_usd),
+            ma.length,
+            ma.type
+          );
+          out.push({
+            key: `cum_small_${idx}`,
             label: `% < $${u} ${tag}`,
-            color: '#fbbf24',
-            dash: '5,3',
+            color,
+            dash: SUB_DASH[0],
             compute: (_d: VolumeBucket, i: number) =>
               totalMA[i] > 0 ? (smallMA[i] / totalMA[i]) * 100 : 0
-          },
-          {
-            key: 'cum_large',
+          });
+          out.push({
+            key: `cum_large_${idx}`,
             label: `% > $${o} ${tag}`,
-            color: '#06b6d4',
-            dash: '5,3',
+            color,
+            dash: SUB_DASH[1],
             compute: (_d: VolumeBucket, i: number) =>
               totalMA[i] > 0 ? (largeMA[i] / totalMA[i]) * 100 : 0
-          }
-        ];
-      }
-      case 'tt': {
-        const arr = data as LongShortRow[];
-        const countMA = maArray(
-          arr.map((d) => d.top_trader_count_ratio),
-          instance.maLength,
-          instance.maType
-        );
-        const volMA = maArray(
-          arr.map((d) => d.top_trader_vol_ratio),
-          instance.maLength,
-          instance.maType
-        );
-        return [
-          { key: 'cum_top_ct', label: `Top count ${tag}`, color: '#fbbf24', dash: '5,3', compute: (_d: LongShortRow, i: number) => countMA[i] },
-          { key: 'cum_top_vol', label: `Top vol ${tag}`, color: '#06b6d4', dash: '5,3', compute: (_d: LongShortRow, i: number) => volMA[i] }
-        ];
-      }
-      case 'ls': {
-        const arr = data as LongShortRow[];
-        const allCountMA = maArray(
-          arr.map((d) => d.long_short_count_ratio),
-          instance.maLength,
-          instance.maType
-        );
-        const takerVolMA = maArray(
-          arr.map((d) => d.taker_long_short_vol_ratio),
-          instance.maLength,
-          instance.maType
-        );
-        return [
-          { key: 'cum_all_ct', label: `All L/S ct ${tag}`, color: '#84cc16', dash: '5,3', compute: (_d: LongShortRow, i: number) => allCountMA[i] },
-          { key: 'cum_taker_vol', label: `Taker vol ${tag}`, color: '#a855f7', dash: '5,3', compute: (_d: LongShortRow, i: number) => takerVolMA[i] }
-        ];
-      }
-      case 'transfer': {
-        const arr = data as TransferBucket[];
-        const ma = maArray(arr.map((b) => b.sum_amount), instance.maLength, instance.maType);
-        const tag = `${instance.maType.toUpperCase()}(${instance.maLength})`;
-        return [
-          {
-            key: 'cum_transfer',
+          });
+          break;
+        }
+        case 'tt': {
+          const arr = data as LongShortRow[];
+          const countMA = maArray(arr.map((d) => d.top_trader_count_ratio), ma.length, ma.type);
+          const volMA = maArray(arr.map((d) => d.top_trader_vol_ratio), ma.length, ma.type);
+          out.push({
+            key: `cum_top_ct_${idx}`,
+            label: `Top count ${tag}`,
+            color,
+            dash: SUB_DASH[0],
+            compute: (_d: LongShortRow, i: number) => countMA[i]
+          });
+          out.push({
+            key: `cum_top_vol_${idx}`,
+            label: `Top vol ${tag}`,
+            color,
+            dash: SUB_DASH[1],
+            compute: (_d: LongShortRow, i: number) => volMA[i]
+          });
+          break;
+        }
+        case 'ls': {
+          const arr = data as LongShortRow[];
+          const allCountMA = maArray(
+            arr.map((d) => d.long_short_count_ratio),
+            ma.length,
+            ma.type
+          );
+          const takerVolMA = maArray(
+            arr.map((d) => d.taker_long_short_vol_ratio),
+            ma.length,
+            ma.type
+          );
+          out.push({
+            key: `cum_all_ct_${idx}`,
+            label: `All L/S ct ${tag}`,
+            color,
+            dash: SUB_DASH[0],
+            compute: (_d: LongShortRow, i: number) => allCountMA[i]
+          });
+          out.push({
+            key: `cum_taker_vol_${idx}`,
+            label: `Taker vol ${tag}`,
+            color,
+            dash: SUB_DASH[1],
+            compute: (_d: LongShortRow, i: number) => takerVolMA[i]
+          });
+          break;
+        }
+        case 'transfer': {
+          const arr = data as TransferBucket[];
+          const arrMa = maArray(arr.map((b) => b.sum_amount), ma.length, ma.type);
+          out.push({
+            key: `cum_transfer_${idx}`,
             label: `Amount ${tag}`,
-            color: '#fbbf24',
-            dash: '5,3',
-            compute: (_d: TransferBucket, i: number) => ma[i]
-          }
-        ];
+            color,
+            dash: SUB_DASH[0],
+            compute: (_d: TransferBucket, i: number) => arrMa[i]
+          });
+          break;
+        }
       }
     }
-    return [];
+    return out;
   });
 
   // Transfer-kind primary line (Point toggle controls visibility).
@@ -386,7 +397,7 @@
   ];
   let transferLinesD = $derived([
     ...(instance.showPoint ? TRANSFER_LINES : []),
-    ...(instance.showCumulative ? cumulativeLines : [])
+    ...cumulativeLines
   ]);
 
   // bs / sz: bar series (Point toggle controls visibility)
@@ -395,25 +406,26 @@
     instance.showPoint ? sizeSeries(instance.under ?? 10000, instance.over ?? 100000) : []
   );
 
-  let bsLines = $derived(
-    instance.showCumulative ? [...BUYER_SELLER_LINES, ...cumulativeLines] : []
-  );
+  let bsLines = $derived(anyMaEnabled ? [...BUYER_SELLER_LINES, ...cumulativeLines] : []);
   let szLinesD = $derived(
-    instance.showCumulative
+    anyMaEnabled
       ? [...sizeLines(instance.under ?? 10000, instance.over ?? 100000), ...cumulativeLines]
       : []
   );
-  let oiLinesD = $derived(
-    [...(instance.showPoint ? OI_LINES : []), ...(instance.showCumulative ? cumulativeLines : [])]
-  );
-  let ttLinesD = $derived(
-    [...(instance.showPoint ? TOP_TRADERS_LINES : []), ...(instance.showCumulative ? cumulativeLines : [])]
-  );
-  let lsLinesD = $derived(
-    [...(instance.showPoint ? LS_LINES : []), ...(instance.showCumulative ? cumulativeLines : [])]
-  );
-  let ohlcvLinesD = $derived(instance.showCumulative ? cumulativeLines : []);
-  let frLinesD = $derived(instance.showCumulative ? cumulativeLines : []);
+  let oiLinesD = $derived([
+    ...(instance.showPoint ? OI_LINES : []),
+    ...cumulativeLines
+  ]);
+  let ttLinesD = $derived([
+    ...(instance.showPoint ? TOP_TRADERS_LINES : []),
+    ...cumulativeLines
+  ]);
+  let lsLinesD = $derived([
+    ...(instance.showPoint ? LS_LINES : []),
+    ...cumulativeLines
+  ]);
+  let ohlcvLinesD = $derived(cumulativeLines);
+  let frLinesD = $derived(cumulativeLines);
 
   // ---- sz threshold apply ----
   function applySzThresholds() {
@@ -575,28 +587,40 @@
         <input type="checkbox" bind:checked={instance.showPoint} class="accent-zinc-400" />
         Point
       </label>
-      <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
-        <input type="checkbox" bind:checked={instance.showCumulative} class="accent-zinc-400" />
-        MA
-      </label>
-      <input
-        type="number"
-        bind:value={instance.maLength}
-        min="2"
-        max="500"
-        step="1"
-        title="MA length"
-        class="w-14 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-      />
-      <select
-        bind:value={instance.maType}
-        title="MA type"
-        class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-      >
-        <option value="sma">SMA</option>
-        <option value="ema">EMA</option>
-        <option value="wma">WMA</option>
-      </select>
+      <span class="w-px h-4 bg-zinc-800"></span>
+      {#each instance.mas as ma, idx}
+        <div class="flex items-center gap-1.5">
+          <label class="flex items-center gap-1.5 cursor-pointer">
+            <input
+              type="checkbox"
+              bind:checked={instance.mas[idx].enabled}
+              class="accent-zinc-400"
+            />
+            <span
+              class="font-medium"
+              style="color: {MA_COLORS[idx]}; opacity: {ma.enabled ? 1 : 0.55}"
+            >MA{idx + 1}</span>
+          </label>
+          <input
+            type="number"
+            bind:value={instance.mas[idx].length}
+            min="2"
+            max="500"
+            step="1"
+            title="Length"
+            class="w-14 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+          />
+          <select
+            bind:value={instance.mas[idx].type}
+            title="Type"
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+          >
+            <option value="sma">SMA</option>
+            <option value="ema">EMA</option>
+            <option value="wma">WMA</option>
+          </select>
+        </div>
+      {/each}
     </div>
   {/if}
 

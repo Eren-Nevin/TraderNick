@@ -207,6 +207,25 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   transfer: 'Transfer Volume'
 };
 
+export type MAConfig = {
+  enabled: boolean;
+  length: number;
+  type: MAType;
+};
+
+/** Colours assigned by MA slot index (0..2). Used for the MA line(s) in every kind. */
+export const MA_COLORS = ['#fbbf24', '#06b6d4', '#ec4899'] as const;
+
+export const MAX_MAS = 3;
+
+export function defaultMAs(): MAConfig[] {
+  return [
+    { enabled: false, length: 9, type: 'sma' },
+    { enabled: false, length: 21, type: 'sma' },
+    { enabled: false, length: 50, type: 'sma' }
+  ];
+}
+
 export type ChartInstance = {
   id: string;
   kind: ChartKind;
@@ -214,9 +233,7 @@ export type ChartInstance = {
   token: string;
   interval: Interval;
   showPoint: boolean;
-  showCumulative: boolean;
-  maLength: number;
-  maType: MAType;
+  mas: MAConfig[]; // length MAX_MAS, each slot independently enabled
   // sz only
   under?: number;
   over?: number;
@@ -242,9 +259,7 @@ export function newChartInstance(
     token: defaults.token,
     interval: '1h',
     showPoint: true,
-    showCumulative: false,
-    maLength: 9,
-    maType: 'sma'
+    mas: defaultMAs()
   };
   if (kind === 'sz') {
     base.under = 10000;
