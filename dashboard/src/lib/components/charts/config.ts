@@ -238,7 +238,7 @@ export function newChartInstance(
         ? crypto.randomUUID()
         : `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     kind,
-    width: kind === 'ohlcv' || kind === 'transfer' ? 2 : 1,
+    width: 1,
     token: defaults.token,
     interval: '1h',
     showPoint: true,
