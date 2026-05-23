@@ -78,28 +78,37 @@
   let frCollapsed = $state(false);
 
   let showOHLCVPoint = $state(true);
-  let showOHLCVCumulative = $state(true);
+  let showOHLCVCumulative = $state(false);
   let pinOHLCV = $state(false);
   let showBSPoint = $state(true);
-  let showBSCumulative = $state(true);
+  let showBSCumulative = $state(false);
   let showSZPoint = $state(true);
-  let showSZCumulative = $state(true);
+  let showSZCumulative = $state(false);
   let showOIPoint = $state(true);
-  let showOICumulative = $state(true);
+  let showOICumulative = $state(false);
   let showTTPoint = $state(true);
-  let showTTCumulative = $state(true);
+  let showTTCumulative = $state(false);
   let showLSPoint = $state(true);
-  let showLSCumulative = $state(true);
+  let showLSCumulative = $state(false);
   let showFRPoint = $state(true);
-  let showFRCumulative = $state(true);
-
-  let cumulativeEnabled = $state(false);
-  let cumulativeLengthInput = $state('9');
-  let cumulativeTypeInput = $state<'sma' | 'ema' | 'wma'>('sma');
-  let cumulativeLength = $state(9);
-  let cumulativeType = $state<'sma' | 'ema' | 'wma'>('sma');
+  let showFRCumulative = $state(false);
 
   type MAType = 'sma' | 'ema' | 'wma';
+
+  let ohlcvMALength = $state(9);
+  let ohlcvMAType = $state<MAType>('sma');
+  let bsMALength = $state(9);
+  let bsMAType = $state<MAType>('sma');
+  let szMALength = $state(9);
+  let szMAType = $state<MAType>('sma');
+  let oiMALength = $state(9);
+  let oiMAType = $state<MAType>('sma');
+  let ttMALength = $state(9);
+  let ttMAType = $state<MAType>('sma');
+  let lsMALength = $state(9);
+  let lsMAType = $state<MAType>('sma');
+  let frMALength = $state(9);
+  let frMAType = $state<MAType>('sma');
 
   function smaArray(vals: number[], n: number): number[] {
     const out = new Array<number>(vals.length);
@@ -206,18 +215,18 @@
   ]);
 
   let bsCumulativeLines = $derived.by(() => {
-    if (!cumulativeEnabled || buckets.length === 0) return [];
+    if (buckets.length === 0) return [];
     const buyerMA = maArray(
       buckets.map((b) => b.buyer_taker_usd),
-      cumulativeLength,
-      cumulativeType
+      bsMALength,
+      bsMAType
     );
     const totalMA = maArray(
       buckets.map((b) => b.buyer_taker_usd + b.seller_taker_usd),
-      cumulativeLength,
-      cumulativeType
+      bsMALength,
+      bsMAType
     );
-    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    const tag = `${bsMAType.toUpperCase()}(${bsMALength})`;
     return [
       {
         key: 'cum_buyer',
@@ -231,23 +240,23 @@
   });
 
   let szCumulativeLines = $derived.by(() => {
-    if (!cumulativeEnabled || buckets.length === 0) return [];
+    if (buckets.length === 0) return [];
     const smallMA = maArray(
       buckets.map((b) => b.small_usd),
-      cumulativeLength,
-      cumulativeType
+      szMALength,
+      szMAType
     );
     const largeMA = maArray(
       buckets.map((b) => b.large_usd),
-      cumulativeLength,
-      cumulativeType
+      szMALength,
+      szMAType
     );
     const totalMA = maArray(
       buckets.map((b) => b.small_usd + b.mid_usd + b.large_usd),
-      cumulativeLength,
-      cumulativeType
+      szMALength,
+      szMAType
     );
-    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    const tag = `${szMAType.toUpperCase()}(${szMALength})`;
     return [
       {
         key: 'cum_small',
@@ -322,13 +331,13 @@
   );
 
   let oiCumulativeLines = $derived.by(() => {
-    if (!cumulativeEnabled || openInterest.length === 0) return [];
+    if (openInterest.length === 0) return [];
     const ma = maArray(
       openInterest.map((d) => d.open_interest_value),
-      cumulativeLength,
-      cumulativeType
+      oiMALength,
+      oiMAType
     );
-    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    const tag = `${oiMAType.toUpperCase()}(${oiMALength})`;
     return [
       {
         key: 'cum_oi',
@@ -341,13 +350,13 @@
   });
 
   let frCumulativeLines = $derived.by(() => {
-    if (!cumulativeEnabled || fundingRateBps.length === 0) return [];
+    if (fundingRateBps.length === 0) return [];
     const ma = maArray(
       fundingRateBps.map((d) => d.rate_bps),
-      cumulativeLength,
-      cumulativeType
+      frMALength,
+      frMAType
     );
-    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    const tag = `${frMAType.toUpperCase()}(${frMALength})`;
     return [
       {
         key: 'cum_fr',
@@ -367,13 +376,13 @@
   let frLines = $derived(showFRCumulative ? frCumulativeLines : []);
 
   let ohlcvCumulativeLines = $derived.by(() => {
-    if (!cumulativeEnabled || candles.length === 0) return [];
+    if (candles.length === 0) return [];
     const ma = maArray(
       candles.map((c) => c.close),
-      cumulativeLength,
-      cumulativeType
+      ohlcvMALength,
+      ohlcvMAType
     );
-    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    const tag = `${ohlcvMAType.toUpperCase()}(${ohlcvMALength})`;
     return [
       {
         key: 'cum_close',
@@ -387,18 +396,18 @@
   let ohlcvLines = $derived(showOHLCVCumulative ? ohlcvCumulativeLines : []);
 
   let ttCumulativeLines = $derived.by(() => {
-    if (!cumulativeEnabled || longShort.length === 0) return [];
+    if (longShort.length === 0) return [];
     const countMA = maArray(
       longShort.map((d) => d.top_trader_count_ratio),
-      cumulativeLength,
-      cumulativeType
+      ttMALength,
+      ttMAType
     );
     const volMA = maArray(
       longShort.map((d) => d.top_trader_vol_ratio),
-      cumulativeLength,
-      cumulativeType
+      ttMALength,
+      ttMAType
     );
-    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    const tag = `${ttMAType.toUpperCase()}(${ttMALength})`;
     return [
       {
         key: 'cum_top_ct',
@@ -418,18 +427,18 @@
   });
 
   let lsCumulativeLines = $derived.by(() => {
-    if (!cumulativeEnabled || longShort.length === 0) return [];
+    if (longShort.length === 0) return [];
     const allCountMA = maArray(
       longShort.map((d) => d.long_short_count_ratio),
-      cumulativeLength,
-      cumulativeType
+      lsMALength,
+      lsMAType
     );
     const takerVolMA = maArray(
       longShort.map((d) => d.taker_long_short_vol_ratio),
-      cumulativeLength,
-      cumulativeType
+      lsMALength,
+      lsMAType
     );
-    const tag = `${cumulativeType.toUpperCase()}(${cumulativeLength})`;
+    const tag = `${lsMAType.toUpperCase()}(${lsMALength})`;
     return [
       {
         key: 'cum_all_ct',
@@ -456,13 +465,6 @@
     ...(showLSPoint ? LS_LINES : []),
     ...(showLSCumulative ? lsCumulativeLines : [])
   ]);
-
-  function applyCumulativeSettings() {
-    const n = Math.max(2, Math.min(500, Math.round(Number(cumulativeLengthInput) || 9)));
-    cumulativeLength = n;
-    cumulativeLengthInput = String(n);
-    cumulativeType = cumulativeTypeInput;
-  }
 
   $effect(() => {
     if (
@@ -664,42 +666,6 @@
         />
         Sync zoom
       </label>
-      <label class="text-xs text-zinc-400 flex items-center gap-2 ml-2">
-        <input
-          type="checkbox"
-          bind:checked={cumulativeEnabled}
-          class="accent-zinc-400"
-        />
-        MA
-      </label>
-      <label class="text-xs text-zinc-400">
-        N
-        <input
-          bind:value={cumulativeLengthInput}
-          type="number"
-          min="2"
-          max="500"
-          step="1"
-          class="ml-2 w-16 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"
-        />
-      </label>
-      <label class="text-xs text-zinc-400">
-        Type
-        <select
-          bind:value={cumulativeTypeInput}
-          class="ml-2 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-sm"
-        >
-          <option value="sma">SMA</option>
-          <option value="ema">EMA</option>
-          <option value="wma">WMA</option>
-        </select>
-      </label>
-      <button
-        onclick={applyCumulativeSettings}
-        class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded px-3 py-1 text-sm"
-      >
-        Apply MA
-      </button>
     </div>
   </div>
 
@@ -722,6 +688,22 @@
           <input type="checkbox" bind:checked={showOHLCVCumulative} class="accent-zinc-400" />
           MA
         </label>
+        <input
+          type="number"
+          bind:value={ohlcvMALength}
+          min="2"
+          max="500"
+          step="1"
+          class="w-14 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        />
+        <select
+          bind:value={ohlcvMAType}
+          class="bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-xs"
+        >
+          <option value="sma">SMA</option>
+          <option value="ema">EMA</option>
+          <option value="wma">WMA</option>
+        </select>
       {/snippet}
       {#if loading && candles.length === 0}
         <div class="p-4 text-sm text-zinc-400">Loading…</div>
@@ -755,6 +737,22 @@
           <input type="checkbox" bind:checked={showOICumulative} class="accent-zinc-400" />
           MA
         </label>
+        <input
+          type="number"
+          bind:value={oiMALength}
+          min="2"
+          max="500"
+          step="1"
+          class="w-14 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        />
+        <select
+          bind:value={oiMAType}
+          class="bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-xs"
+        >
+          <option value="sma">SMA</option>
+          <option value="ema">EMA</option>
+          <option value="wma">WMA</option>
+        </select>
       {/snippet}
       {#if openInterest.length === 0}
         <div class="p-4 text-sm text-zinc-400">
@@ -785,6 +783,22 @@
           <input type="checkbox" bind:checked={showFRCumulative} class="accent-zinc-400" />
           MA
         </label>
+        <input
+          type="number"
+          bind:value={frMALength}
+          min="2"
+          max="500"
+          step="1"
+          class="w-14 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        />
+        <select
+          bind:value={frMAType}
+          class="bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-xs"
+        >
+          <option value="sma">SMA</option>
+          <option value="ema">EMA</option>
+          <option value="wma">WMA</option>
+        </select>
       {/snippet}
       {#if fundingRate.length === 0}
         <div class="p-4 text-sm text-zinc-400">
@@ -819,6 +833,22 @@
           <input type="checkbox" bind:checked={showBSCumulative} class="accent-zinc-400" />
           MA
         </label>
+        <input
+          type="number"
+          bind:value={bsMALength}
+          min="2"
+          max="500"
+          step="1"
+          class="w-14 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        />
+        <select
+          bind:value={bsMAType}
+          class="bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-xs"
+        >
+          <option value="sma">SMA</option>
+          <option value="ema">EMA</option>
+          <option value="wma">WMA</option>
+        </select>
       {/snippet}
       {#if buckets.length === 0}
         <div class="p-4 text-sm text-zinc-400">
@@ -848,6 +878,22 @@
           <input type="checkbox" bind:checked={showSZCumulative} class="accent-zinc-400" />
           MA
         </label>
+        <input
+          type="number"
+          bind:value={szMALength}
+          min="2"
+          max="500"
+          step="1"
+          class="w-14 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        />
+        <select
+          bind:value={szMAType}
+          class="bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-xs"
+        >
+          <option value="sma">SMA</option>
+          <option value="ema">EMA</option>
+          <option value="wma">WMA</option>
+        </select>
       {/snippet}
       {#if buckets.length === 0}
         <div class="p-4 text-sm text-zinc-400">
@@ -877,6 +923,22 @@
           <input type="checkbox" bind:checked={showTTCumulative} class="accent-zinc-400" />
           MA
         </label>
+        <input
+          type="number"
+          bind:value={ttMALength}
+          min="2"
+          max="500"
+          step="1"
+          class="w-14 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        />
+        <select
+          bind:value={ttMAType}
+          class="bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-xs"
+        >
+          <option value="sma">SMA</option>
+          <option value="ema">EMA</option>
+          <option value="wma">WMA</option>
+        </select>
       {/snippet}
       {#if longShort.length === 0}
         <div class="p-4 text-sm text-zinc-400">
@@ -908,6 +970,22 @@
           <input type="checkbox" bind:checked={showLSCumulative} class="accent-zinc-400" />
           MA
         </label>
+        <input
+          type="number"
+          bind:value={lsMALength}
+          min="2"
+          max="500"
+          step="1"
+          class="w-14 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        />
+        <select
+          bind:value={lsMAType}
+          class="bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-xs"
+        >
+          <option value="sma">SMA</option>
+          <option value="ema">EMA</option>
+          <option value="wma">WMA</option>
+        </select>
       {/snippet}
       {#if longShort.length === 0}
         <div class="p-4 text-sm text-zinc-400">
