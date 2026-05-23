@@ -14,7 +14,7 @@
   } = $props();
 </script>
 
-<div class="rounded border border-zinc-800 bg-zinc-950 overflow-hidden flex flex-col">
+<div class="rounded-xl border border-zinc-700 bg-zinc-950 overflow-hidden flex flex-col">
   <div class="flex items-center justify-between gap-2 px-3 py-2 border-b border-zinc-900">
     <button
       type="button"

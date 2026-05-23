@@ -167,7 +167,7 @@
   }
 </script>
 
-<div class="p-6 space-y-6">
+<div class="px-12 py-6 space-y-10">
   <div class="flex items-end justify-between gap-4 flex-wrap">
     <div>
       <h1 class="text-xl font-semibold">Trades</h1>
@@ -204,7 +204,7 @@
     use:dndzone={{ items: instances, flipDurationMs: FLIP_MS, dropTargetStyle: {} }}
     onconsider={handleSort}
     onfinalize={handleSort}
-    class="grid grid-cols-1 md:grid-cols-2 gap-6"
+    class="grid grid-cols-1 md:grid-cols-2 gap-10"
     style="grid-auto-flow: dense;"
   >
     {#each instances as inst, idx (inst.id)}
@@ -228,9 +228,9 @@
   </section>
 
   {#if instances.length < MAX_CHARTS}
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+    <div class="grid grid-cols-1 md:grid-cols-2 gap-10">
       <div
-        class="relative rounded border border-dashed border-zinc-700 bg-zinc-950/30 min-h-[180px] flex items-center justify-center"
+        class="relative rounded-xl border border-dashed border-zinc-700 bg-zinc-950/30 min-h-[180px] flex items-center justify-center"
         role="region"
         aria-label="Insert chart"
       >

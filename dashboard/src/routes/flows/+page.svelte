@@ -282,7 +282,7 @@
   }
 </script>
 
-<div class="p-6 space-y-10">
+<div class="px-12 py-6 space-y-10">
   <div class="flex items-end justify-between gap-4 flex-wrap">
     <div>
       <h1 class="text-xl font-semibold">Flows</h1>

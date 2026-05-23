@@ -344,38 +344,46 @@
     `${kindLabel} — ${instance.token} ${instance.interval}` +
       (instance.kind === 'sz' ? ` (< $${instance.under} / > $${instance.over})` : '')
   );
+
+  let settingsOpen = $state(false);
 </script>
 
 <div
-  class={'rounded border border-zinc-800 bg-zinc-950 overflow-hidden flex flex-col h-full ' +
+  class={'rounded-xl border border-zinc-700 bg-zinc-950 overflow-hidden flex flex-col h-full ' +
     (instance.pin && instance.kind === 'ohlcv' ? 'sticky top-0 z-20 shadow-xl shadow-black/60 ' : '')}
   role="region"
   aria-label={panelTitle}
 >
-  <div class="flex items-center justify-between gap-2 px-3 py-2 border-b border-zinc-900">
-    <div class="flex items-center gap-2 min-w-0">
-      <div
-        title="Drag to reorder"
-        class="cursor-grab active:cursor-grabbing flex items-center gap-2 text-zinc-400 hover:text-zinc-100 select-none"
+  <div class="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-zinc-800 bg-gradient-to-b from-zinc-900/40 to-transparent">
+    <!-- Title block -->
+    <button
+      type="button"
+      onclick={() => (collapsed = !collapsed)}
+      title="Drag to reorder · Click to collapse"
+      class="cursor-grab active:cursor-grabbing flex items-center gap-2 min-w-0 text-left"
+    >
+      <span class="text-zinc-500 text-base leading-none select-none">⠿</span>
+      <span class="text-zinc-500 text-[10px] w-3 inline-block text-center leading-none">
+        {collapsed ? '▶' : '▼'}
+      </span>
+      <span class="text-zinc-100 text-sm font-semibold tracking-tight truncate">
+        {kindLabel}
+      </span>
+      <span
+        class="hidden sm:inline-flex items-center gap-1 ml-1 px-2 py-0.5 rounded-md bg-zinc-800/70 border border-zinc-700/70 text-[10px] uppercase tracking-wider text-zinc-300"
       >
-        <span class="text-zinc-500 text-xs leading-none">⠿</span>
-        <button
-          type="button"
-          onclick={() => (collapsed = !collapsed)}
-          class="flex items-center gap-2 text-zinc-400 hover:text-zinc-100"
-        >
-          <span class="text-[10px] w-3 inline-block text-center leading-none"
-            >{collapsed ? '▶' : '▼'}</span
-          >
-          <span class="text-[10px] uppercase tracking-widest truncate">{panelTitle}</span>
-        </button>
-      </div>
-    </div>
-    <div class="flex items-center gap-2 flex-wrap">
+        <span class="text-zinc-100 font-medium">{instance.token}</span>
+        <span class="text-zinc-500">·</span>
+        <span>{instance.interval}</span>
+      </span>
+    </button>
+
+    <!-- Primary controls (always visible) -->
+    <div class="flex items-center gap-1.5">
       <select
         value={instance.token}
         onchange={(e) => onTokenChange(instance.id, e.currentTarget.value)}
-        class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
       >
         {#each tokens as t (t)}
           <option value={t}>{t}</option>
@@ -383,46 +391,73 @@
       </select>
       <select
         bind:value={instance.interval}
-        class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
       >
         {#each INTERVALS as iv (iv)}
           <option value={iv}>{iv}</option>
         {/each}
       </select>
+      <button
+        type="button"
+        onclick={() => (settingsOpen = !settingsOpen)}
+        title="Chart settings"
+        aria-pressed={settingsOpen}
+        class="w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center
+               {settingsOpen ? 'bg-zinc-800 text-zinc-100 border-zinc-700' : ''}"
+      >⚙</button>
+      <button
+        type="button"
+        onclick={toggleWidth}
+        title={instance.width === 1 ? 'Expand to 2 columns' : 'Shrink to 1 column'}
+        class="w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center"
+      >{instance.width === 1 ? '⇔' : '⇒'}</button>
+      <button
+        type="button"
+        onclick={() => onRemove(instance.id)}
+        title="Remove chart"
+        class="w-7 h-7 rounded-md text-zinc-400 hover:text-red-400 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center"
+      >✕</button>
+    </div>
+  </div>
+
+  {#if settingsOpen && !collapsed}
+    <div class="px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/30 flex items-center gap-3 flex-wrap text-xs">
       {#if instance.kind === 'ohlcv'}
-        <label class="text-xs text-zinc-400 flex items-center gap-1">
+        <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
           <input type="checkbox" bind:checked={instance.pin} class="accent-zinc-400" />
           Pin
         </label>
+        <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
       {#if instance.kind === 'sz'}
+        <span class="text-zinc-500">Under</span>
         <input
           bind:value={instance.underInput}
           type="number"
           step="100"
           min="0"
-          title="Under threshold (USD)"
-          class="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
         />
+        <span class="text-zinc-500">Over</span>
         <input
           bind:value={instance.overInput}
           type="number"
           step="100"
           min="0"
-          title="Over threshold (USD)"
-          class="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
         />
         <button
           type="button"
           onclick={applySzThresholds}
-          class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+          class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
         >Apply</button>
+        <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
-      <label class="text-xs text-zinc-400 flex items-center gap-1">
+      <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
         <input type="checkbox" bind:checked={instance.showPoint} class="accent-zinc-400" />
         Point
       </label>
-      <label class="text-xs text-zinc-400 flex items-center gap-1">
+      <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
         <input type="checkbox" bind:checked={instance.showCumulative} class="accent-zinc-400" />
         MA
       </label>
@@ -432,30 +467,20 @@
         min="2"
         max="500"
         step="1"
-        class="w-14 bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs"
+        title="MA length"
+        class="w-14 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
       />
       <select
         bind:value={instance.maType}
-        class="bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-xs"
+        title="MA type"
+        class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
       >
         <option value="sma">SMA</option>
         <option value="ema">EMA</option>
         <option value="wma">WMA</option>
       </select>
-      <button
-        type="button"
-        onclick={toggleWidth}
-        title={instance.width === 1 ? 'Expand to 2 columns' : 'Shrink to 1 column'}
-        class="w-7 h-6 rounded text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 text-xs"
-      >{instance.width === 1 ? '⇔' : '⇒'}</button>
-      <button
-        type="button"
-        onclick={() => onRemove(instance.id)}
-        title="Remove chart"
-        class="w-6 h-6 rounded text-zinc-400 hover:text-red-300 hover:bg-zinc-800 text-sm leading-none"
-      >✕</button>
     </div>
-  </div>
+  {/if}
 
   {#if !collapsed}
     {#if error}
