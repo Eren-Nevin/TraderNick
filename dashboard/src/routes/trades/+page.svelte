@@ -79,6 +79,7 @@
 
   let showOHLCVPoint = $state(true);
   let showOHLCVCumulative = $state(true);
+  let pinOHLCV = $state(false);
   let showBSPoint = $state(true);
   let showBSCumulative = $state(true);
   let showSZPoint = $state(true);
@@ -706,36 +707,42 @@
     <div class="p-3 rounded border border-red-900 bg-red-950/40 text-sm text-red-300">{error}</div>
   {/if}
 
-  <ChartPanel title="OHLCV">
-    {#snippet controls()}
-      <label class="text-xs text-zinc-400 flex items-center gap-2">
-        <input type="checkbox" bind:checked={showOHLCVPoint} class="accent-zinc-400" />
-        Point
-      </label>
-      <label class="text-xs text-zinc-400 flex items-center gap-2">
-        <input type="checkbox" bind:checked={showOHLCVCumulative} class="accent-zinc-400" />
-        MA
-      </label>
-    {/snippet}
-    {#if loading && candles.length === 0}
-      <div class="p-4 text-sm text-zinc-400">Loading…</div>
-    {:else if candles.length === 0}
-      <div class="p-4 text-sm text-zinc-400">
-        No OHLCV data yet — wait for the live poller or fire a backfill.
-      </div>
-    {:else}
-      <CandlestickChart
-        {candles}
-        lines={ohlcvLines}
-        showCandles={showOHLCVPoint}
-        {xExtent}
-        view={syncZoom ? sharedView : ohlcvView}
-        onView={(v) => handleView('ohlcv', v)}
-        hoverTime={syncZoom ? sharedHoverTime : ohlcvHoverTime}
-        onHover={(t) => handleHover('ohlcv', t)}
-      />
-    {/if}
-  </ChartPanel>
+  <div class={pinOHLCV ? 'sticky top-0 z-20 shadow-xl shadow-black/60' : ''}>
+    <ChartPanel title="OHLCV">
+      {#snippet controls()}
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={pinOHLCV} class="accent-zinc-400" />
+          Pin
+        </label>
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showOHLCVPoint} class="accent-zinc-400" />
+          Point
+        </label>
+        <label class="text-xs text-zinc-400 flex items-center gap-2">
+          <input type="checkbox" bind:checked={showOHLCVCumulative} class="accent-zinc-400" />
+          MA
+        </label>
+      {/snippet}
+      {#if loading && candles.length === 0}
+        <div class="p-4 text-sm text-zinc-400">Loading…</div>
+      {:else if candles.length === 0}
+        <div class="p-4 text-sm text-zinc-400">
+          No OHLCV data yet — wait for the live poller or fire a backfill.
+        </div>
+      {:else}
+        <CandlestickChart
+          {candles}
+          lines={ohlcvLines}
+          showCandles={showOHLCVPoint}
+          {xExtent}
+          view={syncZoom ? sharedView : ohlcvView}
+          onView={(v) => handleView('ohlcv', v)}
+          hoverTime={syncZoom ? sharedHoverTime : ohlcvHoverTime}
+          onHover={(t) => handleHover('ohlcv', t)}
+        />
+      {/if}
+    </ChartPanel>
+  </div>
 
   <div class="grid grid-cols-1 md:grid-cols-2 gap-8">
     <ChartPanel title="Open Interest (USD)" bind:collapsed={oiCollapsed}>
