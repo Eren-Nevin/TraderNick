@@ -3,7 +3,8 @@
   import {
     newChartInstance,
     type ChartInstance as ChartInstanceT,
-    type ChartKind
+    type ChartKind,
+    type ChartTemplate
   } from '$lib/components/charts/config';
   import type { PageData } from './$types';
 
@@ -27,6 +28,56 @@
     const transfer = newChartInstance('transfer', { token, chain });
     return [ohlcv, transfer];
   }
+
+  // Hardcoded one-click templates surfaced in the Insert menu. Future: persist
+  // user-saved templates from the chart itself.
+  const TEMPLATES: ChartTemplate[] = [
+    {
+      id: 'tpl-non-cex-to-cex',
+      label: 'Transfer: Non-CEX → CEX (inflows)',
+      build: (defaults) => {
+        const inst = newChartInstance('transfer', defaults);
+        inst.filter = { sender_ex: ['CEX'], receiver_in: ['CEX'] };
+        return inst;
+      }
+    },
+    {
+      id: 'tpl-cex-to-non-cex',
+      label: 'Transfer: CEX → Non-CEX (outflows)',
+      build: (defaults) => {
+        const inst = newChartInstance('transfer', defaults);
+        inst.filter = { sender_in: ['CEX'], receiver_ex: ['CEX'] };
+        return inst;
+      }
+    },
+    {
+      id: 'tpl-cex-to-deposit',
+      label: 'Transfer: → CEX deposit addresses',
+      build: (defaults) => {
+        const inst = newChartInstance('transfer', defaults);
+        inst.filter = { receiver_in: ['Deposit'] };
+        return inst;
+      }
+    },
+    {
+      id: 'tpl-involving-bridge',
+      label: 'Transfer: Involving Bridge',
+      build: (defaults) => {
+        const inst = newChartInstance('transfer', defaults);
+        inst.filter = { involving_in: ['Bridge'] };
+        return inst;
+      }
+    },
+    {
+      id: 'tpl-excluding-cex',
+      label: 'Transfer: Excluding CEX (peer-to-peer)',
+      build: (defaults) => {
+        const inst = newChartInstance('transfer', defaults);
+        inst.filter = { involving_ex: ['CEX'] };
+        return inst;
+      }
+    }
+  ];
 </script>
 
 <div class="px-12 py-6 space-y-10">
@@ -42,6 +93,7 @@
     streams={data.streams}
     storageKey="tradernick:flows:layout:v1"
     availableKinds={AVAILABLE_KINDS}
+    templates={TEMPLATES}
     defaultChain="ETH"
     {defaultLayout}
   />

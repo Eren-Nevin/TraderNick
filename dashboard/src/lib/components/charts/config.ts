@@ -262,6 +262,14 @@ export type ChartInstance = {
   filter?: TransferFilters;
 };
 
+/** A one-click chart preset surfaced in the Insert menu. `build` returns a
+ *  ready-to-add ChartInstance (with id, defaults, and any preset filter etc.). */
+export type ChartTemplate = {
+  id: string;
+  label: string;
+  build: (defaults: { token: string; chain?: string }) => ChartInstance;
+};
+
 /** Cycle of canonical sizes the chart can be toggled through.
  *  1×1 = compact (1 col, 270px chart),
  *  2×2 = default (2 cols, 540px chart),

@@ -10,6 +10,7 @@
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind,
+    type ChartTemplate,
     type MAConfig
   } from '$lib/components/charts/config';
   import type { Interval, TransferStream } from '$lib/api';
@@ -20,6 +21,7 @@
     streams = [],
     storageKey,
     availableKinds,
+    templates = [],
     defaultLayout,
     defaultToken,
     defaultChain
@@ -28,6 +30,7 @@
     streams?: TransferStream[];
     storageKey: string;
     availableKinds: ChartKind[];
+    templates?: ChartTemplate[];
     defaultLayout: () => ChartInstanceT[];
     defaultToken?: string;
     defaultChain?: string;
@@ -58,6 +61,13 @@
     if (instances.length >= MAX_CHARTS) return;
     const tk = defaultToken ?? tokens[0] ?? 'BTC';
     const inst = newChartInstance(kind, { token: tk, chain: defaultChain });
+    instances = [...instances, inst];
+    insertOpen = false;
+  }
+  function addTemplate(t: ChartTemplate) {
+    if (instances.length >= MAX_CHARTS) return;
+    const tk = defaultToken ?? tokens[0] ?? 'BTC';
+    const inst = t.build({ token: tk, chain: defaultChain });
     instances = [...instances, inst];
     insertOpen = false;
   }
@@ -307,9 +317,25 @@
       >+ Insert Chart</button>
       {#if insertOpen}
         <div
-          class="absolute z-30 top-12 left-1/2 -translate-x-1/2 bg-zinc-950 border border-zinc-700 rounded-md shadow-xl shadow-black/60 py-1 min-w-[180px]"
+          class="absolute z-30 top-12 left-1/2 -translate-x-1/2 bg-zinc-950 border border-zinc-700 rounded-md shadow-xl shadow-black/60 py-1 min-w-[260px] max-h-[60vh] overflow-y-auto"
           role="menu"
         >
+          {#if templates.length > 0}
+            <div class="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-widest text-zinc-500">
+              Templates
+            </div>
+            {#each templates as t (t.id)}
+              <button
+                type="button"
+                onclick={() => addTemplate(t)}
+                class="block w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+              >{t.label}</button>
+            {/each}
+            <div class="border-t border-zinc-800 my-1"></div>
+          {/if}
+          <div class="px-3 pt-0.5 pb-0.5 text-[10px] uppercase tracking-widest text-zinc-500">
+            Blank chart
+          </div>
           {#each availableKinds as k (k)}
             <button
               type="button"
