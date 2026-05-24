@@ -106,32 +106,36 @@ def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str
     for i, spec in enumerate(extras):
         cf = spec.get("filters") or {}
         preds: list[str] = []
-        # Categories — list-of-string per wallet, use hasAny.
+        # Categories — list-of-string per wallet; case-insensitive hasAny.
         for side in ("sender", "receiver", "involving"):
             for action in ("in", "ex"):
                 key = f"{side}_{action}"
                 cats = cf.get(key)
                 if not cats or not isinstance(cats, list):
                     continue
-                cats = [str(c) for c in cats if str(c).strip()]
+                cats = [str(c).lower() for c in cats if str(c).strip()]
                 if not cats:
                     continue
                 pname = f"e_pos_{i}_{side}_{action}"
                 params[pname] = cats
                 pphold = f"{{{pname}:Array(String)}}"
+
+                def cat_match(col: str) -> str:
+                    return f"hasAny(arrayMap(c -> lower(c), {dg(col)}), {pphold})"
+
                 if side == "involving":
-                    match = f"(hasAny({dg('sender')}, {pphold}) OR hasAny({dg('receiver')}, {pphold}))"
+                    match = f"({cat_match('sender')} OR {cat_match('receiver')})"
                 else:
-                    match = f"hasAny({dg(side)}, {pphold})"
+                    match = cat_match(side)
                 preds.append(match if action == "in" else f"NOT {match}")
-        # Entities — single nullable string per wallet, use coalesce(...) IN (...).
+        # Entities — single nullable string per wallet; case-insensitive IN.
         for side in ("sender", "receiver", "involving"):
             for action in ("in", "ex"):
                 key = f"{side}_entity_{action}"
                 vals = cf.get(key)
                 if not vals or not isinstance(vals, list):
                     continue
-                vals = [str(v) for v in vals if str(v).strip()]
+                vals = [str(v).lower() for v in vals if str(v).strip()]
                 if not vals:
                     continue
                 pname = f"e_pos_{i}_{side}_ent_{action}"
@@ -139,7 +143,7 @@ def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str
                 pphold = f"{{{pname}:Array(String)}}"
 
                 def ent_match(col: str) -> str:
-                    return f"coalesce({dg_entity(col)}, '') IN {pphold}"
+                    return f"lower(coalesce({dg_entity(col)}, '')) IN {pphold}"
 
                 if side == "involving":
                     match = f"({ent_match('sender')} OR {ent_match('receiver')})"
@@ -154,11 +158,9 @@ def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str
 def _build_entity_predicate(chain: str, side: str, action: str, vals: list[str]) -> tuple[str, str] | None:
     """Predicate over the dictionary's `entity` (Nullable String) attribute.
 
-    For an unknown wallet (or a wallet with no entity) dictGet returns NULL;
-    coalesce('') normalises so the IN check works cleanly:
-      - include `{X, Y}`: passes only for wallets whose entity is X or Y
-      - exclude `{X}`:    passes for wallets whose entity is anything else
-                          (including NULL / unknown)
+    Matching is case-insensitive: both the dictionary's entity and the user-
+    supplied values are lower()'d before comparison. NULL / unknown entities
+    coalesce to '' so the IN check stays well-defined.
     """
     if not vals:
         return None
@@ -169,8 +171,8 @@ def _build_entity_predicate(chain: str, side: str, action: str, vals: list[str])
 
     def match(col: str) -> str:
         return (
-            f"coalesce(dictGet('tradernick.wallet_labels', 'entity', "
-            f"{addr_expr.format(col=col)}), '') IN {pphold}"
+            f"lower(coalesce(dictGet('tradernick.wallet_labels', 'entity', "
+            f"{addr_expr.format(col=col)}), '')) IN {pphold}"
         )
 
     if side == "involving":
@@ -196,22 +198,21 @@ def _build_wallet_predicate(chain: str, side: str, action: str, cats: list[str])
         "lower({col})" if chain.upper() in _EVM_CHAINS else "{col}"
     )
     param = f"{side}_{action}_cats"
+    pphold = f"{{{param}:Array(String)}}"
+
+    def match(col: str) -> str:
+        # Case-insensitive: lower both the dictionary's category strings and the
+        # caller's supplied values (lowered in Python before being passed in).
+        return (
+            f"hasAny(arrayMap(c -> lower(c), "
+            f"dictGet('tradernick.wallet_labels', 'categories', "
+            f"{addr_expr.format(col=col)})), {pphold})"
+        )
+
     if side == "involving":
-        sender_expr = (
-            f"hasAny(dictGet('tradernick.wallet_labels', 'categories', "
-            f"{addr_expr.format(col='sender')}), {{{param}:Array(String)}})"
-        )
-        receiver_expr = (
-            f"hasAny(dictGet('tradernick.wallet_labels', 'categories', "
-            f"{addr_expr.format(col='receiver')}), {{{param}:Array(String)}})"
-        )
-        match_expr = f"({sender_expr} OR {receiver_expr})"
+        match_expr = f"({match('sender')} OR {match('receiver')})"
     else:
-        col = side  # 'sender' or 'receiver'
-        match_expr = (
-            f"hasAny(dictGet('tradernick.wallet_labels', 'categories', "
-            f"{addr_expr.format(col=col)}), {{{param}:Array(String)}})"
-        )
+        match_expr = match(side)
     if action == "in":
         return match_expr, param
     # action == 'ex' — must NOT overlap with the supplied categories
@@ -264,14 +265,16 @@ async def aggregate(request):
             continue
         sql_frag, param_name = pred
         where_clauses.append("AND " + sql_frag)
-        legacy_params[param_name] = cats
+        # Case-insensitive — pre-lowercase the user input so it matches the
+        # `lower(c)` projection on the dictionary side.
+        legacy_params[param_name] = [str(c).lower() for c in cats]
     for side, action, vals in entity_specs:
         pred = _build_entity_predicate(chain, side, action, vals)
         if pred is None:
             continue
         sql_frag, param_name = pred
         where_clauses.append("AND " + sql_frag)
-        legacy_params[param_name] = vals
+        legacy_params[param_name] = [str(v).lower() for v in vals]
     where_extra_sql = "\n          ".join(where_clauses)
 
     # ---- New extras param: list of {id, filters} → one sumIf per extra ----
