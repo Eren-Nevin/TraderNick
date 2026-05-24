@@ -337,6 +337,15 @@
     return () => ro.disconnect();
   });
 
+  let _drawRaf: number | null = null;
+  function scheduleDraw() {
+    if (_drawRaf != null) return;
+    _drawRaf = requestAnimationFrame(() => {
+      _drawRaf = null;
+      draw();
+    });
+  }
+
   $effect(() => {
     data;
     series;
@@ -345,7 +354,7 @@
     view;
     width;
     void themeStore.theme;
-    draw();
+    scheduleDraw();
   });
 
   $effect(() => {

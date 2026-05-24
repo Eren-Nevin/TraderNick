@@ -116,18 +116,44 @@
 
     const v0 = xScale.invert(0).getTime() / 1000;
     const v1 = xScale.invert(plotW).getTime() / 1000;
-    const visible = candles.filter((c) => c.time >= v0 && c.time <= v1);
-    const ref = visible.length ? visible : candles;
 
-    let yLo = showCandles ? (d3.min(ref, (c) => c.low) ?? Infinity) : Infinity;
-    let yHi = showCandles ? (d3.max(ref, (c) => c.high) ?? -Infinity) : -Infinity;
-    for (const c of ref) {
-      const idx = candles.indexOf(c);
+    // Single pass — replaces the O(N²) `candles.filter` + `candles.indexOf(c)`
+    // combo that caused pan/zoom to lag at large N.
+    let yLo = Infinity;
+    let yHi = -Infinity;
+    let visibleCount = 0;
+    let vMaxLocal = 0;
+    for (let i = 0; i < candles.length; i++) {
+      const c = candles[i];
+      if (c.time < v0 || c.time > v1) continue;
+      visibleCount++;
+      if (showCandles) {
+        if (c.low < yLo) yLo = c.low;
+        if (c.high > yHi) yHi = c.high;
+      }
+      if (c.volume > vMaxLocal) vMaxLocal = c.volume;
       for (const ln of lines) {
-        const v = ln.compute(c, idx, candles);
+        const v = ln.compute(c, i, candles);
         if (Number.isFinite(v)) {
           if (v < yLo) yLo = v;
           if (v > yHi) yHi = v;
+        }
+      }
+    }
+    if (visibleCount === 0) {
+      for (let i = 0; i < candles.length; i++) {
+        const c = candles[i];
+        if (showCandles) {
+          if (c.low < yLo) yLo = c.low;
+          if (c.high > yHi) yHi = c.high;
+        }
+        if (c.volume > vMaxLocal) vMaxLocal = c.volume;
+        for (const ln of lines) {
+          const v = ln.compute(c, i, candles);
+          if (Number.isFinite(v)) {
+            if (v < yLo) yLo = v;
+            if (v > yHi) yHi = v;
+          }
         }
       }
     }
@@ -146,7 +172,7 @@
       .range([priceH, 0])
       .nice();
 
-    const vMax = d3.max(ref, (c) => c.volume) ?? 1;
+    const vMax = vMaxLocal || 1;
     const yVol = d3
       .scaleLinear()
       .domain([0, vMax * 1.1 || 1])
@@ -332,6 +358,19 @@
     return () => ro.disconnect();
   });
 
+  let _drawRaf: number | null = null;
+  function scheduleDraw() {
+    if (_drawRaf != null) return;
+    _drawRaf = requestAnimationFrame(() => {
+      _drawRaf = null;
+      if (svgEl && zoomBehavior) {
+        const t = viewToTransform(view, chartBaseStart, chartBaseEnd, chartPlotW);
+        d3.select(svgEl).call(zoomBehavior.transform, t);
+      }
+      draw();
+    });
+  }
+
   $effect(() => {
     candles;
     lines;
@@ -340,11 +379,7 @@
     view;
     width;
     void themeStore.theme;
-    if (svgEl && zoomBehavior) {
-      const t = viewToTransform(view, chartBaseStart, chartBaseEnd, chartPlotW);
-      d3.select(svgEl).call(zoomBehavior.transform, t);
-    }
-    draw();
+    scheduleDraw();
   });
 
   $effect(() => {

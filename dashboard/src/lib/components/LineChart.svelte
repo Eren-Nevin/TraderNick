@@ -107,18 +107,35 @@
 
     const v0 = xScale.invert(0).getTime() / 1000;
     const v1 = xScale.invert(plotW).getTime() / 1000;
-    const visible = data.filter((d) => d.time >= v0 && d.time <= v1);
-    const ref = visible.length ? visible : data;
 
+    // Single pass over data with the original index in-hand — replaces the old
+    // O(N²) `ref.filter()` + `data.indexOf(ref[i])` combo that pegged the CPU
+    // during pan/zoom when N got large.
     let yMin = Infinity;
     let yMax = -Infinity;
-    for (let i = 0; i < ref.length; i++) {
-      const idx = data.indexOf(ref[i]);
+    let visibleCount = 0;
+    for (let i = 0; i < data.length; i++) {
+      const d = data[i];
+      if (d.time < v0 || d.time > v1) continue;
+      visibleCount++;
       for (const ln of lines) {
-        const v = ln.compute(ref[i], idx, data);
+        const v = ln.compute(d, i, data);
         if (Number.isFinite(v)) {
           if (v < yMin) yMin = v;
           if (v > yMax) yMax = v;
+        }
+      }
+    }
+    if (visibleCount === 0) {
+      // Nothing in the visible window — fall back to scanning all data so the
+      // axis still has a sane range (matches the previous behaviour).
+      for (let i = 0; i < data.length; i++) {
+        for (const ln of lines) {
+          const v = ln.compute(data[i], i, data);
+          if (Number.isFinite(v)) {
+            if (v < yMin) yMin = v;
+            if (v > yMax) yMax = v;
+          }
         }
       }
     }
@@ -282,6 +299,19 @@
     return () => ro.disconnect();
   });
 
+  let _drawRaf: number | null = null;
+  function scheduleDraw() {
+    if (_drawRaf != null) return;
+    _drawRaf = requestAnimationFrame(() => {
+      _drawRaf = null;
+      if (svgEl && zoomBehavior) {
+        const t = viewToTransform(view, chartBaseStart, chartBaseEnd, chartPlotW);
+        d3.select(svgEl).call(zoomBehavior.transform, t);
+      }
+      draw();
+    });
+  }
+
   $effect(() => {
     data;
     lines;
@@ -290,11 +320,7 @@
     view;
     width;
     void themeStore.theme;
-    if (svgEl && zoomBehavior) {
-      const t = viewToTransform(view, chartBaseStart, chartBaseEnd, chartPlotW);
-      d3.select(svgEl).call(zoomBehavior.transform, t);
-    }
-    draw();
+    scheduleDraw();
   });
 
   $effect(() => {

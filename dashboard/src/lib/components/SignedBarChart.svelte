@@ -116,22 +116,20 @@
 
     const v0 = xScale.invert(0).getTime() / 1000;
     const v1 = xScale.invert(plotW).getTime() / 1000;
-    const visible = data.filter((d) => d.time >= v0 && d.time <= v1);
-    const ref = visible.length ? visible : data;
 
+    // Single pass — replaces O(N²) `data.filter` + `data.indexOf(r)` combo.
     let yMin = 0;
     let yMax = 0;
-    if (showBars) {
-      for (const d of ref) {
+    for (let i = 0; i < data.length; i++) {
+      const d = data[i];
+      if (d.time < v0 || d.time > v1) continue;
+      if (showBars) {
         const v = d[valueKey] ?? 0;
         if (v < yMin) yMin = v;
         if (v > yMax) yMax = v;
       }
-    }
-    for (const r of ref) {
-      const idx = data.indexOf(r);
       for (const ln of lines) {
-        const v = ln.compute(r, idx, data);
+        const v = ln.compute(d, i, data);
         if (Number.isFinite(v)) {
           if (v < yMin) yMin = v;
           if (v > yMax) yMax = v;
@@ -318,6 +316,19 @@
     return () => ro.disconnect();
   });
 
+  let _drawRaf: number | null = null;
+  function scheduleDraw() {
+    if (_drawRaf != null) return;
+    _drawRaf = requestAnimationFrame(() => {
+      _drawRaf = null;
+      if (svgEl && zoomBehavior) {
+        const t = viewToTransform(view, chartBaseStart, chartBaseEnd, chartPlotW);
+        d3.select(svgEl).call(zoomBehavior.transform, t);
+      }
+      draw();
+    });
+  }
+
   $effect(() => {
     data;
     valueKey;
@@ -327,11 +338,7 @@
     view;
     width;
     void themeStore.theme;
-    if (svgEl && zoomBehavior) {
-      const t = viewToTransform(view, chartBaseStart, chartBaseEnd, chartPlotW);
-      d3.select(svgEl).call(zoomBehavior.transform, t);
-    }
-    draw();
+    scheduleDraw();
   });
 
   $effect(() => {
