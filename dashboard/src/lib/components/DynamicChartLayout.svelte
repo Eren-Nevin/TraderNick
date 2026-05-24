@@ -161,18 +161,34 @@
       }
       if (inst.kind === 'transfer') {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
-        const rf = r.filters;
-        const filters: Record<string, string[]> = {};
-        if (rf && typeof rf === 'object') {
-          for (const k of ['sender_in', 'sender_ex', 'receiver_in', 'receiver_ex', 'involving_in', 'involving_ex']) {
-            const v = (rf as Record<string, unknown>)[k];
-            if (Array.isArray(v)) {
-              const cleaned = v.map((x) => (typeof x === 'string' ? x : '')).filter((x) => x.length > 0);
-              if (cleaned.length) filters[k] = cleaned;
+        const rawExtras = Array.isArray(r.extraSeries) ? r.extraSeries : [];
+        const cleanExtras: { id: string; name: string; filters: Record<string, string[]> }[] = [];
+        for (const e of rawExtras) {
+          if (!e || typeof e !== 'object') continue;
+          const er = e as Record<string, unknown>;
+          if (typeof er.id !== 'string') continue;
+          const filters: Record<string, string[]> = {};
+          const rf = er.filters;
+          if (rf && typeof rf === 'object') {
+            for (const k of ['sender_in', 'sender_ex', 'receiver_in', 'receiver_ex', 'involving_in', 'involving_ex']) {
+              const v = (rf as Record<string, unknown>)[k];
+              if (Array.isArray(v)) {
+                const cleaned = v
+                  .map((x) => (typeof x === 'string' ? x : ''))
+                  .filter((x) => x.length > 0);
+                if (cleaned.length) filters[k] = cleaned;
+              }
             }
           }
+          if (Object.keys(filters).length === 0) continue;
+          cleanExtras.push({
+            id: er.id,
+            name: typeof er.name === 'string' ? er.name : '',
+            filters
+          });
+          if (cleanExtras.length >= 3) break;
         }
-        inst.filters = filters;
+        inst.extraSeries = cleanExtras;
       }
       out.push(inst);
       if (out.length >= MAX_CHARTS) break;

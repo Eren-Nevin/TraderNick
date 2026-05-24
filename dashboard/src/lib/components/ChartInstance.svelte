@@ -20,8 +20,10 @@
     BUYER_SELLER_LINES,
     BUYER_SELLER_SERIES,
     CHART_KIND_LABELS,
+    EXTRA_SERIES_COLORS,
     LS_LINES,
     MA_COLORS,
+    MAX_EXTRA_SERIES,
     NEUTRAL_REF,
     OI_LINES,
     TOP_TRADERS_LINES,
@@ -33,7 +35,9 @@
     sizeLines,
     sizeSeries,
     unixSec,
-    type ChartInstance as ChartInstanceT
+    type ChartInstance as ChartInstanceT,
+    type FilteredSeries,
+    type TransferFilters
   } from '$lib/components/charts/config';
   import type { View } from '$lib/chart-zoom';
 
@@ -104,22 +108,81 @@
     }
   });
 
-  // Parse a CSV string from the input into a normalised string array.
+  // ---- transfer "extra series" form state ----
+  type FilterKey = 'sender_in' | 'sender_ex' | 'receiver_in' | 'receiver_ex' | 'involving_in' | 'involving_ex';
+  const FILTER_KEYS: FilterKey[] = [
+    'sender_in',
+    'sender_ex',
+    'receiver_in',
+    'receiver_ex',
+    'involving_in',
+    'involving_ex'
+  ];
+  const EMPTY_PENDING: Record<FilterKey, string> = {
+    sender_in: '',
+    sender_ex: '',
+    receiver_in: '',
+    receiver_ex: '',
+    involving_in: '',
+    involving_ex: ''
+  };
+  let pendingName = $state('');
+  let pendingFilters = $state<Record<FilterKey, string>>({ ...EMPTY_PENDING });
+
   function parseFilterCsv(s: string): string[] {
     return s
       .split(',')
       .map((v) => v.trim())
       .filter((v) => v.length > 0);
   }
-  function joinFilterCsv(arr: string[] | undefined): string {
-    return (arr ?? []).join(', ');
+  function buildPendingFilterSet(): TransferFilters {
+    const next: TransferFilters = {};
+    for (const k of FILTER_KEYS) {
+      const arr = parseFilterCsv(pendingFilters[k as FilterKey]);
+      if (arr.length) next[k] = arr;
+    }
+    return next;
   }
-  function setFilter(key: keyof NonNullable<typeof instance.filters>, value: string) {
-    const next = { ...(instance.filters ?? {}) };
-    const arr = parseFilterCsv(value);
-    if (arr.length) next[key] = arr;
-    else delete next[key];
-    instance.filters = next;
+  function autoNameFromFilters(f: TransferFilters): string {
+    const parts: string[] = [];
+    if (f.sender_in?.length) parts.push(`${f.sender_in.join('+')} →`);
+    if (f.receiver_in?.length) parts.push(`→ ${f.receiver_in.join('+')}`);
+    if (f.involving_in?.length) parts.push(`⇄ ${f.involving_in.join('+')}`);
+    if (f.sender_ex?.length) parts.push(`¬${f.sender_ex.join('+')} →`);
+    if (f.receiver_ex?.length) parts.push(`→ ¬${f.receiver_ex.join('+')}`);
+    if (f.involving_ex?.length) parts.push(`¬⇄${f.involving_ex.join('+')}`);
+    return parts.join(' · ');
+  }
+
+  let pendingFilterSet = $derived.by(() => buildPendingFilterSet());
+  let pendingHasAny = $derived(
+    FILTER_KEYS.some((k) => parseFilterCsv(pendingFilters[k as FilterKey]).length > 0)
+  );
+  let extraSeriesCount = $derived((instance.extraSeries ?? []).length);
+  let canAddSeries = $derived(pendingHasAny && extraSeriesCount < MAX_EXTRA_SERIES);
+
+  function addSeries() {
+    if (!canAddSeries) return;
+    const f = pendingFilterSet;
+    const newId =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const newSeries: FilteredSeries = {
+      id: newId,
+      name: pendingName.trim() || autoNameFromFilters(f),
+      filters: f
+    };
+    instance.extraSeries = [...(instance.extraSeries ?? []), newSeries];
+    pendingName = '';
+    pendingFilters = { ...EMPTY_PENDING };
+  }
+  function removeSeries(id: string) {
+    instance.extraSeries = (instance.extraSeries ?? []).filter((s) => s.id !== id);
+  }
+  function clearPending() {
+    pendingName = '';
+    pendingFilters = { ...EMPTY_PENDING };
   }
 
   // ---- transient state (not persisted) ----
@@ -148,15 +211,11 @@
   let xExtent = $derived<[number, number]>([unixSec(since), unixSec(until)]);
 
   // ---- loader: dispatch on kind ----
-  const FILTER_KEYS = [
-    'sender_in', 'sender_ex',
-    'receiver_in', 'receiver_ex',
-    'involving_in', 'involving_ex'
-  ] as const;
 
-  function filtersKey(): string {
-    const f = instance.filters ?? {};
-    return FILTER_KEYS.map((k) => (f[k] ?? []).join(',')).join('|');
+  function extraSeriesKey(): string {
+    return (instance.extraSeries ?? [])
+      .map((s) => `${s.id}=${JSON.stringify(s.filters)}`)
+      .join('|');
   }
 
   function loadKey(): string {
@@ -164,7 +223,7 @@
       return `${instance.kind}|${instance.token}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}`;
     }
     if (instance.kind === 'transfer') {
-      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${instance.interval}|${filtersKey()}`;
+      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${instance.interval}|${extraSeriesKey()}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -174,6 +233,68 @@
     if (key === loadedKey) return;
     void load();
   });
+
+  /** Fetch the unfiltered "main" series plus each `instance.extraSeries` in
+   *  parallel against /api/transfers/aggregate, then merge them into one
+   *  array keyed by `time` so a LineChart can render N+1 lines at once. */
+  async function loadTransferMerged(sinceIso: string, untilIso: string) {
+    const baseQS = {
+      chain: instance.chain ?? 'ETH',
+      kind: transferKind,
+      token: instance.token,
+      interval: instance.interval,
+      since: sinceIso,
+      until: untilIso,
+      limit: '10000'
+    };
+    function urlFor(filters: TransferFilters | null): string {
+      const qs: Record<string, string> = { ...baseQS };
+      if (filters) {
+        for (const k of FILTER_KEYS) {
+          const arr = filters[k] ?? [];
+          if (arr.length) qs[k] = arr.join(',');
+        }
+      }
+      return `/api/transfers/aggregate?${new URLSearchParams(qs)}`;
+    }
+
+    const extras = instance.extraSeries ?? [];
+    const urls = [urlFor(null), ...extras.map((s) => urlFor(s.filters))];
+    const results = await Promise.all(
+      urls.map(async (u) => {
+        const r = await fetch(u);
+        if (!r.ok) throw new Error(`transfers ${r.status}`);
+        const body = await r.json();
+        return (body.series ?? []) as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>;
+      })
+    );
+
+    const merged = new Map<number, Record<string, number>>();
+    function ensure(t: number): Record<string, number> {
+      let row = merged.get(t);
+      if (!row) {
+        row = { time: t, main: 0, sum_amount: 0, sum_value_usd: 0, count: 0 };
+        for (let i = 0; i < extras.length; i++) row[`extra_${i}`] = 0;
+        merged.set(t, row);
+      }
+      return row;
+    }
+    for (const b of results[0]) {
+      const row = ensure(b.time);
+      row.main = b.sum_amount;
+      row.sum_amount = b.sum_amount;
+      row.sum_value_usd = b.sum_value_usd;
+      row.count = b.count;
+    }
+    for (let i = 0; i < extras.length; i++) {
+      for (const b of results[i + 1] ?? []) {
+        const row = ensure(b.time);
+        row[`extra_${i}`] = b.sum_amount;
+      }
+    }
+    const out = Array.from(merged.values()).sort((a, b) => (a.time as number) - (b.time as number));
+    data = out as unknown as AnyDatum[];
+  }
 
   async function load() {
     error = null;
@@ -238,23 +359,15 @@
           pickArr = (b) => (b.buckets ?? []) as AnyDatum[];
           break;
         case 'transfer': {
-          const qsParams: Record<string, string> = {
-            chain: instance.chain ?? 'ETH',
-            kind: transferKind,
-            token: instance.token,
-            interval: instance.interval,
-            since: sinceIso,
-            until: untilIso,
-            limit: '10000'
-          };
-          const f = instance.filters ?? {};
-          for (const k of FILTER_KEYS) {
-            const vals = f[k] ?? [];
-            if (vals.length) qsParams[k] = vals.join(',');
-          }
-          url = `/api/transfers/aggregate?${new URLSearchParams(qsParams)}`;
-          pickArr = (b) => (b.series ?? []) as AnyDatum[];
-          break;
+          // Transfer kind does its own multi-fetch + merge so the chart can show
+          // a main (unfiltered) line alongside up to MAX_EXTRA_SERIES filtered
+          // overlays. Skip the single-URL pickArr path below.
+          await loadTransferMerged(sinceIso, untilIso);
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          since = sinceIso;
+          until = untilIso;
+          return;
         }
       }
       const res = await fetch(url);
@@ -439,17 +552,24 @@
     return out;
   });
 
-  // Transfer-kind primary line (Point toggle controls visibility).
-  const TRANSFER_LINES = [
-    {
-      key: 'sum_amount',
-      label: 'Amount',
-      color: '#06b6d4',
-      compute: (d: TransferBucket) => d.sum_amount
-    }
-  ];
+  // Transfer-kind lines: main (cyan) + one per extraSeries.
+  const TRANSFER_MAIN_LINE = {
+    key: 'main',
+    label: 'Total',
+    color: '#06b6d4',
+    compute: (d: TransferBucket & Record<string, number>) => d.main ?? d.sum_amount ?? 0
+  };
+  let transferExtraLines = $derived(
+    (instance.extraSeries ?? []).map((s, idx) => ({
+      key: `extra_${idx}`,
+      label: s.name || `Filter ${idx + 1}`,
+      color: EXTRA_SERIES_COLORS[idx] ?? '#fbbf24',
+      compute: (d: Record<string, number>) => d[`extra_${idx}`] ?? 0
+    }))
+  );
   let transferLinesD = $derived([
-    ...(instance.showPoint ? TRANSFER_LINES : []),
+    ...(instance.showPoint ? [TRANSFER_MAIN_LINE] : []),
+    ...transferExtraLines,
     ...cumulativeLines
   ]);
 
@@ -677,37 +797,91 @@
     </div>
 
     {#if instance.kind === 'transfer'}
-      <div class="px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-2">
+      <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-3">
         <div class="text-[10px] uppercase tracking-widest text-zinc-500">
-          Wallet filters
-          <span class="text-zinc-600 normal-case">— comma-separated category names; ✘ excludes</span>
+          Filtered series
+          <span class="text-zinc-600 normal-case">— overlay up to {MAX_EXTRA_SERIES} colored lines, each its own wallet filter</span>
         </div>
-        <datalist id="wallet-cats-{instance.id}">
-          {#each walletCategories as c (c.name)}
-            <option value={c.name}></option>
-          {/each}
-        </datalist>
-        {#each [['sender', 'Sender'], ['receiver', 'Receiver'], ['involving', 'Either']] as [side, label]}
-          <div class="grid grid-cols-[60px_1fr_1fr] items-center gap-2">
-            <span class="text-zinc-400">{label}</span>
-            <input
-              type="text"
-              list="wallet-cats-{instance.id}"
-              value={joinFilterCsv(instance.filters?.[`${side}_in`])}
-              onchange={(e) => setFilter(`${side}_in`, e.currentTarget.value)}
-              placeholder="✔ include"
-              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-            />
-            <input
-              type="text"
-              list="wallet-cats-{instance.id}"
-              value={joinFilterCsv(instance.filters?.[`${side}_ex`])}
-              onchange={(e) => setFilter(`${side}_ex`, e.currentTarget.value)}
-              placeholder="✘ exclude"
-              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-            />
+
+        <!-- Existing series chips -->
+        {#if (instance.extraSeries ?? []).length > 0}
+          <div class="flex flex-wrap gap-2">
+            {#each instance.extraSeries ?? [] as s, idx (s.id)}
+              <span
+                class="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-zinc-700 bg-zinc-900 text-zinc-100"
+                title={autoNameFromFilters(s.filters)}
+              >
+                <span
+                  class="w-3 h-3 rounded-sm inline-block"
+                  style="background: {EXTRA_SERIES_COLORS[idx] ?? '#fbbf24'}"
+                ></span>
+                <span class="truncate max-w-[200px]">{s.name}</span>
+                <button
+                  type="button"
+                  onclick={() => removeSeries(s.id)}
+                  title="Remove series"
+                  class="text-zinc-400 hover:text-red-400 leading-none"
+                >✕</button>
+              </span>
+            {/each}
           </div>
-        {/each}
+        {/if}
+
+        <!-- Add-new form -->
+        {#if (instance.extraSeries ?? []).length < MAX_EXTRA_SERIES}
+          <datalist id="wallet-cats-{instance.id}">
+            {#each walletCategories as c (c.name)}
+              <option value={c.name}></option>
+            {/each}
+          </datalist>
+          <div class="space-y-2 p-2 border border-zinc-800 rounded-md">
+            <input
+              type="text"
+              bind:value={pendingName}
+              placeholder="Series name (optional)"
+              class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+            />
+            {#each [['sender', 'Sender'], ['receiver', 'Receiver'], ['involving', 'Either']] as [side, label]}
+              <div class="grid grid-cols-[60px_1fr_1fr] items-center gap-2">
+                <span class="text-zinc-400">{label}</span>
+                <input
+                  type="text"
+                  list="wallet-cats-{instance.id}"
+                  bind:value={pendingFilters[`${side}_in` as FilterKey]}
+                  placeholder="✔ include"
+                  class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+                />
+                <input
+                  type="text"
+                  list="wallet-cats-{instance.id}"
+                  bind:value={pendingFilters[`${side}_ex` as FilterKey]}
+                  placeholder="✘ exclude"
+                  class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+                />
+              </div>
+            {/each}
+            <div class="flex items-center gap-2">
+              <button
+                type="button"
+                onclick={addSeries}
+                disabled={!canAddSeries}
+                class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md px-3 py-1 text-xs text-zinc-100"
+              >+ Add series</button>
+              <button
+                type="button"
+                onclick={clearPending}
+                class="text-zinc-500 hover:text-zinc-200 text-xs"
+              >Clear</button>
+              {#if !pendingHasAny}
+                <span class="text-zinc-600 text-[11px]">Set at least one filter</span>
+              {/if}
+            </div>
+          </div>
+        {:else}
+          <div class="text-zinc-500 text-[11px]">
+            Max {MAX_EXTRA_SERIES} series reached — remove one to add another.
+          </div>
+        {/if}
       </div>
     {/if}
   {/if}
