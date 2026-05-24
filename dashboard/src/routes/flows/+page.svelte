@@ -44,23 +44,23 @@
   const TEMPLATES: ChartTemplate[] = [
     {
       id: 'tpl-non-cex-to-cex',
-      label: 'non-cex-to-cex-inflows',
-      build: buildTemplate('non-cex-to-cex-inflows', { sender_ex: ['CEX'], receiver_in: ['CEX'] })
+      label: 'Total CeX Inflow',
+      build: buildTemplate('Total CeX Inflow', { sender_ex: ['CEX'], receiver_in: ['CEX'] })
     },
     {
       id: 'tpl-cex-to-non-cex',
-      label: 'cex-to-non-cex-outflows',
-      build: buildTemplate('cex-to-non-cex-outflows', { sender_in: ['CEX'], receiver_ex: ['CEX'] })
+      label: 'Total CeX Outflow',
+      build: buildTemplate('Total CeX Outflow', { sender_in: ['CEX'], receiver_ex: ['CEX'] })
     },
     {
       id: 'tpl-deposit-inflows',
-      label: 'deposit-inflows',
-      build: buildTemplate('deposit-inflows', { receiver_in: ['Deposit'] })
+      label: 'CeX Deposit Inflow',
+      build: buildTemplate('CeX Deposit Inflow', { receiver_in: ['Deposit'] })
     },
     {
       id: 'tpl-hot-wallet-outflows',
-      label: 'hot-wallet-outflows',
-      build: buildTemplate('hot-wallet-outflows', { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] })
+      label: 'CeX Hot-Wallet Outflow',
+      build: buildTemplate('CeX Hot-Wallet Outflow', { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] })
     },
     {
       id: 'tpl-involving-bridge',
