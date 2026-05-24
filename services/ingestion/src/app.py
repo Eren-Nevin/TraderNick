@@ -1,8 +1,12 @@
 import base64
 import hmac
 import logging
+import os
+import tempfile
 
 from sanic import Sanic, response
+
+from scripts.bootstrap_wallets import load_into_clickhouse
 
 import config
 from jobs.manager import (
@@ -225,3 +229,41 @@ async def backfill_tron_native_transfers(request):
 @app.post("/jobs/backfill/tron_trc20_transfers")
 async def backfill_tron_trc20_transfers(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS, _extract_tokens)
+
+
+@app.post("/admin/wallets")
+async def admin_wallets(request):
+    """Replace the wallets table from a parquet.
+
+    Two modes:
+    - Multipart upload: `curl -u admin:pwd -F file=@wallets.parquet …` — file body is
+      written to a temp file and loaded.
+    - JSON path:        `{"path": "/app/data/wallets.parquet"}` — loads directly from
+      an already-mounted file. Path must be readable by the ingestion container.
+    """
+    uploaded = request.files.get("file") if hasattr(request, "files") else None
+    if uploaded is not None:
+        tmp = tempfile.NamedTemporaryFile(prefix="wallets-upload-", suffix=".parquet", delete=False)
+        try:
+            tmp.write(uploaded.body)
+            tmp.close()
+            summary = await load_into_clickhouse(tmp.name)
+        finally:
+            try:
+                os.unlink(tmp.name)
+            except OSError:
+                pass
+        return response.json(summary)
+
+    body = request.json or {}
+    path = body.get("path")
+    if not path:
+        return response.json(
+            {"error": "expected multipart 'file' upload OR JSON {\"path\": \"/app/data/...\"}"},
+            status=400,
+        )
+    try:
+        summary = await load_into_clickhouse(path)
+    except FileNotFoundError:
+        return response.json({"error": f"path not found: {path}"}, status=404)
+    return response.json(summary)

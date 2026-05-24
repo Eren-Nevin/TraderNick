@@ -226,6 +226,15 @@ export function defaultMAs(): MAConfig[] {
   ];
 }
 
+export type TransferFilters = {
+  sender_in?: string[];
+  sender_ex?: string[];
+  receiver_in?: string[];
+  receiver_ex?: string[];
+  involving_in?: string[];
+  involving_ex?: string[];
+};
+
 export type ChartInstance = {
   id: string;
   kind: ChartKind;
@@ -243,6 +252,7 @@ export type ChartInstance = {
   pin?: boolean;
   // transfer only
   chain?: string;
+  filters?: TransferFilters;
 };
 
 export function newChartInstance(
@@ -272,6 +282,7 @@ export function newChartInstance(
   }
   if (kind === 'transfer') {
     base.chain = defaults.chain ?? 'ETH';
+    base.filters = {};
   }
   return base;
 }

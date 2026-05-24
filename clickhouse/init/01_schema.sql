@@ -109,3 +109,35 @@ CREATE TABLE IF NOT EXISTS tradernick.ingestion_jobs
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (job_id)
 TTL updated_at + INTERVAL 30 DAY;
+
+-- Wallet labels imported from Horatio's chain-analysis (or any equivalent source).
+-- Addresses are stored verbatim from the source file; the bootstrap loader adds a
+-- lowercase variant for every `0x…` row so EVM lookups (which use lower(sender)) match
+-- regardless of source casing. BTC/TRON addresses go in case-preserved.
+CREATE TABLE IF NOT EXISTS tradernick.wallets
+(
+    address     String              CODEC(ZSTD(3)),
+    categories  Array(String)       CODEC(ZSTD(3)),
+    entity      Nullable(String)    CODEC(ZSTD(3)),
+    loaded_at   DateTime            DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(loaded_at)
+ORDER BY (address);
+
+CREATE DICTIONARY IF NOT EXISTS tradernick.wallet_labels
+(
+    address     String,
+    categories  Array(String),
+    entity      Nullable(String) DEFAULT NULL
+)
+PRIMARY KEY address
+SOURCE(CLICKHOUSE(
+    HOST 'localhost'
+    PORT 9000
+    USER 'tradernick'
+    PASSWORD 'tradernick'
+    DB 'tradernick'
+    QUERY 'SELECT address, categories, entity FROM tradernick.wallets FINAL'
+))
+LAYOUT(HASHED())
+LIFETIME(MIN 300 MAX 600);

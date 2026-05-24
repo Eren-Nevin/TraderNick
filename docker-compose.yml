@@ -32,6 +32,10 @@ services:
       CLICKHOUSE_USER: tradernick
       CLICKHOUSE_DB: tradernick
       INGEST_TOKENS: ${INGEST_TOKENS:-BTC,ETH,SOL,ARB,OP}
+      WALLETS_PARQUET_PATH: ${WALLETS_PARQUET_PATH:-/app/data/wallets.parquet}
+    volumes:
+      # local copy of the wallets parquet (path overridable via WALLETS_PARQUET_HOST)
+      - ${WALLETS_PARQUET_HOST:-./data}:/app/data:ro
     ports:
       - "10001:8000"
     restart: unless-stopped

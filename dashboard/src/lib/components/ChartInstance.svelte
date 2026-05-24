@@ -3,6 +3,7 @@
   import StackedBarChart from '$lib/components/StackedBarChart.svelte';
   import LineChart from '$lib/components/LineChart.svelte';
   import SignedBarChart from '$lib/components/SignedBarChart.svelte';
+  import { onMount } from 'svelte';
   import {
     INTERVALS,
     type Candle,
@@ -12,6 +13,7 @@
     type OpenInterestRow,
     type TransferBucket,
     type TransferStream,
+    type WalletCategory,
     type VolumeBucket
   } from '$lib/api';
   import {
@@ -87,6 +89,39 @@
     }
   });
 
+  // Wallet-category catalogue (for filter input <datalist> suggestions).
+  let walletCategories = $state<WalletCategory[]>([]);
+  onMount(async () => {
+    if (instance.kind !== 'transfer') return;
+    try {
+      const res = await fetch('/api/transfers/categories');
+      if (res.ok) {
+        const body = await res.json();
+        walletCategories = body.categories ?? [];
+      }
+    } catch {
+      // ignore — UI degrades to plain text input
+    }
+  });
+
+  // Parse a CSV string from the input into a normalised string array.
+  function parseFilterCsv(s: string): string[] {
+    return s
+      .split(',')
+      .map((v) => v.trim())
+      .filter((v) => v.length > 0);
+  }
+  function joinFilterCsv(arr: string[] | undefined): string {
+    return (arr ?? []).join(', ');
+  }
+  function setFilter(key: keyof NonNullable<typeof instance.filters>, value: string) {
+    const next = { ...(instance.filters ?? {}) };
+    const arr = parseFilterCsv(value);
+    if (arr.length) next[key] = arr;
+    else delete next[key];
+    instance.filters = next;
+  }
+
   // ---- transient state (not persisted) ----
   let data = $state<AnyDatum[]>([]);
   let since = $state<string>(new Date(0).toISOString());
@@ -113,12 +148,23 @@
   let xExtent = $derived<[number, number]>([unixSec(since), unixSec(until)]);
 
   // ---- loader: dispatch on kind ----
+  const FILTER_KEYS = [
+    'sender_in', 'sender_ex',
+    'receiver_in', 'receiver_ex',
+    'involving_in', 'involving_ex'
+  ] as const;
+
+  function filtersKey(): string {
+    const f = instance.filters ?? {};
+    return FILTER_KEYS.map((k) => (f[k] ?? []).join(',')).join('|');
+  }
+
   function loadKey(): string {
     if (instance.kind === 'sz') {
       return `${instance.kind}|${instance.token}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}`;
     }
     if (instance.kind === 'transfer') {
-      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${instance.interval}`;
+      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${instance.interval}|${filtersKey()}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -191,8 +237,8 @@
           })}`;
           pickArr = (b) => (b.buckets ?? []) as AnyDatum[];
           break;
-        case 'transfer':
-          url = `/api/transfers/aggregate?${new URLSearchParams({
+        case 'transfer': {
+          const qsParams: Record<string, string> = {
             chain: instance.chain ?? 'ETH',
             kind: transferKind,
             token: instance.token,
@@ -200,9 +246,16 @@
             since: sinceIso,
             until: untilIso,
             limit: '10000'
-          })}`;
+          };
+          const f = instance.filters ?? {};
+          for (const k of FILTER_KEYS) {
+            const vals = f[k] ?? [];
+            if (vals.length) qsParams[k] = vals.join(',');
+          }
+          url = `/api/transfers/aggregate?${new URLSearchParams(qsParams)}`;
           pickArr = (b) => (b.series ?? []) as AnyDatum[];
           break;
+        }
       }
       const res = await fetch(url);
       if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -622,6 +675,41 @@
         </div>
       {/each}
     </div>
+
+    {#if instance.kind === 'transfer'}
+      <div class="px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-2">
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500">
+          Wallet filters
+          <span class="text-zinc-600 normal-case">— comma-separated category names; ✘ excludes</span>
+        </div>
+        <datalist id="wallet-cats-{instance.id}">
+          {#each walletCategories as c (c.name)}
+            <option value={c.name}></option>
+          {/each}
+        </datalist>
+        {#each [['sender', 'Sender'], ['receiver', 'Receiver'], ['involving', 'Either']] as [side, label]}
+          <div class="grid grid-cols-[60px_1fr_1fr] items-center gap-2">
+            <span class="text-zinc-400">{label}</span>
+            <input
+              type="text"
+              list="wallet-cats-{instance.id}"
+              value={joinFilterCsv(instance.filters?.[`${side}_in`])}
+              onchange={(e) => setFilter(`${side}_in`, e.currentTarget.value)}
+              placeholder="✔ include"
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+            />
+            <input
+              type="text"
+              list="wallet-cats-{instance.id}"
+              value={joinFilterCsv(instance.filters?.[`${side}_ex`])}
+              onchange={(e) => setFilter(`${side}_ex`, e.currentTarget.value)}
+              placeholder="✘ exclude"
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+            />
+          </div>
+        {/each}
+      </div>
+    {/if}
   {/if}
 
   {#if !collapsed}

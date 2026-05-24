@@ -72,3 +72,17 @@ export type TransferStream = {
   chain: string;
   token: string;
 };
+
+export type WalletCategory = {
+  name: string;
+  count: number;
+};
+
+export type TransferFilters = {
+  sender_in?: string[];
+  sender_ex?: string[];
+  receiver_in?: string[];
+  receiver_ex?: string[];
+  involving_in?: string[];
+  involving_ex?: string[];
+};

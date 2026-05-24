@@ -161,6 +161,18 @@
       }
       if (inst.kind === 'transfer') {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
+        const rf = r.filters;
+        const filters: Record<string, string[]> = {};
+        if (rf && typeof rf === 'object') {
+          for (const k of ['sender_in', 'sender_ex', 'receiver_in', 'receiver_ex', 'involving_in', 'involving_ex']) {
+            const v = (rf as Record<string, unknown>)[k];
+            if (Array.isArray(v)) {
+              const cleaned = v.map((x) => (typeof x === 'string' ? x : '')).filter((x) => x.length > 0);
+              if (cleaned.length) filters[k] = cleaned;
+            }
+          }
+        }
+        inst.filters = filters;
       }
       out.push(inst);
       if (out.length >= MAX_CHARTS) break;
