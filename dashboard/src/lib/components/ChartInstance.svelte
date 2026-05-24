@@ -241,6 +241,10 @@
   let since = $state<string>(new Date(0).toISOString());
   let until = $state<string>(new Date(0).toISOString());
   let loadedKey = $state<string>('');
+  // True while a load() is in flight — drives the indeterminate progress
+  // strip in the chart header so the user gets feedback when changing
+  // chain / token / interval / filter takes more than a tick.
+  let loading = $state(false);
   let localView = $state<View>(null);
   let localHoverTime = $state<number | null>(null);
   let collapsed = $state(false);
@@ -337,6 +341,7 @@
 
   async function load() {
     error = null;
+    loading = true;
     try {
       // Transfer kind uses a fixed 30-day window regardless of interval; other kinds use
       // the per-interval lookback window.
@@ -419,6 +424,8 @@
       localView = defaultView(sinceIso, untilIso);
     } catch (e) {
       error = e instanceof Error ? e.message : String(e);
+    } finally {
+      loading = false;
     }
   }
 
@@ -1043,6 +1050,13 @@
     </div>
   {/if}
 
+    <!-- Indeterminate load strip — visible whenever a fetch is in flight (chain/token/interval/filter change). -->
+    <div class="loadbar h-0.5 overflow-hidden bg-blue-500/10" aria-hidden="true">
+      {#if loading}
+        <div class="loadbar-track"></div>
+      {/if}
+    </div>
+
     {#if error}
       <div class="p-3 text-xs text-red-300 bg-red-950/30">{error}</div>
     {/if}
@@ -1160,3 +1174,29 @@
   </div>
   {/if}
 </div>
+
+<style>
+  /* Indeterminate progress strip — a coloured segment slides left→right→left
+     across a translucent track. Lives in scoped CSS because Tailwind ships no
+     ready-made indeterminate keyframes. */
+  .loadbar {
+    position: relative;
+  }
+  .loadbar-track {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    width: 35%;
+    background: linear-gradient(
+      90deg,
+      transparent 0%,
+      rgb(96 165 250) 50%,
+      transparent 100%
+    );
+    animation: loadbar-slide 1.1s ease-in-out infinite;
+  }
+  @keyframes loadbar-slide {
+    0%   { left: -35%; }
+    100% { left: 100%; }
+  }
+</style>
