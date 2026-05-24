@@ -10,10 +10,10 @@ export type MAType = 'sma' | 'ema' | 'wma';
 
 export const LOOKBACK_DAYS: Record<Interval, number> = {
   '1m': 1,
-  '5m': 3,
-  '15m': 7,
-  '30m': 14,
-  '1h': 14,
+  '5m': 7,
+  '15m': 30,
+  '30m': 30,
+  '1h': 30,
   '4h': 30,
   '1d': 30
 };
