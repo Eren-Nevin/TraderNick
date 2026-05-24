@@ -93,38 +93,55 @@
     }
   });
 
-  // Wallet-category catalogue (for filter input <datalist> suggestions).
+  // Wallet-category + entity catalogues (for filter input <datalist> suggestions).
   let walletCategories = $state<WalletCategory[]>([]);
+  let walletEntities = $state<WalletCategory[]>([]);
   onMount(async () => {
     if (instance.kind !== 'transfer') return;
     try {
-      const res = await fetch('/api/transfers/categories');
-      if (res.ok) {
-        const body = await res.json();
-        walletCategories = body.categories ?? [];
-      }
+      const [catsRes, entsRes] = await Promise.all([
+        fetch('/api/transfers/categories'),
+        fetch('/api/transfers/entities')
+      ]);
+      if (catsRes.ok) walletCategories = (await catsRes.json()).categories ?? [];
+      if (entsRes.ok) walletEntities = (await entsRes.json()).entities ?? [];
     } catch {
-      // ignore — UI degrades to plain text input
+      // ignore — inputs still work without autocomplete
     }
   });
 
   // ---- transfer "extra series" form state ----
-  type FilterKey = 'sender_in' | 'sender_ex' | 'receiver_in' | 'receiver_ex' | 'involving_in' | 'involving_ex';
-  const FILTER_KEYS: FilterKey[] = [
-    'sender_in',
-    'sender_ex',
-    'receiver_in',
-    'receiver_ex',
-    'involving_in',
-    'involving_ex'
+  type FilterKey =
+    | 'sender_in' | 'sender_ex'
+    | 'receiver_in' | 'receiver_ex'
+    | 'involving_in' | 'involving_ex'
+    | 'sender_entity_in' | 'sender_entity_ex'
+    | 'receiver_entity_in' | 'receiver_entity_ex'
+    | 'involving_entity_in' | 'involving_entity_ex';
+  const CAT_FILTER_KEYS: FilterKey[] = [
+    'sender_in', 'sender_ex',
+    'receiver_in', 'receiver_ex',
+    'involving_in', 'involving_ex'
   ];
+  const ENT_FILTER_KEYS: FilterKey[] = [
+    'sender_entity_in', 'sender_entity_ex',
+    'receiver_entity_in', 'receiver_entity_ex',
+    'involving_entity_in', 'involving_entity_ex'
+  ];
+  const FILTER_KEYS: FilterKey[] = [...CAT_FILTER_KEYS, ...ENT_FILTER_KEYS];
   const EMPTY_PENDING: Record<FilterKey, string> = {
     sender_in: '',
     sender_ex: '',
     receiver_in: '',
     receiver_ex: '',
     involving_in: '',
-    involving_ex: ''
+    involving_ex: '',
+    sender_entity_in: '',
+    sender_entity_ex: '',
+    receiver_entity_in: '',
+    receiver_entity_ex: '',
+    involving_entity_in: '',
+    involving_entity_ex: ''
   };
   let pendingFilter = $state<Record<FilterKey, string>>({ ...EMPTY_PENDING });
 
@@ -157,6 +174,12 @@
     if (f.sender_ex?.length) parts.push(`from_not_${f.sender_ex.join('+')}`);
     if (f.receiver_in?.length) parts.push(`to_${f.receiver_in.join('+')}`);
     if (f.receiver_ex?.length) parts.push(`to_not_${f.receiver_ex.join('+')}`);
+    if (f.involving_entity_in?.length) parts.push(`involving_ent_${f.involving_entity_in.join('+')}`);
+    if (f.involving_entity_ex?.length) parts.push(`not_involving_ent_${f.involving_entity_ex.join('+')}`);
+    if (f.sender_entity_in?.length) parts.push(`from_ent_${f.sender_entity_in.join('+')}`);
+    if (f.sender_entity_ex?.length) parts.push(`from_not_ent_${f.sender_entity_ex.join('+')}`);
+    if (f.receiver_entity_in?.length) parts.push(`to_ent_${f.receiver_entity_in.join('+')}`);
+    if (f.receiver_entity_ex?.length) parts.push(`to_not_ent_${f.receiver_entity_ex.join('+')}`);
     return parts.join('_');
   }
 
@@ -164,14 +187,11 @@
   $effect(() => {
     if (instance.kind !== 'transfer') return;
     const f = instance.filter ?? {};
-    pendingFilter = {
-      sender_in: joinFilterCsv(f.sender_in),
-      sender_ex: joinFilterCsv(f.sender_ex),
-      receiver_in: joinFilterCsv(f.receiver_in),
-      receiver_ex: joinFilterCsv(f.receiver_ex),
-      involving_in: joinFilterCsv(f.involving_in),
-      involving_ex: joinFilterCsv(f.involving_ex)
-    };
+    const next: Record<FilterKey, string> = { ...EMPTY_PENDING };
+    for (const k of FILTER_KEYS) {
+      next[k] = joinFilterCsv((f as Record<string, string[] | undefined>)[k]);
+    }
+    pendingFilter = next;
   });
 
   let activeFilter = $derived(instance.filter ?? {});
@@ -837,6 +857,13 @@
             <option value={c.name}></option>
           {/each}
         </datalist>
+        <datalist id="wallet-ents-{instance.id}">
+          {#each walletEntities as e (e.name)}
+            <option value={e.name}></option>
+          {/each}
+        </datalist>
+
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500 pt-1">Categories</div>
         {#each [['sender', 'Sender'], ['receiver', 'Receiver'], ['involving', 'Either']] as [side, label]}
           {#if instance.width === 1}
             <div class="space-y-1">
@@ -876,7 +903,49 @@
             </div>
           {/if}
         {/each}
-        <div class="flex items-center gap-2 pt-1">
+
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500 pt-2">Entities</div>
+        {#each [['sender', 'Sender'], ['receiver', 'Receiver'], ['involving', 'Either']] as [side, label]}
+          {#if instance.width === 1}
+            <div class="space-y-1">
+              <div class="text-zinc-400">{label}</div>
+              <input
+                type="text"
+                list="wallet-ents-{instance.id}"
+                bind:value={pendingFilter[`${side}_entity_in` as FilterKey]}
+                placeholder="✔ include"
+                class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+              />
+              <input
+                type="text"
+                list="wallet-ents-{instance.id}"
+                bind:value={pendingFilter[`${side}_entity_ex` as FilterKey]}
+                placeholder="✘ exclude"
+                class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+              />
+            </div>
+          {:else}
+            <div class="grid grid-cols-[60px_1fr_1fr] items-center gap-2">
+              <span class="text-zinc-400">{label}</span>
+              <input
+                type="text"
+                list="wallet-ents-{instance.id}"
+                bind:value={pendingFilter[`${side}_entity_in` as FilterKey]}
+                placeholder="✔ include"
+                class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+              />
+              <input
+                type="text"
+                list="wallet-ents-{instance.id}"
+                bind:value={pendingFilter[`${side}_entity_ex` as FilterKey]}
+                placeholder="✘ exclude"
+                class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+              />
+            </div>
+          {/if}
+        {/each}
+
+        <div class="flex items-center gap-2 pt-2">
           <button
             type="button"
             onclick={applyFilter}

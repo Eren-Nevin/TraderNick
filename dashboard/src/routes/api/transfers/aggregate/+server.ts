@@ -10,13 +10,21 @@ const PASSTHROUGH = [
   'since',
   'until',
   'limit',
-  // wallet filter passthrough — both the legacy single-filter form and the new extras JSON
+  // wallet category filter passthrough
   'sender_in',
   'sender_ex',
   'receiver_in',
   'receiver_ex',
   'involving_in',
   'involving_ex',
+  // wallet entity filter passthrough
+  'sender_entity_in',
+  'sender_entity_ex',
+  'receiver_entity_in',
+  'receiver_entity_ex',
+  'involving_entity_in',
+  'involving_entity_ex',
+  // new extras JSON
   'extras'
 ];
 

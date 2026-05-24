@@ -14,6 +14,14 @@ _FILTER_KEYS = (
     "sender_in", "sender_ex",
     "receiver_in", "receiver_ex",
     "involving_in", "involving_ex",
+    "sender_entity_in", "sender_entity_ex",
+    "receiver_entity_in", "receiver_entity_ex",
+    "involving_entity_in", "involving_entity_ex",
+)
+_ENTITY_KEYS = (
+    "sender_entity_in", "sender_entity_ex",
+    "receiver_entity_in", "receiver_entity_ex",
+    "involving_entity_in", "involving_entity_ex",
 )
 _MAX_EXTRAS = 3
 
@@ -89,9 +97,16 @@ def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str
     # CH parses as subtraction inside an identifier. The handler reads the
     # column by position when building the response so the client id is only
     # ever used as a JSON dict key, not as a SQL identifier.
+    def dg_entity(col: str) -> str:
+        return (
+            "dictGet('tradernick.wallet_labels', 'entity', "
+            + addr_expr.format(col=col) + ")"
+        )
+
     for i, spec in enumerate(extras):
         cf = spec.get("filters") or {}
         preds: list[str] = []
+        # Categories — list-of-string per wallet, use hasAny.
         for side in ("sender", "receiver", "involving"):
             for action in ("in", "ex"):
                 key = f"{side}_{action}"
@@ -109,9 +124,62 @@ def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str
                 else:
                     match = f"hasAny({dg(side)}, {pphold})"
                 preds.append(match if action == "in" else f"NOT {match}")
+        # Entities — single nullable string per wallet, use coalesce(...) IN (...).
+        for side in ("sender", "receiver", "involving"):
+            for action in ("in", "ex"):
+                key = f"{side}_entity_{action}"
+                vals = cf.get(key)
+                if not vals or not isinstance(vals, list):
+                    continue
+                vals = [str(v) for v in vals if str(v).strip()]
+                if not vals:
+                    continue
+                pname = f"e_pos_{i}_{side}_ent_{action}"
+                params[pname] = vals
+                pphold = f"{{{pname}:Array(String)}}"
+
+                def ent_match(col: str) -> str:
+                    return f"coalesce({dg_entity(col)}, '') IN {pphold}"
+
+                if side == "involving":
+                    match = f"({ent_match('sender')} OR {ent_match('receiver')})"
+                else:
+                    match = ent_match(side)
+                preds.append(match if action == "in" else f"NOT {match}")
         cond = " AND ".join(preds) if preds else "1"
         clauses.append(f"sumIf(amount, {cond}) AS extra_pos_{i}")
     return clauses, params
+
+
+def _build_entity_predicate(chain: str, side: str, action: str, vals: list[str]) -> tuple[str, str] | None:
+    """Predicate over the dictionary's `entity` (Nullable String) attribute.
+
+    For an unknown wallet (or a wallet with no entity) dictGet returns NULL;
+    coalesce('') normalises so the IN check works cleanly:
+      - include `{X, Y}`: passes only for wallets whose entity is X or Y
+      - exclude `{X}`:    passes for wallets whose entity is anything else
+                          (including NULL / unknown)
+    """
+    if not vals:
+        return None
+    chain_evm = chain.upper() in _EVM_CHAINS
+    addr_expr = "lower({col})" if chain_evm else "{col}"
+    param = f"{side}_{action}_ent"
+    pphold = f"{{{param}:Array(String)}}"
+
+    def match(col: str) -> str:
+        return (
+            f"coalesce(dictGet('tradernick.wallet_labels', 'entity', "
+            f"{addr_expr.format(col=col)}), '') IN {pphold}"
+        )
+
+    if side == "involving":
+        expr = f"({match('sender')} OR {match('receiver')})"
+    else:
+        expr = match(side)
+    if action == "in":
+        return expr, param
+    return f"NOT {expr}", param
 
 
 def _build_wallet_predicate(chain: str, side: str, action: str, cats: list[str]) -> tuple[str, str] | None:
@@ -172,7 +240,7 @@ async def aggregate(request):
     until_dt = _parse_iso(until)
 
     # ---- Legacy single-filter params (kept so direct curl calls still work) ----
-    filter_specs = [
+    cat_specs = [
         ("sender",    "in", _parse_csv(request.args.get("sender_in"))),
         ("sender",    "ex", _parse_csv(request.args.get("sender_ex"))),
         ("receiver",  "in", _parse_csv(request.args.get("receiver_in"))),
@@ -180,15 +248,30 @@ async def aggregate(request):
         ("involving", "in", _parse_csv(request.args.get("involving_in"))),
         ("involving", "ex", _parse_csv(request.args.get("involving_ex"))),
     ]
+    entity_specs = [
+        ("sender",    "in", _parse_csv(request.args.get("sender_entity_in"))),
+        ("sender",    "ex", _parse_csv(request.args.get("sender_entity_ex"))),
+        ("receiver",  "in", _parse_csv(request.args.get("receiver_entity_in"))),
+        ("receiver",  "ex", _parse_csv(request.args.get("receiver_entity_ex"))),
+        ("involving", "in", _parse_csv(request.args.get("involving_entity_in"))),
+        ("involving", "ex", _parse_csv(request.args.get("involving_entity_ex"))),
+    ]
     where_clauses: list[str] = []
     legacy_params: dict = {}
-    for side, action, cats in filter_specs:
+    for side, action, cats in cat_specs:
         pred = _build_wallet_predicate(chain, side, action, cats)
         if pred is None:
             continue
         sql_frag, param_name = pred
         where_clauses.append("AND " + sql_frag)
         legacy_params[param_name] = cats
+    for side, action, vals in entity_specs:
+        pred = _build_entity_predicate(chain, side, action, vals)
+        if pred is None:
+            continue
+        sql_frag, param_name = pred
+        where_clauses.append("AND " + sql_frag)
+        legacy_params[param_name] = vals
     where_extra_sql = "\n          ".join(where_clauses)
 
     # ---- New extras param: list of {id, filters} → one sumIf per extra ----
@@ -281,10 +364,14 @@ async def aggregate(request):
     })
 
 
-# --- /transfers/categories -----------------------------------------------------
+# --- /transfers/categories + /transfers/entities ------------------------------
 _CATS_CACHE: dict = {"at": 0.0, "value": None}
 _CATS_TTL_SECONDS = 300.0
 _cats_lock = asyncio.Lock()
+
+_ENTS_CACHE: dict = {"at": 0.0, "value": None}
+_ENTS_TTL_SECONDS = 300.0
+_ents_lock = asyncio.Lock()
 
 
 async def _fetch_categories() -> list[dict]:
@@ -312,3 +399,31 @@ async def categories(_request):
             _CATS_CACHE["value"] = await _fetch_categories()
             _CATS_CACHE["at"] = now
     return response.json({"categories": _CATS_CACHE["value"]})
+
+
+async def _fetch_entities() -> list[dict]:
+    ch = await client()
+    rows = await ch.query(
+        """
+        SELECT entity AS e, count() AS n
+        FROM tradernick.wallets FINAL
+        WHERE entity IS NOT NULL AND entity != ''
+        GROUP BY e
+        ORDER BY n DESC
+        LIMIT 200
+        """
+    )
+    return [{"name": r[0], "count": int(r[1])} for r in rows.result_rows]
+
+
+@bp.get("/transfers/entities")
+async def entities(_request):
+    now = time.monotonic()
+    if _ENTS_CACHE["value"] is not None and now - _ENTS_CACHE["at"] < _ENTS_TTL_SECONDS:
+        return response.json({"entities": _ENTS_CACHE["value"]})
+    async with _ents_lock:
+        now = time.monotonic()
+        if _ENTS_CACHE["value"] is None or now - _ENTS_CACHE["at"] >= _ENTS_TTL_SECONDS:
+            _ENTS_CACHE["value"] = await _fetch_entities()
+            _ENTS_CACHE["at"] = now
+    return response.json({"entities": _ENTS_CACHE["value"]})

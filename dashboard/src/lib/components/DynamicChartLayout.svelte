@@ -196,7 +196,14 @@
           const out: Record<string, string[]> = {};
           if (!src || typeof src !== 'object') return out;
           const rf = src as Record<string, unknown>;
-          for (const k of ['sender_in', 'sender_ex', 'receiver_in', 'receiver_ex', 'involving_in', 'involving_ex']) {
+          for (const k of [
+            'sender_in', 'sender_ex',
+            'receiver_in', 'receiver_ex',
+            'involving_in', 'involving_ex',
+            'sender_entity_in', 'sender_entity_ex',
+            'receiver_entity_in', 'receiver_entity_ex',
+            'involving_entity_in', 'involving_entity_ex'
+          ]) {
             const v = rf[k];
             if (Array.isArray(v)) {
               const cleaned = v

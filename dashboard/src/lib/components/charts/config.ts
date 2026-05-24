@@ -235,12 +235,20 @@ export function defaultMAs(): MAConfig[] {
 }
 
 export type TransferFilters = {
+  // Wallet *category* filters (multi-valued list-of-string per wallet).
   sender_in?: string[];
   sender_ex?: string[];
   receiver_in?: string[];
   receiver_ex?: string[];
   involving_in?: string[];
   involving_ex?: string[];
+  // Wallet *entity* filters (single nullable string per wallet, e.g. "Binance").
+  sender_entity_in?: string[];
+  sender_entity_ex?: string[];
+  receiver_entity_in?: string[];
+  receiver_entity_ex?: string[];
+  involving_entity_in?: string[];
+  involving_entity_ex?: string[];
 };
 
 export type ChartWidth = 1 | 2 | 4;
