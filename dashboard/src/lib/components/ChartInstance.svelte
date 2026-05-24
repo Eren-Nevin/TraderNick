@@ -53,7 +53,8 @@
     instance = $bindable(),
     tokens,
     streams = [],
-    compounds = [],
+    tokenGroups = [],
+    chainGroups = [],
     syncZoom,
     sharedView,
     sharedHoverTime,
@@ -65,7 +66,8 @@
     instance: ChartInstanceT;
     tokens: string[];
     streams?: TransferStream[];
-    compounds?: import('$lib/api').TransferCompound[];
+    tokenGroups?: import('$lib/api').TokenGroup[];
+    chainGroups?: import('$lib/api').ChainGroup[];
     syncZoom: boolean;
     sharedView: View;
     sharedHoverTime: number | null;
@@ -79,28 +81,35 @@
   let chains = $derived(
     Array.from(new Set(streams.map((s) => s.chain))).sort()
   );
+  // Two orthogonal axes can each be a singleton OR a server-defined group:
+  //   - `instance.chain` ∈ {real chain names} ∪ {chain group names}
+  //   - `instance.token` ∈ {real token names} ∪ {token group names}
+  // When either holds a group name, the chart fetches via ?chain_group= /
+  // ?token_group=; otherwise the legacy single-stream path.
+  let chainGroupByName = $derived(new Map(chainGroups.map((g) => [g.name, g])));
+  let tokenGroupNames = $derived(new Set(tokenGroups.map((g) => g.name)));
+  let activeChainGroup = $derived(chainGroupByName.get(instance.chain ?? '') ?? null);
+  let activeTokenGroup = $derived(tokenGroupNames.has(instance.token) ? instance.token : null);
+  // Chains the token dropdown should reflect: a single chain when chain is a
+  // real chain, the union across the group's members otherwise.
+  let resolvedChainSet = $derived(
+    activeChainGroup
+      ? new Set(activeChainGroup.chains)
+      : new Set([instance.chain ?? ''])
+  );
   let tokensForChain = $derived(
     Array.from(
-      new Set(streams.filter((s) => s.chain === instance.chain).map((s) => s.token))
+      new Set(streams.filter((s) => resolvedChainSet.has(s.chain)).map((s) => s.token))
     ).sort()
   );
   let transferKind = $derived(
     streams.find((s) => s.chain === instance.chain && s.token === instance.token)?.kind ?? 'erc20'
   );
-  // Compound-token detection: when `instance.token` matches a known compound
-  // name, the chart aggregates across the compound's pair list rather than
-  // a single (chain, token). The chain selector is disabled in that mode
-  // (still bound to whatever real chain was previously chosen, for when the
-  // user switches back to a single token).
-  let compoundNames = $derived(new Set(compounds.map((c) => c.name)));
-  let activeCompound = $derived(
-    compoundNames.has(instance.token) ? instance.token : null
-  );
-  // Auto-snap token when chain changes and current token isn't on the new chain.
-  // Skip when a compound is selected (compounds don't belong to a single chain).
+  // Auto-snap token when the chain narrows and current token isn't reachable.
+  // Skip when a token group is selected (groups span chains by design).
   $effect(() => {
     if (instance.kind !== 'transfer') return;
-    if (activeCompound !== null) return;
+    if (activeTokenGroup !== null) return;
     if (tokensForChain.length > 0 && !tokensForChain.includes(instance.token)) {
       instance.token = tokensForChain[0];
     }
@@ -264,11 +273,11 @@
       return `${instance.kind}|${instance.token}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}`;
     }
     if (instance.kind === 'transfer') {
-      // Compound mode: chain becomes irrelevant — key on the compound name.
-      const sel = activeCompound !== null
-        ? `compound:${activeCompound}`
-        : `${instance.chain ?? ''}|${instance.token}`;
-      return `${instance.kind}|${sel}|${instance.interval}|${transferFilterKey()}`;
+      // Key encodes whether each axis is singleton or group so cache busts
+      // when the user toggles between e.g. ETH-USDC and EVM-USDC.
+      const cPart = activeChainGroup ? `cg:${activeChainGroup.name}` : (instance.chain ?? '');
+      const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
+      return `${instance.kind}|${cPart}|${tPart}|${instance.interval}|${transferFilterKey()}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -290,12 +299,22 @@
       until: untilIso,
       limit: '10000'
     });
-    if (activeCompound !== null) {
-      qs.set('compound', activeCompound);
+    // Each axis is either a singleton (chain= / token=) or a group
+    // (chain_group= / token_group=). Both can be set independently; the
+    // backend cross-products them against the streams catalogue.
+    if (activeChainGroup) {
+      qs.set('chain_group', activeChainGroup.name);
     } else {
       qs.set('chain', instance.chain ?? 'ETH');
-      qs.set('kind', transferKind);
+    }
+    if (activeTokenGroup !== null) {
+      qs.set('token_group', activeTokenGroup);
+    } else {
       qs.set('token', instance.token);
+      // `kind` only matters in the all-singleton path — it disambiguates
+      // (TRON, trc20, USDT) vs (TRON, tron_native, TRX). When either axis
+      // is a group the backend resolves `kind` per-pair itself.
+      if (!activeChainGroup) qs.set('kind', transferKind);
     }
     const f = instance.filter ?? {};
     for (const k of FILTER_KEYS) {
@@ -702,15 +721,21 @@
           class="hidden sm:inline-flex items-center gap-1 ml-1 px-2 py-0.5 rounded-md bg-zinc-800/70 border border-zinc-700/70 text-[10px] uppercase tracking-wider text-zinc-300"
         >
           {#if instance.kind === 'transfer'}
-            {#if activeCompound !== null}
-              <span class="text-amber-300" title="Compound — aggregates across chains">Σ</span>
+            {#if activeChainGroup}
+              <span class="text-amber-300" title={activeChainGroup.description}>Σ</span>
+              <span class="text-zinc-300">{activeChainGroup.label}</span>
               <span class="text-zinc-500">·</span>
             {:else}
               <span class="text-zinc-300">{instance.chain}</span>
               <span class="text-zinc-500">·</span>
             {/if}
           {/if}
-          <span class="text-zinc-100 font-medium">{instance.token}</span>
+          {#if activeTokenGroup !== null}
+            <span class="text-amber-300" title="Token group">Σ</span>
+            <span class="text-zinc-100 font-medium">{instance.token}</span>
+          {:else}
+            <span class="text-zinc-100 font-medium">{instance.token}</span>
+          {/if}
           <span class="text-zinc-500">·</span>
           <span>{instance.interval}</span>
         </span>
@@ -727,29 +752,40 @@
       {#if instance.kind === 'transfer'}
         <select
           bind:value={instance.chain}
-          disabled={activeCompound !== null}
-          title={activeCompound !== null ? 'Compound spans multiple chains' : ''}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
         >
-          {#each chains as c (c)}
-            <option value={c}>{c}</option>
-          {/each}
+          {#if chainGroups.length > 0}
+            <optgroup label="Chain">
+              {#each chains as c (c)}
+                <option value={c}>{c}</option>
+              {/each}
+            </optgroup>
+            <optgroup label="Chain group">
+              {#each chainGroups as g (g.name)}
+                <option value={g.name} title={g.description}>Σ {g.label}</option>
+              {/each}
+            </optgroup>
+          {:else}
+            {#each chains as c (c)}
+              <option value={c}>{c}</option>
+            {/each}
+          {/if}
         </select>
         <select
           value={instance.token}
           onchange={(e) => (instance.token = e.currentTarget.value)}
-          disabled={tokensForChain.length <= 1 && compounds.length === 0}
+          disabled={tokensForChain.length <= 1 && tokenGroups.length === 0}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {#if compounds.length > 0}
-            <optgroup label={`Tokens on ${instance.chain}`}>
+          {#if tokenGroups.length > 0}
+            <optgroup label={activeChainGroup ? `Tokens on Σ ${activeChainGroup.label}` : `Tokens on ${instance.chain}`}>
               {#each tokensForChain as t (t)}
                 <option value={t}>{t}</option>
               {/each}
             </optgroup>
-            <optgroup label="Compound">
-              {#each compounds as c (c.name)}
-                <option value={c.name} title={c.description}>Σ {c.label}</option>
+            <optgroup label="Token group">
+              {#each tokenGroups as g (g.name)}
+                <option value={g.name} title={g.description}>Σ {g.label}</option>
               {/each}
             </optgroup>
           {:else}

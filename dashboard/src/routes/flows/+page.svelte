@@ -105,7 +105,8 @@
   <DynamicChartLayout
     tokens={data.tokens}
     streams={data.streams}
-    compounds={data.compounds}
+    tokenGroups={data.tokenGroups}
+    chainGroups={data.chainGroups}
     storageKey="tradernick:flows:layout:v1"
     availableKinds={AVAILABLE_KINDS}
     templates={TEMPLATES}

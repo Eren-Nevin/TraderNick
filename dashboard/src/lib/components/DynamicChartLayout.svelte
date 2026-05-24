@@ -13,13 +13,14 @@
     type ChartTemplate,
     type MAConfig
   } from '$lib/components/charts/config';
-  import type { Interval, TransferCompound, TransferStream } from '$lib/api';
+  import type { ChainGroup, Interval, TokenGroup, TransferStream } from '$lib/api';
   import type { View } from '$lib/chart-zoom';
 
   let {
     tokens,
     streams = [],
-    compounds = [],
+    tokenGroups = [],
+    chainGroups = [],
     storageKey,
     availableKinds,
     templates = [],
@@ -29,7 +30,8 @@
   }: {
     tokens: string[];
     streams?: TransferStream[];
-    compounds?: TransferCompound[];
+    tokenGroups?: TokenGroup[];
+    chainGroups?: ChainGroup[];
     storageKey: string;
     availableKinds: ChartKind[];
     templates?: ChartTemplate[];
@@ -212,6 +214,14 @@
       }
       if (inst.kind === 'transfer') {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
+        // Migration: the previous compound-token registry had a "Native" entry
+        // that was a virtual cross-chain bundle. It's been removed; the native
+        // assets (ETH on ETH/ARB/BASE, BNB on BSC, POL on POLYGON) are being
+        // ingested as real streams instead. Old layouts referencing it would
+        // 404 the aggregate, so reset to the page default.
+        if (inst.token === 'Native') {
+          inst.token = defaultToken ?? tokens[0] ?? 'BTC';
+        }
         // New shape: a single `filter` field. Migrate from the older
         // `extraSeries[0].filters` if present (we keep only the first; the
         // rest are dropped now that the chart shows only one series).
@@ -324,7 +334,8 @@
         bind:instance={instances[idx]}
         {tokens}
         {streams}
-        {compounds}
+        {tokenGroups}
+        {chainGroups}
         {syncZoom}
         {sharedView}
         {sharedHoverTime}

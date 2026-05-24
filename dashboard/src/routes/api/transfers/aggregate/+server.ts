@@ -7,8 +7,9 @@ const PASSTHROUGH = [
   'chain',
   'kind',
   'token',
-  // compound (swaps in for chain/kind/token when set)
-  'compound',
+  // group axes — either or both may be set; resolution happens server-side
+  'chain_group',
+  'token_group',
   'interval',
   'since',
   'until',

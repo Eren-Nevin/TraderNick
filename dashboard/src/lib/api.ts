@@ -73,11 +73,22 @@ export type TransferStream = {
   token: string;
 };
 
-/** A server-defined compound token — aggregates transfer volume across
- *  multiple (chain, kind, token) tuples in a single CH query. The
- *  underlying pair list lives on the backend; the dashboard only sees
- *  the name + label + which chains it spans. */
-export type TransferCompound = {
+/** A server-defined token group — a named bundle of token symbols
+ *  (e.g. "Stables" = USDC + USDT + DAI + USDE). At query time the
+ *  backend cross-products this with whatever chain selection is in
+ *  play and intersects against the streams catalogue, so unmatched
+ *  tokens silently contribute zero. */
+export type TokenGroup = {
+  name: string;
+  label: string;
+  description: string;
+  tokens: string[];
+};
+
+/** A server-defined chain group — a named bundle of chain names
+ *  (e.g. "EVM" = ETH + ARB + BASE + BSC + POLYGON, or the dynamic
+ *  "All" which expands to every ingested chain). */
+export type ChainGroup = {
   name: string;
   label: string;
   description: string;

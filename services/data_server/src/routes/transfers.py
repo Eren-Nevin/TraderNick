@@ -7,7 +7,7 @@ from datetime import datetime, timezone
 from sanic import Blueprint, response
 
 from clickhouse import client
-from routes.compounds import compound_pairs, get_compound
+from routes.groups import is_chain_group, is_token_group, resolve_pairs
 from routes.ohlcv import INTERVAL_SECONDS
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -28,42 +28,9 @@ _MAX_EXTRAS = 3
 
 bp = Blueprint("transfers")
 
-# Distinct (kind, chain, token) tuples take ~2-5s to compute over the full
-# transfers table once it has 100M+ rows. The list changes only when admin
-# reconfigures ingestion, so cache aggressively with a TTL.
-_STREAMS_CACHE: dict = {"at": 0.0, "value": None}
-_STREAMS_TTL_SECONDS = 60.0
-_streams_lock = asyncio.Lock()
-
 
 def _parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
-
-
-async def _fetch_streams() -> list[dict]:
-    ch = await client()
-    rows = await ch.query(
-        """
-        SELECT DISTINCT chain, token, kind
-        FROM tradernick.transfers
-        ORDER BY chain, token
-        """
-    )
-    return [{"chain": r[0], "token": r[1], "kind": r[2]} for r in rows.result_rows]
-
-
-@bp.get("/transfers/streams")
-async def streams(_request):
-    now = time.monotonic()
-    if _STREAMS_CACHE["value"] is not None and now - _STREAMS_CACHE["at"] < _STREAMS_TTL_SECONDS:
-        return response.json({"streams": _STREAMS_CACHE["value"]})
-    async with _streams_lock:
-        # double-check after acquiring lock — concurrent waiters share the refresh
-        now = time.monotonic()
-        if _STREAMS_CACHE["value"] is None or now - _STREAMS_CACHE["at"] >= _STREAMS_TTL_SECONDS:
-            _STREAMS_CACHE["value"] = await _fetch_streams()
-            _STREAMS_CACHE["at"] = now
-    return response.json({"streams": _STREAMS_CACHE["value"]})
 
 
 # EVM chains where addresses are case-insensitive — we lower(sender/receiver)
@@ -243,44 +210,63 @@ def _build_wallet_predicate(
 
 @bp.get("/transfers/aggregate")
 async def aggregate(request):
-    compound_name = request.args.get("compound")
+    # Single-stream selection (chain + kind + token) — required when neither
+    # group axis is being used.
     chain = request.args.get("chain")
     kind = request.args.get("kind")
     token = request.args.get("token")
+    # Group axes — either independently or together. Each group name resolves
+    # to a list of values; the cross-product (filtered by streams) becomes the
+    # set of (chain, kind, token) tuples this query covers.
+    chain_group = request.args.get("chain_group")
+    token_group = request.args.get("token_group")
     interval = request.args.get("interval", "1h")
     since = request.args.get("since")
     until = request.args.get("until")
     limit = int(request.args.get("limit", "10000"))
-
-    # `compound=<name>` swaps the single (chain, kind, token) WHERE for an
-    # `(chain, kind, token) IN ((...), ...)` predicate built from the
-    # registry. The chain/kind/token query-string params are ignored when
-    # `compound` is set.
-    pairs: list[tuple[str, str, str]] | None = None
-    if compound_name:
-        spec = get_compound(compound_name)
-        if spec is None:
-            return response.json({"error": f"unknown compound {compound_name!r}"}, status=400)
-        pairs = compound_pairs(compound_name)
-        if not pairs:
-            return response.json({"error": f"compound {compound_name!r} has no pairs"}, status=400)
-    else:
-        if not chain or not token or not kind:
-            return response.json({"error": "missing chain/kind/token"}, status=400)
 
     if interval not in INTERVAL_SECONDS:
         return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
     if not since or not until:
         return response.json({"error": "missing since/until"}, status=400)
 
+    use_groups = bool(chain_group) or bool(token_group)
+    pairs: list[tuple[str, str, str]] | None = None
+    addr_chain: str | None = None
+
+    if use_groups:
+        if chain_group and not is_chain_group(chain_group):
+            return response.json({"error": f"unknown chain_group {chain_group!r}"}, status=400)
+        if token_group and not is_token_group(token_group):
+            return response.json({"error": f"unknown token_group {token_group!r}"}, status=400)
+        # When only one axis is a group, the singleton on the other axis is
+        # required (chain= when chain_group not set, token= when token_group not set).
+        if not chain_group and not chain:
+            return response.json({"error": "missing chain (or chain_group)"}, status=400)
+        if not token_group and not token:
+            return response.json({"error": "missing token (or token_group)"}, status=400)
+        pairs, addr_chain = await resolve_pairs(
+            chain=chain,
+            token=token,
+            chain_group=chain_group,
+            token_group=token_group,
+        )
+        if not pairs:
+            return response.json({
+                "error": "no streams matched the requested group selection",
+                "chain": chain,
+                "token": token,
+                "chain_group": chain_group,
+                "token_group": token_group,
+            }, status=404)
+    else:
+        if not chain or not token or not kind:
+            return response.json({"error": "missing chain/kind/token"}, status=400)
+        addr_chain = chain
+
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since)
     until_dt = _parse_iso(until)
-
-    # Address-normalisation mode for the wallet-filter predicates: pass the
-    # single chain in single-stream mode, None in compound mode (so the
-    # helpers emit per-row `if(chain IN EVM, lower(addr), addr)`).
-    addr_chain: str | None = None if pairs is not None else chain
 
     # ---- Legacy single-filter params (kept so direct curl calls still work) ----
     cat_specs = [
@@ -361,8 +347,8 @@ async def aggregate(request):
         **extra_params,
     }
     if pairs is not None:
-        # Pairs come from a server-defined registry, never user input — safe to
-        # inline as a SQL tuple literal. Quoting is paranoia, not necessity.
+        # Pairs are resolved against the server-side streams catalogue (never
+        # raw user input), but quote defensively anyway.
         def _q(s: str) -> str:
             return "'" + s.replace("'", "''") + "'"
         tup_sql = ", ".join(
@@ -416,8 +402,15 @@ async def aggregate(request):
         "series": series,
     }
     if pairs is not None:
-        resp_body["compound"] = compound_name
         resp_body["pairs"] = [{"chain": c, "kind": k, "token": t} for (c, k, t) in pairs]
+        if chain_group:
+            resp_body["chain_group"] = chain_group
+        if token_group:
+            resp_body["token_group"] = token_group
+        if chain and not chain_group:
+            resp_body["chain"] = chain
+        if token and not token_group:
+            resp_body["token"] = token
     else:
         resp_body["chain"] = chain
         resp_body["kind"] = kind
