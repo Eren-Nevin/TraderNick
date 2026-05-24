@@ -17,7 +17,11 @@
  */
 
 const MAX_CONCURRENT = 4;
-const DEFAULT_TIMEOUT_MS = 45_000;
+// Heavy ASOF-JOIN aggregates over compound queries (EVM × Stables, 30d)
+// genuinely take ~30-60s under load. Set this comfortably above that so the
+// timeout is a "something is wedged" signal, not a "your honest slow query
+// got cut off" annoyance. The user always has the refresh button.
+const DEFAULT_TIMEOUT_MS = 120_000;
 
 let inflight = 0;
 const queue: Array<() => void> = [];
@@ -33,18 +37,54 @@ export async function queuedFetch(
   init?: RequestInit,
   timeoutMs: number = DEFAULT_TIMEOUT_MS
 ): Promise<Response> {
+  const userSignal = init?.signal;
+  // Bail out before claiming a slot if the caller already gave up.
+  if (userSignal?.aborted) {
+    throw userSignal.reason ?? new DOMException('aborted', 'AbortError');
+  }
+  // Wait for a slot — observing the caller's abort signal so a cancelled
+  // request gives back its queue spot immediately instead of holding it
+  // until its natural turn.
   if (inflight >= MAX_CONCURRENT) {
-    await new Promise<void>((resolve) => queue.push(resolve));
+    await new Promise<void>((resolve, reject) => {
+      const wake = () => resolve();
+      queue.push(wake);
+      if (userSignal) {
+        const onAbort = () => {
+          const idx = queue.indexOf(wake);
+          if (idx >= 0) queue.splice(idx, 1);
+          reject(userSignal.reason ?? new DOMException('aborted', 'AbortError'));
+        };
+        userSignal.addEventListener('abort', onAbort, { once: true });
+      }
+    });
+  }
+  // Race: caller may have aborted in the gap between dequeue and here.
+  if (userSignal?.aborted) {
+    throw userSignal.reason ?? new DOMException('aborted', 'AbortError');
   }
   inflight++;
   const controller = new AbortController();
-  const userSignal = init?.signal;
   if (userSignal) {
-    // Honour caller's abort signal too — forward it to our controller.
-    if (userSignal.aborted) controller.abort();
-    else userSignal.addEventListener('abort', () => controller.abort(), { once: true });
+    // Forward caller's signal to the fetch — already-aborted is impossible
+    // here (we checked), so only the future-abort case needs wiring.
+    userSignal.addEventListener(
+      'abort',
+      () => controller.abort(userSignal.reason),
+      { once: true }
+    );
   }
-  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  // Pass an explicit reason so the caught error has a meaningful message
+  // ("Request timed out after Xs") rather than the browser default
+  // ("Signal aborted for no reason" / "The operation was aborted").
+  const timer = setTimeout(() => {
+    controller.abort(
+      new DOMException(
+        `Request timed out after ${Math.round(timeoutMs / 1000)}s — click ↻ to retry`,
+        'TimeoutError'
+      )
+    );
+  }, timeoutMs);
   try {
     return await fetch(url, { ...init, signal: controller.signal });
   } finally {

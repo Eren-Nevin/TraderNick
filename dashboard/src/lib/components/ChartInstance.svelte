@@ -246,6 +246,10 @@
   // strip in the chart header so the user gets feedback when changing
   // chain / token / interval / filter takes more than a tick.
   let loading = $state(false);
+  // Abort handle for the currently-active load(). When a fresh load() starts
+  // (selector change, refresh button) we abort this so the prior fetch frees
+  // its queue slot immediately instead of dragging the queue with stale work.
+  let currentLoad: AbortController | null = null;
   let localView = $state<View>(null);
   let localHoverTime = $state<number | null>(null);
   let collapsed = $state(false);
@@ -330,7 +334,11 @@
     return qs;
   }
 
-  async function loadTransferMerged(sinceIso: string, untilIso: string) {
+  async function loadTransferMerged(
+    sinceIso: string,
+    untilIso: string,
+    signal?: AbortSignal
+  ) {
     // Netflow path: two parallel fetches (the two locked filter sets) merged
     // by time bucket. Net = positive.sum_value_usd − negative.sum_value_usd.
     if (instance.netFilter) {
@@ -343,8 +351,8 @@
         return qs;
       };
       const [posRes, negRes] = await Promise.all([
-        queuedFetch(`/api/transfers/aggregate?${buildQS(instance.netFilter.positive)}`),
-        queuedFetch(`/api/transfers/aggregate?${buildQS(instance.netFilter.negative)}`)
+        queuedFetch(`/api/transfers/aggregate?${buildQS(instance.netFilter.positive)}`, { signal }),
+        queuedFetch(`/api/transfers/aggregate?${buildQS(instance.netFilter.negative)}`, { signal })
       ]);
       if (!posRes.ok) throw new Error(`transfers inflow ${posRes.status}`);
       if (!negRes.ok) throw new Error(`transfers outflow ${negRes.status}`);
@@ -383,7 +391,7 @@
       const arr = f[k as FilterKey] ?? [];
       if (arr.length) qs.set(k, arr.join(','));
     }
-    const res = await queuedFetch(`/api/transfers/aggregate?${qs}`);
+    const res = await queuedFetch(`/api/transfers/aggregate?${qs}`, { signal });
     if (!res.ok) throw new Error(`transfers ${res.status}`);
     const body = await res.json();
     const rows = (body.series ?? []) as Array<Record<string, number>>;
@@ -397,6 +405,11 @@
   }
 
   async function load() {
+    // Cancel any prior load so it frees its queue slot immediately.
+    if (currentLoad) currentLoad.abort();
+    const controller = new AbortController();
+    currentLoad = controller;
+    const signal = controller.signal;
     error = null;
     loading = true;
     try {
@@ -463,7 +476,7 @@
           // Transfer kind does its own multi-fetch + merge so the chart can show
           // a main (unfiltered) line alongside up to MAX_EXTRA_SERIES filtered
           // overlays. Skip the single-URL pickArr path below.
-          await loadTransferMerged(sinceIso, untilIso);
+          await loadTransferMerged(sinceIso, untilIso, signal);
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
           since = sinceIso;
@@ -471,7 +484,7 @@
           return;
         }
       }
-      const res = await queuedFetch(url);
+      const res = await queuedFetch(url, { signal });
       if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
       const body = await res.json();
       data = pickArr(body);
@@ -480,17 +493,28 @@
       loadedKey = loadKey();
       localView = defaultView(sinceIso, untilIso);
     } catch (e) {
+      // Superseded by a newer load() — silent. The newer load owns `loading`
+      // and will surface its own state.
+      if (signal.aborted && (e as DOMException)?.name === 'AbortError') {
+        return;
+      }
       error = e instanceof Error ? e.message : String(e);
     } finally {
-      loading = false;
+      // Only clear loading if we're still the active load (a newer load that
+      // aborted us has already taken over `currentLoad` and its own loading).
+      if (currentLoad === controller) {
+        currentLoad = null;
+        loading = false;
+      }
     }
   }
 
   /** Force a fresh fetch — bypasses the `loadedKey === key` short-circuit
    *  so the user can recover from a timeout / 503 without changing any
-   *  selector. Wired to the header refresh button. */
+   *  selector. Wired to the header refresh button. Allowed mid-load:
+   *  load() will abort the prior in-flight fetch via currentLoad so a
+   *  stuck request can be replaced. */
   async function reload() {
-    if (loading) return;
     loadedKey = '';
     await load();
   }
@@ -896,10 +920,8 @@
       <button
         type="button"
         onclick={reload}
-        disabled={loading}
-        title="Refresh"
+        title={loading ? 'Loading — click to cancel and retry' : 'Refresh'}
         class="w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center
-               disabled:opacity-40 disabled:cursor-not-allowed
                {loading ? 'animate-spin' : ''}"
         aria-label="Refresh chart"
       >↻</button>
