@@ -146,15 +146,19 @@
     }
     return next;
   }
+  /** Snake-case structured name: involving sections first, then from_ / to_
+   *  sections. Each section is `[not_]<prefix>_<cat1+cat2…>`. Sections are
+   *  joined with `_`. Example: sender_ex=CEX & receiver_in=Deposit
+   *  → `from_not_CEX_to_Deposit`. */
   function autoNameFromFilters(f: TransferFilters): string {
     const parts: string[] = [];
-    if (f.sender_in?.length) parts.push(`${f.sender_in.join('+')} →`);
-    if (f.receiver_in?.length) parts.push(`→ ${f.receiver_in.join('+')}`);
-    if (f.involving_in?.length) parts.push(`⇄ ${f.involving_in.join('+')}`);
-    if (f.sender_ex?.length) parts.push(`¬${f.sender_ex.join('+')} →`);
-    if (f.receiver_ex?.length) parts.push(`→ ¬${f.receiver_ex.join('+')}`);
-    if (f.involving_ex?.length) parts.push(`¬⇄${f.involving_ex.join('+')}`);
-    return parts.join(' · ');
+    if (f.involving_in?.length) parts.push(`involving_${f.involving_in.join('+')}`);
+    if (f.involving_ex?.length) parts.push(`not_involving_${f.involving_ex.join('+')}`);
+    if (f.sender_in?.length) parts.push(`from_${f.sender_in.join('+')}`);
+    if (f.sender_ex?.length) parts.push(`from_not_${f.sender_ex.join('+')}`);
+    if (f.receiver_in?.length) parts.push(`to_${f.receiver_in.join('+')}`);
+    if (f.receiver_ex?.length) parts.push(`to_not_${f.receiver_ex.join('+')}`);
+    return parts.join('_');
   }
 
   let pendingHasAny = $derived(
