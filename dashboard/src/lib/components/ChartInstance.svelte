@@ -596,15 +596,15 @@
   // fits in one grid row and a 2-row panel uses the full 540 of two grid rows.
   let chartCanvasHeight = $derived(instance.height === 1 ? 270 : 540);
 
-  let sizeLabel = $derived(`${instance.width}×${instance.height}`);
-
-  function cycleSize() {
-    const cur = SIZE_CYCLE.findIndex(
-      (s) => s.width === instance.width && s.height === instance.height
-    );
-    const next = SIZE_CYCLE[(cur + 1) % SIZE_CYCLE.length] ?? SIZE_CYCLE[1];
-    instance.width = next.width as ChartWidth;
-    instance.height = next.height as ChartHeight;
+  // Encode/decode (width, height) as a single string so we can drive the
+  // <select> with a normal bind-style onchange. Mirrors SIZE_CYCLE order.
+  let sizeValue = $derived(`${instance.width}x${instance.height}`);
+  function onSizeChange(v: string) {
+    const [w, h] = v.split('x').map(Number);
+    const match = SIZE_CYCLE.find((s) => s.width === w && s.height === h);
+    if (!match) return;
+    instance.width = match.width as ChartWidth;
+    instance.height = match.height as ChartHeight;
   }
 
   let kindLabel = $derived(CHART_KIND_LABELS[instance.kind]);
@@ -698,12 +698,16 @@
         class="w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center
                {settingsOpen ? 'bg-zinc-800 text-zinc-100 border-zinc-700' : ''}"
       >⚙</button>
-      <button
-        type="button"
-        onclick={cycleSize}
-        title="Cycle size: 1×1 → 2×2 → 4×2"
-        class="h-7 min-w-[34px] px-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-[11px] leading-none font-mono flex items-center justify-center"
-      >{sizeLabel}</button>
+      <select
+        value={sizeValue}
+        onchange={(e) => onSizeChange(e.currentTarget.value)}
+        title="Chart size"
+        class="h-7 bg-zinc-900 border border-zinc-700 rounded-md px-2 text-[11px] font-mono text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+      >
+        {#each SIZE_CYCLE as s (s.width + 'x' + s.height)}
+          <option value="{s.width}x{s.height}">{s.width}×{s.height}</option>
+        {/each}
+      </select>
       <button
         type="button"
         onclick={() => onRemove(instance.id)}
