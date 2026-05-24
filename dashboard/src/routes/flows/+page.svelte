@@ -63,14 +63,9 @@
       build: buildTemplate('CeX Hot-Wallet Outflow', { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] })
     },
     {
-      id: 'tpl-involving-bridge',
-      label: 'involving-bridge',
-      build: buildTemplate('involving-bridge', { involving_in: ['Bridge'] })
-    },
-    {
-      id: 'tpl-excluding-cex',
-      label: 'peer-to-peer (no CEX)',
-      build: buildTemplate('peer-to-peer', { involving_ex: ['CEX'] })
+      id: 'tpl-cex-internal',
+      label: 'CeX Internal Flow',
+      build: buildTemplate('CeX Internal Flow', { sender_in: ['CEX'], receiver_in: ['CEX'] })
     }
   ];
 </script>
