@@ -40,6 +40,7 @@
     type TransferFilters
   } from '$lib/components/charts/config';
   import type { View } from '$lib/chart-zoom';
+  import { queuedFetch } from '$lib/fetch-queue';
 
   type AnyDatum =
     | Candle
@@ -122,8 +123,8 @@
     if (instance.kind !== 'transfer') return;
     try {
       const [catsRes, entsRes] = await Promise.all([
-        fetch('/api/transfers/categories'),
-        fetch('/api/transfers/entities')
+        queuedFetch('/api/transfers/categories'),
+        queuedFetch('/api/transfers/entities')
       ]);
       if (catsRes.ok) walletCategories = (await catsRes.json()).categories ?? [];
       if (entsRes.ok) walletEntities = (await entsRes.json()).entities ?? [];
@@ -342,8 +343,8 @@
         return qs;
       };
       const [posRes, negRes] = await Promise.all([
-        fetch(`/api/transfers/aggregate?${buildQS(instance.netFilter.positive)}`),
-        fetch(`/api/transfers/aggregate?${buildQS(instance.netFilter.negative)}`)
+        queuedFetch(`/api/transfers/aggregate?${buildQS(instance.netFilter.positive)}`),
+        queuedFetch(`/api/transfers/aggregate?${buildQS(instance.netFilter.negative)}`)
       ]);
       if (!posRes.ok) throw new Error(`transfers inflow ${posRes.status}`);
       if (!negRes.ok) throw new Error(`transfers outflow ${negRes.status}`);
@@ -382,7 +383,7 @@
       const arr = f[k as FilterKey] ?? [];
       if (arr.length) qs.set(k, arr.join(','));
     }
-    const res = await fetch(`/api/transfers/aggregate?${qs}`);
+    const res = await queuedFetch(`/api/transfers/aggregate?${qs}`);
     if (!res.ok) throw new Error(`transfers ${res.status}`);
     const body = await res.json();
     const rows = (body.series ?? []) as Array<Record<string, number>>;
@@ -470,7 +471,7 @@
           return;
         }
       }
-      const res = await fetch(url);
+      const res = await queuedFetch(url);
       if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
       const body = await res.json();
       data = pickArr(body);
@@ -483,6 +484,15 @@
     } finally {
       loading = false;
     }
+  }
+
+  /** Force a fresh fetch — bypasses the `loadedKey === key` short-circuit
+   *  so the user can recover from a timeout / 503 without changing any
+   *  selector. Wired to the header refresh button. */
+  async function reload() {
+    if (loading) return;
+    loadedKey = '';
+    await load();
   }
 
   // ---- derived series / lines / extra computed data ----
@@ -883,6 +893,16 @@
           <option value={iv}>{iv}</option>
         {/each}
       </select>
+      <button
+        type="button"
+        onclick={reload}
+        disabled={loading}
+        title="Refresh"
+        class="w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center
+               disabled:opacity-40 disabled:cursor-not-allowed
+               {loading ? 'animate-spin' : ''}"
+        aria-label="Refresh chart"
+      >↻</button>
       <button
         type="button"
         onclick={() => (settingsOpen = !settingsOpen)}
