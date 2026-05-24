@@ -2,7 +2,23 @@ import { INTERNAL_DATA_SERVER_URL } from '$lib/server/env';
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
-const PASSTHROUGH = ['chain', 'kind', 'token', 'interval', 'since', 'until', 'limit'];
+const PASSTHROUGH = [
+  'chain',
+  'kind',
+  'token',
+  'interval',
+  'since',
+  'until',
+  'limit',
+  // wallet filter passthrough — both the legacy single-filter form and the new extras JSON
+  'sender_in',
+  'sender_ex',
+  'receiver_in',
+  'receiver_ex',
+  'involving_in',
+  'involving_ex',
+  'extras'
+];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

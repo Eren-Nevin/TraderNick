@@ -154,7 +154,6 @@
     return parts.join(' · ');
   }
 
-  let pendingFilterSet = $derived.by(() => buildPendingFilterSet());
   let pendingHasAny = $derived(
     FILTER_KEYS.some((k) => parseFilterCsv(pendingFilters[k as FilterKey]).length > 0)
   );
@@ -163,7 +162,7 @@
 
   function addSeries() {
     if (!canAddSeries) return;
-    const f = pendingFilterSet;
+    const f = buildPendingFilterSet();
     const newId =
       typeof crypto !== 'undefined' && 'randomUUID' in crypto
         ? crypto.randomUUID()
@@ -234,11 +233,13 @@
     void load();
   });
 
-  /** Fetch the unfiltered "main" series plus each `instance.extraSeries` in
-   *  parallel against /api/transfers/aggregate, then merge them into one
-   *  array keyed by `time` so a LineChart can render N+1 lines at once. */
+  /** Single fetch against /api/transfers/aggregate?extras=[…]. The data_server
+   *  returns one row per bucket with the main aggregates plus one
+   *  `extra_amount_<id>` per spec, all computed in a single CH scan
+   *  (one query, one merge — no N+1 round trip, no client-side merge). */
   async function loadTransferMerged(sinceIso: string, untilIso: string) {
-    const baseQS = {
+    const extras = instance.extraSeries ?? [];
+    const qs = new URLSearchParams({
       chain: instance.chain ?? 'ETH',
       kind: transferKind,
       token: instance.token,
@@ -246,53 +247,27 @@
       since: sinceIso,
       until: untilIso,
       limit: '10000'
-    };
-    function urlFor(filters: TransferFilters | null): string {
-      const qs: Record<string, string> = { ...baseQS };
-      if (filters) {
-        for (const k of FILTER_KEYS) {
-          const arr = filters[k] ?? [];
-          if (arr.length) qs[k] = arr.join(',');
-        }
-      }
-      return `/api/transfers/aggregate?${new URLSearchParams(qs)}`;
+    });
+    if (extras.length) {
+      qs.set('extras', JSON.stringify(extras.map((s) => ({ id: s.id, filters: s.filters }))));
     }
-
-    const extras = instance.extraSeries ?? [];
-    const urls = [urlFor(null), ...extras.map((s) => urlFor(s.filters))];
-    const results = await Promise.all(
-      urls.map(async (u) => {
-        const r = await fetch(u);
-        if (!r.ok) throw new Error(`transfers ${r.status}`);
-        const body = await r.json();
-        return (body.series ?? []) as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>;
-      })
-    );
-
-    const merged = new Map<number, Record<string, number>>();
-    function ensure(t: number): Record<string, number> {
-      let row = merged.get(t);
-      if (!row) {
-        row = { time: t, main: 0, sum_amount: 0, sum_value_usd: 0, count: 0 };
-        for (let i = 0; i < extras.length; i++) row[`extra_${i}`] = 0;
-        merged.set(t, row);
+    const res = await fetch(`/api/transfers/aggregate?${qs}`);
+    if (!res.ok) throw new Error(`transfers ${res.status}`);
+    const body = await res.json();
+    const rows = (body.series ?? []) as Array<Record<string, number>>;
+    const out: Record<string, number>[] = rows.map((b) => {
+      const row: Record<string, number> = {
+        time: b.time,
+        main: b.sum_amount,
+        sum_amount: b.sum_amount,
+        sum_value_usd: b.sum_value_usd,
+        count: b.count
+      };
+      for (let i = 0; i < extras.length; i++) {
+        row[`extra_${i}`] = b[`extra_amount_${extras[i].id}`] ?? 0;
       }
       return row;
-    }
-    for (const b of results[0]) {
-      const row = ensure(b.time);
-      row.main = b.sum_amount;
-      row.sum_amount = b.sum_amount;
-      row.sum_value_usd = b.sum_value_usd;
-      row.count = b.count;
-    }
-    for (let i = 0; i < extras.length; i++) {
-      for (const b of results[i + 1] ?? []) {
-        const row = ensure(b.time);
-        row[`extra_${i}`] = b.sum_amount;
-      }
-    }
-    const out = Array.from(merged.values()).sort((a, b) => (a.time as number) - (b.time as number));
+    });
     data = out as unknown as AnyDatum[];
   }
 

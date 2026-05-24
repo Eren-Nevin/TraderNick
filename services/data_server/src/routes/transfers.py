@@ -1,4 +1,6 @@
 import asyncio
+import json
+import re
 import time
 from datetime import datetime, timezone
 
@@ -6,6 +8,14 @@ from sanic import Blueprint, response
 
 from clickhouse import client
 from routes.ohlcv import INTERVAL_SECONDS
+
+_SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_FILTER_KEYS = (
+    "sender_in", "sender_ex",
+    "receiver_in", "receiver_ex",
+    "involving_in", "involving_ex",
+)
+_MAX_EXTRAS = 3
 
 bp = Blueprint("transfers")
 
@@ -56,6 +66,48 @@ def _parse_csv(s: str | None) -> list[str]:
     if not s:
         return []
     return [v.strip() for v in s.split(",") if v.strip()]
+
+
+def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str], dict]:
+    """For each extra spec ({id, filters}), build a `sumIf(amount, <cond>) AS extra_amount_<id>`
+    clause and the matching parameters. All clauses go into a single CH SELECT so the table
+    is scanned once and every aggregation falls out of the same group-by.
+    """
+    chain_evm = chain.upper() in _EVM_CHAINS
+    addr_expr = "lower({col})" if chain_evm else "{col}"
+
+    def dg(col: str) -> str:
+        return (
+            "dictGet('tradernick.wallet_labels', 'categories', "
+            + addr_expr.format(col=col) + ")"
+        )
+
+    clauses: list[str] = []
+    params: dict = {}
+    for spec in extras:
+        eid = spec["id"]  # already validated
+        cf = spec.get("filters") or {}
+        preds: list[str] = []
+        for side in ("sender", "receiver", "involving"):
+            for action in ("in", "ex"):
+                key = f"{side}_{action}"
+                cats = cf.get(key)
+                if not cats or not isinstance(cats, list):
+                    continue
+                cats = [str(c) for c in cats if str(c).strip()]
+                if not cats:
+                    continue
+                pname = f"e_{eid}_{side}_{action}"
+                params[pname] = cats
+                pphold = f"{{{pname}:Array(String)}}"
+                if side == "involving":
+                    match = f"(hasAny({dg('sender')}, {pphold}) OR hasAny({dg('receiver')}, {pphold}))"
+                else:
+                    match = f"hasAny({dg(side)}, {pphold})"
+                preds.append(match if action == "in" else f"NOT {match}")
+        cond = " AND ".join(preds) if preds else "1"
+        clauses.append(f"sumIf(amount, {cond}) AS extra_amount_{eid}")
+    return clauses, params
 
 
 def _build_wallet_predicate(chain: str, side: str, action: str, cats: list[str]) -> tuple[str, str] | None:
@@ -115,7 +167,7 @@ async def aggregate(request):
     since_dt = _parse_iso(since)
     until_dt = _parse_iso(until)
 
-    # Wallet-label filter inputs. Each is a comma-separated list of category names.
+    # ---- Legacy single-filter params (kept so direct curl calls still work) ----
     filter_specs = [
         ("sender",    "in", _parse_csv(request.args.get("sender_in"))),
         ("sender",    "ex", _parse_csv(request.args.get("sender_ex"))),
@@ -124,32 +176,62 @@ async def aggregate(request):
         ("involving", "in", _parse_csv(request.args.get("involving_in"))),
         ("involving", "ex", _parse_csv(request.args.get("involving_ex"))),
     ]
-
-    extra_clauses: list[str] = []
-    extra_params: dict = {}
+    where_clauses: list[str] = []
+    legacy_params: dict = {}
     for side, action, cats in filter_specs:
         pred = _build_wallet_predicate(chain, side, action, cats)
         if pred is None:
             continue
         sql_frag, param_name = pred
-        extra_clauses.append("AND " + sql_frag)
-        extra_params[param_name] = cats
+        where_clauses.append("AND " + sql_frag)
+        legacy_params[param_name] = cats
+    where_extra_sql = "\n          ".join(where_clauses)
 
-    extra_sql = "\n          ".join(extra_clauses)
+    # ---- New extras param: list of {id, filters} → one sumIf per extra ----
+    extras_raw = request.args.get("extras")
+    extras: list[dict] = []
+    if extras_raw:
+        try:
+            parsed = json.loads(extras_raw)
+        except Exception:
+            return response.json({"error": "extras: invalid JSON"}, status=400)
+        if not isinstance(parsed, list):
+            return response.json({"error": "extras: expected JSON array"}, status=400)
+        for spec in parsed:
+            if not isinstance(spec, dict):
+                continue
+            eid = spec.get("id")
+            if not isinstance(eid, str) or not _SAFE_ID.fullmatch(eid):
+                return response.json({"error": f"extras: invalid id {eid!r}"}, status=400)
+            filters = spec.get("filters") or {}
+            if not isinstance(filters, dict):
+                continue
+            # whitelist filter keys
+            cleaned_filters = {k: filters[k] for k in _FILTER_KEYS if k in filters}
+            extras.append({"id": eid, "filters": cleaned_filters})
+            if len(extras) >= _MAX_EXTRAS:
+                break
+
+    extra_clauses, extra_params = _build_extra_sumif_clauses(chain, extras)
+    extra_select_sql = (
+        ",\n            " + ",\n            ".join(extra_clauses)
+        if extra_clauses
+        else ""
+    )
 
     sql = f"""
         SELECT
             toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
             sum(amount)             AS sum_amount,
             sum(coalesce(value_usd, 0)) AS sum_value_usd,
-            count()                 AS count
+            count()                 AS count{extra_select_sql}
         FROM tradernick.transfers
         WHERE chain = {{chain:String}}
           AND kind  = {{kind:String}}
           AND token = {{token:String}}
           AND time >= {{since:DateTime}}
           AND time <  {{until:DateTime}}
-          {extra_sql}
+          {where_extra_sql}
         GROUP BY bucket
         ORDER BY bucket
         LIMIT {{limit:UInt32}}
@@ -166,24 +248,31 @@ async def aggregate(request):
             "since": since_dt,
             "until": until_dt,
             "limit": limit,
+            **legacy_params,
             **extra_params,
         },
     )
 
-    series = [
-        {
+    n_static = 4  # bucket, sum_amount, sum_value_usd, count
+    series = []
+    for r in rows.result_rows:
+        row = {
             "time": int(r[0]),
             "sum_amount": float(r[1]),
             "sum_value_usd": float(r[2]),
             "count": int(r[3]),
         }
-        for r in rows.result_rows
-    ]
+        for i, spec in enumerate(extras):
+            v = r[n_static + i]
+            row[f"extra_amount_{spec['id']}"] = float(v) if v is not None else 0.0
+        series.append(row)
+
     return response.json({
         "chain": chain,
         "kind": kind,
         "token": token,
         "interval": interval,
+        "extras": [e["id"] for e in extras],
         "series": series,
     })
 
