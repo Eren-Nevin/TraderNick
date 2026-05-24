@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as d3 from 'd3';
   import { cssVar, themeStore } from '$lib/stores/theme.svelte';
+  import { fmtUtcTime } from '$lib/components/charts/config';
   import type { Candle } from '$lib/api';
   import { transformToView, viewToTransform, type View } from '$lib/chart-zoom';
 
@@ -396,7 +397,7 @@
       class="absolute top-2 left-2 px-3 py-2 rounded border border-zinc-700 bg-zinc-900/90 text-xs font-mono text-zinc-100 pointer-events-none shadow"
     >
       <div class="text-zinc-400">
-        {new Date(hoverCandle.time * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC
+        {fmtUtcTime(hoverCandle.time)}
       </div>
       <div>
         <span class="text-zinc-400">O</span>

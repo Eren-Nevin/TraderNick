@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import * as d3 from 'd3';
   import { cssVar, themeStore } from '$lib/stores/theme.svelte';
+  import { fmtUtcTime } from '$lib/components/charts/config';
   import { transformToView, viewToTransform, type View } from '$lib/chart-zoom';
 
   type Datum = { time: number } & Record<string, number>;
@@ -364,7 +365,7 @@
       class="absolute top-2 right-20 px-3 py-2 rounded border border-zinc-700 bg-zinc-900/90 text-xs font-mono text-zinc-100 pointer-events-none shadow"
     >
       <div class="text-zinc-400">
-        {new Date(hoverDatum.time * 1000).toISOString().replace('T', ' ').slice(0, 19)} UTC
+        {fmtUtcTime(hoverDatum.time)}
       </div>
       <div class="flex items-center gap-2">
         <span

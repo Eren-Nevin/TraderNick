@@ -103,6 +103,14 @@ export function fmtUsdTooltip(v: number) {
   return `$${v.toFixed(2)}`;
 }
 
+/** Tooltip timestamp helper — "Sun 2026-05-24 12:34:56 UTC". */
+export function fmtUtcTime(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+  const iso = d.toISOString().replace('T', ' ').slice(0, 19);
+  return `${weekday} ${iso} UTC`;
+}
+
 export const BUYER_SELLER_SERIES = [
   { key: 'buyer_taker_usd', label: 'Buyer', color: '#22c55e' },
   { key: 'seller_taker_usd', label: 'Seller', color: '#ef4444' }
