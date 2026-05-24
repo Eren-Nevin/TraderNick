@@ -51,11 +51,20 @@
       }
     },
     {
-      id: 'tpl-cex-to-deposit',
-      label: 'Transfer: → CEX deposit addresses',
+      id: 'tpl-deposit-inflows',
+      label: 'Transfer: deposit-inflows',
       build: (defaults) => {
         const inst = newChartInstance('transfer', defaults);
         inst.filter = { receiver_in: ['Deposit'] };
+        return inst;
+      }
+    },
+    {
+      id: 'tpl-hot-wallet-outflows',
+      label: 'Transfer: hot-wallet-outflows',
+      build: (defaults) => {
+        const inst = newChartInstance('transfer', defaults);
+        inst.filter = { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] };
         return inst;
       }
     },
