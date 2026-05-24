@@ -586,10 +586,18 @@
   }
 
   // ---- width toggle ----
-  // Chart canvas height in px — driven by instance.height (1 row vs 2 rows).
-  // Pairs with `grid-auto-rows: 320px` in DynamicChartLayout so a 1-row panel
-  // fits in one grid row and a 2-row panel uses the full 540 of two grid rows.
-  let chartCanvasHeight = $derived(instance.height === 1 ? 270 : 540);
+  // Chart canvas height in px — driven by instance.height (1 row vs 2 rows)
+  // and instance.width (because a 1-col panel uses a taller two-row header so
+  // less vertical space is left for the chart canvas).
+  let chartCanvasHeight = $derived(
+    instance.height === 1
+      ? instance.width === 1
+        ? 240
+        : 270
+      : instance.width === 1
+        ? 510
+        : 540
+  );
 
   // Encode/decode (width, height) as a single string so we can drive the
   // <select> with a normal bind-style onchange. Mirrors SIZE_CYCLE order.
@@ -603,8 +611,10 @@
   }
 
   let kindLabel = $derived(CHART_KIND_LABELS[instance.kind]);
+  let isTemplate = $derived(typeof instance.templateName === 'string' && instance.templateName.length > 0);
+  let displayTitle = $derived(isTemplate ? (instance.templateName as string) : kindLabel);
   let panelTitle = $derived(
-    `${kindLabel} — ${instance.token} ${instance.interval}` +
+    `${displayTitle} — ${instance.token} ${instance.interval}` +
       (instance.kind === 'sz' ? ` (< $${instance.under} / > $${instance.over})` : '')
   );
 
@@ -617,7 +627,15 @@
   role="region"
   aria-label={panelTitle}
 >
-  <div class="flex items-center justify-between gap-3 px-4 py-2.5 border-b border-zinc-800 bg-gradient-to-b from-zinc-900/40 to-transparent">
+  <div
+    class={[
+      'px-4 py-2 border-b border-zinc-800 bg-gradient-to-b from-zinc-900/40 to-transparent',
+      // 1×1 stacks title above controls; bigger sizes keep them side-by-side.
+      instance.width === 1
+        ? 'flex flex-col items-stretch gap-1.5'
+        : 'flex items-center justify-between gap-3'
+    ].join(' ')}
+  >
     <!-- Title block -->
     <button
       type="button"
@@ -630,23 +648,36 @@
         {collapsed ? '▶' : '▼'}
       </span>
       <span class="text-zinc-100 text-sm font-semibold tracking-tight truncate">
-        {kindLabel}
+        {displayTitle}
       </span>
-      <span
-        class="hidden sm:inline-flex items-center gap-1 ml-1 px-2 py-0.5 rounded-md bg-zinc-800/70 border border-zinc-700/70 text-[10px] uppercase tracking-wider text-zinc-300"
-      >
-        {#if instance.kind === 'transfer'}
-          <span class="text-zinc-300">{instance.chain}</span>
+      {#if isTemplate}
+        <span
+          class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-900/40 border border-amber-700/40 text-[9px] uppercase tracking-widest text-amber-300"
+          title="Template — filter locked"
+        >tpl</span>
+      {/if}
+      {#if instance.width !== 1}
+        <span
+          class="hidden sm:inline-flex items-center gap-1 ml-1 px-2 py-0.5 rounded-md bg-zinc-800/70 border border-zinc-700/70 text-[10px] uppercase tracking-wider text-zinc-300"
+        >
+          {#if instance.kind === 'transfer'}
+            <span class="text-zinc-300">{instance.chain}</span>
+            <span class="text-zinc-500">·</span>
+          {/if}
+          <span class="text-zinc-100 font-medium">{instance.token}</span>
           <span class="text-zinc-500">·</span>
-        {/if}
-        <span class="text-zinc-100 font-medium">{instance.token}</span>
-        <span class="text-zinc-500">·</span>
-        <span>{instance.interval}</span>
-      </span>
+          <span>{instance.interval}</span>
+        </span>
+      {/if}
     </button>
 
     <!-- Primary controls (always visible) -->
-    <div class="flex items-center gap-1.5">
+    <div
+      class={[
+        'flex items-center gap-1.5',
+        instance.width === 1 ? 'flex-wrap' : ''
+      ].join(' ')}
+    >
       {#if instance.kind === 'transfer'}
         <select
           bind:value={instance.chain}
@@ -789,7 +820,7 @@
       {/each}
     </div>
 
-    {#if instance.kind === 'transfer'}
+    {#if instance.kind === 'transfer' && !isTemplate}
       <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-2">
         <div class="text-[10px] uppercase tracking-widest text-zinc-500">
           Wallet filter

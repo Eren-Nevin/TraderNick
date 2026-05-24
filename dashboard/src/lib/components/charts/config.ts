@@ -268,6 +268,10 @@ export type ChartInstance = {
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
   filter?: TransferFilters;
+  /** If set, this chart was inserted from a template. The filter is treated as
+   *  locked (no Apply/Clear UI), and the panel title uses this name instead of
+   *  the generic kind label. Token / chain / interval / MAs remain editable. */
+  templateName?: string;
 };
 
 /** A one-click chart preset surfaced in the Insert menu. `build` returns a

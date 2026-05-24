@@ -29,62 +29,48 @@
     return [ohlcv, transfer];
   }
 
-  // Hardcoded one-click templates surfaced in the Insert menu. Future: persist
+  // Hardcoded one-click templates surfaced in the Insert menu. Each template
+  // creates a transfer chart with a *locked* filter — the user can change
+  // chain / token / interval / MAs but not the wallet-filter. Future: persist
   // user-saved templates from the chart itself.
+  function buildTemplate(name: string, filter: import('$lib/components/charts/config').TransferFilters) {
+    return (defaults: { token: string; chain?: string }) => {
+      const inst = newChartInstance('transfer', defaults);
+      inst.filter = filter;
+      inst.templateName = name;
+      return inst;
+    };
+  }
   const TEMPLATES: ChartTemplate[] = [
     {
       id: 'tpl-non-cex-to-cex',
-      label: 'Transfer: Non-CEX → CEX (inflows)',
-      build: (defaults) => {
-        const inst = newChartInstance('transfer', defaults);
-        inst.filter = { sender_ex: ['CEX'], receiver_in: ['CEX'] };
-        return inst;
-      }
+      label: 'non-cex-to-cex-inflows',
+      build: buildTemplate('non-cex-to-cex-inflows', { sender_ex: ['CEX'], receiver_in: ['CEX'] })
     },
     {
       id: 'tpl-cex-to-non-cex',
-      label: 'Transfer: CEX → Non-CEX (outflows)',
-      build: (defaults) => {
-        const inst = newChartInstance('transfer', defaults);
-        inst.filter = { sender_in: ['CEX'], receiver_ex: ['CEX'] };
-        return inst;
-      }
+      label: 'cex-to-non-cex-outflows',
+      build: buildTemplate('cex-to-non-cex-outflows', { sender_in: ['CEX'], receiver_ex: ['CEX'] })
     },
     {
       id: 'tpl-deposit-inflows',
-      label: 'Transfer: deposit-inflows',
-      build: (defaults) => {
-        const inst = newChartInstance('transfer', defaults);
-        inst.filter = { receiver_in: ['Deposit'] };
-        return inst;
-      }
+      label: 'deposit-inflows',
+      build: buildTemplate('deposit-inflows', { receiver_in: ['Deposit'] })
     },
     {
       id: 'tpl-hot-wallet-outflows',
-      label: 'Transfer: hot-wallet-outflows',
-      build: (defaults) => {
-        const inst = newChartInstance('transfer', defaults);
-        inst.filter = { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] };
-        return inst;
-      }
+      label: 'hot-wallet-outflows',
+      build: buildTemplate('hot-wallet-outflows', { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] })
     },
     {
       id: 'tpl-involving-bridge',
-      label: 'Transfer: Involving Bridge',
-      build: (defaults) => {
-        const inst = newChartInstance('transfer', defaults);
-        inst.filter = { involving_in: ['Bridge'] };
-        return inst;
-      }
+      label: 'involving-bridge',
+      build: buildTemplate('involving-bridge', { involving_in: ['Bridge'] })
     },
     {
       id: 'tpl-excluding-cex',
-      label: 'Transfer: Excluding CEX (peer-to-peer)',
-      build: (defaults) => {
-        const inst = newChartInstance('transfer', defaults);
-        inst.filter = { involving_ex: ['CEX'] };
-        return inst;
-      }
+      label: 'peer-to-peer (no CEX)',
+      build: buildTemplate('peer-to-peer', { involving_ex: ['CEX'] })
     }
   ];
 </script>

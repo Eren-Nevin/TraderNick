@@ -215,6 +215,9 @@
           }
         }
         inst.filter = filter;
+        if (typeof r.templateName === 'string' && r.templateName.length > 0) {
+          inst.templateName = r.templateName;
+        }
       }
       out.push(inst);
       if (out.length >= MAX_CHARTS) break;
