@@ -246,10 +246,14 @@ export type FilteredSeries = {
 export const MAX_EXTRA_SERIES = 3;
 export const EXTRA_SERIES_COLORS = ['#fbbf24', '#ec4899', '#84cc16'] as const;
 
+export type ChartWidth = 1 | 2 | 4;
+export type ChartHeight = 1 | 2;
+
 export type ChartInstance = {
   id: string;
   kind: ChartKind;
-  width: 1 | 2;
+  width: ChartWidth;
+  height: ChartHeight;
   token: string;
   interval: Interval;
   showPoint: boolean;
@@ -266,6 +270,16 @@ export type ChartInstance = {
   extraSeries?: FilteredSeries[];
 };
 
+/** Cycle of canonical sizes the chart can be toggled through.
+ *  1×1 = compact (1 col, 270px chart),
+ *  2×2 = default (2 cols, 540px chart),
+ *  4×2 = wide   (4 cols, 540px chart). */
+export const SIZE_CYCLE: { width: ChartWidth; height: ChartHeight }[] = [
+  { width: 1, height: 1 },
+  { width: 2, height: 2 },
+  { width: 4, height: 2 }
+];
+
 export function newChartInstance(
   kind: ChartKind,
   defaults: { token: string; chain?: string }
@@ -276,7 +290,8 @@ export function newChartInstance(
         ? crypto.randomUUID()
         : `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     kind,
-    width: 1,
+    width: 2,
+    height: 2,
     token: defaults.token,
     interval: '1h',
     showPoint: true,

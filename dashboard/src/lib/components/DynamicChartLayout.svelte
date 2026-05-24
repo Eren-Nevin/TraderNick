@@ -141,10 +141,28 @@
       if (!isChartKind(r.kind)) return null;
       if (typeof r.token !== 'string') return null;
       if (typeof r.interval !== 'string') return null;
+      // Size migration: the old format had width ∈ {1,2} and no height. Map
+      // old → new so existing saved layouts keep their look.
+      //   old width=1 → new 2×2 (default)
+      //   old width=2 → new 4×2 (wide)
+      let width: 1 | 2 | 4;
+      let height: 1 | 2;
+      if (r.height === 1 || r.height === 2) {
+        width = r.width === 1 || r.width === 2 || r.width === 4 ? r.width : 2;
+        height = r.height;
+      } else if (r.width === 2) {
+        width = 4;
+        height = 2;
+      } else {
+        width = 2;
+        height = 2;
+      }
+
       const inst: ChartInstanceT = {
         id: r.id,
         kind: r.kind,
-        width: r.width === 2 ? 2 : 1,
+        width,
+        height,
         token: r.token,
         interval: r.interval as Interval,
         showPoint: r.showPoint !== false,
@@ -253,11 +271,14 @@
   use:dndzone={{ items: instances, flipDurationMs: FLIP_MS, dropTargetStyle: {} }}
   onconsider={handleSort}
   onfinalize={handleSort}
-  class="grid grid-cols-1 md:grid-cols-2 gap-10"
-  style="grid-auto-flow: dense;"
+  class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
+  style="grid-auto-rows: 320px; grid-auto-flow: dense;"
 >
   {#each instances as inst, idx (inst.id)}
-    <div animate:flip={{ duration: FLIP_MS }} style="grid-column: span {inst.width}">
+    <div
+      animate:flip={{ duration: FLIP_MS }}
+      style="grid-column: span {inst.width}; grid-row: span {inst.height};"
+    >
       <ChartInstance
         bind:instance={instances[idx]}
         {tokens}
@@ -275,7 +296,7 @@
 </section>
 
 {#if instances.length < MAX_CHARTS}
-  <div class="grid grid-cols-1 md:grid-cols-2 gap-10">
+  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
     <div
       class="relative rounded-xl border border-dashed border-zinc-700 bg-zinc-950/30 min-h-[180px] flex items-center justify-center"
       role="region"

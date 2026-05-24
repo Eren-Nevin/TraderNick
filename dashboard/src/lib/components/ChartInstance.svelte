@@ -26,6 +26,7 @@
     MAX_EXTRA_SERIES,
     NEUTRAL_REF,
     OI_LINES,
+    SIZE_CYCLE,
     TOP_TRADERS_LINES,
     defaultView,
     fmtUsdAxis,
@@ -35,7 +36,9 @@
     sizeLines,
     sizeSeries,
     unixSec,
+    type ChartHeight,
     type ChartInstance as ChartInstanceT,
+    type ChartWidth,
     type FilteredSeries,
     type TransferFilters
   } from '$lib/components/charts/config';
@@ -588,8 +591,20 @@
   }
 
   // ---- width toggle ----
-  function toggleWidth() {
-    instance.width = instance.width === 1 ? 2 : 1;
+  // Chart canvas height in px — driven by instance.height (1 row vs 2 rows).
+  // Pairs with `grid-auto-rows: 320px` in DynamicChartLayout so a 1-row panel
+  // fits in one grid row and a 2-row panel uses the full 540 of two grid rows.
+  let chartCanvasHeight = $derived(instance.height === 1 ? 270 : 540);
+
+  let sizeLabel = $derived(`${instance.width}×${instance.height}`);
+
+  function cycleSize() {
+    const cur = SIZE_CYCLE.findIndex(
+      (s) => s.width === instance.width && s.height === instance.height
+    );
+    const next = SIZE_CYCLE[(cur + 1) % SIZE_CYCLE.length] ?? SIZE_CYCLE[1];
+    instance.width = next.width as ChartWidth;
+    instance.height = next.height as ChartHeight;
   }
 
   let kindLabel = $derived(CHART_KIND_LABELS[instance.kind]);
@@ -685,10 +700,10 @@
       >⚙</button>
       <button
         type="button"
-        onclick={toggleWidth}
-        title={instance.width === 1 ? 'Expand to 2 columns' : 'Shrink to 1 column'}
-        class="w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center"
-      >{instance.width === 1 ? '⇔' : '⇒'}</button>
+        onclick={cycleSize}
+        title="Cycle size: 1×1 → 2×2 → 4×2"
+        class="h-7 min-w-[34px] px-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-[11px] leading-none font-mono flex items-center justify-center"
+      >{sizeLabel}</button>
       <button
         type="button"
         onclick={() => onRemove(instance.id)}
@@ -872,7 +887,7 @@
         candles={data as Candle[]}
         lines={ohlcvLinesD}
         showCandles={instance.showPoint}
-        height={540}
+        height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -883,7 +898,7 @@
       <LineChart
         data={data as OpenInterestRow[]}
         lines={oiLinesD}
-        height={540}
+        height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -899,7 +914,7 @@
         lines={frLinesD}
         showBars={instance.showPoint}
         valueLabel="Rate"
-        height={540}
+        height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -914,7 +929,7 @@
         data={data as VolumeBucket[]}
         series={bsBars}
         lines={bsLines}
-        height={540}
+        height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -926,7 +941,7 @@
         data={data as VolumeBucket[]}
         series={szBars}
         lines={szLinesD}
-        height={540}
+        height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -938,7 +953,7 @@
         data={data as LongShortRow[]}
         lines={ttLinesD}
         refLines={NEUTRAL_REF}
-        height={540}
+        height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -952,7 +967,7 @@
         data={data as LongShortRow[]}
         lines={lsLinesD}
         refLines={NEUTRAL_REF}
-        height={540}
+        height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
         onView={handleView}
@@ -965,7 +980,7 @@
       <LineChart
         data={data as TransferBucket[]}
         lines={transferLinesD}
-        height={540}
+        height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
         onView={handleView}
