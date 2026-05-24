@@ -3,9 +3,12 @@ import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
 const PASSTHROUGH = [
+  // single-stream selection
   'chain',
   'kind',
   'token',
+  // compound (swaps in for chain/kind/token when set)
+  'compound',
   'interval',
   'since',
   'until',

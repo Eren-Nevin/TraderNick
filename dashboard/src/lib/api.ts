@@ -73,6 +73,17 @@ export type TransferStream = {
   token: string;
 };
 
+/** A server-defined compound token — aggregates transfer volume across
+ *  multiple (chain, kind, token) tuples in a single CH query. The
+ *  underlying pair list lives on the backend; the dashboard only sees
+ *  the name + label + which chains it spans. */
+export type TransferCompound = {
+  name: string;
+  label: string;
+  description: string;
+  chains: string[];
+};
+
 export type WalletCategory = {
   name: string;
   count: number;

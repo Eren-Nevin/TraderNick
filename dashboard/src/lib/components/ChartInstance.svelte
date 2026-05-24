@@ -53,6 +53,7 @@
     instance = $bindable(),
     tokens,
     streams = [],
+    compounds = [],
     syncZoom,
     sharedView,
     sharedHoverTime,
@@ -64,6 +65,7 @@
     instance: ChartInstanceT;
     tokens: string[];
     streams?: TransferStream[];
+    compounds?: import('$lib/api').TransferCompound[];
     syncZoom: boolean;
     sharedView: View;
     sharedHoverTime: number | null;
@@ -85,9 +87,20 @@
   let transferKind = $derived(
     streams.find((s) => s.chain === instance.chain && s.token === instance.token)?.kind ?? 'erc20'
   );
+  // Compound-token detection: when `instance.token` matches a known compound
+  // name, the chart aggregates across the compound's pair list rather than
+  // a single (chain, token). The chain selector is disabled in that mode
+  // (still bound to whatever real chain was previously chosen, for when the
+  // user switches back to a single token).
+  let compoundNames = $derived(new Set(compounds.map((c) => c.name)));
+  let activeCompound = $derived(
+    compoundNames.has(instance.token) ? instance.token : null
+  );
   // Auto-snap token when chain changes and current token isn't on the new chain.
+  // Skip when a compound is selected (compounds don't belong to a single chain).
   $effect(() => {
     if (instance.kind !== 'transfer') return;
+    if (activeCompound !== null) return;
     if (tokensForChain.length > 0 && !tokensForChain.includes(instance.token)) {
       instance.token = tokensForChain[0];
     }
@@ -251,7 +264,11 @@
       return `${instance.kind}|${instance.token}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}`;
     }
     if (instance.kind === 'transfer') {
-      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${instance.interval}|${transferFilterKey()}`;
+      // Compound mode: chain becomes irrelevant — key on the compound name.
+      const sel = activeCompound !== null
+        ? `compound:${activeCompound}`
+        : `${instance.chain ?? ''}|${instance.token}`;
+      return `${instance.kind}|${sel}|${instance.interval}|${transferFilterKey()}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -268,14 +285,18 @@
    *  from those filtered values automatically. */
   async function loadTransferMerged(sinceIso: string, untilIso: string) {
     const qs = new URLSearchParams({
-      chain: instance.chain ?? 'ETH',
-      kind: transferKind,
-      token: instance.token,
       interval: instance.interval,
       since: sinceIso,
       until: untilIso,
       limit: '10000'
     });
+    if (activeCompound !== null) {
+      qs.set('compound', activeCompound);
+    } else {
+      qs.set('chain', instance.chain ?? 'ETH');
+      qs.set('kind', transferKind);
+      qs.set('token', instance.token);
+    }
     const f = instance.filter ?? {};
     for (const k of FILTER_KEYS) {
       const arr = f[k as FilterKey] ?? [];
@@ -681,8 +702,13 @@
           class="hidden sm:inline-flex items-center gap-1 ml-1 px-2 py-0.5 rounded-md bg-zinc-800/70 border border-zinc-700/70 text-[10px] uppercase tracking-wider text-zinc-300"
         >
           {#if instance.kind === 'transfer'}
-            <span class="text-zinc-300">{instance.chain}</span>
-            <span class="text-zinc-500">·</span>
+            {#if activeCompound !== null}
+              <span class="text-amber-300" title="Compound — aggregates across chains">Σ</span>
+              <span class="text-zinc-500">·</span>
+            {:else}
+              <span class="text-zinc-300">{instance.chain}</span>
+              <span class="text-zinc-500">·</span>
+            {/if}
           {/if}
           <span class="text-zinc-100 font-medium">{instance.token}</span>
           <span class="text-zinc-500">·</span>
@@ -701,7 +727,9 @@
       {#if instance.kind === 'transfer'}
         <select
           bind:value={instance.chain}
-          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          disabled={activeCompound !== null}
+          title={activeCompound !== null ? 'Compound spans multiple chains' : ''}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
         >
           {#each chains as c (c)}
             <option value={c}>{c}</option>
@@ -710,12 +738,25 @@
         <select
           value={instance.token}
           onchange={(e) => (instance.token = e.currentTarget.value)}
-          disabled={tokensForChain.length <= 1}
+          disabled={tokensForChain.length <= 1 && compounds.length === 0}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-50 disabled:cursor-not-allowed"
         >
-          {#each tokensForChain as t (t)}
-            <option value={t}>{t}</option>
-          {/each}
+          {#if compounds.length > 0}
+            <optgroup label={`Tokens on ${instance.chain}`}>
+              {#each tokensForChain as t (t)}
+                <option value={t}>{t}</option>
+              {/each}
+            </optgroup>
+            <optgroup label="Compound">
+              {#each compounds as c (c.name)}
+                <option value={c.name} title={c.description}>Σ {c.label}</option>
+              {/each}
+            </optgroup>
+          {:else}
+            {#each tokensForChain as t (t)}
+              <option value={t}>{t}</option>
+            {/each}
+          {/if}
         </select>
       {:else}
         <select

@@ -13,12 +13,13 @@
     type ChartTemplate,
     type MAConfig
   } from '$lib/components/charts/config';
-  import type { Interval, TransferStream } from '$lib/api';
+  import type { Interval, TransferCompound, TransferStream } from '$lib/api';
   import type { View } from '$lib/chart-zoom';
 
   let {
     tokens,
     streams = [],
+    compounds = [],
     storageKey,
     availableKinds,
     templates = [],
@@ -28,6 +29,7 @@
   }: {
     tokens: string[];
     streams?: TransferStream[];
+    compounds?: TransferCompound[];
     storageKey: string;
     availableKinds: ChartKind[];
     templates?: ChartTemplate[];
@@ -322,6 +324,7 @@
         bind:instance={instances[idx]}
         {tokens}
         {streams}
+        {compounds}
         {syncZoom}
         {sharedView}
         {sharedHoverTime}

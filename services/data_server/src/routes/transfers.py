@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 from sanic import Blueprint, response
 
 from clickhouse import client
+from routes.compounds import compound_pairs, get_compound
 from routes.ohlcv import INTERVAL_SECONDS
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
@@ -68,6 +69,24 @@ async def streams(_request):
 # EVM chains where addresses are case-insensitive — we lower(sender/receiver)
 # before looking up the wallet_labels dictionary. Other chains (BTC, TRON) preserve case.
 _EVM_CHAINS = ("ETH", "ARB", "POLYGON", "BASE", "BSC", "OP", "AVAX")
+_EVM_CHAINS_SQL = "(" + ", ".join(f"'{c}'" for c in _EVM_CHAINS) + ")"
+
+
+def _addr_expr(chain: str | None, col: str) -> str:
+    """Return the SQL expression for a normalised address.
+
+    - chain="ETH" / "ARB" / "BASE" / "BSC" / "POLYGON" → `lower(col)` (EVM)
+    - chain="BTC" / "TRON" / ...                         → `col` (case-sensitive)
+    - chain=None (compound / multi-chain query)         → per-row conditional:
+          `if(chain IN (...EVM...), lower(col), col)`
+      so EVM rows still hit the dict's lowercase keys and BTC/TRON rows pass
+      through unchanged.
+    """
+    if chain is None:
+        return f"if(chain IN {_EVM_CHAINS_SQL}, lower({col}), {col})"
+    if chain.upper() in _EVM_CHAINS:
+        return f"lower({col})"
+    return col
 
 
 def _parse_csv(s: str | None) -> list[str]:
@@ -76,18 +95,18 @@ def _parse_csv(s: str | None) -> list[str]:
     return [v.strip() for v in s.split(",") if v.strip()]
 
 
-def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str], dict]:
+def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[list[str], dict]:
     """For each extra spec ({id, filters}), build a `sumIf(amount, <cond>) AS extra_amount_<id>`
     clause and the matching parameters. All clauses go into a single CH SELECT so the table
     is scanned once and every aggregation falls out of the same group-by.
-    """
-    chain_evm = chain.upper() in _EVM_CHAINS
-    addr_expr = "lower({col})" if chain_evm else "{col}"
 
+    `chain=None` means the query spans multiple chains (compound mode) and the
+    dict lookup must normalise the address per-row.
+    """
     def dg(col: str) -> str:
         return (
             "dictGet('tradernick.wallet_labels', 'categories', "
-            + addr_expr.format(col=col) + ")"
+            + _addr_expr(chain, col) + ")"
         )
 
     clauses: list[str] = []
@@ -100,7 +119,7 @@ def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str
     def dg_entity(col: str) -> str:
         return (
             "dictGet('tradernick.wallet_labels', 'entity', "
-            + addr_expr.format(col=col) + ")"
+            + _addr_expr(chain, col) + ")"
         )
 
     for i, spec in enumerate(extras):
@@ -155,24 +174,27 @@ def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str
     return clauses, params
 
 
-def _build_entity_predicate(chain: str, side: str, action: str, vals: list[str]) -> tuple[str, str] | None:
+def _build_entity_predicate(
+    chain: str | None, side: str, action: str, vals: list[str]
+) -> tuple[str, str] | None:
     """Predicate over the dictionary's `entity` (Nullable String) attribute.
 
     Matching is case-insensitive: both the dictionary's entity and the user-
     supplied values are lower()'d before comparison. NULL / unknown entities
     coalesce to '' so the IN check stays well-defined.
+
+    `chain=None` switches to per-row address normalisation for compound /
+    multi-chain queries.
     """
     if not vals:
         return None
-    chain_evm = chain.upper() in _EVM_CHAINS
-    addr_expr = "lower({col})" if chain_evm else "{col}"
     param = f"{side}_{action}_ent"
     pphold = f"{{{param}:Array(String)}}"
 
     def match(col: str) -> str:
         return (
             f"lower(coalesce(dictGet('tradernick.wallet_labels', 'entity', "
-            f"{addr_expr.format(col=col)}), '')) IN {pphold}"
+            f"{_addr_expr(chain, col)}), '')) IN {pphold}"
         )
 
     if side == "involving":
@@ -184,19 +206,19 @@ def _build_entity_predicate(chain: str, side: str, action: str, vals: list[str])
     return f"NOT {expr}", param
 
 
-def _build_wallet_predicate(chain: str, side: str, action: str, cats: list[str]) -> tuple[str, str] | None:
+def _build_wallet_predicate(
+    chain: str | None, side: str, action: str, cats: list[str]
+) -> tuple[str, str] | None:
     """Construct a SQL predicate fragment + a unique parameter name for one filter.
 
     side   = 'sender' | 'receiver' | 'involving'
     action = 'in' | 'ex'
+    chain  = a known chain string OR None for compound / multi-chain queries.
 
     Returns (sql_fragment, param_name) or None if cats is empty.
     """
     if not cats:
         return None
-    addr_expr = (
-        "lower({col})" if chain.upper() in _EVM_CHAINS else "{col}"
-    )
     param = f"{side}_{action}_cats"
     pphold = f"{{{param}:Array(String)}}"
 
@@ -206,7 +228,7 @@ def _build_wallet_predicate(chain: str, side: str, action: str, cats: list[str])
         return (
             f"hasAny(arrayMap(c -> lower(c), "
             f"dictGet('tradernick.wallet_labels', 'categories', "
-            f"{addr_expr.format(col=col)})), {pphold})"
+            f"{_addr_expr(chain, col)})), {pphold})"
         )
 
     if side == "involving":
@@ -221,6 +243,7 @@ def _build_wallet_predicate(chain: str, side: str, action: str, cats: list[str])
 
 @bp.get("/transfers/aggregate")
 async def aggregate(request):
+    compound_name = request.args.get("compound")
     chain = request.args.get("chain")
     kind = request.args.get("kind")
     token = request.args.get("token")
@@ -229,8 +252,22 @@ async def aggregate(request):
     until = request.args.get("until")
     limit = int(request.args.get("limit", "10000"))
 
-    if not chain or not token or not kind:
-        return response.json({"error": "missing chain/kind/token"}, status=400)
+    # `compound=<name>` swaps the single (chain, kind, token) WHERE for an
+    # `(chain, kind, token) IN ((...), ...)` predicate built from the
+    # registry. The chain/kind/token query-string params are ignored when
+    # `compound` is set.
+    pairs: list[tuple[str, str, str]] | None = None
+    if compound_name:
+        spec = get_compound(compound_name)
+        if spec is None:
+            return response.json({"error": f"unknown compound {compound_name!r}"}, status=400)
+        pairs = compound_pairs(compound_name)
+        if not pairs:
+            return response.json({"error": f"compound {compound_name!r} has no pairs"}, status=400)
+    else:
+        if not chain or not token or not kind:
+            return response.json({"error": "missing chain/kind/token"}, status=400)
+
     if interval not in INTERVAL_SECONDS:
         return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
     if not since or not until:
@@ -239,6 +276,11 @@ async def aggregate(request):
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since)
     until_dt = _parse_iso(until)
+
+    # Address-normalisation mode for the wallet-filter predicates: pass the
+    # single chain in single-stream mode, None in compound mode (so the
+    # helpers emit per-row `if(chain IN EVM, lower(addr), addr)`).
+    addr_chain: str | None = None if pairs is not None else chain
 
     # ---- Legacy single-filter params (kept so direct curl calls still work) ----
     cat_specs = [
@@ -260,7 +302,7 @@ async def aggregate(request):
     where_clauses: list[str] = []
     legacy_params: dict = {}
     for side, action, cats in cat_specs:
-        pred = _build_wallet_predicate(chain, side, action, cats)
+        pred = _build_wallet_predicate(addr_chain, side, action, cats)
         if pred is None:
             continue
         sql_frag, param_name = pred
@@ -269,7 +311,7 @@ async def aggregate(request):
         # `lower(c)` projection on the dictionary side.
         legacy_params[param_name] = [str(c).lower() for c in cats]
     for side, action, vals in entity_specs:
-        pred = _build_entity_predicate(chain, side, action, vals)
+        pred = _build_entity_predicate(addr_chain, side, action, vals)
         if pred is None:
             continue
         sql_frag, param_name = pred
@@ -302,12 +344,38 @@ async def aggregate(request):
             if len(extras) >= _MAX_EXTRAS:
                 break
 
-    extra_clauses, extra_params = _build_extra_sumif_clauses(chain, extras)
+    extra_clauses, extra_params = _build_extra_sumif_clauses(addr_chain, extras)
     extra_select_sql = (
         ",\n            " + ",\n            ".join(extra_clauses)
         if extra_clauses
         else ""
     )
+
+    # Build the chain/kind/token predicate — single tuple or multi-tuple IN list.
+    ch_params: dict = {
+        "seconds": seconds,
+        "since": since_dt,
+        "until": until_dt,
+        "limit": limit,
+        **legacy_params,
+        **extra_params,
+    }
+    if pairs is not None:
+        # Pairs come from a server-defined registry, never user input — safe to
+        # inline as a SQL tuple literal. Quoting is paranoia, not necessity.
+        def _q(s: str) -> str:
+            return "'" + s.replace("'", "''") + "'"
+        tup_sql = ", ".join(
+            f"({_q(c)}, {_q(k)}, {_q(t)})" for (c, k, t) in pairs
+        )
+        ckt_where = f"(chain, kind, token) IN ({tup_sql})"
+    else:
+        ckt_where = (
+            "chain = {chain:String} AND kind = {kind:String} AND token = {token:String}"
+        )
+        ch_params["chain"] = chain
+        ch_params["kind"] = kind
+        ch_params["token"] = token
 
     sql = f"""
         SELECT
@@ -316,9 +384,7 @@ async def aggregate(request):
             sum(coalesce(value_usd, 0)) AS sum_value_usd,
             count()                 AS count{extra_select_sql}
         FROM tradernick.transfers
-        WHERE chain = {{chain:String}}
-          AND kind  = {{kind:String}}
-          AND token = {{token:String}}
+        WHERE {ckt_where}
           AND time >= {{since:DateTime}}
           AND time <  {{until:DateTime}}
           {where_extra_sql}
@@ -328,20 +394,7 @@ async def aggregate(request):
     """
 
     ch = await client()
-    rows = await ch.query(
-        sql,
-        parameters={
-            "seconds": seconds,
-            "chain": chain,
-            "kind": kind,
-            "token": token,
-            "since": since_dt,
-            "until": until_dt,
-            "limit": limit,
-            **legacy_params,
-            **extra_params,
-        },
-    )
+    rows = await ch.query(sql, parameters=ch_params)
 
     n_static = 4  # bucket, sum_amount, sum_value_usd, count
     series = []
@@ -357,14 +410,19 @@ async def aggregate(request):
             row[f"extra_amount_{spec['id']}"] = float(v) if v is not None else 0.0
         series.append(row)
 
-    return response.json({
-        "chain": chain,
-        "kind": kind,
-        "token": token,
+    resp_body: dict = {
         "interval": interval,
         "extras": [e["id"] for e in extras],
         "series": series,
-    })
+    }
+    if pairs is not None:
+        resp_body["compound"] = compound_name
+        resp_body["pairs"] = [{"chain": c, "kind": k, "token": t} for (c, k, t) in pairs]
+    else:
+        resp_body["chain"] = chain
+        resp_body["kind"] = kind
+        resp_body["token"] = token
+    return response.json(resp_body)
 
 
 # --- /transfers/categories + /transfers/entities ------------------------------

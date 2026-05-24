@@ -1,5 +1,6 @@
 from sanic import Sanic, response
 
+from routes.compounds import bp as compounds_bp
 from routes.derivatives import bp as derivatives_bp
 from routes.ohlcv import bp as ohlcv_bp
 from routes.trade_volume import bp as trade_volume_bp
@@ -12,6 +13,7 @@ app.blueprint(ohlcv_bp)
 app.blueprint(trade_volume_bp)
 app.blueprint(derivatives_bp)
 app.blueprint(transfers_bp)
+app.blueprint(compounds_bp)
 
 
 @app.get("/health")
