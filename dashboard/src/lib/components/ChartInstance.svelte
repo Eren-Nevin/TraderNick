@@ -840,23 +840,44 @@
               class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
             />
             {#each [['sender', 'Sender'], ['receiver', 'Receiver'], ['involving', 'Either']] as [side, label]}
-              <div class="grid grid-cols-[60px_1fr_1fr] items-center gap-2">
-                <span class="text-zinc-400">{label}</span>
-                <input
-                  type="text"
-                  list="wallet-cats-{instance.id}"
-                  bind:value={pendingFilters[`${side}_in` as FilterKey]}
-                  placeholder="✔ include"
-                  class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-                />
-                <input
-                  type="text"
-                  list="wallet-cats-{instance.id}"
-                  bind:value={pendingFilters[`${side}_ex` as FilterKey]}
-                  placeholder="✘ exclude"
-                  class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-                />
-              </div>
+              {#if instance.width === 1}
+                <!-- Narrow (1-col) layout — stack include/exclude vertically -->
+                <div class="space-y-1">
+                  <div class="text-zinc-400">{label}</div>
+                  <input
+                    type="text"
+                    list="wallet-cats-{instance.id}"
+                    bind:value={pendingFilters[`${side}_in` as FilterKey]}
+                    placeholder="✔ include"
+                    class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+                  />
+                  <input
+                    type="text"
+                    list="wallet-cats-{instance.id}"
+                    bind:value={pendingFilters[`${side}_ex` as FilterKey]}
+                    placeholder="✘ exclude"
+                    class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+                  />
+                </div>
+              {:else}
+                <div class="grid grid-cols-[60px_1fr_1fr] items-center gap-2">
+                  <span class="text-zinc-400">{label}</span>
+                  <input
+                    type="text"
+                    list="wallet-cats-{instance.id}"
+                    bind:value={pendingFilters[`${side}_in` as FilterKey]}
+                    placeholder="✔ include"
+                    class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+                  />
+                  <input
+                    type="text"
+                    list="wallet-cats-{instance.id}"
+                    bind:value={pendingFilters[`${side}_ex` as FilterKey]}
+                    placeholder="✘ exclude"
+                    class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+                  />
+                </div>
+              {/if}
             {/each}
             <div class="flex items-center gap-2">
               <button
