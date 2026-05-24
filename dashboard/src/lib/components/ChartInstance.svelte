@@ -331,7 +331,6 @@
     const rows = (body.series ?? []) as Array<Record<string, number>>;
     const out: Record<string, number>[] = rows.map((b) => ({
       time: b.time,
-      main: b.sum_amount,
       sum_amount: b.sum_amount,
       sum_value_usd: b.sum_value_usd,
       count: b.count
@@ -583,10 +582,12 @@
         }
         case 'transfer': {
           const arr = data as TransferBucket[];
-          const arrMa = maArray(arr.map((b) => b.sum_amount), ma.length, ma.type);
+          // MAs follow the same series the chart plots — USD value, ASOF-
+          // priced server-side from binance_ohlcv_1m.
+          const arrMa = maArray(arr.map((b) => b.sum_value_usd), ma.length, ma.type);
           out.push({
             key: `cum_transfer_${idx}`,
-            label: `Amount ${tag}`,
+            label: `USD ${tag}`,
             color,
             dash: SUB_DASH[0],
             compute: (_d: TransferBucket, i: number) => arrMa[i]
@@ -598,7 +599,10 @@
     return out;
   });
 
-  // Transfer-kind single line: whatever the (optionally filtered) sum is.
+  // Transfer-kind single line: USD value of the (optionally filtered) sum.
+  // The backend prices each transfer with the ASOF-nearest 1m OHLCV close,
+  // so this number is honest dollars — no longer token amount with a "$"
+  // formatter slapped on.
   let transferMainLabel = $derived(activeFilterIsAny ? activeFilterLabel : 'Total');
   let transferLinesD = $derived([
     ...(instance.showPoint
@@ -607,7 +611,7 @@
           label: transferMainLabel,
           color: '#06b6d4',
           compute: (d: TransferBucket & Record<string, number>) =>
-            d.main ?? d.sum_amount ?? 0
+            d.sum_value_usd ?? 0
         }]
       : []),
     ...cumulativeLines
