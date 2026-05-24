@@ -66,6 +66,50 @@
       id: 'tpl-cex-internal',
       label: 'CeX Internal Flow',
       build: buildTemplate('CeX Internal Flow', { sender_in: ['CEX'], receiver_in: ['CEX'] })
+    },
+    // Per-exchange entity-based templates — these use the wallet's `entity`
+    // attribute (Binance / OKX / Coinbase / Bybit ...) so they pin to a specific
+    // exchange's *own* hot/cold wallets. Deposit-collection addresses have
+    // entity=NULL and are tagged via category (e.g. Binance-Deposit) instead.
+    {
+      id: 'tpl-binance-inflow',
+      label: 'Binance Inflow',
+      build: buildTemplate('Binance Inflow', { receiver_entity_in: ['Binance'] })
+    },
+    {
+      id: 'tpl-binance-outflow',
+      label: 'Binance Outflow',
+      build: buildTemplate('Binance Outflow', { sender_entity_in: ['Binance'] })
+    },
+    {
+      id: 'tpl-coinbase-inflow',
+      label: 'Coinbase Inflow',
+      build: buildTemplate('Coinbase Inflow', { receiver_entity_in: ['Coinbase'] })
+    },
+    {
+      id: 'tpl-coinbase-outflow',
+      label: 'Coinbase Outflow',
+      build: buildTemplate('Coinbase Outflow', { sender_entity_in: ['Coinbase'] })
+    },
+    {
+      id: 'tpl-okx-inflow',
+      label: 'OKX Inflow',
+      build: buildTemplate('OKX Inflow', { receiver_entity_in: ['OKX'] })
+    },
+    {
+      id: 'tpl-okx-outflow',
+      label: 'OKX Outflow',
+      build: buildTemplate('OKX Outflow', { sender_entity_in: ['OKX'] })
+    },
+    {
+      id: 'tpl-bybit-inflow',
+      label: 'Bybit Inflow',
+      build: buildTemplate('Bybit Inflow', { receiver_entity_in: ['Bybit'] })
+    },
+    {
+      id: 'tpl-bybit-outflow',
+      label: 'Bybit Outflow',
+      build: buildTemplate('Bybit Outflow', { sender_entity_in: ['Bybit'] })
     }
   ];
 </script>
