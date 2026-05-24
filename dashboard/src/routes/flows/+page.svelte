@@ -67,6 +67,32 @@
     return buildTemplate(name, filter);
   }
 
+  // Netflow = Inflow − Outflow per bucket. Two parallel fetches with the
+  // same filter sets as the two simple templates above; the chart subtracts
+  // them client-side. Positive = net deposits into CeX (accumulation),
+  // negative = net withdrawals (distribution).
+  function inflowFilter(cex: Cex): TF {
+    return cex === 'All'
+      ? { receiver_in: ['Deposit'] }
+      : { receiver_in: [`${cex}-Deposit`] };
+  }
+  function outflowFilter(cex: Cex): TF {
+    const f: TF = { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] };
+    if (cex !== 'All') f.sender_entity_in = [cex];
+    return f;
+  }
+  function cexNetflowBuild(cex: Cex) {
+    const positive = inflowFilter(cex);
+    const negative = outflowFilter(cex);
+    const name = cex === 'All' ? 'CeX Netflow' : `${cex} Netflow`;
+    return (defaults: { token: string; chain?: string }) => {
+      const inst = newChartInstance('transfer', defaults);
+      inst.netFilter = { positive: { ...positive }, negative: { ...negative } };
+      inst.templateName = name;
+      return inst;
+    };
+  }
+
   const TEMPLATES: ChartTemplate[] = [
     {
       id: 'tpl-cex-inflow',
@@ -84,6 +110,15 @@
         id: `tpl-cex-outflow-${c.toLowerCase()}`,
         label: c,
         build: cexOutflowBuild(c)
+      }))
+    },
+    {
+      id: 'tpl-cex-netflow',
+      label: 'CeX Netflow',
+      variants: CEXES.map((c) => ({
+        id: `tpl-cex-netflow-${c.toLowerCase()}`,
+        label: c,
+        build: cexNetflowBuild(c)
       }))
     },
     {

@@ -89,18 +89,20 @@ export function maArray(vals: number[], n: number, t: MAType): number[] {
 
 export function fmtUsdAxis(v: number) {
   const abs = Math.abs(v);
-  if (abs >= 1e9) return `$${(v / 1e9).toFixed(2)}B`;
-  if (abs >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `$${(v / 1e3).toFixed(0)}K`;
-  return `$${v.toFixed(0)}`;
+  const sign = v < 0 ? '-' : '';
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(0)}K`;
+  return `${sign}$${abs.toFixed(0)}`;
 }
 
 export function fmtUsdTooltip(v: number) {
   const abs = Math.abs(v);
-  if (abs >= 1e9) return `$${(v / 1e9).toFixed(3)}B`;
-  if (abs >= 1e6) return `$${(v / 1e6).toFixed(2)}M`;
-  if (abs >= 1e3) return `$${(v / 1e3).toFixed(1)}K`;
-  return `$${v.toFixed(2)}`;
+  const sign = v < 0 ? '-' : '';
+  if (abs >= 1e9) return `${sign}$${(abs / 1e9).toFixed(3)}B`;
+  if (abs >= 1e6) return `${sign}$${(abs / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${sign}$${(abs / 1e3).toFixed(1)}K`;
+  return `${sign}$${abs.toFixed(2)}`;
 }
 
 /** Tooltip timestamp helper — "Sun 2026-05-24 12:34:56 UTC". */
@@ -276,6 +278,11 @@ export type ChartInstance = {
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
   filter?: TransferFilters;
+  /** Two filter sets fetched in parallel and subtracted on the client:
+   *  `positive - negative` per bucket. Used by netflow-style templates
+   *  (e.g. CeX Netflow = CeX Inflow − CeX Outflow). Mutually exclusive
+   *  with `filter` — templates set one or the other, never both. */
+  netFilter?: { positive: TransferFilters; negative: TransferFilters };
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */

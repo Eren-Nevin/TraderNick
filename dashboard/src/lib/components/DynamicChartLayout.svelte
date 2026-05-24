@@ -255,6 +255,18 @@
           }
         }
         inst.filter = filter;
+        // Netflow templates persist two locked filter sets (positive − negative).
+        if (r.netFilter && typeof r.netFilter === 'object') {
+          const nf = r.netFilter as Record<string, unknown>;
+          const positive = pickFilter(nf.positive);
+          const negative = pickFilter(nf.negative);
+          if (
+            Object.keys(positive).length > 0 ||
+            Object.keys(negative).length > 0
+          ) {
+            inst.netFilter = { positive, negative };
+          }
+        }
         if (typeof r.templateName === 'string' && r.templateName.length > 0) {
           inst.templateName = r.templateName;
         }

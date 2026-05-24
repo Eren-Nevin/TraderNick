@@ -269,7 +269,17 @@
 
   function transferFilterKey(): string {
     const f = instance.filter ?? {};
-    return FILTER_KEYS.map((k) => (f[k as FilterKey] ?? []).join(',')).join('|');
+    const main = FILTER_KEYS.map((k) => (f[k as FilterKey] ?? []).join(',')).join('|');
+    // Netflow templates have two filter sets — fold both into the cache key
+    // so switching CeX variants busts correctly.
+    if (instance.netFilter) {
+      const p = instance.netFilter.positive;
+      const n = instance.netFilter.negative;
+      const pPart = FILTER_KEYS.map((k) => (p[k as FilterKey] ?? []).join(',')).join('|');
+      const nPart = FILTER_KEYS.map((k) => (n[k as FilterKey] ?? []).join(',')).join('|');
+      return `${main}|net+:${pPart}|net-:${nPart}`;
+    }
+    return main;
   }
 
   function loadKey(): string {
@@ -296,16 +306,15 @@
    *  legacy single-filter params on /transfers/aggregate apply pre-aggregation
    *  in CH, so the returned `sum_amount` is the filtered sum. MAs then compute
    *  from those filtered values automatically. */
-  async function loadTransferMerged(sinceIso: string, untilIso: string) {
+  /** Build the chain/kind/token + chain_group/token_group portion of the
+   *  query string — shared between the single-filter and netflow paths. */
+  function transferBaseQS(sinceIso: string, untilIso: string): URLSearchParams {
     const qs = new URLSearchParams({
       interval: instance.interval,
       since: sinceIso,
       until: untilIso,
       limit: '10000'
     });
-    // Each axis is either a singleton (chain= / token=) or a group
-    // (chain_group= / token_group=). Both can be set independently; the
-    // backend cross-products them against the streams catalogue.
     if (activeChainGroup) {
       qs.set('chain_group', activeChainGroup.name);
     } else {
@@ -315,11 +324,59 @@
       qs.set('token_group', activeTokenGroup);
     } else {
       qs.set('token', instance.token);
-      // `kind` only matters in the all-singleton path — it disambiguates
-      // (TRON, trc20, USDT) vs (TRON, tron_native, TRX). When either axis
-      // is a group the backend resolves `kind` per-pair itself.
       if (!activeChainGroup) qs.set('kind', transferKind);
     }
+    return qs;
+  }
+
+  async function loadTransferMerged(sinceIso: string, untilIso: string) {
+    // Netflow path: two parallel fetches (the two locked filter sets) merged
+    // by time bucket. Net = positive.sum_value_usd − negative.sum_value_usd.
+    if (instance.netFilter) {
+      const buildQS = (filter: TransferFilters) => {
+        const qs = transferBaseQS(sinceIso, untilIso);
+        for (const k of FILTER_KEYS) {
+          const arr = filter[k as FilterKey] ?? [];
+          if (arr.length) qs.set(k, arr.join(','));
+        }
+        return qs;
+      };
+      const [posRes, negRes] = await Promise.all([
+        fetch(`/api/transfers/aggregate?${buildQS(instance.netFilter.positive)}`),
+        fetch(`/api/transfers/aggregate?${buildQS(instance.netFilter.negative)}`)
+      ]);
+      if (!posRes.ok) throw new Error(`transfers inflow ${posRes.status}`);
+      if (!negRes.ok) throw new Error(`transfers outflow ${negRes.status}`);
+      const posBody = await posRes.json();
+      const negBody = await negRes.json();
+      const negByTime = new Map<number, { amount: number; usd: number }>();
+      for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+        negByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd });
+      }
+      const out: Record<string, number>[] = [];
+      const seen = new Set<number>();
+      for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
+        const n = negByTime.get(r.time) ?? { amount: 0, usd: 0 };
+        out.push({
+          time: r.time,
+          sum_amount: r.sum_amount - n.amount,
+          sum_value_usd: r.sum_value_usd - n.usd,
+          count: r.count
+        });
+        seen.add(r.time);
+      }
+      // Buckets present only in the outflow series → net is negative.
+      for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+        if (seen.has(r.time)) continue;
+        out.push({ time: r.time, sum_amount: -r.sum_amount, sum_value_usd: -r.sum_value_usd, count: r.count });
+      }
+      out.sort((a, b) => a.time - b.time);
+      data = out as unknown as AnyDatum[];
+      return;
+    }
+
+    // Single-filter path (legacy).
+    const qs = transferBaseQS(sinceIso, untilIso);
     const f = instance.filter ?? {};
     for (const k of FILTER_KEYS) {
       const arr = f[k as FilterKey] ?? [];
@@ -603,7 +660,9 @@
   // The backend prices each transfer with the ASOF-nearest 1m OHLCV close,
   // so this number is honest dollars — no longer token amount with a "$"
   // formatter slapped on.
-  let transferMainLabel = $derived(activeFilterIsAny ? activeFilterLabel : 'Total');
+  let transferMainLabel = $derived(
+    instance.netFilter ? 'Netflow' : (activeFilterIsAny ? activeFilterLabel : 'Total')
+  );
   let transferLinesD = $derived([
     ...(instance.showPoint
       ? [{
