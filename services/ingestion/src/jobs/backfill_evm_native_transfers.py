@@ -9,6 +9,9 @@ from defistream import AsyncDeFiStream
 
 import config
 from clickhouse import async_client, delete_transfers_range, safe_ident, transfers_df_for_bulk_insert
+# Single source of truth for the chain → native-token symbol map (so the
+# backfill writes the same `token` value the live polling does).
+from groups.evm_native_transfers import NATIVE_TOKEN_BY_CHAIN
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [backfill_evm_native_transfers] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -88,7 +91,8 @@ async def _fetch_chunk(ds: AsyncDeFiStream, chain: str, since: datetime, until: 
     )
     if df.is_empty():
         return 0
-    pd_df = transfers_df_for_bulk_insert(df, kind="native", chain=chain)
+    token = NATIVE_TOKEN_BY_CHAIN.get(chain.upper())
+    pd_df = transfers_df_for_bulk_insert(df, kind="native", chain=chain, token_override=token)
     ch = await async_client()
     await ch.insert_df(TABLE, pd_df)
     return len(pd_df)

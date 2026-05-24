@@ -15,6 +15,18 @@ log = logging.getLogger(__name__)
 POLL_INTERVAL_SECONDS = 60
 POLL_OVERLAP_MINUTES = 3
 
+# Canonical native-asset symbol per EVM chain — gets written to the
+# `token` column so the dashboard shows ETH / BNB / POL rather than
+# whatever DeFiStream happens to emit. Polygon's native asset was
+# renamed MATIC → POL in 2024; we store the new symbol.
+NATIVE_TOKEN_BY_CHAIN: dict[str, str] = {
+    "ETH": "ETH",
+    "ARB": "ETH",
+    "BASE": "ETH",
+    "BSC": "BNB",
+    "POLYGON": "POL",
+}
+
 
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -31,7 +43,8 @@ async def fetch_and_insert(ds: AsyncDeFiStream, chain: str, since: datetime, unt
     )
     if df.is_empty():
         return 0
-    rows = transfers_df_to_rows(df, kind="native", chain=chain)
+    token = NATIVE_TOKEN_BY_CHAIN.get(chain.upper())
+    rows = transfers_df_to_rows(df, kind="native", chain=chain, token_override=token)
     ch = await async_client()
     await ch.insert("tradernick.transfers", rows, column_names=TRANSFER_COLUMNS)
     return len(rows)
