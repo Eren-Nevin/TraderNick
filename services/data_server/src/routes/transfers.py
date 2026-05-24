@@ -84,8 +84,12 @@ def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str
 
     clauses: list[str] = []
     params: dict = {}
-    for spec in extras:
-        eid = spec["id"]  # already validated
+    # IMPORTANT: we use a positional SQL alias (extra_pos_<i>) — NOT the client
+    # id — because client ids (e.g. crypto.randomUUID()) contain dashes which
+    # CH parses as subtraction inside an identifier. The handler reads the
+    # column by position when building the response so the client id is only
+    # ever used as a JSON dict key, not as a SQL identifier.
+    for i, spec in enumerate(extras):
         cf = spec.get("filters") or {}
         preds: list[str] = []
         for side in ("sender", "receiver", "involving"):
@@ -97,7 +101,7 @@ def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str
                 cats = [str(c) for c in cats if str(c).strip()]
                 if not cats:
                     continue
-                pname = f"e_{eid}_{side}_{action}"
+                pname = f"e_pos_{i}_{side}_{action}"
                 params[pname] = cats
                 pphold = f"{{{pname}:Array(String)}}"
                 if side == "involving":
@@ -106,7 +110,7 @@ def _build_extra_sumif_clauses(chain: str, extras: list[dict]) -> tuple[list[str
                     match = f"hasAny({dg(side)}, {pphold})"
                 preds.append(match if action == "in" else f"NOT {match}")
         cond = " AND ".join(preds) if preds else "1"
-        clauses.append(f"sumIf(amount, {cond}) AS extra_amount_{eid}")
+        clauses.append(f"sumIf(amount, {cond}) AS extra_pos_{i}")
     return clauses, params
 
 
