@@ -20,10 +20,8 @@
     BUYER_SELLER_LINES,
     BUYER_SELLER_SERIES,
     CHART_KIND_LABELS,
-    EXTRA_SERIES_COLORS,
     LS_LINES,
     MA_COLORS,
-    MAX_EXTRA_SERIES,
     NEUTRAL_REF,
     OI_LINES,
     SIZE_CYCLE,
@@ -39,7 +37,6 @@
     type ChartHeight,
     type ChartInstance as ChartInstanceT,
     type ChartWidth,
-    type FilteredSeries,
     type TransferFilters
   } from '$lib/components/charts/config';
   import type { View } from '$lib/chart-zoom';
@@ -129,8 +126,7 @@
     involving_in: '',
     involving_ex: ''
   };
-  let pendingName = $state('');
-  let pendingFilters = $state<Record<FilterKey, string>>({ ...EMPTY_PENDING });
+  let pendingFilter = $state<Record<FilterKey, string>>({ ...EMPTY_PENDING });
 
   function parseFilterCsv(s: string): string[] {
     return s
@@ -138,10 +134,13 @@
       .map((v) => v.trim())
       .filter((v) => v.length > 0);
   }
+  function joinFilterCsv(arr: string[] | undefined): string {
+    return (arr ?? []).join(', ');
+  }
   function buildPendingFilterSet(): TransferFilters {
     const next: TransferFilters = {};
     for (const k of FILTER_KEYS) {
-      const arr = parseFilterCsv(pendingFilters[k as FilterKey]);
+      const arr = parseFilterCsv(pendingFilter[k as FilterKey]);
       if (arr.length) next[k] = arr;
     }
     return next;
@@ -161,34 +160,38 @@
     return parts.join('_');
   }
 
-  let pendingHasAny = $derived(
-    FILTER_KEYS.some((k) => parseFilterCsv(pendingFilters[k as FilterKey]).length > 0)
-  );
-  let extraSeriesCount = $derived((instance.extraSeries ?? []).length);
-  let canAddSeries = $derived(pendingHasAny && extraSeriesCount < MAX_EXTRA_SERIES);
-
-  function addSeries() {
-    if (!canAddSeries) return;
-    const f = buildPendingFilterSet();
-    const newId =
-      typeof crypto !== 'undefined' && 'randomUUID' in crypto
-        ? crypto.randomUUID()
-        : `s-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-    const newSeries: FilteredSeries = {
-      id: newId,
-      name: pendingName.trim() || autoNameFromFilters(f),
-      filters: f
+  // When instance.filter changes (e.g. layout restore), seed the form text.
+  $effect(() => {
+    if (instance.kind !== 'transfer') return;
+    const f = instance.filter ?? {};
+    pendingFilter = {
+      sender_in: joinFilterCsv(f.sender_in),
+      sender_ex: joinFilterCsv(f.sender_ex),
+      receiver_in: joinFilterCsv(f.receiver_in),
+      receiver_ex: joinFilterCsv(f.receiver_ex),
+      involving_in: joinFilterCsv(f.involving_in),
+      involving_ex: joinFilterCsv(f.involving_ex)
     };
-    instance.extraSeries = [...(instance.extraSeries ?? []), newSeries];
-    pendingName = '';
-    pendingFilters = { ...EMPTY_PENDING };
+  });
+
+  let activeFilter = $derived(instance.filter ?? {});
+  let activeFilterIsAny = $derived(FILTER_KEYS.some((k) => (activeFilter[k] ?? []).length > 0));
+  let activeFilterLabel = $derived(autoNameFromFilters(activeFilter));
+  let pendingDiffers = $derived.by(() => {
+    for (const k of FILTER_KEYS) {
+      const live = (activeFilter[k] ?? []).join('\x00');
+      const pend = parseFilterCsv(pendingFilter[k as FilterKey]).join('\x00');
+      if (live !== pend) return true;
+    }
+    return false;
+  });
+
+  function applyFilter() {
+    instance.filter = buildPendingFilterSet();
   }
-  function removeSeries(id: string) {
-    instance.extraSeries = (instance.extraSeries ?? []).filter((s) => s.id !== id);
-  }
-  function clearPending() {
-    pendingName = '';
-    pendingFilters = { ...EMPTY_PENDING };
+  function clearFilter() {
+    pendingFilter = { ...EMPTY_PENDING };
+    instance.filter = {};
   }
 
   // ---- transient state (not persisted) ----
@@ -218,10 +221,9 @@
 
   // ---- loader: dispatch on kind ----
 
-  function extraSeriesKey(): string {
-    return (instance.extraSeries ?? [])
-      .map((s) => `${s.id}=${JSON.stringify(s.filters)}`)
-      .join('|');
+  function transferFilterKey(): string {
+    const f = instance.filter ?? {};
+    return FILTER_KEYS.map((k) => (f[k as FilterKey] ?? []).join(',')).join('|');
   }
 
   function loadKey(): string {
@@ -229,7 +231,7 @@
       return `${instance.kind}|${instance.token}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}`;
     }
     if (instance.kind === 'transfer') {
-      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${instance.interval}|${extraSeriesKey()}`;
+      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${instance.interval}|${transferFilterKey()}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -240,12 +242,11 @@
     void load();
   });
 
-  /** Single fetch against /api/transfers/aggregate?extras=[…]. The data_server
-   *  returns one row per bucket with the main aggregates plus one
-   *  `extra_amount_<id>` per spec, all computed in a single CH scan
-   *  (one query, one merge — no N+1 round trip, no client-side merge). */
+  /** Single fetch — the main line IS the (possibly filtered) series. The six
+   *  legacy single-filter params on /transfers/aggregate apply pre-aggregation
+   *  in CH, so the returned `sum_amount` is the filtered sum. MAs then compute
+   *  from those filtered values automatically. */
   async function loadTransferMerged(sinceIso: string, untilIso: string) {
-    const extras = instance.extraSeries ?? [];
     const qs = new URLSearchParams({
       chain: instance.chain ?? 'ETH',
       kind: transferKind,
@@ -255,26 +256,22 @@
       until: untilIso,
       limit: '10000'
     });
-    if (extras.length) {
-      qs.set('extras', JSON.stringify(extras.map((s) => ({ id: s.id, filters: s.filters }))));
+    const f = instance.filter ?? {};
+    for (const k of FILTER_KEYS) {
+      const arr = f[k as FilterKey] ?? [];
+      if (arr.length) qs.set(k, arr.join(','));
     }
     const res = await fetch(`/api/transfers/aggregate?${qs}`);
     if (!res.ok) throw new Error(`transfers ${res.status}`);
     const body = await res.json();
     const rows = (body.series ?? []) as Array<Record<string, number>>;
-    const out: Record<string, number>[] = rows.map((b) => {
-      const row: Record<string, number> = {
-        time: b.time,
-        main: b.sum_amount,
-        sum_amount: b.sum_amount,
-        sum_value_usd: b.sum_value_usd,
-        count: b.count
-      };
-      for (let i = 0; i < extras.length; i++) {
-        row[`extra_${i}`] = b[`extra_amount_${extras[i].id}`] ?? 0;
-      }
-      return row;
-    });
+    const out: Record<string, number>[] = rows.map((b) => ({
+      time: b.time,
+      main: b.sum_amount,
+      sum_amount: b.sum_amount,
+      sum_value_usd: b.sum_value_usd,
+      count: b.count
+    }));
     data = out as unknown as AnyDatum[];
   }
 
@@ -534,24 +531,18 @@
     return out;
   });
 
-  // Transfer-kind lines: main (cyan) + one per extraSeries.
-  const TRANSFER_MAIN_LINE = {
-    key: 'main',
-    label: 'Total',
-    color: '#06b6d4',
-    compute: (d: TransferBucket & Record<string, number>) => d.main ?? d.sum_amount ?? 0
-  };
-  let transferExtraLines = $derived(
-    (instance.extraSeries ?? []).map((s, idx) => ({
-      key: `extra_${idx}`,
-      label: s.name || `Filter ${idx + 1}`,
-      color: EXTRA_SERIES_COLORS[idx] ?? '#fbbf24',
-      compute: (d: Record<string, number>) => d[`extra_${idx}`] ?? 0
-    }))
-  );
+  // Transfer-kind single line: whatever the (optionally filtered) sum is.
+  let transferMainLabel = $derived(activeFilterIsAny ? activeFilterLabel : 'Total');
   let transferLinesD = $derived([
-    ...(instance.showPoint ? [TRANSFER_MAIN_LINE] : []),
-    ...transferExtraLines,
+    ...(instance.showPoint
+      ? [{
+          key: 'main',
+          label: transferMainLabel,
+          color: '#06b6d4',
+          compute: (d: TransferBucket & Record<string, number>) =>
+            d.main ?? d.sum_amount ?? 0
+        }]
+      : []),
     ...cumulativeLines
   ]);
 
@@ -799,112 +790,77 @@
     </div>
 
     {#if instance.kind === 'transfer'}
-      <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-3">
+      <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-2">
         <div class="text-[10px] uppercase tracking-widest text-zinc-500">
-          Filtered series
-          <span class="text-zinc-600 normal-case">— overlay up to {MAX_EXTRA_SERIES} colored lines, each its own wallet filter</span>
+          Wallet filter
+          <span class="text-zinc-600 normal-case">— replaces the chart's main series; MAs follow</span>
         </div>
-
-        <!-- Existing series chips -->
-        {#if (instance.extraSeries ?? []).length > 0}
-          <div class="flex flex-wrap gap-2">
-            {#each instance.extraSeries ?? [] as s, idx (s.id)}
-              <span
-                class="inline-flex items-center gap-1.5 px-2 py-1 rounded-md border border-zinc-700 bg-zinc-900 text-zinc-100"
-                title={autoNameFromFilters(s.filters)}
-              >
-                <span
-                  class="w-3 h-3 rounded-sm inline-block"
-                  style="background: {EXTRA_SERIES_COLORS[idx] ?? '#fbbf24'}"
-                ></span>
-                <span class="truncate max-w-[200px]">{s.name}</span>
-                <button
-                  type="button"
-                  onclick={() => removeSeries(s.id)}
-                  title="Remove series"
-                  class="text-zinc-400 hover:text-red-400 leading-none"
-                >✕</button>
-              </span>
-            {/each}
+        {#if activeFilterIsAny}
+          <div class="text-[11px] text-zinc-300">
+            <span class="text-zinc-500">active:</span>
+            <span class="font-mono">{activeFilterLabel}</span>
           </div>
         {/if}
-
-        <!-- Add-new form -->
-        {#if (instance.extraSeries ?? []).length < MAX_EXTRA_SERIES}
-          <datalist id="wallet-cats-{instance.id}">
-            {#each walletCategories as c (c.name)}
-              <option value={c.name}></option>
-            {/each}
-          </datalist>
-          <div class="space-y-2 p-2 border border-zinc-800 rounded-md">
-            <input
-              type="text"
-              bind:value={pendingName}
-              placeholder="Series name (optional)"
-              class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-            />
-            {#each [['sender', 'Sender'], ['receiver', 'Receiver'], ['involving', 'Either']] as [side, label]}
-              {#if instance.width === 1}
-                <!-- Narrow (1-col) layout — stack include/exclude vertically -->
-                <div class="space-y-1">
-                  <div class="text-zinc-400">{label}</div>
-                  <input
-                    type="text"
-                    list="wallet-cats-{instance.id}"
-                    bind:value={pendingFilters[`${side}_in` as FilterKey]}
-                    placeholder="✔ include"
-                    class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-                  />
-                  <input
-                    type="text"
-                    list="wallet-cats-{instance.id}"
-                    bind:value={pendingFilters[`${side}_ex` as FilterKey]}
-                    placeholder="✘ exclude"
-                    class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-                  />
-                </div>
-              {:else}
-                <div class="grid grid-cols-[60px_1fr_1fr] items-center gap-2">
-                  <span class="text-zinc-400">{label}</span>
-                  <input
-                    type="text"
-                    list="wallet-cats-{instance.id}"
-                    bind:value={pendingFilters[`${side}_in` as FilterKey]}
-                    placeholder="✔ include"
-                    class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-                  />
-                  <input
-                    type="text"
-                    list="wallet-cats-{instance.id}"
-                    bind:value={pendingFilters[`${side}_ex` as FilterKey]}
-                    placeholder="✘ exclude"
-                    class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-                  />
-                </div>
-              {/if}
-            {/each}
-            <div class="flex items-center gap-2">
-              <button
-                type="button"
-                onclick={addSeries}
-                disabled={!canAddSeries}
-                class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md px-3 py-1 text-xs text-zinc-100"
-              >+ Add series</button>
-              <button
-                type="button"
-                onclick={clearPending}
-                class="text-zinc-500 hover:text-zinc-200 text-xs"
-              >Clear</button>
-              {#if !pendingHasAny}
-                <span class="text-zinc-600 text-[11px]">Set at least one filter</span>
-              {/if}
+        <datalist id="wallet-cats-{instance.id}">
+          {#each walletCategories as c (c.name)}
+            <option value={c.name}></option>
+          {/each}
+        </datalist>
+        {#each [['sender', 'Sender'], ['receiver', 'Receiver'], ['involving', 'Either']] as [side, label]}
+          {#if instance.width === 1}
+            <div class="space-y-1">
+              <div class="text-zinc-400">{label}</div>
+              <input
+                type="text"
+                list="wallet-cats-{instance.id}"
+                bind:value={pendingFilter[`${side}_in` as FilterKey]}
+                placeholder="✔ include"
+                class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+              />
+              <input
+                type="text"
+                list="wallet-cats-{instance.id}"
+                bind:value={pendingFilter[`${side}_ex` as FilterKey]}
+                placeholder="✘ exclude"
+                class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+              />
             </div>
-          </div>
-        {:else}
-          <div class="text-zinc-500 text-[11px]">
-            Max {MAX_EXTRA_SERIES} series reached — remove one to add another.
-          </div>
-        {/if}
+          {:else}
+            <div class="grid grid-cols-[60px_1fr_1fr] items-center gap-2">
+              <span class="text-zinc-400">{label}</span>
+              <input
+                type="text"
+                list="wallet-cats-{instance.id}"
+                bind:value={pendingFilter[`${side}_in` as FilterKey]}
+                placeholder="✔ include"
+                class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+              />
+              <input
+                type="text"
+                list="wallet-cats-{instance.id}"
+                bind:value={pendingFilter[`${side}_ex` as FilterKey]}
+                placeholder="✘ exclude"
+                class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+              />
+            </div>
+          {/if}
+        {/each}
+        <div class="flex items-center gap-2 pt-1">
+          <button
+            type="button"
+            onclick={applyFilter}
+            disabled={!pendingDiffers}
+            class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed rounded-md px-3 py-1 text-xs text-zinc-100"
+          >Apply</button>
+          <button
+            type="button"
+            onclick={clearFilter}
+            class="text-zinc-500 hover:text-zinc-200 text-xs"
+          >Clear</button>
+          {#if pendingDiffers}
+            <span class="text-amber-400 text-[11px]">unsaved</span>
+          {/if}
+        </div>
       </div>
     {/if}
     </div>

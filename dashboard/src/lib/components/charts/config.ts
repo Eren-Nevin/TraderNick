@@ -235,17 +235,6 @@ export type TransferFilters = {
   involving_ex?: string[];
 };
 
-/** An optional extra line overlaid on a transfer chart, defined by its own
- *  wallet-category filter set. Up to MAX_EXTRA_SERIES of these per chart. */
-export type FilteredSeries = {
-  id: string;
-  name: string;
-  filters: TransferFilters;
-};
-
-export const MAX_EXTRA_SERIES = 3;
-export const EXTRA_SERIES_COLORS = ['#fbbf24', '#ec4899', '#84cc16'] as const;
-
 export type ChartWidth = 1 | 2 | 4;
 export type ChartHeight = 1 | 2;
 
@@ -267,7 +256,10 @@ export type ChartInstance = {
   pin?: boolean;
   // transfer only
   chain?: string;
-  extraSeries?: FilteredSeries[];
+  /** Optional wallet-category filter applied to the transfer chart's main
+   *  series. When set, the chart replaces its unfiltered sum with the filtered
+   *  one (MAs computed from the filtered values too). */
+  filter?: TransferFilters;
 };
 
 /** Cycle of canonical sizes the chart can be toggled through.
@@ -308,7 +300,7 @@ export function newChartInstance(
   }
   if (kind === 'transfer') {
     base.chain = defaults.chain ?? 'ETH';
-    base.extraSeries = [];
+    base.filter = {};
   }
   return base;
 }

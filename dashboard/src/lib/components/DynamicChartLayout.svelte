@@ -179,34 +179,32 @@
       }
       if (inst.kind === 'transfer') {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
-        const rawExtras = Array.isArray(r.extraSeries) ? r.extraSeries : [];
-        const cleanExtras: { id: string; name: string; filters: Record<string, string[]> }[] = [];
-        for (const e of rawExtras) {
-          if (!e || typeof e !== 'object') continue;
-          const er = e as Record<string, unknown>;
-          if (typeof er.id !== 'string') continue;
-          const filters: Record<string, string[]> = {};
-          const rf = er.filters;
-          if (rf && typeof rf === 'object') {
-            for (const k of ['sender_in', 'sender_ex', 'receiver_in', 'receiver_ex', 'involving_in', 'involving_ex']) {
-              const v = (rf as Record<string, unknown>)[k];
-              if (Array.isArray(v)) {
-                const cleaned = v
-                  .map((x) => (typeof x === 'string' ? x : ''))
-                  .filter((x) => x.length > 0);
-                if (cleaned.length) filters[k] = cleaned;
-              }
+        // New shape: a single `filter` field. Migrate from the older
+        // `extraSeries[0].filters` if present (we keep only the first; the
+        // rest are dropped now that the chart shows only one series).
+        function pickFilter(src: unknown): Record<string, string[]> {
+          const out: Record<string, string[]> = {};
+          if (!src || typeof src !== 'object') return out;
+          const rf = src as Record<string, unknown>;
+          for (const k of ['sender_in', 'sender_ex', 'receiver_in', 'receiver_ex', 'involving_in', 'involving_ex']) {
+            const v = rf[k];
+            if (Array.isArray(v)) {
+              const cleaned = v
+                .map((x) => (typeof x === 'string' ? x : ''))
+                .filter((x) => x.length > 0);
+              if (cleaned.length) out[k] = cleaned;
             }
           }
-          if (Object.keys(filters).length === 0) continue;
-          cleanExtras.push({
-            id: er.id,
-            name: typeof er.name === 'string' ? er.name : '',
-            filters
-          });
-          if (cleanExtras.length >= 3) break;
+          return out;
         }
-        inst.extraSeries = cleanExtras;
+        let filter: Record<string, string[]> = pickFilter(r.filter);
+        if (Object.keys(filter).length === 0 && Array.isArray(r.extraSeries) && r.extraSeries.length > 0) {
+          const first = r.extraSeries[0] as Record<string, unknown> | undefined;
+          if (first && typeof first === 'object') {
+            filter = pickFilter(first.filters);
+          }
+        }
+        inst.filter = filter;
       }
       out.push(inst);
       if (out.length >= MAX_CHARTS) break;
