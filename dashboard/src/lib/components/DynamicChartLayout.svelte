@@ -49,13 +49,23 @@
   let sharedHoverTime = $state<number | null>(null);
 
   let insertOpen = $state(false);
+  // IDs of templates whose parameter sub-list is currently expanded in the menu.
+  let expandedTemplates = $state<Set<string>>(new Set());
 
   function openInsert() {
     if (instances.length >= MAX_CHARTS) return;
     insertOpen = !insertOpen;
+    if (!insertOpen) expandedTemplates = new Set();
   }
   function closeInsert() {
     insertOpen = false;
+    expandedTemplates = new Set();
+  }
+  function toggleTemplateExpand(id: string) {
+    const next = new Set(expandedTemplates);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    expandedTemplates = next;
   }
   function addChart(kind: ChartKind) {
     if (instances.length >= MAX_CHARTS) return;
@@ -65,11 +75,22 @@
     insertOpen = false;
   }
   function addTemplate(t: ChartTemplate) {
-    if (instances.length >= MAX_CHARTS) return;
+    if (instances.length >= MAX_CHARTS || !t.build) return;
     const tk = defaultToken ?? tokens[0] ?? 'BTC';
     const inst = t.build({ token: tk, chain: defaultChain });
     instances = [...instances, inst];
     insertOpen = false;
+    expandedTemplates = new Set();
+  }
+  function addTemplateVariant(
+    build: (defaults: { token: string; chain?: string }) => ChartInstanceT
+  ) {
+    if (instances.length >= MAX_CHARTS) return;
+    const tk = defaultToken ?? tokens[0] ?? 'BTC';
+    const inst = build({ token: tk, chain: defaultChain });
+    instances = [...instances, inst];
+    insertOpen = false;
+    expandedTemplates = new Set();
   }
   function removeChart(id: string) {
     instances = instances.filter((i) => i.id !== id);
@@ -335,11 +356,36 @@
               Templates
             </div>
             {#each templates as t (t.id)}
-              <button
-                type="button"
-                onclick={() => addTemplate(t)}
-                class="block w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-              >{t.label}</button>
+              {#if t.variants && t.variants.length > 0}
+                <button
+                  type="button"
+                  onclick={() => toggleTemplateExpand(t.id)}
+                  class="flex items-center justify-between w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+                  aria-expanded={expandedTemplates.has(t.id)}
+                >
+                  <span>{t.label}</span>
+                  <span class="text-zinc-500 text-[10px] ml-2"
+                    >{expandedTemplates.has(t.id) ? '▾' : '▸'}</span
+                  >
+                </button>
+                {#if expandedTemplates.has(t.id)}
+                  <div class="bg-zinc-900/40">
+                    {#each t.variants as v (v.id)}
+                      <button
+                        type="button"
+                        onclick={() => addTemplateVariant(v.build)}
+                        class="block w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+                      >{v.label}</button>
+                    {/each}
+                  </div>
+                {/if}
+              {:else if t.build}
+                <button
+                  type="button"
+                  onclick={() => addTemplate(t)}
+                  class="block w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+                >{t.label}</button>
+              {/if}
             {/each}
             <div class="border-t border-zinc-800 my-1"></div>
           {/if}

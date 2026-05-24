@@ -31,85 +31,65 @@
 
   // Hardcoded one-click templates surfaced in the Insert menu. Each template
   // creates a transfer chart with a *locked* filter — the user can change
-  // chain / token / interval / MAs but not the wallet-filter. Future: persist
-  // user-saved templates from the chart itself.
-  function buildTemplate(name: string, filter: import('$lib/components/charts/config').TransferFilters) {
+  // chain / token / interval / MAs but not the wallet-filter.
+  type TF = import('$lib/components/charts/config').TransferFilters;
+  function buildTemplate(name: string, filter: TF) {
     return (defaults: { token: string; chain?: string }) => {
       const inst = newChartInstance('transfer', defaults);
-      inst.filter = filter;
+      // Clone so two instances built from the same template don't share state.
+      inst.filter = { ...filter };
       inst.templateName = name;
       return inst;
     };
   }
+
+  // Parameterised templates — user picks a CeX (All / Binance / Coinbase / OKX /
+  // Bybit) when inserting. The selection is folded into the locked filter:
+  //   - Inflow:  receiver_in = [<CeX>-Deposit]  (or 'Deposit' for All)
+  //   - Outflow: sender_in   = ['Hot-Wallet']
+  //              receiver_ex = ['CEX']
+  //              + sender_entity_in = [<CeX>]   (skipped for All)
+  const CEXES = ['All', 'Binance', 'Coinbase', 'OKX', 'Bybit'] as const;
+  type Cex = (typeof CEXES)[number];
+
+  function cexInflowBuild(cex: Cex) {
+    const filter: TF =
+      cex === 'All'
+        ? { receiver_in: ['Deposit'] }
+        : { receiver_in: [`${cex}-Deposit`] };
+    const name = cex === 'All' ? 'CeX Inflow' : `${cex} Inflow`;
+    return buildTemplate(name, filter);
+  }
+  function cexOutflowBuild(cex: Cex) {
+    const filter: TF = { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] };
+    if (cex !== 'All') filter.sender_entity_in = [cex];
+    const name = cex === 'All' ? 'CeX Outflow' : `${cex} Outflow`;
+    return buildTemplate(name, filter);
+  }
+
   const TEMPLATES: ChartTemplate[] = [
     {
-      id: 'tpl-non-cex-to-cex',
-      label: 'Total CeX Inflow',
-      build: buildTemplate('Total CeX Inflow', { sender_ex: ['CEX'], receiver_in: ['CEX'] })
+      id: 'tpl-cex-inflow',
+      label: 'CeX Inflow',
+      variants: CEXES.map((c) => ({
+        id: `tpl-cex-inflow-${c.toLowerCase()}`,
+        label: c,
+        build: cexInflowBuild(c)
+      }))
     },
     {
-      id: 'tpl-cex-to-non-cex',
-      label: 'Total CeX Outflow',
-      build: buildTemplate('Total CeX Outflow', { sender_in: ['CEX'], receiver_ex: ['CEX'] })
-    },
-    {
-      id: 'tpl-deposit-inflows',
-      label: 'CeX Deposit Inflow',
-      build: buildTemplate('CeX Deposit Inflow', { receiver_in: ['Deposit'] })
-    },
-    {
-      id: 'tpl-hot-wallet-outflows',
-      label: 'CeX Hot-Wallet Outflow',
-      build: buildTemplate('CeX Hot-Wallet Outflow', { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] })
+      id: 'tpl-cex-outflow',
+      label: 'CeX Outflow',
+      variants: CEXES.map((c) => ({
+        id: `tpl-cex-outflow-${c.toLowerCase()}`,
+        label: c,
+        build: cexOutflowBuild(c)
+      }))
     },
     {
       id: 'tpl-cex-internal',
       label: 'CeX Internal Flow',
       build: buildTemplate('CeX Internal Flow', { sender_in: ['CEX'], receiver_in: ['CEX'] })
-    },
-    // Per-exchange entity-based templates — these use the wallet's `entity`
-    // attribute (Binance / OKX / Coinbase / Bybit ...) so they pin to a specific
-    // exchange's *own* hot/cold wallets. Deposit-collection addresses have
-    // entity=NULL and are tagged via category (e.g. Binance-Deposit) instead.
-    {
-      id: 'tpl-binance-inflow',
-      label: 'Binance Inflow',
-      build: buildTemplate('Binance Inflow', { receiver_entity_in: ['Binance'] })
-    },
-    {
-      id: 'tpl-binance-outflow',
-      label: 'Binance Outflow',
-      build: buildTemplate('Binance Outflow', { sender_entity_in: ['Binance'] })
-    },
-    {
-      id: 'tpl-coinbase-inflow',
-      label: 'Coinbase Inflow',
-      build: buildTemplate('Coinbase Inflow', { receiver_entity_in: ['Coinbase'] })
-    },
-    {
-      id: 'tpl-coinbase-outflow',
-      label: 'Coinbase Outflow',
-      build: buildTemplate('Coinbase Outflow', { sender_entity_in: ['Coinbase'] })
-    },
-    {
-      id: 'tpl-okx-inflow',
-      label: 'OKX Inflow',
-      build: buildTemplate('OKX Inflow', { receiver_entity_in: ['OKX'] })
-    },
-    {
-      id: 'tpl-okx-outflow',
-      label: 'OKX Outflow',
-      build: buildTemplate('OKX Outflow', { sender_entity_in: ['OKX'] })
-    },
-    {
-      id: 'tpl-bybit-inflow',
-      label: 'Bybit Inflow',
-      build: buildTemplate('Bybit Inflow', { receiver_entity_in: ['Bybit'] })
-    },
-    {
-      id: 'tpl-bybit-outflow',
-      label: 'Bybit Outflow',
-      build: buildTemplate('Bybit Outflow', { sender_entity_in: ['Bybit'] })
     }
   ];
 </script>

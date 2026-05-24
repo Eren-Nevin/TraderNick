@@ -282,12 +282,29 @@ export type ChartInstance = {
   templateName?: string;
 };
 
-/** A one-click chart preset surfaced in the Insert menu. `build` returns a
- *  ready-to-add ChartInstance (with id, defaults, and any preset filter etc.). */
+/** Builder for a one-click chart preset — given the page's defaults, returns
+ *  a ready-to-add ChartInstance. */
+export type ChartTemplateBuild = (defaults: {
+  token: string;
+  chain?: string;
+}) => ChartInstance;
+
+/** A chart preset surfaced in the Insert menu.
+ *
+ *  Two shapes:
+ *    - `{ build }` — single one-click template (e.g. "CeX Internal Flow").
+ *    - `{ variants: [...] }` — parameterised template whose menu entry expands
+ *      to a list of sub-choices the user picks from (e.g. "CeX Inflow" → All /
+ *      Binance / Coinbase / OKX / Bybit). Each variant has its own builder. */
 export type ChartTemplate = {
   id: string;
   label: string;
-  build: (defaults: { token: string; chain?: string }) => ChartInstance;
+  build?: ChartTemplateBuild;
+  variants?: {
+    id: string;
+    label: string;
+    build: ChartTemplateBuild;
+  }[];
 };
 
 /** Cycle of canonical sizes the chart can be toggled through.
