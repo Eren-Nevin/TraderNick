@@ -222,7 +222,22 @@ export function sizeLines(under: number, over: number) {
 
 export type FundingRateBpsRow = FundingRateRow & { rate_bps: number };
 
-export type ChartKind = 'ohlcv' | 'oi' | 'fr' | 'bs' | 'sz' | 'tt' | 'ls' | 'transfer' | 'pc';
+export type ChartKind =
+  | 'ohlcv'
+  | 'oi'
+  | 'fr'
+  | 'bs'
+  | 'sz'
+  | 'tt'
+  | 'ls'
+  | 'transfer'
+  | 'pc'
+  | 'aave_deposit'
+  | 'aave_withdraw'
+  | 'aave_borrow'
+  | 'aave_repay'
+  | 'aave_flashloan'
+  | 'aave_liquidation';
 
 export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ohlcv: 'OHLCV',
@@ -233,7 +248,35 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   tt: 'Top Traders L/S',
   ls: 'Long/Short',
   transfer: 'Token Flow',
-  pc: 'Price Comparison'
+  pc: 'Price Comparison',
+  aave_deposit: 'AAVE Deposits',
+  aave_withdraw: 'AAVE Withdrawals',
+  aave_borrow: 'AAVE Borrows',
+  aave_repay: 'AAVE Repays',
+  aave_flashloan: 'AAVE Flash Loans',
+  aave_liquidation: 'AAVE Liquidations'
+};
+
+/** AAVE chart kinds collected for convenience (loop over them on the
+ *  lending page + share helpers). Order matters — used as the default
+ *  layout order on the Lending page. */
+export const AAVE_CHART_KINDS: ChartKind[] = [
+  'aave_deposit',
+  'aave_withdraw',
+  'aave_borrow',
+  'aave_repay',
+  'aave_flashloan',
+  'aave_liquidation'
+];
+
+/** Map from a ChartKind to the AAVE event slug the data_server expects. */
+export const AAVE_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  aave_deposit: 'deposit',
+  aave_withdraw: 'withdraw',
+  aave_borrow: 'borrow',
+  aave_repay: 'repay',
+  aave_flashloan: 'flashloan',
+  aave_liquidation: 'liquidation'
 };
 
 export type MAConfig = {
@@ -389,6 +432,12 @@ export function newChartInstance(
   }
   if (kind === 'pc') {
     base.overlayTokens = [];
+  }
+  if (AAVE_KIND_TO_EVENT[kind]) {
+    // AAVE charts behave like transfer charts — keyed by (chain, token) —
+    // so we surface the same selectors. Default eth_market is empty, which
+    // the data_server treats as "all markets".
+    base.chain = defaults.chain ?? 'ETH';
   }
   if (kind === 'transfer') {
     base.chain = defaults.chain ?? 'ETH';

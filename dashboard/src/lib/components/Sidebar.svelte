@@ -6,7 +6,8 @@
   let collapsed = $state(false);
   const links = [
     { href: '/trades', label: 'Trades', short: 'T' },
-    { href: '/flows', label: 'Flows', short: 'F' }
+    { href: '/flows', label: 'Flows', short: 'F' },
+    { href: '/lending', label: 'Lending', short: 'L' }
   ];
 
   onMount(() => themeStore.hydrate());

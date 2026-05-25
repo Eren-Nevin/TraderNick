@@ -35,6 +35,7 @@
     sizeSeries,
     unixSec,
     weekBoundariesSec,
+    AAVE_KIND_TO_EVENT,
     type ChartHeight,
     type ChartInstance as ChartInstanceT,
     type ChartWidth,
@@ -316,7 +317,10 @@
     instance.showWeekLines
       ? weekBoundariesSec(xExtent[0], xExtent[1]).map((t) => ({
           time: t,
-          color: '#a1a1aa',
+          // 8-char hex for alpha — zinc-400 at ~33% opacity. SVG stroke
+          // accepts #RRGGBBAA so we don't need a separate opacity prop on
+          // the chart components.
+          color: '#a1a1aa55',
           dash: '2,4'
         }))
       : []
@@ -355,6 +359,10 @@
       // cache key. Sorted so order-of-add doesn't bust the key.
       const ov = [...(instance.overlayTokens ?? [])].sort().join(',');
       return `${instance.kind}|${instance.token}|${instance.interval}|ov:${ov}`;
+    }
+    if (AAVE_KIND_TO_EVENT[instance.kind]) {
+      // AAVE charts depend on chain + token (event_type derived from kind).
+      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${instance.interval}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -487,11 +495,14 @@
     error = null;
     loading = true;
     try {
-      // Transfer kind uses a fixed 30-day window regardless of interval; other kinds use
-      // the per-interval lookback window.
+      // Transfer + AAVE event kinds use a fixed 30-day window regardless of
+      // interval (they're sparse compared to OHLCV); other kinds use the
+      // per-interval lookback window.
       let sinceIso: string;
       let untilIso: string;
-      if (instance.kind === 'transfer') {
+      const isWideWindowKind =
+        instance.kind === 'transfer' || (AAVE_KIND_TO_EVENT[instance.kind] !== undefined);
+      if (isWideWindowKind) {
         const now = new Date();
         const tu = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
         const ts = new Date(tu.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -512,6 +523,32 @@
 
       let url = '';
       let pickArr: (body: Record<string, unknown>) => AnyDatum[] = () => [];
+      // AAVE chart kinds all hit the same /api/aave/aggregate endpoint with
+      // a different `event=` param — handle them together up front to keep
+      // the per-kind switch tidy.
+      const aaveEvent = AAVE_KIND_TO_EVENT[instance.kind];
+      if (aaveEvent) {
+        const qs = new URLSearchParams({
+          event: aaveEvent,
+          chain: instance.chain ?? 'ETH',
+          token: instance.token,
+          interval: instance.interval,
+          since: sinceIso,
+          until: untilIso,
+          limit: '5000'
+        });
+        if (forceFresh) qs.set('fresh', '1');
+        const res = await queuedFetch(`/api/aave/aggregate?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = (body.series ?? []) as AnyDatum[];
+        since = sinceIso;
+        until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
       switch (instance.kind) {
         case 'ohlcv':
           url = `/api/ohlcv?${new URLSearchParams(baseQS)}`;
@@ -834,6 +871,22 @@
     ...cumulativeLines
   ]);
 
+  // AAVE event lines — same shape as the transfer chart: one cyan series of
+  // sum_value_usd per bucket, with the chart's MAs computed on it. Falls
+  // back to sum_amount for tokens without a USD valuation (rare).
+  let aaveLinesD = $derived([
+    ...(instance.showPoint
+      ? [{
+          key: 'main',
+          label: CHART_KIND_LABELS[instance.kind] ?? 'AAVE',
+          color: '#06b6d4',
+          compute: (d: Record<string, number>) =>
+            (d.sum_value_usd ?? 0) || (d.sum_amount ?? 0)
+        }]
+      : []),
+    ...cumulativeLines
+  ]);
+
   // bs / sz: bar series (Point toggle controls visibility)
   let bsBars = $derived(instance.showPoint ? BUYER_SELLER_SERIES : []);
   let szBars = $derived(
@@ -1030,7 +1083,27 @@
         instance.width === 1 ? 'flex-wrap' : ''
       ].join(' ')}
     >
-      {#if instance.kind === 'transfer'}
+      {#if AAVE_KIND_TO_EVENT[instance.kind]}
+        <!-- AAVE kinds: simple chain + token selectors. Token is free-text
+             because AAVE has tokens not in the transfer-streams catalogue
+             (USDE, USDS, GHO, etc.) -->
+        <select
+          bind:value={instance.chain}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          {#each ['ETH','ARB','BASE','BSC','POLYGON'] as c (c)}
+            <option value={c}>{c}</option>
+          {/each}
+        </select>
+        <input
+          type="text"
+          value={instance.token}
+          onchange={(e) => (instance.token = e.currentTarget.value.trim().toUpperCase())}
+          class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 uppercase"
+          spellcheck="false"
+          aria-label="Token symbol"
+        />
+      {:else if instance.kind === 'transfer'}
         <select
           bind:value={instance.chain}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-40 disabled:cursor-not-allowed"
@@ -1567,6 +1640,20 @@
       <LineChart
         data={data as TransferBucket[]}
         lines={transferLinesD}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
+      />
+    {:else if AAVE_KIND_TO_EVENT[instance.kind]}
+      <LineChart
+        data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
+        lines={aaveLinesD}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}

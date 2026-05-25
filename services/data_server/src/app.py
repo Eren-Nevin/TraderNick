@@ -1,5 +1,6 @@
 from sanic import Sanic, response
 
+from routes.aave import bp as aave_bp
 from routes.derivatives import bp as derivatives_bp
 from routes.groups import bp as groups_bp
 from routes.ohlcv import bp as ohlcv_bp
@@ -16,6 +17,7 @@ app.blueprint(derivatives_bp)
 app.blueprint(transfers_bp)
 app.blueprint(transfers_streams_bp)
 app.blueprint(groups_bp)
+app.blueprint(aave_bp)
 
 
 @app.get("/health")
