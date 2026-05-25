@@ -1334,38 +1334,6 @@
           title="Template — filter locked"
         >tpl</span>
       {/if}
-      {#if instance.width !== 1}
-        <span
-          class="hidden sm:inline-flex items-center gap-1 ml-1 px-2 py-0.5 rounded-md bg-zinc-800/70 border border-zinc-700/70 text-[10px] uppercase tracking-wider text-zinc-300"
-        >
-          {#if instance.kind === 'transfer'}
-            {#if activeChainGroup}
-              <span class="text-amber-300" title={activeChainGroup.description}>Σ</span>
-              <span class="text-zinc-300">{activeChainGroup.label}</span>
-              <span class="text-zinc-500">·</span>
-            {:else}
-              <span class="text-zinc-300">{instance.chain}</span>
-              <span class="text-zinc-500">·</span>
-            {/if}
-          {/if}
-          {#if isUniswapKind(instance.kind)}
-            <span class="text-zinc-300">{instance.chain}</span>
-            <span class="text-zinc-500">·</span>
-            {#if instance.uniPool}
-              <span class="text-zinc-100 font-medium">{fmtUniPool(instance.uniPool)}</span>
-            {:else}
-              <span class="text-zinc-500 italic">(no pool)</span>
-            {/if}
-          {:else if activeTokenGroup !== null}
-            <span class="text-amber-300" title="Token group">Σ</span>
-            <span class="text-zinc-100 font-medium">{instance.token}</span>
-          {:else}
-            <span class="text-zinc-100 font-medium">{instance.token}</span>
-          {/if}
-          <span class="text-zinc-500">·</span>
-          <span>{instance.interval}</span>
-        </span>
-      {/if}
     </button>
 
     <!-- Primary controls (always visible) -->
