@@ -214,7 +214,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   sz: 'Volume by Size',
   tt: 'Top Traders L/S',
   ls: 'Long/Short',
-  transfer: 'Transfer Volume'
+  transfer: 'Token Flow'
 };
 
 export type MAConfig = {
@@ -251,6 +251,14 @@ export type TransferFilters = {
   receiver_entity_ex?: string[];
   involving_entity_in?: string[];
   involving_entity_ex?: string[];
+  // Exact *address* filters. Case-insensitive for EVM (server lowercases
+  // any 0x-prefixed address before matching), case-sensitive for BTC / TRON.
+  sender_addr_in?: string[];
+  sender_addr_ex?: string[];
+  receiver_addr_in?: string[];
+  receiver_addr_ex?: string[];
+  involving_addr_in?: string[];
+  involving_addr_ex?: string[];
 };
 
 export type ChartWidth = 1 | 2 | 4;

@@ -18,12 +18,28 @@ _FILTER_KEYS = (
     "sender_entity_in", "sender_entity_ex",
     "receiver_entity_in", "receiver_entity_ex",
     "involving_entity_in", "involving_entity_ex",
+    "sender_addr_in", "sender_addr_ex",
+    "receiver_addr_in", "receiver_addr_ex",
+    "involving_addr_in", "involving_addr_ex",
 )
 _ENTITY_KEYS = (
     "sender_entity_in", "sender_entity_ex",
     "receiver_entity_in", "receiver_entity_ex",
     "involving_entity_in", "involving_entity_ex",
 )
+_ADDR_KEYS = (
+    "sender_addr_in", "sender_addr_ex",
+    "receiver_addr_in", "receiver_addr_ex",
+    "involving_addr_in", "involving_addr_ex",
+)
+
+
+def _normalize_addr(s: str) -> str:
+    """EVM addresses (0x-prefixed) are stored lowercase on insert, so we
+    lowercase user input to match. BTC / TRON addresses preserve case so
+    we leave them alone."""
+    s = s.strip()
+    return s.lower() if s.startswith("0x") else s
 _MAX_EXTRAS = 3
 
 bp = Blueprint("transfers")
@@ -215,6 +231,39 @@ def _build_wallet_predicate(
     return f"NOT {match_expr}", param
 
 
+def _build_addr_predicate(
+    side: str, action: str, addrs: list[str]
+) -> tuple[str, str] | None:
+    """Exact-address predicate over `sender` / `receiver`.
+
+    Address normalisation is done caller-side (_normalize_addr lowercases
+    0x-prefixed addresses, leaves BTC/TRON alone), so this is a plain
+    `<col> IN {param}` regardless of chain — the stored EVM addresses are
+    already lowercase. No materialized column needed; the chain prefix on
+    the order key already prunes the bulk of rows.
+
+    side   = 'sender' | 'receiver' | 'involving'
+    action = 'in' | 'ex'
+
+    Returns (sql_fragment, param_name) or None if no addresses.
+    """
+    if not addrs:
+        return None
+    param = f"{side}_{action}_addr"
+    pphold = f"{{{param}:Array(String)}}"
+
+    def match(col: str) -> str:
+        return f"{col} IN {pphold}"
+
+    if side == "involving":
+        expr = f"({match('sender')} OR {match('receiver')})"
+    else:
+        expr = match(side)
+    if action == "in":
+        return expr, param
+    return f"NOT {expr}", param
+
+
 # --- response cache ----------------------------------------------------------
 #
 # Aggregate responses are cached for AGG_CACHE_TTL seconds, keyed on the
@@ -383,6 +432,16 @@ async def aggregate(request):
         ("involving", "in", _parse_csv(request.args.get("involving_entity_in"))),
         ("involving", "ex", _parse_csv(request.args.get("involving_entity_ex"))),
     ]
+    # Exact-address filters. Normalised here (lower if 0x...) so the SQL
+    # comparison is a plain `IN {param}` against the stored value.
+    addr_specs = [
+        ("sender",    "in", [_normalize_addr(a) for a in _parse_csv(request.args.get("sender_addr_in"))]),
+        ("sender",    "ex", [_normalize_addr(a) for a in _parse_csv(request.args.get("sender_addr_ex"))]),
+        ("receiver",  "in", [_normalize_addr(a) for a in _parse_csv(request.args.get("receiver_addr_in"))]),
+        ("receiver",  "ex", [_normalize_addr(a) for a in _parse_csv(request.args.get("receiver_addr_ex"))]),
+        ("involving", "in", [_normalize_addr(a) for a in _parse_csv(request.args.get("involving_addr_in"))]),
+        ("involving", "ex", [_normalize_addr(a) for a in _parse_csv(request.args.get("involving_addr_ex"))]),
+    ]
     where_clauses: list[str] = []
     legacy_params: dict = {}
     for side, action, cats in cat_specs:
@@ -401,6 +460,13 @@ async def aggregate(request):
         sql_frag, param_name = pred
         where_clauses.append("AND " + sql_frag)
         legacy_params[param_name] = [str(v).lower() for v in vals]
+    for side, action, addrs in addr_specs:
+        pred = _build_addr_predicate(side, action, addrs)
+        if pred is None:
+            continue
+        sql_frag, param_name = pred
+        where_clauses.append("AND " + sql_frag)
+        legacy_params[param_name] = addrs
     where_extra_sql = "\n          ".join(where_clauses)
 
     # ---- New extras param: list of {id, filters} → one sumIf per extra ----

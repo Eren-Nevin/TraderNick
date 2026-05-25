@@ -241,7 +241,10 @@
             'involving_in', 'involving_ex',
             'sender_entity_in', 'sender_entity_ex',
             'receiver_entity_in', 'receiver_entity_ex',
-            'involving_entity_in', 'involving_entity_ex'
+            'involving_entity_in', 'involving_entity_ex',
+            'sender_addr_in', 'sender_addr_ex',
+            'receiver_addr_in', 'receiver_addr_ex',
+            'involving_addr_in', 'involving_addr_ex'
           ]) {
             const v = rf[k];
             if (Array.isArray(v)) {

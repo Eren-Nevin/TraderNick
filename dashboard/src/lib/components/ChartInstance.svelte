@@ -156,7 +156,10 @@
     | 'involving_in' | 'involving_ex'
     | 'sender_entity_in' | 'sender_entity_ex'
     | 'receiver_entity_in' | 'receiver_entity_ex'
-    | 'involving_entity_in' | 'involving_entity_ex';
+    | 'involving_entity_in' | 'involving_entity_ex'
+    | 'sender_addr_in' | 'sender_addr_ex'
+    | 'receiver_addr_in' | 'receiver_addr_ex'
+    | 'involving_addr_in' | 'involving_addr_ex';
   const CAT_FILTER_KEYS: FilterKey[] = [
     'sender_in', 'sender_ex',
     'receiver_in', 'receiver_ex',
@@ -167,7 +170,12 @@
     'receiver_entity_in', 'receiver_entity_ex',
     'involving_entity_in', 'involving_entity_ex'
   ];
-  const FILTER_KEYS: FilterKey[] = [...CAT_FILTER_KEYS, ...ENT_FILTER_KEYS];
+  const ADDR_FILTER_KEYS: FilterKey[] = [
+    'sender_addr_in', 'sender_addr_ex',
+    'receiver_addr_in', 'receiver_addr_ex',
+    'involving_addr_in', 'involving_addr_ex'
+  ];
+  const FILTER_KEYS: FilterKey[] = [...CAT_FILTER_KEYS, ...ENT_FILTER_KEYS, ...ADDR_FILTER_KEYS];
   const EMPTY_PENDING: Record<FilterKey, string> = {
     sender_in: '',
     sender_ex: '',
@@ -180,7 +188,13 @@
     receiver_entity_in: '',
     receiver_entity_ex: '',
     involving_entity_in: '',
-    involving_entity_ex: ''
+    involving_entity_ex: '',
+    sender_addr_in: '',
+    sender_addr_ex: '',
+    receiver_addr_in: '',
+    receiver_addr_ex: '',
+    involving_addr_in: '',
+    involving_addr_ex: ''
   };
   let pendingFilter = $state<Record<FilterKey, string>>({ ...EMPTY_PENDING });
 
@@ -1331,6 +1345,48 @@
                 bind:value={pendingFilter[`${side}_entity_ex` as FilterKey]}
                 placeholder="✘ exclude"
                 class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+              />
+            </div>
+          {/if}
+        {/each}
+
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500 pt-2">
+          Addresses
+          <span class="text-zinc-600 normal-case">
+            — exact match, comma-separated. Case-insensitive for EVM (0x…), case-sensitive for BTC / TRON.
+          </span>
+        </div>
+        {#each [['sender', 'Sender'], ['receiver', 'Receiver'], ['involving', 'Either']] as [side, label]}
+          {#if instance.width === 1}
+            <div class="space-y-1">
+              <div class="text-zinc-400">{label}</div>
+              <input
+                type="text"
+                bind:value={pendingFilter[`${side}_addr_in` as FilterKey]}
+                placeholder="✔ include"
+                class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-mono text-zinc-100"
+              />
+              <input
+                type="text"
+                bind:value={pendingFilter[`${side}_addr_ex` as FilterKey]}
+                placeholder="✘ exclude"
+                class="w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-mono text-zinc-100"
+              />
+            </div>
+          {:else}
+            <div class="grid grid-cols-[60px_1fr_1fr] items-center gap-2">
+              <span class="text-zinc-400">{label}</span>
+              <input
+                type="text"
+                bind:value={pendingFilter[`${side}_addr_in` as FilterKey]}
+                placeholder="✔ include"
+                class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-mono text-zinc-100"
+              />
+              <input
+                type="text"
+                bind:value={pendingFilter[`${side}_addr_ex` as FilterKey]}
+                placeholder="✘ exclude"
+                class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-mono text-zinc-100"
               />
             </div>
           {/if}
