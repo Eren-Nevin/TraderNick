@@ -437,7 +437,7 @@ export function newChartInstance(
         : `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     kind,
     width: 2,
-    height: 2,
+    height: 1,
     token: defaults.token,
     interval: '1h',
     showPoint: true,
