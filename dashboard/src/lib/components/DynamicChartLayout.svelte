@@ -381,8 +381,8 @@
       style="grid-column: span {inst.width}; grid-row: span {inst.height};"
       class="relative insert-host"
     >
-      <!-- "+" hover zone sitting in the row-gap above this chart. Clicking
-           opens the insert menu pre-set to insert *before* this chart. -->
+      <!-- "+" hover zone sitting in the column-gap to the left of this chart.
+           Clicking opens the insert menu pre-set to insert *before* this chart. -->
       <button
         type="button"
         class="insert-plus"
@@ -513,20 +513,20 @@
 
 <style>
   /* Insert-between-charts affordance. Each chart wrapper hosts an absolute
-     button overhanging the row gap above it. The button is invisible until
-     the wrapper is hovered, at which point a small "+" circle appears
-     centred at the top.
+     button overhanging the column gap to the LEFT of it. The button is
+     invisible until the wrapper is hovered, at which point a small "+"
+     circle appears centred along the left edge.
 
-     The hit area is wider than the visible circle (full chart width × 24px
-     tall) so a casual hover near the top of the chart triggers it. The
+     The hit area is taller than the visible circle (24px wide × full chart
+     height) so a casual hover near the left of the chart triggers it. The
      circle uses pointer-events: none so the click target is the whole bar,
      not just the dot. */
   .insert-host > .insert-plus {
     position: absolute;
-    top: -16px;
-    left: 0;
-    right: 0;
-    height: 24px;
+    left: -16px;
+    top: 0;
+    bottom: 0;
+    width: 24px;
     z-index: 20;
     display: flex;
     align-items: center;
