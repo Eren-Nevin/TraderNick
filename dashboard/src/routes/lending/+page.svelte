@@ -18,7 +18,7 @@
     // user can swap token/chain per chart.
     return AAVE_CHART_KINDS.map((kind) => {
       const inst = newChartInstance(kind, { token: 'USDC', chain: 'ETH' });
-      inst.interval = '1h';
+      inst.interval = '4h';
       return inst;
     });
   }

@@ -22,10 +22,10 @@ const DEFAULT_LOOKBACK_DAYS: Record<Interval, number> = {
 
 export const load: PageServerLoad = async ({ url, fetch }) => {
   const token = url.searchParams.get('token') ?? 'BTC';
-  const intervalParam = url.searchParams.get('interval') ?? '1h';
+  const intervalParam = url.searchParams.get('interval') ?? '4h';
   const interval: Interval = (INTERVALS as readonly string[]).includes(intervalParam)
     ? (intervalParam as Interval)
-    : '1h';
+    : '4h';
   const under = Number(url.searchParams.get('under') ?? '10000');
   const over = Number(url.searchParams.get('over') ?? '100000');
 

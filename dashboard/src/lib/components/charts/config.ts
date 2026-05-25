@@ -439,7 +439,7 @@ export function newChartInstance(
     width: 2,
     height: 1,
     token: defaults.token,
-    interval: '1h',
+    interval: '4h',
     showPoint: true,
     mas: defaultMAs()
   };
