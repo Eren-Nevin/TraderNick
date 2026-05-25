@@ -391,7 +391,7 @@
         title="Insert chart here"
         onclick={(e) => openInsertAt(idx, e)}
       >
-        <PlusCircle size={22} strokeWidth={1.5} class="insert-plus-icon" />
+        <PlusCircle size={16} strokeWidth={1.5} class="insert-plus-icon" />
       </button>
       <ChartInstance
         bind:instance={instances[idx]}
