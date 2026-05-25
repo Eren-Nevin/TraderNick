@@ -362,9 +362,10 @@
     }
     if (AAVE_KIND_TO_EVENT[instance.kind]) {
       // AAVE charts depend on chain + token (event_type derived from kind).
-      // Token may be a token-group name — fold the group flag into the key.
+      // Either axis may be a group name — fold the group flag into the key.
+      const cPart = activeChainGroup ? `cg:${activeChainGroup.name}` : (instance.chain ?? '');
       const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
-      return `${instance.kind}|${instance.chain ?? ''}|${tPart}|${instance.interval}`;
+      return `${instance.kind}|${cPart}|${tPart}|${instance.interval}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -533,12 +534,16 @@
       if (aaveEvent) {
         const qs = new URLSearchParams({
           event: aaveEvent,
-          chain: instance.chain ?? 'ETH',
           interval: instance.interval,
           since: sinceIso,
           until: untilIso,
           limit: '5000'
         });
+        if (activeChainGroup) {
+          qs.set('chain_group', activeChainGroup.name);
+        } else {
+          qs.set('chain', instance.chain ?? 'ETH');
+        }
         if (activeTokenGroup !== null) {
           qs.set('token_group', activeTokenGroup);
         } else {
@@ -1091,16 +1096,30 @@
       ].join(' ')}
     >
       {#if AAVE_KIND_TO_EVENT[instance.kind]}
-        <!-- AAVE kinds: chain dropdown (5 EVMs) + token <select> with a
-             "Token group" optgroup so the user can pick e.g. "USDC+USDT"
-             or "Stables" and the chart sums across the group's members. -->
+        <!-- AAVE kinds: chain dropdown (5 EVMs + chain groups) + token
+             <select> with a "Token group" optgroup so the user can pick
+             e.g. "USDC+USDT" or "Stables" and the chart sums across the
+             group's members. -->
         <select
           bind:value={instance.chain}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
         >
-          {#each ['ETH','ARB','BASE','BSC','POLYGON'] as c (c)}
-            <option value={c}>{c}</option>
-          {/each}
+          {#if chainGroups.length > 0}
+            <optgroup label="Chain">
+              {#each ['ETH','ARB','BASE','BSC','POLYGON'] as c (c)}
+                <option value={c}>{c}</option>
+              {/each}
+            </optgroup>
+            <optgroup label="Chain group">
+              {#each chainGroups as g (g.name)}
+                <option value={g.name} title={g.description}>Σ {g.label}</option>
+              {/each}
+            </optgroup>
+          {:else}
+            {#each ['ETH','ARB','BASE','BSC','POLYGON'] as c (c)}
+              <option value={c}>{c}</option>
+            {/each}
+          {/if}
         </select>
         <select
           value={instance.token}
