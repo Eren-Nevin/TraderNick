@@ -2,6 +2,7 @@
   import { onMount } from 'svelte';
   import { flip } from 'svelte/animate';
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
+  import PlusCircle from '@lucide/svelte/icons/plus-circle';
   import ChartInstance from '$lib/components/ChartInstance.svelte';
   import {
     CHART_KIND_LABELS,
@@ -390,7 +391,7 @@
         title="Insert chart here"
         onclick={(e) => openInsertAt(idx, e)}
       >
-        <span class="insert-plus-dot">+</span>
+        <PlusCircle size={22} strokeWidth={1.5} class="insert-plus-icon" />
       </button>
       <ChartInstance
         bind:instance={instances[idx]}
@@ -548,27 +549,14 @@
   .insert-host > .insert-plus:focus-visible {
     opacity: 1;
   }
-  .insert-plus-dot {
+  /* The icon (PlusCircle from lucide) is a single SVG so a colour change
+     on the stroke is all we need for the hover state. */
+  :global(.insert-plus .insert-plus-icon) {
     pointer-events: none;
-    width: 22px;
-    height: 22px;
-    border-radius: 9999px;
-    background-color: rgb(24 24 27);            /* zinc-900 */
-    border: 1px solid rgb(82 82 91);            /* zinc-600 */
-    color: rgb(228 228 231);                    /* zinc-200 */
-    /* Flexbox centres the glyph geometrically — inline-block + line-height
-       leaves the "+" slightly low because the character's visual centre
-       sits above its baseline. */
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-size: 18px;
-    line-height: 1;
-    transition: background-color 120ms, border-color 120ms;
+    color: rgb(161 161 170);                    /* zinc-400 */
+    transition: color 120ms;
   }
-  .insert-host > .insert-plus:hover .insert-plus-dot {
-    background-color: rgb(59 130 246 / 0.25);   /* blue-500/25 */
-    border-color: rgb(96 165 250);              /* blue-400 */
-    color: rgb(219 234 254);                    /* blue-100 */
+  .insert-host > .insert-plus:hover :global(.insert-plus-icon) {
+    color: rgb(96 165 250);                     /* blue-400 */
   }
 </style>
