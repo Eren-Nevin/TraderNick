@@ -43,7 +43,11 @@
 
   const MAX_CHARTS = 10;
   const FLIP_MS = 250;
-  const KNOWN_KINDS: ChartKind[] = ['ohlcv', 'oi', 'fr', 'bs', 'sz', 'tt', 'ls', 'transfer'];
+  // Drive the validator off CHART_KIND_LABELS so adding a new ChartKind
+  // doesn't silently invalidate every saved layout that uses it. (Previous
+  // hand-maintained list missed `pc` and every `aave_*` — sanitize() would
+  // return null for the whole layout if any one chart was an AAVE kind.)
+  const KNOWN_KINDS = Object.keys(CHART_KIND_LABELS) as ChartKind[];
 
   let instances = $state<ChartInstanceT[]>(defaultLayout());
   let hydrated = $state(false);
