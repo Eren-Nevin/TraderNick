@@ -556,10 +556,14 @@
     background-color: rgb(24 24 27);            /* zinc-900 */
     border: 1px solid rgb(82 82 91);            /* zinc-600 */
     color: rgb(228 228 231);                    /* zinc-200 */
-    font-size: 22px;
-    line-height: 20px;
-    text-align: center;
-    display: inline-block;
+    /* Flexbox centres the glyph geometrically — inline-block + line-height
+       leaves the "+" slightly low because the character's visual centre
+       sits above its baseline. */
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+    line-height: 1;
     transition: background-color 120ms, border-color 120ms;
   }
   .insert-host > .insert-plus:hover .insert-plus-dot {
