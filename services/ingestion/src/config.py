@@ -43,6 +43,13 @@ def _parse_csv_list(raw: str) -> list[str]:
     return [s.strip().upper() for s in raw.split(",") if s.strip()]
 
 
+def _parse_csv_list_raw(raw: str) -> list[str]:
+    """Like _parse_csv_list but preserves casing — used where the API
+    expects exact tokens (e.g. AAVE eth_market_type accepts 'Core' /
+    'Prime' / 'EtherFi' but rejects the uppercased forms)."""
+    return [s.strip() for s in raw.split(",") if s.strip()]
+
+
 EVM_ERC20_PAIRS = _parse_chain_token_pairs(
     os.environ.get(
         "EVM_ERC20_TRANSFERS",
@@ -53,3 +60,11 @@ EVM_NATIVE_CHAINS = _parse_csv_list(os.environ.get("EVM_NATIVE_TRANSFERS", ""))
 BTC_TRANSFERS_ENABLED = os.environ.get("BTC_TRANSFERS_ENABLED", "1") == "1"
 TRON_NATIVE_TRANSFERS_ENABLED = os.environ.get("TRON_NATIVE_TRANSFERS_ENABLED", "1") == "1"
 TRON_TRC20_TOKENS = _parse_csv_list(os.environ.get("TRON_TRC20_TRANSFERS", "USDT"))
+
+# AAVE v3 — chains + ETH-only market types. Live polling iterates the
+# cross product (chain, eth_market) × (deposit/withdraw/borrow/repay/
+# flashloan/liquidation). eth_market is honoured only on ETH; on other
+# chains we issue a single call per event.
+AAVE_EVENTS_CHAINS = _parse_csv_list(os.environ.get("AAVE_EVENTS_CHAINS", ""))
+AAVE_ETH_MARKETS = _parse_csv_list_raw(os.environ.get("AAVE_ETH_MARKETS", "Core,Prime,EtherFi"))
+AAVE_EVENTS_ENABLED = os.environ.get("AAVE_EVENTS_ENABLED", "1") == "1"

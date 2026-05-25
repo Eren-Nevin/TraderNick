@@ -17,6 +17,7 @@ GROUP_MODULES = {
     "btc_transfers": "groups.btc_transfers",
     "tron_native_transfers": "groups.tron_native_transfers",
     "tron_trc20_transfers": "groups.tron_trc20_transfers",
+    "aave_events": "groups.aave_events",
 }
 
 

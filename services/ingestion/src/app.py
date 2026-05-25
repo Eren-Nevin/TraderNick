@@ -18,6 +18,7 @@ from jobs.manager import (
     JOB_TYPE_BACKFILL_OHLCV,
     JOB_TYPE_BACKFILL_OPEN_INTEREST,
     JOB_TYPE_BACKFILL_RAW_TRADES,
+    JOB_TYPE_BACKFILL_AAVE_EVENTS,
     JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS,
     JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS,
     JobManager,
@@ -76,6 +77,7 @@ async def startup(app_, _loop):
         "btc_transfers",
         "tron_native_transfers",
         "tron_trc20_transfers",
+        "aave_events",
     ])
     app_.ctx.jobs = JobManager()
     try:
@@ -229,6 +231,38 @@ async def backfill_tron_native_transfers(request):
 @app.post("/jobs/backfill/tron_trc20_transfers")
 async def backfill_tron_trc20_transfers(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS, _extract_tokens)
+
+
+_AAVE_VALID_EVENTS = ("deposit", "withdraw", "borrow", "repay", "flashloan", "liquidation")
+_AAVE_VALID_MARKETS = ("Core", "Prime", "EtherFi")
+
+
+def _extract_aave_events(body):
+    chains = body.get("chains") or config.AAVE_EVENTS_CHAINS
+    if not chains or not isinstance(chains, list):
+        return "missing chains (list)", None
+    events = body.get("events") or list(_AAVE_VALID_EVENTS)
+    if not isinstance(events, list):
+        return "events must be a list", None
+    unknown_events = [e for e in events if e not in _AAVE_VALID_EVENTS]
+    if unknown_events:
+        return f"unknown events: {unknown_events}", None
+    eth_markets = body.get("eth_markets") or list(config.AAVE_ETH_MARKETS)
+    if not isinstance(eth_markets, list):
+        return "eth_markets must be a list", None
+    unknown_markets = [m for m in eth_markets if m not in _AAVE_VALID_MARKETS]
+    if unknown_markets:
+        return f"unknown eth_markets: {unknown_markets}", None
+    return None, {
+        "chains": [str(c).upper() for c in chains],
+        "events": list(events),
+        "eth_markets": list(eth_markets),
+    }
+
+
+@app.post("/jobs/backfill/aave_events")
+async def backfill_aave_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AAVE_EVENTS, _extract_aave_events)
 
 
 @app.post("/admin/wallets")
