@@ -86,6 +86,15 @@ def _is_rate_limit(exc: Exception) -> bool:
     return "too many requests" in msg or "429" in msg or "rate limit" in msg
 
 
+def _is_pool_not_found(exc: Exception) -> bool:
+    """DeFiStream returns a 400/404 with this message when a pool we've
+    configured doesn't exist (wrong fee tier, never deployed on that chain,
+    etc.). We mark the pool dead and move on rather than failing the whole
+    backfill — a typo in UNI_V3_POOLS shouldn't strand 30 days of data."""
+    msg = str(exc).lower()
+    return "pool not found" in msg or "not available" in msg
+
+
 def _planned_chunks(pools, events, since, until):
     chunks = []
     step = timedelta(hours=CHUNK_HOURS)
@@ -185,6 +194,10 @@ async def main(job_id: str):
         log.info("job %s force purge done", job_id)
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
+    # Track (chain, sym0, sym1, fee) pools that have returned "pool not found"
+    # — skip every remaining chunk for that pool instead of hitting the API
+    # 24 more times to get the same error.
+    dead_pools: set[tuple[str, str, str, int]] = set()
     try:
         for chain, sym0, sym1, fee, event, cs, ce in chunks:
             if _stop:
@@ -196,12 +209,30 @@ async def main(job_id: str):
             key = (chain, sym0, sym1, fee, event, cs.isoformat())
             if key in completed_set:
                 continue
+            pool_key = (chain, sym0, sym1, fee)
             label = f"{chain}/{sym0}-{sym1}-{fee}/{event}"
+            if pool_key in dead_pools:
+                log.info("job %s chunk %s SKIP (dead pool)", job_id, label)
+                completed_set.add(key)
+                done += 1
+                continue
             log.info("job %s chunk %s %s..%s", job_id, label, cs, ce)
-            n = await _fetch_chunk(
-                ds, chain=chain, symbol0=sym0, symbol1=sym1, fee_tier=fee,
-                event=event, since=cs, until=ce,
-            )
+            try:
+                n = await _fetch_chunk(
+                    ds, chain=chain, symbol0=sym0, symbol1=sym1, fee_tier=fee,
+                    event=event, since=cs, until=ce,
+                )
+            except Exception as exc:
+                if _is_pool_not_found(exc):
+                    log.warning(
+                        "job %s pool %s/%s/%s/%d not on DeFiStream — skipping remaining chunks: %s",
+                        job_id, chain, sym0, sym1, fee, exc,
+                    )
+                    dead_pools.add(pool_key)
+                    completed_set.add(key)
+                    done += 1
+                    continue
+                raise
             log.info("job %s chunk %s rows=%d", job_id, label, n)
             completed_set.add(key)
             done += 1
