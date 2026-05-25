@@ -523,10 +523,15 @@
      not just the dot. */
   .insert-host > .insert-plus {
     position: absolute;
-    left: -16px;
+    /* The grid gap between items is 1.5rem (gap-6 = 24px). Span the full
+       width of that gap so the "+" is centred in the empty space, not
+       overlapping the chart card. For first-column wrappers (no gap to
+       the left, only page margin), the button still renders cleanly in
+       that whitespace. */
+    left: -1.5rem;
     top: 0;
     bottom: 0;
-    width: 24px;
+    width: 1.5rem;
     z-index: 20;
     display: flex;
     align-items: center;
