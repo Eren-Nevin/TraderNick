@@ -204,7 +204,7 @@ export function sizeLines(under: number, over: number) {
 
 export type FundingRateBpsRow = FundingRateRow & { rate_bps: number };
 
-export type ChartKind = 'ohlcv' | 'oi' | 'fr' | 'bs' | 'sz' | 'tt' | 'ls' | 'transfer';
+export type ChartKind = 'ohlcv' | 'oi' | 'fr' | 'bs' | 'sz' | 'tt' | 'ls' | 'transfer' | 'pc';
 
 export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ohlcv: 'OHLCV',
@@ -214,7 +214,8 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   sz: 'Volume by Size',
   tt: 'Top Traders L/S',
   ls: 'Long/Short',
-  transfer: 'Token Flow'
+  transfer: 'Token Flow',
+  pc: 'Price Comparison'
 };
 
 export type MAConfig = {
@@ -280,12 +281,10 @@ export type ChartInstance = {
   overInput?: string;
   // ohlcv only
   pin?: boolean;
-  /** Other tokens to overlay as `close`-price lines on the OHLCV chart.
-   *  Each entry triggers an extra /api/ohlcv fetch with the same time
-   *  window. When any are present the chart switches to "compare mode":
-   *  candles disappear, the main token becomes a line, every series is
-   *  rebased to % change from the leftmost data point, and the Y axis
-   *  reads as %. (TradingView "Compare" semantics.) */
+  // pc (Price Comparison) only — list of tokens to compare alongside
+  // `instance.token`. Each one is fetched via /api/ohlcv and added as a
+  // rebased % line. The primary `instance.token` is itself one of the
+  // lines, anchored at the leftmost data point of its own series.
   overlayTokens?: string[];
   // transfer only
   chain?: string;
@@ -365,6 +364,9 @@ export function newChartInstance(
   }
   if (kind === 'ohlcv') {
     base.pin = false;
+  }
+  if (kind === 'pc') {
+    base.overlayTokens = [];
   }
   if (kind === 'transfer') {
     base.chain = defaults.chain ?? 'ETH';
