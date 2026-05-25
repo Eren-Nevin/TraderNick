@@ -1075,8 +1075,8 @@
         ? 240
         : 270
       : instance.width === 1
-        ? 550
-        : 580
+        ? 530
+        : 560
   );
 
   // Encode/decode (width, height) as a single string so we can drive the
