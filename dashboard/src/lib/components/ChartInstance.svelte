@@ -1065,15 +1065,18 @@
   // ---- width toggle ----
   // Chart canvas height in px — driven by instance.height (1 row vs 2 rows)
   // and instance.width (because a 1-col panel uses a taller two-row header so
-  // less vertical space is left for the chart canvas).
+  // less vertical space is left for the chart canvas). Each grid row is
+  // 320px (see DynamicChartLayout), so a height=2 panel is 640px total —
+  // header takes ~52px and we leave a few px for the indeterminate-load
+  // strip and border.
   let chartCanvasHeight = $derived(
     instance.height === 1
       ? instance.width === 1
         ? 240
         : 270
       : instance.width === 1
-        ? 510
-        : 540
+        ? 550
+        : 580
   );
 
   // Encode/decode (width, height) as a single string so we can drive the
