@@ -1062,22 +1062,15 @@
     instance.over = o;
   }
 
-  // ---- width toggle ----
-  // Chart canvas height in px — driven by instance.height (1 row vs 2 rows)
-  // and instance.width (because a 1-col panel uses a taller two-row header so
-  // less vertical space is left for the chart canvas). Each grid row is
-  // 320px (see DynamicChartLayout), so a height=2 panel is 640px total —
-  // header takes ~52px and we leave a few px for the indeterminate-load
-  // strip and border.
-  let chartCanvasHeight = $derived(
-    instance.height === 1
-      ? instance.width === 1
-        ? 240
-        : 270
-      : instance.width === 1
-        ? 530
-        : 560
-  );
+  // ---- chart-area sizing ----
+  // The chart canvas fills whatever's left of the panel after the header.
+  // `bind:clientHeight` on the wrapper below feeds the measured height in
+  // here; we subtract the loadbar's 2px and clamp to a sensible minimum so
+  // the chart still has somewhere to draw before the first layout pass.
+  // This makes every size combo (1×1 / 2×1 / 4×1 / 1×2 / 2×2 / 4×2) just
+  // fit by construction — no more per-cell hand-tuned canvas heights.
+  let chartAreaHeight = $state(0);
+  let chartCanvasHeight = $derived(Math.max(140, chartAreaHeight - 2));
 
   // Encode/decode (width, height) as a single string so we can drive the
   // <select> with a normal bind-style onchange. Mirrors SIZE_CYCLE order.
@@ -1318,7 +1311,7 @@
   </div>
 
   {#if !collapsed}
-  <div class="flex-1 relative min-h-0">
+  <div class="flex-1 relative min-h-0" bind:clientHeight={chartAreaHeight}>
 
   {#if settingsOpen}
     <div class="absolute inset-0 z-20 bg-zinc-950/95 overflow-y-auto">
