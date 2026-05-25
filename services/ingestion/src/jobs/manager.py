@@ -22,6 +22,7 @@ JOB_TYPE_BACKFILL_BTC_TRANSFERS = "backfill_btc_transfers"
 JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS = "backfill_tron_native_transfers"
 JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS = "backfill_tron_trc20_transfers"
 JOB_TYPE_BACKFILL_AAVE_EVENTS = "backfill_aave_events"
+JOB_TYPE_BACKFILL_UNISWAP_EVENTS = "backfill_uniswap_events"
 JOB_MODULES = {
     JOB_TYPE_BACKFILL_OHLCV: "jobs.backfill_binance_ohlcv",
     JOB_TYPE_BACKFILL_RAW_TRADES: "jobs.backfill_binance_raw_trades",
@@ -34,6 +35,7 @@ JOB_MODULES = {
     JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS: "jobs.backfill_tron_native_transfers",
     JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS: "jobs.backfill_tron_trc20_transfers",
     JOB_TYPE_BACKFILL_AAVE_EVENTS: "jobs.backfill_aave_events",
+    JOB_TYPE_BACKFILL_UNISWAP_EVENTS: "jobs.backfill_uniswap_events",
 }
 
 

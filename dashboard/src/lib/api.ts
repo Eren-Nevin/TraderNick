@@ -73,6 +73,19 @@ export type TransferStream = {
   token: string;
 };
 
+/** One pool exposed by /uniswap/streams. The 4-tuple (chain, symbol0,
+ *  symbol1, fee_tier) uniquely identifies a pool — `rows` is the count
+ *  of rows for the listed `event` so the dashboard can prioritise pools
+ *  that actually have data. */
+export type UniswapStream = {
+  event: string;
+  chain: string;
+  symbol0: string;
+  symbol1: string;
+  fee_tier: number;
+  rows: number;
+};
+
 /** A server-defined token group — a named bundle of token symbols
  *  (e.g. "Stables" = USDC + USDT + DAI + USDE). At query time the
  *  backend cross-products this with whatever chain selection is in

@@ -239,7 +239,13 @@ export type ChartKind =
   | 'aave_repay'
   | 'aave_net_borrow'
   | 'aave_flashloan'
-  | 'aave_liquidation';
+  | 'aave_liquidation'
+  | 'uniswap_swap'
+  | 'uniswap_deposit'
+  | 'uniswap_withdraw'
+  | 'uniswap_collect'
+  | 'uniswap_net_liquidity'
+  | 'uniswap_net_swap_flow';
 
 export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ohlcv: 'OHLCV',
@@ -258,7 +264,13 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   aave_repay: 'AAVE Repays',
   aave_net_borrow: 'AAVE Net Borrow',
   aave_flashloan: 'AAVE Flash Loans',
-  aave_liquidation: 'AAVE Liquidations'
+  aave_liquidation: 'AAVE Liquidations',
+  uniswap_swap: 'Uniswap Swaps',
+  uniswap_deposit: 'Uniswap Deposits',
+  uniswap_withdraw: 'Uniswap Withdrawals',
+  uniswap_collect: 'Uniswap Collects',
+  uniswap_net_liquidity: 'Uniswap Net Liquidity',
+  uniswap_net_swap_flow: 'Uniswap Net Swap Flow'
 };
 
 /** AAVE chart kinds collected for convenience (loop over them on the
@@ -299,6 +311,54 @@ export function isAaveKind(kind: ChartKind): boolean {
     AAVE_KIND_TO_EVENT[kind] !== undefined ||
     AAVE_NET_KIND_TO_EVENTS[kind] !== undefined
   );
+}
+
+/** Uniswap chart kinds collected for the DeX page (default layout order). */
+export const UNISWAP_CHART_KINDS: ChartKind[] = [
+  'uniswap_swap',
+  'uniswap_deposit',
+  'uniswap_withdraw',
+  'uniswap_collect',
+  'uniswap_net_liquidity',
+  'uniswap_net_swap_flow'
+];
+
+/** Map from a single-event Uniswap kind → the data_server event slug. */
+export const UNISWAP_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  uniswap_swap: 'swap',
+  uniswap_deposit: 'deposit',
+  uniswap_withdraw: 'withdraw',
+  uniswap_collect: 'collect'
+};
+
+/** Net Uniswap kinds — net_liquidity fetches two endpoints (deposit +
+ *  withdraw); net_swap_flow uses the swap endpoint's directional split
+ *  via sum_value_usd_t0t1 − sum_value_usd_t1t0 (no second fetch). */
+export const UNISWAP_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  uniswap_net_liquidity: ['deposit', 'withdraw']
+};
+
+/** True for any Uniswap kind (single-event, net-liquidity, net-swap-flow). */
+export function isUniswapKind(kind: ChartKind): boolean {
+  return (
+    UNISWAP_KIND_TO_EVENT[kind] !== undefined ||
+    UNISWAP_NET_KIND_TO_EVENTS[kind] !== undefined ||
+    kind === 'uniswap_net_swap_flow'
+  );
+}
+
+/** Uniswap V3 pool identity carried on each Uniswap chart instance. The
+ *  three fields together uniquely identify a pool within a chain — the
+ *  chain itself is stored separately in `ChartInstance.chain`. */
+export type UniPool = {
+  symbol0: string;
+  symbol1: string;
+  fee: number;
+};
+
+/** Format a pool for menus/headers: "WETH/USDC 0.05%". */
+export function fmtUniPool(p: UniPool): string {
+  return `${p.symbol0}/${p.symbol1} ${(p.fee / 10000).toFixed(2)}%`;
 }
 
 export type MAConfig = {
@@ -373,8 +433,10 @@ export type ChartInstance = {
   // rebased % line. The primary `instance.token` is itself one of the
   // lines, anchored at the leftmost data point of its own series.
   overlayTokens?: string[];
-  // transfer only
+  // transfer / aave / uniswap — every event-stream kind that selects a chain
   chain?: string;
+  // uniswap_* only: the pool (symbol0/symbol1/fee) on the selected chain
+  uniPool?: UniPool;
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -465,6 +527,12 @@ export function newChartInstance(
   if (kind === 'transfer') {
     base.chain = defaults.chain ?? 'ETH';
     base.filter = {};
+  }
+  if (isUniswapKind(kind)) {
+    base.chain = defaults.chain ?? 'ETH';
+    // Conservative default: canonical USDC/WETH 0.05%. The page-level loader
+    // will replace this with the first available pool from /uniswap/streams.
+    base.uniPool = { symbol0: 'USDC', symbol1: 'WETH', fee: 500 };
   }
   return base;
 }

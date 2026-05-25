@@ -19,6 +19,7 @@ from jobs.manager import (
     JOB_TYPE_BACKFILL_OPEN_INTEREST,
     JOB_TYPE_BACKFILL_RAW_TRADES,
     JOB_TYPE_BACKFILL_AAVE_EVENTS,
+    JOB_TYPE_BACKFILL_UNISWAP_EVENTS,
     JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS,
     JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS,
     JobManager,
@@ -78,6 +79,7 @@ async def startup(app_, _loop):
         "tron_native_transfers",
         "tron_trc20_transfers",
         "aave_events",
+        "uniswap_events",
     ])
     app_.ctx.jobs = JobManager()
     try:
@@ -263,6 +265,39 @@ def _extract_aave_events(body):
 @app.post("/jobs/backfill/aave_events")
 async def backfill_aave_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AAVE_EVENTS, _extract_aave_events)
+
+
+_UNI_VALID_EVENTS = ("swap", "deposit", "withdraw", "collect")
+
+
+def _extract_uniswap_events(body):
+    pools = body.get("pools")
+    if pools is None:
+        pools = [[c, s0, s1, fee] for (c, s0, s1, fee) in config.UNI_V3_POOLS]
+    if not pools or not isinstance(pools, list):
+        return "missing pools (list of [chain, symbol0, symbol1, fee])", None
+    norm: list[list] = []
+    for p in pools:
+        if not isinstance(p, list) or len(p) != 4:
+            return "each pool must be [chain, symbol0, symbol1, fee]", None
+        try:
+            fee = int(p[3])
+        except (TypeError, ValueError):
+            return f"fee must be an int, got {p[3]!r}", None
+        sym0, sym1 = sorted([str(p[1]).upper(), str(p[2]).upper()])
+        norm.append([str(p[0]).upper(), sym0, sym1, fee])
+    events = body.get("events") or list(_UNI_VALID_EVENTS)
+    if not isinstance(events, list):
+        return "events must be a list", None
+    unknown = [e for e in events if e not in _UNI_VALID_EVENTS]
+    if unknown:
+        return f"unknown events: {unknown}", None
+    return None, {"pools": norm, "events": list(events)}
+
+
+@app.post("/jobs/backfill/uniswap_events")
+async def backfill_uniswap_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_UNISWAP_EVENTS, _extract_uniswap_events)
 
 
 @app.post("/admin/wallets")

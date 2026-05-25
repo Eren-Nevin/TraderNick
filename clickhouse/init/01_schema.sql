@@ -327,3 +327,113 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_liquidations
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (chain, eth_market, debt_token, time, owner, tx_id, log_index);
+-- Uniswap V3 events — four tables, one per event type. Pool is identified by
+-- (chain, symbol0, symbol1, fee_tier). DeFiStream canonicalises (symbol0,
+-- symbol1) to address-order on output (USDC < WETH alphabetically too) — we
+-- store the rows using that canonical pair so charts can query unambiguously.
+-- ORDER BY (chain, symbol0, symbol1, fee_tier, time, ...) means a single-pool
+-- query reduces to a prefix scan and the time-range walk inside it.
+
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_swaps
+(
+    chain             LowCardinality(String),
+    symbol0           LowCardinality(String),
+    symbol1           LowCardinality(String),
+    fee_tier          UInt32,
+    time              DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number      UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id             String             CODEC(ZSTD(3)),
+    log_index         UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address      String             CODEC(ZSTD(3)),
+    swapper           String             CODEC(ZSTD(3)),
+    recipient         String             CODEC(ZSTD(3)),
+    token_sold        LowCardinality(String),
+    token_bought      LowCardinality(String),
+    amount_sold       Float64            CODEC(Gorilla, ZSTD(3)),
+    amount_bought     Float64            CODEC(Gorilla, ZSTD(3)),
+    sqrt_based_price  Float64            CODEC(Gorilla, ZSTD(3)),
+    liquidity         Float64            CODEC(Gorilla, ZSTD(3)),
+    tick              Int32              CODEC(T64, ZSTD(3)),
+    value_usd         Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at       DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_deposits
+(
+    chain             LowCardinality(String),
+    symbol0           LowCardinality(String),
+    symbol1           LowCardinality(String),
+    fee_tier          UInt32,
+    time              DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number      UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id             String             CODEC(ZSTD(3)),
+    log_index         UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address      String             CODEC(ZSTD(3)),
+    sender            String             CODEC(ZSTD(3)),
+    owner             String             CODEC(ZSTD(3)),
+    amount0           Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1           Float64            CODEC(Gorilla, ZSTD(3)),
+    tick_lower        Int32              CODEC(T64, ZSTD(3)),
+    tick_upper        Int32              CODEC(T64, ZSTD(3)),
+    price_lower       Float64            CODEC(Gorilla, ZSTD(3)),
+    price_upper       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd         Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at       DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_withdrawals
+(
+    chain             LowCardinality(String),
+    symbol0           LowCardinality(String),
+    symbol1           LowCardinality(String),
+    fee_tier          UInt32,
+    time              DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number      UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id             String             CODEC(ZSTD(3)),
+    log_index         UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address      String             CODEC(ZSTD(3)),
+    owner             String             CODEC(ZSTD(3)),
+    amount0           Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1           Float64            CODEC(Gorilla, ZSTD(3)),
+    tick_lower        Int32              CODEC(T64, ZSTD(3)),
+    tick_upper        Int32              CODEC(T64, ZSTD(3)),
+    price_lower       Float64            CODEC(Gorilla, ZSTD(3)),
+    price_upper       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd         Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at       DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_collects
+(
+    chain             LowCardinality(String),
+    symbol0           LowCardinality(String),
+    symbol1           LowCardinality(String),
+    fee_tier          UInt32,
+    time              DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number      UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id             String             CODEC(ZSTD(3)),
+    log_index         UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address      String             CODEC(ZSTD(3)),
+    owner             String             CODEC(ZSTD(3)),
+    recipient         String             CODEC(ZSTD(3)),
+    amount0           Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1           Float64            CODEC(Gorilla, ZSTD(3)),
+    tick_lower        Int32              CODEC(T64, ZSTD(3)),
+    tick_upper        Int32              CODEC(T64, ZSTD(3)),
+    price_lower       Float64            CODEC(Gorilla, ZSTD(3)),
+    price_upper       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd         Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at       DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index);

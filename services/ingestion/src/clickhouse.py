@@ -422,3 +422,152 @@ AAVE_EVENTS = {
     "flashloan":   ("flashloans",  "tradernick.aave_flashloans",   AAVE_FLASHLOANS_COLUMNS,   aave_flashloans_df_to_rows),
     "liquidation": ("liquidations","tradernick.aave_liquidations", AAVE_LIQUIDATIONS_COLUMNS, aave_liquidations_df_to_rows),
 }
+
+
+# --- Uniswap V3 events ------------------------------------------------------
+#
+# Four event types (swap / deposit / withdraw / collect) each scoped to a
+# specific pool, identified by (chain, symbol0, symbol1, fee_tier). The pool
+# columns are emitted from the caller side because DeFiStream's response
+# doesn't echo them in a typed form — only as part of the canonical
+# `token0` / `token1` strings on deposit/withdraw/collect (and not at all
+# on swap).
+
+UNISWAP_SWAPS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "fee_tier",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "swapper", "recipient",
+    "token_sold", "token_bought", "amount_sold", "amount_bought",
+    "sqrt_based_price", "liquidity", "tick",
+    "value_usd",
+]
+UNISWAP_DEPOSITS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "fee_tier",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "sender", "owner",
+    "amount0", "amount1",
+    "tick_lower", "tick_upper", "price_lower", "price_upper",
+    "value_usd",
+]
+UNISWAP_WITHDRAWALS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "fee_tier",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "owner",
+    "amount0", "amount1",
+    "tick_lower", "tick_upper", "price_lower", "price_upper",
+    "value_usd",
+]
+UNISWAP_COLLECTS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "fee_tier",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "owner", "recipient",
+    "amount0", "amount1",
+    "tick_lower", "tick_upper", "price_lower", "price_upper",
+    "value_usd",
+]
+
+
+def _uniswap_value_usd(r):
+    raw = r.get("value_usd")
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def uniswap_swaps_df_to_rows(
+    df: pl.DataFrame, *, chain: str, symbol0: str, symbol1: str, fee_tier: int
+):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            chain, symbol0, symbol1, int(fee_tier),
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["pool_address"]) if r.get("pool_address") else "",
+            str(r["swapper"]) if r.get("swapper") else "",
+            str(r["recipient"]) if r.get("recipient") else "",
+            str(r["tokenSold"]) if r.get("tokenSold") else "",
+            str(r["tokenBought"]) if r.get("tokenBought") else "",
+            float(r["amountSold"]) if r.get("amountSold") is not None else 0.0,
+            float(r["amountBought"]) if r.get("amountBought") is not None else 0.0,
+            float(r["sqrt_based_price"]) if r.get("sqrt_based_price") is not None else 0.0,
+            float(r["liquidity"]) if r.get("liquidity") is not None else 0.0,
+            int(r["tick"]) if r.get("tick") is not None else 0,
+            _uniswap_value_usd(r),
+        ])
+    return rows
+
+
+def _uniswap_lp_event_df_to_rows(
+    df: pl.DataFrame, *, chain: str, symbol0: str, symbol1: str, fee_tier: int,
+    include_sender: bool, include_recipient: bool,
+):
+    """Shared transform for deposit / withdraw / collect — they all carry
+    the same pool-position row shape (owner + amount0/amount1 + tick range
+    + value_usd) but the actor field differs:
+      deposit:  has `sender` + `owner`
+      withdraw: has `owner` only
+      collect:  has `owner` + `recipient`
+    """
+    rows = []
+    for r in df.iter_rows(named=True):
+        row = [
+            chain, symbol0, symbol1, int(fee_tier),
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["pool_address"]) if r.get("pool_address") else "",
+        ]
+        if include_sender:
+            row.append(str(r["sender"]) if r.get("sender") else "")
+        row.append(str(r["owner"]) if r.get("owner") else "")
+        if include_recipient:
+            row.append(str(r["recipient"]) if r.get("recipient") else "")
+        row.extend([
+            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
+            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            int(r["tick_lower"]) if r.get("tick_lower") is not None else 0,
+            int(r["tick_upper"]) if r.get("tick_upper") is not None else 0,
+            float(r["price_lower"]) if r.get("price_lower") is not None else 0.0,
+            float(r["price_upper"]) if r.get("price_upper") is not None else 0.0,
+            _uniswap_value_usd(r),
+        ])
+        rows.append(row)
+    return rows
+
+
+def uniswap_deposits_df_to_rows(df: pl.DataFrame, *, chain, symbol0, symbol1, fee_tier):
+    return _uniswap_lp_event_df_to_rows(
+        df, chain=chain, symbol0=symbol0, symbol1=symbol1, fee_tier=fee_tier,
+        include_sender=True, include_recipient=False,
+    )
+
+
+def uniswap_withdrawals_df_to_rows(df: pl.DataFrame, *, chain, symbol0, symbol1, fee_tier):
+    return _uniswap_lp_event_df_to_rows(
+        df, chain=chain, symbol0=symbol0, symbol1=symbol1, fee_tier=fee_tier,
+        include_sender=False, include_recipient=False,
+    )
+
+
+def uniswap_collects_df_to_rows(df: pl.DataFrame, *, chain, symbol0, symbol1, fee_tier):
+    return _uniswap_lp_event_df_to_rows(
+        df, chain=chain, symbol0=symbol0, symbol1=symbol1, fee_tier=fee_tier,
+        include_sender=False, include_recipient=True,
+    )
+
+
+# event key → (DeFiStream method name on uniswap_v3 client, target CH table,
+# column list, row transform). Same dispatch pattern as AAVE_EVENTS.
+UNISWAP_EVENTS = {
+    "swap":     ("swaps",       "tradernick.uniswap_swaps",       UNISWAP_SWAPS_COLUMNS,       uniswap_swaps_df_to_rows),
+    "deposit":  ("deposits",    "tradernick.uniswap_deposits",    UNISWAP_DEPOSITS_COLUMNS,    uniswap_deposits_df_to_rows),
+    "withdraw": ("withdrawals", "tradernick.uniswap_withdrawals", UNISWAP_WITHDRAWALS_COLUMNS, uniswap_withdrawals_df_to_rows),
+    "collect":  ("collects",    "tradernick.uniswap_collects",    UNISWAP_COLLECTS_COLUMNS,    uniswap_collects_df_to_rows),
+}

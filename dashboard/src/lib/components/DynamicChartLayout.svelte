@@ -20,6 +20,7 @@
   let {
     tokens,
     streams = [],
+    uniPools = [],
     tokenGroups = [],
     chainGroups = [],
     storageKey,
@@ -31,6 +32,7 @@
   }: {
     tokens: string[];
     streams?: TransferStream[];
+    uniPools?: import('$lib/api').UniswapStream[];
     tokenGroups?: TokenGroup[];
     chainGroups?: ChainGroup[];
     storageKey: string;
@@ -258,6 +260,27 @@
       if (inst.kind.startsWith('aave_')) {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
       }
+      // Uniswap chart kinds also need a `chain`, plus a `uniPool` 3-tuple
+      // (symbol0 / symbol1 / fee). Validate the pool shape; fall back to a
+      // canonical default so a corrupt save can't strand the chart.
+      if (inst.kind.startsWith('uniswap_')) {
+        inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
+        const rp = r.uniPool;
+        if (
+          rp && typeof rp === 'object' &&
+          typeof (rp as Record<string, unknown>).symbol0 === 'string' &&
+          typeof (rp as Record<string, unknown>).symbol1 === 'string' &&
+          typeof (rp as Record<string, unknown>).fee === 'number'
+        ) {
+          inst.uniPool = {
+            symbol0: ((rp as Record<string, unknown>).symbol0 as string).toUpperCase(),
+            symbol1: ((rp as Record<string, unknown>).symbol1 as string).toUpperCase(),
+            fee: (rp as Record<string, unknown>).fee as number
+          };
+        } else {
+          inst.uniPool = { symbol0: 'USDC', symbol1: 'WETH', fee: 500 };
+        }
+      }
       if (inst.kind === 'transfer') {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         // Migration: the previous compound-token registry had a "Native" entry
@@ -407,6 +430,7 @@
         bind:instance={instances[idx]}
         {tokens}
         {streams}
+        {uniPools}
         {tokenGroups}
         {chainGroups}
         {syncZoom}

@@ -18,6 +18,7 @@ GROUP_MODULES = {
     "tron_native_transfers": "groups.tron_native_transfers",
     "tron_trc20_transfers": "groups.tron_trc20_transfers",
     "aave_events": "groups.aave_events",
+    "uniswap_events": "groups.uniswap_events",
 }
 
 

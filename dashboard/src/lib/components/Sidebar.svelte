@@ -7,7 +7,8 @@
   const links = [
     { href: '/trades', label: 'Trades', short: 'T' },
     { href: '/flows', label: 'Flows', short: 'F' },
-    { href: '/lending', label: 'Lending', short: 'L' }
+    { href: '/lending', label: 'Lending', short: 'L' },
+    { href: '/dex', label: 'DeX', short: 'D' }
   ];
 
   onMount(() => themeStore.hydrate());

@@ -13,6 +13,7 @@
     type OpenInterestRow,
     type TransferBucket,
     type TransferStream,
+    type UniswapStream,
     type WalletCategory,
     type VolumeBucket
   } from '$lib/api';
@@ -38,10 +39,15 @@
     AAVE_KIND_TO_EVENT,
     AAVE_NET_KIND_TO_EVENTS,
     isAaveKind,
+    UNISWAP_KIND_TO_EVENT,
+    UNISWAP_NET_KIND_TO_EVENTS,
+    isUniswapKind,
+    fmtUniPool,
     type ChartHeight,
     type ChartInstance as ChartInstanceT,
     type ChartWidth,
-    type TransferFilters
+    type TransferFilters,
+    type UniPool
   } from '$lib/components/charts/config';
   import type { View } from '$lib/chart-zoom';
   import { queuedFetch } from '$lib/fetch-queue';
@@ -74,6 +80,7 @@
     instance = $bindable(),
     tokens,
     streams = [],
+    uniPools = [],
     tokenGroups = [],
     chainGroups = [],
     syncZoom,
@@ -87,6 +94,7 @@
     instance: ChartInstanceT;
     tokens: string[];
     streams?: TransferStream[];
+    uniPools?: UniswapStream[];
     tokenGroups?: import('$lib/api').TokenGroup[];
     chainGroups?: import('$lib/api').ChainGroup[];
     syncZoom: boolean;
@@ -97,6 +105,69 @@
     onTokenChange: (id: string, token: string) => void;
     onRemove: (id: string) => void;
   } = $props();
+
+  // ---- uniswap-kind helpers (derived from `uniPools`) ----
+  // `uniPools` is the response from /uniswap/streams: one row per
+  // (event, chain, symbol0, symbol1, fee_tier). We collapse to a unique-
+  // pool set so the selector doesn't show the same WETH/USDC 0.05% four
+  // times (once per event).
+  let uniChains = $derived(
+    Array.from(new Set(uniPools.map((p) => p.chain))).sort()
+  );
+  // Per-chain map of unique pools, ordered by total row-count (popular pools
+  // float to the top of the dropdown).
+  let uniPoolsByChain = $derived.by(() => {
+    const out = new Map<string, UniPool[]>();
+    const counts = new Map<string, number>();
+    const dedup = new Map<string, UniPool>();
+    for (const p of uniPools) {
+      const k = `${p.chain}|${p.symbol0}|${p.symbol1}|${p.fee_tier}`;
+      counts.set(k, (counts.get(k) ?? 0) + p.rows);
+      if (!dedup.has(k)) {
+        dedup.set(k, { symbol0: p.symbol0, symbol1: p.symbol1, fee: p.fee_tier });
+      }
+    }
+    // Group by chain, sort each group by total rows desc.
+    const grouped = new Map<string, { pool: UniPool; rows: number }[]>();
+    for (const [k, pool] of dedup) {
+      const chain = k.split('|', 1)[0];
+      if (!grouped.has(chain)) grouped.set(chain, []);
+      grouped.get(chain)!.push({ pool, rows: counts.get(k) ?? 0 });
+    }
+    for (const [chain, list] of grouped) {
+      list.sort((a, b) => b.rows - a.rows);
+      out.set(chain, list.map((x) => x.pool));
+    }
+    return out;
+  });
+  let uniPoolsForChain = $derived(uniPoolsByChain.get(instance.chain ?? '') ?? []);
+  // Auto-snap pool when the chain narrows and the current pool isn't on it.
+  $effect(() => {
+    if (!isUniswapKind(instance.kind)) return;
+    const list = uniPoolsForChain;
+    if (list.length === 0) return;
+    const current = instance.uniPool;
+    if (
+      current &&
+      list.some(
+        (p) => p.symbol0 === current.symbol0 && p.symbol1 === current.symbol1 && p.fee === current.fee
+      )
+    ) return;
+    instance.uniPool = list[0];
+  });
+
+  // Encode/decode (symbol0|symbol1|fee) as a single string for the <select>
+  // bind, since Svelte's <select> doesn't preserve object identity across
+  // value changes.
+  function uniPoolKey(p: UniPool | undefined): string {
+    return p ? `${p.symbol0}|${p.symbol1}|${p.fee}` : '';
+  }
+  let currentUniPoolKey = $derived(uniPoolKey(instance.uniPool));
+  function onUniPoolChange(v: string) {
+    const [s0, s1, fee] = v.split('|');
+    if (!s0 || !s1 || !fee) return;
+    instance.uniPool = { symbol0: s0, symbol1: s1, fee: Number(fee) };
+  }
 
   // ---- transfer-kind helpers (derived from `streams`) ----
   let chains = $derived(
@@ -370,6 +441,14 @@
       const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
       return `${instance.kind}|${cPart}|${tPart}|${instance.interval}`;
     }
+    if (isUniswapKind(instance.kind)) {
+      // Uniswap charts are keyed by (kind, chain, pool, interval). The pool
+      // is the 3-tuple (symbol0, symbol1, fee). instance.token is unused for
+      // these kinds — pair identity replaces it.
+      const cPart = instance.chain ?? '';
+      const pPart = uniPoolKey(instance.uniPool);
+      return `${instance.kind}|${cPart}|${pPart}|${instance.interval}`;
+    }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
 
@@ -507,7 +586,9 @@
       let sinceIso: string;
       let untilIso: string;
       const isWideWindowKind =
-        instance.kind === 'transfer' || isAaveKind(instance.kind);
+        instance.kind === 'transfer' ||
+        isAaveKind(instance.kind) ||
+        isUniswapKind(instance.kind);
       if (isWideWindowKind) {
         const now = new Date();
         const tu = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
@@ -601,6 +682,114 @@
       // a different `event=` param — handle them together up front to keep
       // the per-kind switch tidy. Token groups (USDC+USDT, Stables) map to
       // ?token_group=... server-side instead of a single token.
+      // Uniswap chart kinds. The single-event ones hit /api/uniswap/aggregate
+      // once. uniswap_net_liquidity needs two parallel calls (deposit −
+      // withdraw, by sum_amount of amount0+amount1). uniswap_net_swap_flow
+      // makes a single swap call and uses the server's directional split
+      // (sum_value_usd_t0t1 − sum_value_usd_t1t0) — no second fetch.
+      if (isUniswapKind(instance.kind)) {
+        const pool = instance.uniPool;
+        if (!pool || !instance.chain) {
+          // Render an empty series — the auto-snap effect will retry once
+          // pools arrive.
+          data = [];
+          since = sinceIso;
+          until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        const buildUniQs = (event: string) => {
+          const qs = new URLSearchParams({
+            event,
+            chain: instance.chain ?? 'ETH',
+            symbol0: pool.symbol0,
+            symbol1: pool.symbol1,
+            fee_tier: String(pool.fee),
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '5000'
+          });
+          if (forceFresh) qs.set('fresh', '1');
+          return qs;
+        };
+        const uniNetEvents = UNISWAP_NET_KIND_TO_EVENTS[instance.kind];
+        if (uniNetEvents) {
+          const [posEvent, negEvent] = uniNetEvents;
+          const [posRes, negRes] = await Promise.all([
+            queuedFetch(`/api/uniswap/aggregate?${buildUniQs(posEvent)}`, { signal }),
+            queuedFetch(`/api/uniswap/aggregate?${buildUniQs(negEvent)}`, { signal })
+          ]);
+          if (!posRes.ok) throw new Error(`${instance.kind} ${posRes.status}`);
+          if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
+          const posBody = await posRes.json();
+          const negBody = await negRes.json();
+          const negByTime = new Map<number, { amount: number; usd: number; count: number }>();
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            negByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd, count: r.count });
+          }
+          const out: Record<string, number>[] = [];
+          const seen = new Set<number>();
+          for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
+            const n = negByTime.get(r.time) ?? { amount: 0, usd: 0, count: 0 };
+            out.push({
+              time: r.time,
+              sum_amount: r.sum_amount - n.amount,
+              sum_value_usd: r.sum_value_usd - n.usd,
+              count: r.count + n.count
+            });
+            seen.add(r.time);
+          }
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            if (seen.has(r.time)) continue;
+            out.push({ time: r.time, sum_amount: -r.sum_amount, sum_value_usd: -r.sum_value_usd, count: r.count });
+          }
+          out.sort((a, b) => a.time - b.time);
+          data = out as unknown as AnyDatum[];
+          since = sinceIso;
+          until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        // Single-event path (including uniswap_net_swap_flow, which uses the
+        // swap endpoint and computes net from its directional t0t1/t1t0 split).
+        const eventForKind =
+          instance.kind === 'uniswap_net_swap_flow'
+            ? 'swap'
+            : UNISWAP_KIND_TO_EVENT[instance.kind];
+        if (!eventForKind) {
+          throw new Error(`unmapped uniswap kind ${instance.kind}`);
+        }
+        const res = await queuedFetch(
+          `/api/uniswap/aggregate?${buildUniQs(eventForKind)}`,
+          { signal }
+        );
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        const series = (body.series ?? []) as Array<Record<string, number>>;
+        if (instance.kind === 'uniswap_net_swap_flow') {
+          // Net swap flow = $ moved token0 → token1 minus $ moved token1 →
+          // token0. Positive = net buying of token1 (= selling token0).
+          data = series.map((r) => ({
+            time: r.time,
+            sum_amount: 0,
+            sum_value_usd: (r.sum_value_usd_t0t1 ?? 0) - (r.sum_value_usd_t1t0 ?? 0),
+            count: r.count
+          })) as unknown as AnyDatum[];
+        } else {
+          data = series as unknown as AnyDatum[];
+        }
+        since = sinceIso;
+        until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
       const aaveEvent = AAVE_KIND_TO_EVENT[instance.kind];
       if (aaveEvent) {
         const qs = new URLSearchParams({
@@ -970,6 +1159,22 @@
     ...cumulativeLines
   ]);
 
+  // Uniswap event lines — same shape as the AAVE chart: cyan sum_value_usd
+  // series + the MAs. The chart label flips between "Net …" for net-* kinds
+  // and the underlying event name for the four single-event kinds.
+  let uniswapLinesD = $derived([
+    ...(instance.showPoint
+      ? [{
+          key: 'main',
+          label: CHART_KIND_LABELS[instance.kind] ?? 'Uniswap',
+          color: '#06b6d4',
+          compute: (d: Record<string, number>) =>
+            (d.sum_value_usd ?? 0) || (d.sum_amount ?? 0)
+        }]
+      : []),
+    ...cumulativeLines
+  ]);
+
   // bs / sz: bar series (Point toggle controls visibility)
   let bsBars = $derived(instance.showPoint ? BUYER_SELLER_SERIES : []);
   let szBars = $derived(
@@ -1087,7 +1292,7 @@
   let isTemplate = $derived(typeof instance.templateName === 'string' && instance.templateName.length > 0);
   let displayTitle = $derived(isTemplate ? (instance.templateName as string) : kindLabel);
   let panelTitle = $derived(
-    `${displayTitle} — ${instance.token} ${instance.interval}` +
+    `${displayTitle} — ${isUniswapKind(instance.kind) && instance.uniPool ? fmtUniPool(instance.uniPool) : instance.token} ${instance.interval}` +
       (instance.kind === 'sz' ? ` (< $${instance.under} / > $${instance.over})` : '')
   );
 
@@ -1143,7 +1348,15 @@
               <span class="text-zinc-500">·</span>
             {/if}
           {/if}
-          {#if activeTokenGroup !== null}
+          {#if isUniswapKind(instance.kind)}
+            <span class="text-zinc-300">{instance.chain}</span>
+            <span class="text-zinc-500">·</span>
+            {#if instance.uniPool}
+              <span class="text-zinc-100 font-medium">{fmtUniPool(instance.uniPool)}</span>
+            {:else}
+              <span class="text-zinc-500 italic">(no pool)</span>
+            {/if}
+          {:else if activeTokenGroup !== null}
             <span class="text-amber-300" title="Token group">Σ</span>
             <span class="text-zinc-100 font-medium">{instance.token}</span>
           {:else}
@@ -1162,7 +1375,37 @@
         instance.width === 1 ? 'flex-wrap' : ''
       ].join(' ')}
     >
-      {#if isAaveKind(instance.kind)}
+      {#if isUniswapKind(instance.kind)}
+        <!-- Uniswap kinds: chain dropdown (only chains that have ingested
+             pools) + a pool dropdown filtered to that chain. Pools are
+             sorted by total rows desc so the most-traded pool floats to
+             the top of the list. -->
+        <select
+          bind:value={instance.chain}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          {#each (uniChains.length > 0 ? uniChains : ['ETH','ARB','BASE','BSC','POLYGON']) as c (c)}
+            <option value={c}>{c}</option>
+          {/each}
+        </select>
+        <select
+          value={currentUniPoolKey}
+          onchange={(e) => onUniPoolChange(e.currentTarget.value)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 min-w-[10rem]"
+        >
+          {#if uniPoolsForChain.length === 0}
+            {#if instance.uniPool}
+              <option value={uniPoolKey(instance.uniPool)}>{fmtUniPool(instance.uniPool)}</option>
+            {:else}
+              <option value="">(no pools)</option>
+            {/if}
+          {:else}
+            {#each uniPoolsForChain as p ((p.symbol0 + '|' + p.symbol1 + '|' + p.fee))}
+              <option value={p.symbol0 + '|' + p.symbol1 + '|' + p.fee}>{fmtUniPool(p)}</option>
+            {/each}
+          {/if}
+        </select>
+      {:else if isAaveKind(instance.kind)}
         <!-- AAVE kinds: chain dropdown (5 EVMs + chain groups) + token
              <select> with a "Token group" optgroup so the user can pick
              e.g. "USDC+USDT" or "Stables" and the chart sums across the
@@ -1762,6 +2005,20 @@
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={aaveLinesD}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
+      />
+    {:else if isUniswapKind(instance.kind)}
+      <LineChart
+        data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
+        lines={uniswapLinesD}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
