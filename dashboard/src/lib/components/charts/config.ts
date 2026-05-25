@@ -265,12 +265,12 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   aave_net_borrow: 'AAVE Net Borrow',
   aave_flashloan: 'AAVE Flash Loans',
   aave_liquidation: 'AAVE Liquidations',
-  uniswap_swap: 'Uniswap Swaps',
-  uniswap_deposit: 'Uniswap Deposits',
-  uniswap_withdraw: 'Uniswap Withdrawals',
-  uniswap_collect: 'Uniswap Collects',
-  uniswap_net_liquidity: 'Uniswap Net Liquidity',
-  uniswap_net_swap_flow: 'Uniswap Net Swap Flow'
+  uniswap_swap: 'Uniswap V3 Swaps',
+  uniswap_deposit: 'Uniswap V3 Deposits',
+  uniswap_withdraw: 'Uniswap V3 Withdrawals',
+  uniswap_collect: 'Uniswap V3 Collects',
+  uniswap_net_liquidity: 'Uniswap V3 Net Liquidity',
+  uniswap_net_swap_flow: 'Uniswap V3 Net Swap Flow'
 };
 
 /** AAVE chart kinds collected for convenience (loop over them on the
