@@ -14,10 +14,14 @@
     dash?: string;
   };
 
+  /** Vertical reference line at a specific Unix-second timestamp. */
+  type VRefLine = { time: number; color?: string; dash?: string };
+
   let {
     data = [] as Datum[],
     valueKey,
     lines = [] as Line[],
+    vRefLines = [] as VRefLine[],
     showBars = true,
     height = 220,
     title = '',
@@ -36,6 +40,7 @@
     data: Datum[];
     valueKey: string;
     lines?: Line[];
+    vRefLines?: VRefLine[];
     showBars?: boolean;
     height?: number;
     title?: string;
@@ -196,6 +201,24 @@
       .attr('stroke', '#52525b')
       .attr('stroke-width', 1);
 
+    // Vertical reference lines (e.g. week markers). Clip to plot area.
+    if (vRefLines.length > 0) {
+      const vLayer = g.append('g').attr('class', 'vrefs').attr('clip-path', `url(#${clipId})`);
+      for (const v of vRefLines) {
+        const x = xScale(new Date(v.time * 1000));
+        if (x < -1 || x > plotW + 1) continue;
+        vLayer
+          .append('line')
+          .attr('x1', x)
+          .attr('x2', x)
+          .attr('y1', 0)
+          .attr('y2', plotH)
+          .attr('stroke', v.color ?? cssVar('--chart-grid', '#3f3f46'))
+          .attr('stroke-width', 1)
+          .attr('stroke-dasharray', v.dash ?? '1,4');
+      }
+    }
+
     if (showBars) {
       const bars = g.append('g').attr('class', 'bars').attr('clip-path', `url(#${clipId})`);
       for (const d of data) {
@@ -334,6 +357,7 @@
     data;
     valueKey;
     lines;
+    vRefLines;
     showBars;
     xExtent;
     view;

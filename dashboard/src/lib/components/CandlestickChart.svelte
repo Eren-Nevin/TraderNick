@@ -14,9 +14,13 @@
     dash?: string;
   };
 
+  /** Vertical reference line at a specific Unix-second timestamp. */
+  type VRefLine = { time: number; color?: string; dash?: string };
+
   let {
     candles = [] as Candle[],
     lines = [] as Line[],
+    vRefLines = [] as VRefLine[],
     showCandles = true,
     height = 540,
     xExtent,
@@ -27,6 +31,7 @@
   }: {
     candles: Candle[];
     lines?: Line[];
+    vRefLines?: VRefLine[];
     showCandles?: boolean;
     height?: number;
     xExtent?: [number, number];
@@ -219,6 +224,24 @@
       .attr('stroke', cssVar('--chart-grid', '#27272a'))
       .attr('stroke-dasharray', '2,3');
 
+    // Vertical reference lines (e.g. week markers). Clip to plot area.
+    if (vRefLines.length > 0) {
+      const vLayer = g.append('g').attr('class', 'vrefs').attr('clip-path', `url(#${clipId})`);
+      for (const v of vRefLines) {
+        const x = xScale(new Date(v.time * 1000));
+        if (x < -1 || x > plotW + 1) continue;
+        vLayer
+          .append('line')
+          .attr('x1', x)
+          .attr('x2', x)
+          .attr('y1', 0)
+          .attr('y2', plotH)
+          .attr('stroke', v.color ?? cssVar('--chart-grid', '#3f3f46'))
+          .attr('stroke-width', 1)
+          .attr('stroke-dasharray', v.dash ?? '1,4');
+      }
+    }
+
     if (showCandles) {
       const gCandles = g.append('g').attr('class', 'candles').attr('clip-path', `url(#${clipId})`);
       for (const c of candles) {
@@ -375,6 +398,7 @@
   $effect(() => {
     candles;
     lines;
+    vRefLines;
     showCandles;
     xExtent;
     view;

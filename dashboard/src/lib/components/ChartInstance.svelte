@@ -34,6 +34,7 @@
     sizeLines,
     sizeSeries,
     unixSec,
+    weekBoundariesSec,
     type ChartHeight,
     type ChartInstance as ChartInstanceT,
     type ChartWidth,
@@ -304,6 +305,14 @@
   }
 
   let xExtent = $derived<[number, number]>([unixSec(since), unixSec(until)]);
+  // Optional week-marker overlay: dotted vertical lines at the start of each
+  // Saturday and Monday (UTC) inside the loaded window. Skipped when the
+  // toggle is off so we don't waste CPU computing boundaries.
+  let weekVRefLines = $derived(
+    instance.showWeekLines
+      ? weekBoundariesSec(xExtent[0], xExtent[1]).map((t) => ({ time: t }))
+      : []
+  );
 
   // ---- loader: dispatch on kind ----
 
@@ -1153,6 +1162,13 @@
         <input type="checkbox" bind:checked={instance.showPoint} class="accent-zinc-400" />
         Point
       </label>
+      <label
+        class="flex items-center gap-1.5 text-zinc-300 cursor-pointer"
+        title="Dotted vertical lines at the start of each Saturday and Monday (UTC)"
+      >
+        <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
+        Week lines
+      </label>
       <span class="w-px h-4 bg-zinc-800"></span>
       {#each instance.mas as ma, idx}
         <div class="flex items-center gap-1.5">
@@ -1435,6 +1451,7 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
+        vRefLines={weekVRefLines}
       />
     {:else if instance.kind === 'pc'}
       <LineChart
@@ -1446,6 +1463,7 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
+        vRefLines={weekVRefLines}
         formatY={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
         formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`}
       />
@@ -1459,6 +1477,7 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
+        vRefLines={weekVRefLines}
         formatY={fmtUsdAxis}
         formatTooltip={fmtUsdTooltip}
       />
@@ -1475,6 +1494,7 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
+        vRefLines={weekVRefLines}
         formatY={(v) => v.toFixed(2)}
         formatTooltip={(v) => `${v.toFixed(2)} bps`}
         minBarWidthPx={3}
@@ -1490,6 +1510,7 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
+        vRefLines={weekVRefLines}
       />
     {:else if instance.kind === 'sz'}
       <StackedBarChart
@@ -1502,6 +1523,7 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
+        vRefLines={weekVRefLines}
       />
     {:else if instance.kind === 'tt'}
       <LineChart
@@ -1514,6 +1536,7 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
+        vRefLines={weekVRefLines}
         formatY={(v) => v.toFixed(2)}
         formatTooltip={(v) => v.toFixed(4)}
       />
@@ -1528,6 +1551,7 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
+        vRefLines={weekVRefLines}
         formatY={(v) => v.toFixed(2)}
         formatTooltip={(v) => v.toFixed(4)}
       />
@@ -1541,6 +1565,7 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
+        vRefLines={weekVRefLines}
         formatY={fmtUsdAxis}
         formatTooltip={fmtUsdTooltip}
       />

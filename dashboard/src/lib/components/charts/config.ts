@@ -105,6 +105,24 @@ export function fmtUsdTooltip(v: number) {
   return `${sign}$${abs.toFixed(2)}`;
 }
 
+/** Return the Unix-second timestamps for every Saturday- and Monday-00:00
+ *  UTC inside [sinceSec, untilSec]. Used by the optional "Week lines"
+ *  overlay so users can eyeball weekly cycles. */
+export function weekBoundariesSec(sinceSec: number, untilSec: number): number[] {
+  if (!Number.isFinite(sinceSec) || !Number.isFinite(untilSec) || untilSec <= sinceSec) {
+    return [];
+  }
+  const DAY = 86_400;
+  // Floor `since` to the start of the day (UTC), then sweep one day at a time.
+  const startOfDay = Math.floor(sinceSec / DAY) * DAY;
+  const out: number[] = [];
+  for (let t = startOfDay; t <= untilSec; t += DAY) {
+    const dow = new Date(t * 1000).getUTCDay(); // Sun=0 ... Sat=6
+    if ((dow === 1 || dow === 6) && t >= sinceSec) out.push(t);
+  }
+  return out;
+}
+
 /** Tooltip timestamp helper — "Sun 2026-05-24 12:34:56 UTC". */
 export function fmtUtcTime(unixSec: number): string {
   const d = new Date(unixSec * 1000);
@@ -273,6 +291,10 @@ export type ChartInstance = {
   token: string;
   interval: Interval;
   showPoint: boolean;
+  /** When true, the chart overlays narrow dotted vertical lines at the
+   *  start of each Saturday and Monday (UTC) inside the visible window.
+   *  Helps line up weekly cycles across charts. Off by default. */
+  showWeekLines?: boolean;
   mas: MAConfig[]; // length MAX_MAS, each slot independently enabled
   // sz only
   under?: number;

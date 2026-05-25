@@ -227,6 +227,7 @@
         token: r.token,
         interval: r.interval as Interval,
         showPoint: r.showPoint !== false,
+        showWeekLines: r.showWeekLines === true,
         mas: migrateMAs(r)
       };
       if (inst.kind === 'sz') {

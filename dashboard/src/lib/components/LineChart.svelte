@@ -14,11 +14,15 @@
     dash?: string;
   };
   type RefLine = { value: number; label?: string; color?: string };
+  /** Vertical reference line at a specific Unix-second timestamp. Used for
+   *  the optional week-marker overlay (start of each Sat / Mon). */
+  type VRefLine = { time: number; color?: string; dash?: string };
 
   let {
     data = [] as Datum[],
     lines = [] as Line[],
     refLines = [] as RefLine[],
+    vRefLines = [] as VRefLine[],
     height = 240,
     title = '',
     xExtent,
@@ -32,6 +36,7 @@
     data: Datum[];
     lines: Line[];
     refLines?: RefLine[];
+    vRefLines?: VRefLine[];
     height?: number;
     title?: string;
     xExtent?: [number, number];
@@ -202,6 +207,20 @@
         .attr('stroke', r.color ?? '#52525b')
         .attr('stroke-dasharray', '4,2');
     }
+    // Vertical reference lines (e.g. week markers). Clip to plot area.
+    for (const v of vRefLines) {
+      const x = xScale(new Date(v.time * 1000));
+      if (x < -1 || x > plotW + 1) continue;
+      refLayer
+        .append('line')
+        .attr('x1', x)
+        .attr('x2', x)
+        .attr('y1', 0)
+        .attr('y2', plotH)
+        .attr('stroke', v.color ?? cssVar('--chart-grid', '#3f3f46'))
+        .attr('stroke-width', 1)
+        .attr('stroke-dasharray', v.dash ?? '1,4');
+    }
 
     const lineLayer = g.append('g').attr('class', 'lines').attr('clip-path', `url(#${clipId})`);
     for (const ln of lines) {
@@ -317,6 +336,7 @@
     data;
     lines;
     refLines;
+    vRefLines;
     xExtent;
     view;
     width;
