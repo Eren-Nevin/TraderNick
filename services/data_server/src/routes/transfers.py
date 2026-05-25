@@ -354,10 +354,10 @@ async def aggregate(request):
         tup_sql = ", ".join(
             f"({_q(c)}, {_q(k)}, {_q(t)})" for (c, k, t) in pairs
         )
-        ckt_where = f"(t.chain, t.kind, t.token) IN ({tup_sql})"
+        ckt_where = f"(chain, kind, token) IN ({tup_sql})"
     else:
         ckt_where = (
-            "t.chain = {chain:String} AND t.kind = {kind:String} AND t.token = {token:String}"
+            "chain = {chain:String} AND kind = {kind:String} AND token = {token:String}"
         )
         ch_params["chain"] = chain
         ch_params["kind"] = kind
@@ -367,16 +367,22 @@ async def aggregate(request):
     # the 1-minute Binance OHLCV table — each transfer is multiplied by the
     # close price of the 1m bar that contains its timestamp.
     #
-    #   ASOF LEFT JOIN ... ON o.token = t.token AND o.time <= t.time
+    # IMPORTANT: the transfers WHERE clause (chain/kind/token, time range,
+    # wallet-label predicates) goes into a SUBQUERY so ClickHouse applies it
+    # *before* the ASOF JOIN. Without this CH happily runs the join on every
+    # row of the transfers table that matches (chain, kind, token) and the
+    # time range — which for compound queries like EVM × USDC+USDT is 500M+
+    # rows — and only then filters by wallet category. Subquery wrap brings
+    # this query from ~120s down to ~18s (filter knocks the row count to ~9M
+    # before the join sees it). The bare column references inside the
+    # subquery (no `t.` alias) match what _build_wallet_predicate /
+    # _build_entity_predicate / _build_extra_sumif_clauses emit.
     #
     # binance_ohlcv_1m is ORDER BY (token, time), so the asof lookup is
     # O(log N) per left row. LEFT JOIN keeps transfers without a matching
     # OHLCV row (e.g. tokens we don't price yet) so sum_amount stays correct;
     # their sum_value_usd contribution falls through to the stable hardcode
-    # below or to 0.
-    #
-    # Stablecoins don't have OHLCV (and don't need it) — they're hardcoded
-    # to $1. Anything else without OHLCV contributes 0 to sum_value_usd.
+    # below or to 0. Stablecoins are hardcoded to $1 (no OHLCV needed).
     sql = f"""
         SELECT
             toUnixTimestamp(toStartOfInterval(t.time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
@@ -387,13 +393,16 @@ async def aggregate(request):
                 coalesce(o.close, 0.0)
             )) AS sum_value_usd,
             count() AS count{extra_select_sql}
-        FROM tradernick.transfers AS t
+        FROM (
+            SELECT chain, kind, token, time, amount, sender, receiver
+            FROM tradernick.transfers
+            WHERE {ckt_where}
+              AND time >= {{since:DateTime}}
+              AND time <  {{until:DateTime}}
+              {where_extra_sql}
+        ) AS t
         ASOF LEFT JOIN tradernick.binance_ohlcv_1m AS o
           ON o.token = t.token AND o.time <= t.time
-        WHERE {ckt_where}
-          AND t.time >= {{since:DateTime}}
-          AND t.time <  {{until:DateTime}}
-          {where_extra_sql}
         GROUP BY bucket
         ORDER BY bucket
         LIMIT {{limit:UInt32}}
