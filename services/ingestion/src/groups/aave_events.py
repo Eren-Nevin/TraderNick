@@ -37,6 +37,13 @@ log = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 60
 POLL_OVERLAP_MINUTES = 3
+# Cap concurrent DeFiStream HTTP calls per tick. DeFiStream's per-second
+# limit is fairly tight (seen ~50 req/min upper bound during the AAVE
+# backfill) and live polling shares budget with any running backfill, so
+# we go serial here. Each tick takes roughly 42 × call_latency seconds,
+# which may overrun the 60s budget — that's fine; the overlap of
+# POLL_OVERLAP_MINUTES * 60 = 180s catches up next tick.
+TICK_CONCURRENCY = 1
 
 
 def _iso(dt: datetime) -> str:
@@ -97,9 +104,11 @@ async def main():
 
     calls = _plan_calls(chains, config.AAVE_ETH_MARKETS)
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
+    sem = asyncio.Semaphore(TICK_CONCURRENCY)
     log.info(
-        "polling aave_v3 chains=%s eth_markets=%s -> %d calls/tick every %ss (overlap=%dm)",
-        chains, config.AAVE_ETH_MARKETS, len(calls), POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES,
+        "polling aave_v3 chains=%s eth_markets=%s -> %d calls/tick (concurrency=%d) every %ss (overlap=%dm)",
+        chains, config.AAVE_ETH_MARKETS, len(calls), TICK_CONCURRENCY,
+        POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES,
     )
 
     while True:
@@ -108,16 +117,17 @@ async def main():
         since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
 
         async def _one(chain, market, event):
-            try:
-                n = await fetch_and_insert(
-                    ds, chain=chain, eth_market=market, event=event,
-                    since=since, until=now,
-                )
-                label = f"{chain}" + (f"/{market}" if market else "") + f"/{event}"
-                log.info("%s rows=%d", label, n)
-            except Exception as exc:
-                label = f"{chain}" + (f"/{market}" if market else "") + f"/{event}"
-                log.exception("%s fetch failed: %s", label, exc)
+            async with sem:
+                try:
+                    n = await fetch_and_insert(
+                        ds, chain=chain, eth_market=market, event=event,
+                        since=since, until=now,
+                    )
+                    label = f"{chain}" + (f"/{market}" if market else "") + f"/{event}"
+                    log.info("%s rows=%d", label, n)
+                except Exception as exc:
+                    label = f"{chain}" + (f"/{market}" if market else "") + f"/{event}"
+                    log.exception("%s fetch failed: %s", label, exc)
 
         await asyncio.gather(*(_one(*c) for c in calls))
         await asyncio.sleep(max(0.0, tick_end - time.monotonic()))

@@ -362,7 +362,9 @@
     }
     if (AAVE_KIND_TO_EVENT[instance.kind]) {
       // AAVE charts depend on chain + token (event_type derived from kind).
-      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${instance.interval}`;
+      // Token may be a token-group name — fold the group flag into the key.
+      const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
+      return `${instance.kind}|${instance.chain ?? ''}|${tPart}|${instance.interval}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -525,18 +527,23 @@
       let pickArr: (body: Record<string, unknown>) => AnyDatum[] = () => [];
       // AAVE chart kinds all hit the same /api/aave/aggregate endpoint with
       // a different `event=` param — handle them together up front to keep
-      // the per-kind switch tidy.
+      // the per-kind switch tidy. Token groups (USDC+USDT, Stables) map to
+      // ?token_group=... server-side instead of a single token.
       const aaveEvent = AAVE_KIND_TO_EVENT[instance.kind];
       if (aaveEvent) {
         const qs = new URLSearchParams({
           event: aaveEvent,
           chain: instance.chain ?? 'ETH',
-          token: instance.token,
           interval: instance.interval,
           since: sinceIso,
           until: untilIso,
           limit: '5000'
         });
+        if (activeTokenGroup !== null) {
+          qs.set('token_group', activeTokenGroup);
+        } else {
+          qs.set('token', instance.token);
+        }
         if (forceFresh) qs.set('fresh', '1');
         const res = await queuedFetch(`/api/aave/aggregate?${qs}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -1084,9 +1091,9 @@
       ].join(' ')}
     >
       {#if AAVE_KIND_TO_EVENT[instance.kind]}
-        <!-- AAVE kinds: simple chain + token selectors. Token is free-text
-             because AAVE has tokens not in the transfer-streams catalogue
-             (USDE, USDS, GHO, etc.) -->
+        <!-- AAVE kinds: chain dropdown (5 EVMs) + token <select> with a
+             "Token group" optgroup so the user can pick e.g. "USDC+USDT"
+             or "Stables" and the chart sums across the group's members. -->
         <select
           bind:value={instance.chain}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -1095,14 +1102,29 @@
             <option value={c}>{c}</option>
           {/each}
         </select>
-        <input
-          type="text"
+        <select
           value={instance.token}
-          onchange={(e) => (instance.token = e.currentTarget.value.trim().toUpperCase())}
-          class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 uppercase"
-          spellcheck="false"
-          aria-label="Token symbol"
-        />
+          onchange={(e) => (instance.token = e.currentTarget.value)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          <optgroup label="Tokens">
+            {#each ['USDC','USDT','DAI','USDE','USDS','GHO','WETH','WBTC','WSTETH','CBBTC','LINK','RLUSD','PYUSD','EURC'] as t (t)}
+              <option value={t}>{t}</option>
+            {/each}
+            <!-- If the current token isn't in the standard list, surface it
+                 as a sticky entry so the user can see what's selected. -->
+            {#if instance.token && !['USDC','USDT','DAI','USDE','USDS','GHO','WETH','WBTC','WSTETH','CBBTC','LINK','RLUSD','PYUSD','EURC'].includes(instance.token) && !tokenGroups.some((g) => g.name === instance.token)}
+              <option value={instance.token}>{instance.token}</option>
+            {/if}
+          </optgroup>
+          {#if tokenGroups.length > 0}
+            <optgroup label="Token group">
+              {#each tokenGroups as g (g.name)}
+                <option value={g.name} title={g.description}>Σ {g.label}</option>
+              {/each}
+            </optgroup>
+          {/if}
+        </select>
       {:else if instance.kind === 'transfer'}
         <select
           bind:value={instance.chain}

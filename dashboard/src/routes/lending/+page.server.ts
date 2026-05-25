@@ -1,4 +1,5 @@
 import { INTERNAL_DATA_SERVER_URL } from '$lib/server/env';
+import type { ChainGroup, TokenGroup } from '$lib/api';
 import type { PageServerLoad } from './$types';
 
 /** Distinct (event, chain, token) tuples that have any AAVE data, plus
@@ -13,13 +14,21 @@ export type AaveStream = {
 };
 
 export const load: PageServerLoad = async ({ fetch }) => {
-  const [tokensRes, streamsRes] = await Promise.all([
+  const [tokensRes, streamsRes, tokenGroupsRes, chainGroupsRes] = await Promise.all([
     fetch(`${INTERNAL_DATA_SERVER_URL}/tokens`),
-    fetch(`${INTERNAL_DATA_SERVER_URL}/aave/streams`)
+    fetch(`${INTERNAL_DATA_SERVER_URL}/aave/streams`),
+    fetch(`${INTERNAL_DATA_SERVER_URL}/transfers/token-groups`),
+    fetch(`${INTERNAL_DATA_SERVER_URL}/transfers/chain-groups`)
   ]);
   const tokens: string[] = tokensRes.ok ? (await tokensRes.json()).tokens : [];
   const aaveStreams: AaveStream[] = streamsRes.ok
     ? (await streamsRes.json()).streams
     : [];
-  return { tokens, aaveStreams };
+  const tokenGroups: TokenGroup[] = tokenGroupsRes.ok
+    ? (await tokenGroupsRes.json()).groups
+    : [];
+  const chainGroups: ChainGroup[] = chainGroupsRes.ok
+    ? (await chainGroupsRes.json()).groups
+    : [];
+  return { tokens, aaveStreams, tokenGroups, chainGroups };
 };

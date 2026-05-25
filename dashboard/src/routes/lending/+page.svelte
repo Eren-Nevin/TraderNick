@@ -36,6 +36,8 @@
 
   <DynamicChartLayout
     tokens={data.tokens}
+    tokenGroups={data.tokenGroups}
+    chainGroups={data.chainGroups}
     storageKey="tradernick:lending:layout:v1"
     availableKinds={AVAILABLE_KINDS}
     defaultChain="ETH"

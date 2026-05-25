@@ -38,6 +38,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [backfill_aave_event
 log = logging.getLogger(__name__)
 
 CHUNK_HOURS = 24
+# DeFiStream throttles bursts: walking 1260 chunks at zero-delay back-to-back
+# trips a 429 well before the backfill finishes. Sleep a tick between chunks
+# (keeps us well under the limit) and retry on 429 with exponential backoff.
+INTER_CHUNK_SLEEP_S = 1.2
+RETRY_DELAYS_S = (1.0, 3.0, 8.0, 20.0, 45.0)
 
 _stop = False
 
@@ -110,6 +115,13 @@ def _planned_chunks(
     return chunks
 
 
+def _is_rate_limit(exc: Exception) -> bool:
+    """DeFiStream's SDK raises a generic exception with 'Too Many Requests'
+    in the message — sniff that to decide whether to back off + retry."""
+    msg = str(exc).lower()
+    return "too many requests" in msg or "429" in msg or "rate limit" in msg
+
+
 async def _fetch_chunk(
     ds: AsyncDeFiStream,
     *,
@@ -120,18 +132,32 @@ async def _fetch_chunk(
     until: datetime,
 ) -> int:
     method_name, table, columns, transform = AAVE_EVENTS[event]
-    builder = getattr(ds.evm.aave_v3, method_name)()
-    builder = builder.network(chain).time_range(_iso_z(since), _iso_z(until))
-    builder = builder.verbose().with_value()
-    if eth_market:
-        builder = builder.eth_market_type(eth_market)
-    df = await builder.as_df("polars")
-    if df.is_empty():
-        return 0
-    rows = transform(df, chain=chain, eth_market=eth_market)
-    ch = await async_client()
-    await ch.insert(table, rows, column_names=columns)
-    return len(rows)
+
+    last_exc: Exception | None = None
+    for attempt, delay in enumerate((0.0, *RETRY_DELAYS_S)):
+        if delay:
+            log.info("rate-limited; backing off %.1fs (attempt %d)", delay, attempt)
+            await asyncio.sleep(delay)
+        try:
+            builder = getattr(ds.evm.aave_v3, method_name)()
+            builder = builder.network(chain).time_range(_iso_z(since), _iso_z(until))
+            builder = builder.verbose().with_value()
+            if eth_market:
+                builder = builder.eth_market_type(eth_market)
+            df = await builder.as_df("polars")
+            if df.is_empty():
+                return 0
+            rows = transform(df, chain=chain, eth_market=eth_market)
+            ch = await async_client()
+            await ch.insert(table, rows, column_names=columns)
+            return len(rows)
+        except Exception as exc:
+            last_exc = exc
+            if not _is_rate_limit(exc):
+                raise
+    # All retries exhausted on a rate-limit — let the job's catch handle it.
+    assert last_exc is not None
+    raise last_exc
 
 
 async def _force_purge(chains, events, eth_markets, since, until):
@@ -213,6 +239,10 @@ async def main(job_id: str):
             args["completed_chunks"] = sorted(map(list, completed_set))
             await _write_status(job_id=job_id, job_type=job_type, args=args, status="running",
                                 progress=done / total, started_at=started_at)
+            # Spacing between chunks — keeps the steady-state request rate
+            # below DeFiStream's per-second cap so we don't have to lean on
+            # the 429 retry path.
+            await asyncio.sleep(INTER_CHUNK_SLEEP_S)
         await _write_status(job_id=job_id, job_type=job_type, args=args, status="completed",
                             progress=1.0, started_at=started_at, finished_at=_utcnow())
     except Exception as exc:

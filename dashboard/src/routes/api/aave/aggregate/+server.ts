@@ -6,11 +6,15 @@ const PASSTHROUGH = [
   'event',
   'chain',
   'token',
+  // Group axes (mirrors the transfer-aggregate proxy)
+  'chain_group',
+  'token_group',
   'eth_markets',
   'interval',
   'since',
   'until',
-  'limit'
+  'limit',
+  'fresh'
 ];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
