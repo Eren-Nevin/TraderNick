@@ -211,6 +211,12 @@
       }
       if (inst.kind === 'ohlcv') {
         inst.pin = r.pin === true;
+        if (Array.isArray(r.overlayTokens)) {
+          inst.overlayTokens = r.overlayTokens
+            .map((t) => (typeof t === 'string' ? t : ''))
+            .filter((t) => t.length > 0)
+            .slice(0, 5);
+        }
       }
       if (inst.kind === 'transfer') {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');

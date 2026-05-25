@@ -54,6 +54,7 @@
     since: string;
     until: string;
     localView: View;
+    overlayData?: Record<string, Candle[]>;
   };
   const loadCache: Map<string, LoadCacheEntry> = new Map();
 
@@ -254,6 +255,10 @@
 
   // ---- transient state (not persisted) ----
   let data = $state<AnyDatum[]>([]);
+  // Overlay token candle arrays, keyed by token symbol. Populated when the
+  // user adds compare tokens to an OHLCV chart (see instance.overlayTokens).
+  // Each entry is the same shape as the main `data` array.
+  let overlayData = $state<Record<string, Candle[]>>({});
   let since = $state<string>(new Date(0).toISOString());
   let until = $state<string>(new Date(0).toISOString());
   let loadedKey = $state<string>('');
@@ -313,6 +318,12 @@
       const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
       return `${instance.kind}|${cPart}|${tPart}|${instance.interval}|${transferFilterKey()}`;
     }
+    if (instance.kind === 'ohlcv') {
+      // Overlay tokens influence the rendered chart, so they belong in the
+      // cache key. Sorted so order-of-add doesn't bust the key.
+      const ov = [...(instance.overlayTokens ?? [])].sort().join(',');
+      return `${instance.kind}|${instance.token}|${instance.interval}|ov:${ov}`;
+    }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
 
@@ -325,6 +336,7 @@
     const cached = loadCache.get(instance.id);
     if (cached && cached.key === key) {
       data = cached.data;
+      overlayData = cached.overlayData ?? {};
       since = cached.since;
       until = cached.until;
       localView = cached.localView;
@@ -469,10 +481,43 @@
       let url = '';
       let pickArr: (body: Record<string, unknown>) => AnyDatum[] = () => [];
       switch (instance.kind) {
-        case 'ohlcv':
-          url = `/api/ohlcv?${new URLSearchParams(baseQS)}`;
-          pickArr = (b) => (b.candles ?? []) as AnyDatum[];
-          break;
+        case 'ohlcv': {
+          // Always fetch the main token. If overlayTokens are set, fetch
+          // each in parallel through the queue (same time window + interval)
+          // and store their candle arrays in `overlayData`. The render path
+          // switches to "compare mode" automatically when overlayData is
+          // non-empty.
+          const overlays = (instance.overlayTokens ?? []).filter(
+            (t) => t && t !== instance.token
+          );
+          const buildOhlcvQs = (tok: string) => {
+            const q = new URLSearchParams({ ...baseQS, token: tok });
+            if (forceFresh) q.set('fresh', '1');
+            return q;
+          };
+          const [mainRes, ...ovRes] = await Promise.all([
+            queuedFetch(`/api/ohlcv?${buildOhlcvQs(instance.token)}`, { signal }),
+            ...overlays.map((t) => queuedFetch(`/api/ohlcv?${buildOhlcvQs(t)}`, { signal }))
+          ]);
+          if (!mainRes.ok) throw new Error(`ohlcv ${mainRes.status}`);
+          const mainBody = await mainRes.json();
+          data = ((mainBody.candles ?? []) as AnyDatum[]);
+          const nextOverlay: Record<string, Candle[]> = {};
+          for (let i = 0; i < overlays.length; i++) {
+            const tok = overlays[i];
+            const r = ovRes[i];
+            if (!r.ok) continue;
+            const body = await r.json();
+            nextOverlay[tok] = (body.candles ?? []) as Candle[];
+          }
+          overlayData = nextOverlay;
+          since = sinceIso;
+          until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView, overlayData });
+          return;
+        }
         case 'oi':
           url = `/api/open_interest?${new URLSearchParams(baseQS)}`;
           pickArr = (b) => (b.series ?? []) as AnyDatum[];
@@ -779,7 +824,64 @@
     ...(instance.showPoint ? LS_LINES : []),
     ...cumulativeLines
   ]);
-  let ohlcvLinesD = $derived(cumulativeLines);
+  // "Compare mode" — active whenever any overlay tokens are configured.
+  // In compare mode we hide candles (keeping them would conflict on the Y
+  // axis), turn the main token into a rebased % line, and render each
+  // overlay as another rebased % line. Rebase anchor is the leftmost data
+  // point — same as TradingView's Compare. Tooltip / Y axis read in %.
+  let compareMode = $derived(
+    instance.kind === 'ohlcv' && (instance.overlayTokens ?? []).length > 0
+  );
+  // Rebase an array of {close} (Candle-shaped) rows so the first non-null
+  // close is 0%, every subsequent value is `(close - base) / base * 100`.
+  function rebasedCloses(rows: { close?: number }[] | undefined | null): number[] {
+    if (!rows || rows.length === 0) return [];
+    let base = 0;
+    for (const r of rows) {
+      if (r && typeof r.close === 'number' && r.close !== 0) { base = r.close; break; }
+    }
+    if (!base) return rows.map(() => 0);
+    return rows.map((r) => {
+      const c = r && typeof r.close === 'number' ? r.close : base;
+      return ((c - base) / base) * 100;
+    });
+  }
+  let mainRebased = $derived(rebasedCloses(data as unknown as { close?: number }[]));
+  // Each overlay's rebased array indexed by *main's* time bucket position.
+  // We assume Binance OHLCV at the same interval/window aligns 1-to-1 across
+  // tokens — if a bucket is missing on an overlay, we fall back to the main
+  // index (which lines up the chart positionally rather than by timestamp).
+  let overlayRebasedByToken = $derived.by<Record<string, number[]>>(() => {
+    const out: Record<string, number[]> = {};
+    if (!compareMode) return out;
+    for (const tok of instance.overlayTokens ?? []) {
+      const rows = overlayData[tok];
+      out[tok] = rebasedCloses(rows);
+    }
+    return out;
+  });
+  // Distinct palette for overlay lines — main is fixed cyan, MAs use the
+  // existing MA_COLORS palette, overlays pick from below.
+  const OVERLAY_COLORS = ['#fbbf24', '#a855f7', '#22c55e', '#ef4444', '#ec4899'] as const;
+  let ohlcvLinesD = $derived(
+    compareMode
+      ? [
+          {
+            key: 'main_close',
+            label: instance.token,
+            color: '#06b6d4',
+            compute: (_d: Candle, i: number) => mainRebased[i] ?? 0
+          },
+          ...(instance.overlayTokens ?? []).map((tok, idx) => ({
+            key: `ovl_${tok}`,
+            label: tok,
+            color: OVERLAY_COLORS[idx % OVERLAY_COLORS.length],
+            compute: (_d: Candle, i: number) => (overlayRebasedByToken[tok] ?? [])[i] ?? 0
+          })),
+          ...cumulativeLines
+        ]
+      : cumulativeLines
+  );
   let frLinesD = $derived(cumulativeLines);
 
   // ---- sz threshold apply ----
@@ -1074,6 +1176,61 @@
       {/each}
     </div>
 
+    {#if instance.kind === 'ohlcv'}
+      <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-2">
+        <div class="text-[10px] uppercase tracking-widest text-zinc-500">
+          Compare
+          <span class="text-zinc-600 normal-case">
+            — overlay close price of other tokens (chart switches to % change from window start)
+          </span>
+        </div>
+        <div class="flex items-center gap-2 flex-wrap">
+          {#each (instance.overlayTokens ?? []) as tok, idx (tok)}
+            <span
+              class="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-1.5 py-0.5"
+              style="color: {OVERLAY_COLORS[idx % OVERLAY_COLORS.length]}"
+            >
+              <span class="font-medium">{tok}</span>
+              <button
+                type="button"
+                aria-label="Remove {tok}"
+                title="Remove"
+                onclick={() => {
+                  instance.overlayTokens = (instance.overlayTokens ?? []).filter((t) => t !== tok);
+                }}
+                class="text-zinc-500 hover:text-red-400 leading-none"
+              >×</button>
+            </span>
+          {/each}
+          {#if (instance.overlayTokens ?? []).length < 5}
+            {@const taken = new Set([instance.token, ...(instance.overlayTokens ?? [])])}
+            {@const available = tokens.filter((t) => !taken.has(t))}
+            {#if available.length > 0}
+              <select
+                value=""
+                onchange={(e) => {
+                  const v = e.currentTarget.value;
+                  if (!v) return;
+                  instance.overlayTokens = [...(instance.overlayTokens ?? []), v];
+                  e.currentTarget.value = '';
+                }}
+                class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+              >
+                <option value="">+ add token…</option>
+                {#each available as t (t)}
+                  <option value={t}>{t}</option>
+                {/each}
+              </select>
+            {:else}
+              <span class="text-zinc-600 text-[11px]">no more tokens to add</span>
+            {/if}
+          {:else}
+            <span class="text-zinc-600 text-[11px]">max 5</span>
+          {/if}
+        </div>
+      </div>
+    {/if}
+
     {#if instance.kind === 'transfer' && !isTemplate}
       <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-2">
         <div class="text-[10px] uppercase tracking-widest text-zinc-500">
@@ -1212,6 +1369,19 @@
     {/if}
     {#if data.length === 0}
       <div class="p-4 text-sm text-zinc-400">No data for {kindLabel}.</div>
+    {:else if instance.kind === 'ohlcv' && compareMode}
+      <LineChart
+        data={data as Candle[]}
+        lines={ohlcvLinesD}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        formatY={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
+        formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`}
+      />
     {:else if instance.kind === 'ohlcv'}
       <CandlestickChart
         candles={data as Candle[]}

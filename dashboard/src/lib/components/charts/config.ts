@@ -272,6 +272,13 @@ export type ChartInstance = {
   overInput?: string;
   // ohlcv only
   pin?: boolean;
+  /** Other tokens to overlay as `close`-price lines on the OHLCV chart.
+   *  Each entry triggers an extra /api/ohlcv fetch with the same time
+   *  window. When any are present the chart switches to "compare mode":
+   *  candles disappear, the main token becomes a line, every series is
+   *  rebased to % change from the leftmost data point, and the Y axis
+   *  reads as %. (TradingView "Compare" semantics.) */
+  overlayTokens?: string[];
   // transfer only
   chain?: string;
   /** Optional wallet-category filter applied to the transfer chart's main
