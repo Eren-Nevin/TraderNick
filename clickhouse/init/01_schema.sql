@@ -114,6 +114,18 @@ TTL updated_at + INTERVAL 30 DAY;
 -- Addresses are stored verbatim from the source file; the bootstrap loader adds a
 -- lowercase variant for every `0x…` row so EVM lookups (which use lower(sender)) match
 -- regardless of source casing. BTC/TRON addresses go in case-preserved.
+-- NOTE: the `transfers` table also carries four MATERIALIZED columns
+-- populated from `tradernick.wallet_labels` at insert time:
+--   sender_categories   Array(LowCardinality(String))
+--   receiver_categories Array(LowCardinality(String))
+--   sender_entity       LowCardinality(Nullable(String))
+--   receiver_entity     LowCardinality(Nullable(String))
+-- They are added via ALTER (see below) rather than the original CREATE
+-- because they reference the wallet_labels dictionary which depends on
+-- the `wallets` table that's defined later in this file. Skip indices
+-- of TYPE set() let CH prune granules that don't contain the requested
+-- category/entity. When `wallets` is reloaded the materialized values
+-- are stale until a refresh — see /admin/refresh-categories below.
 CREATE TABLE IF NOT EXISTS tradernick.wallets
 (
     address     String              CODEC(ZSTD(3)),
@@ -157,3 +169,26 @@ SOURCE(CLICKHOUSE(
 ))
 LAYOUT(HASHED())
 LIFETIME(MIN 300 MAX 600);
+
+-- Materialized wallet-label columns on transfers (declared here, after the
+-- dictionary is defined, because the MATERIALIZED expressions reference it).
+-- IF NOT EXISTS makes this idempotent so repeated container starts don't
+-- error. Set() skip indices let CH prune granules during category/entity
+-- filters; granularity=4 keeps the index small while still pruning well.
+ALTER TABLE tradernick.transfers
+  ADD COLUMN IF NOT EXISTS sender_categories Array(LowCardinality(String)) MATERIALIZED
+    dictGet('tradernick.wallet_labels', 'categories_lower',
+      if(chain IN ('ETH','ARB','POLYGON','BASE','BSC','OP','AVAX'), lower(sender), sender)),
+  ADD COLUMN IF NOT EXISTS receiver_categories Array(LowCardinality(String)) MATERIALIZED
+    dictGet('tradernick.wallet_labels', 'categories_lower',
+      if(chain IN ('ETH','ARB','POLYGON','BASE','BSC','OP','AVAX'), lower(receiver), receiver)),
+  ADD COLUMN IF NOT EXISTS sender_entity LowCardinality(Nullable(String)) MATERIALIZED
+    dictGet('tradernick.wallet_labels', 'entity_lower',
+      if(chain IN ('ETH','ARB','POLYGON','BASE','BSC','OP','AVAX'), lower(sender), sender)),
+  ADD COLUMN IF NOT EXISTS receiver_entity LowCardinality(Nullable(String)) MATERIALIZED
+    dictGet('tradernick.wallet_labels', 'entity_lower',
+      if(chain IN ('ETH','ARB','POLYGON','BASE','BSC','OP','AVAX'), lower(receiver), receiver)),
+  ADD INDEX IF NOT EXISTS idx_sender_categories sender_categories TYPE set(100) GRANULARITY 4,
+  ADD INDEX IF NOT EXISTS idx_receiver_categories receiver_categories TYPE set(100) GRANULARITY 4,
+  ADD INDEX IF NOT EXISTS idx_sender_entity sender_entity TYPE set(500) GRANULARITY 4,
+  ADD INDEX IF NOT EXISTS idx_receiver_entity receiver_entity TYPE set(500) GRANULARITY 4;

@@ -70,17 +70,19 @@ def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[l
     `chain=None` means the query spans multiple chains (compound mode) and the
     dict lookup must normalise the address per-row.
     """
-    # The dict exposes pre-lowered `categories_lower` / `entity_lower`
-    # attributes alongside the original-case ones. Using them here avoids
-    # per-row arrayMap/lower() over hundreds of millions of rows — the
-    # lowering happens once per dictionary refresh (every 5-10 min) inside
-    # the dictionary's QUERY clause. /transfers/categories +
-    # /transfers/entities still return original case for nice UI display.
+    # Wallet category / entity values live as MATERIALIZED columns directly
+    # on `tradernick.transfers` (`sender_categories`, `receiver_categories`,
+    # `sender_entity`, `receiver_entity`), populated at insert time via the
+    # wallet_labels dictionary. The columns store the pre-lowered values, so
+    # queries are bare column reads plus set() skip indices — no dictGet
+    # per row. (`chain` argument is therefore unused below but kept for
+    # signature compatibility with _build_wallet_predicate / _build_entity_predicate.)
+    _ = chain
+
     def dg(col: str) -> str:
-        return (
-            "dictGet('tradernick.wallet_labels', 'categories_lower', "
-            + _addr_expr(chain, col) + ")"
-        )
+        # col is 'sender' or 'receiver'; matching materialized column is
+        # `<col>_categories`.
+        return f"{col}_categories"
 
     clauses: list[str] = []
     params: dict = {}
@@ -90,10 +92,7 @@ def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[l
     # column by position when building the response so the client id is only
     # ever used as a JSON dict key, not as a SQL identifier.
     def dg_entity(col: str) -> str:
-        return (
-            "dictGet('tradernick.wallet_labels', 'entity_lower', "
-            + _addr_expr(chain, col) + ")"
-        )
+        return f"{col}_entity"
 
     for i, spec in enumerate(extras):
         cf = spec.get("filters") or {}
@@ -112,8 +111,8 @@ def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[l
                 params[pname] = cats
                 pphold = f"{{{pname}:Array(String)}}"
 
-                # dg() now returns the pre-lowered `categories_lower` array,
-                # so no arrayMap/lower per row.
+                # dg() now returns the materialized `<col>_categories` column —
+                # bare hasAny() against the array, no dictGet at query time.
                 def cat_match(col: str) -> str:
                     return f"hasAny({dg(col)}, {pphold})"
 
@@ -153,27 +152,26 @@ def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[l
 def _build_entity_predicate(
     chain: str | None, side: str, action: str, vals: list[str]
 ) -> tuple[str, str] | None:
-    """Predicate over the dictionary's `entity` (Nullable String) attribute.
+    """Predicate against the materialized `<sender|receiver>_entity` column
+    on tradernick.transfers (pre-lowered, populated at insert time via the
+    wallet_labels dictionary). The set() skip index on the column lets CH
+    prune granules that don't contain the requested entity.
 
-    Matching is case-insensitive: both the dictionary's entity and the user-
-    supplied values are lower()'d before comparison. NULL / unknown entities
-    coalesce to '' so the IN check stays well-defined.
+    Matching is case-insensitive: the column is pre-lowered, and the user-
+    supplied values get lowered Python-side before being bound. NULL /
+    unknown entities coalesce to '' so the IN check stays well-defined.
 
-    `chain=None` switches to per-row address normalisation for compound /
-    multi-chain queries.
+    `chain` is unused here (kept for backward-compatible signature) — the
+    column was pre-resolved with chain-aware address normalisation at insert.
     """
     if not vals:
         return None
+    _ = chain
     param = f"{side}_{action}_ent"
     pphold = f"{{{param}:Array(String)}}"
 
     def match(col: str) -> str:
-        # `entity_lower` is pre-lowered in the dictionary's QUERY, so the
-        # per-row lower() that was here is no longer needed.
-        return (
-            f"coalesce(dictGet('tradernick.wallet_labels', 'entity_lower', "
-            f"{_addr_expr(chain, col)}), '') IN {pphold}"
-        )
+        return f"coalesce({col}_entity, '') IN {pphold}"
 
     if side == "involving":
         expr = f"({match('sender')} OR {match('receiver')})"
@@ -187,27 +185,25 @@ def _build_entity_predicate(
 def _build_wallet_predicate(
     chain: str | None, side: str, action: str, cats: list[str]
 ) -> tuple[str, str] | None:
-    """Construct a SQL predicate fragment + a unique parameter name for one filter.
+    """Predicate against the materialized `<sender|receiver>_categories`
+    column on tradernick.transfers (pre-lowered, populated at insert time
+    via the wallet_labels dictionary). The set() skip index on the column
+    prunes granules that don't contain any of the requested categories.
 
     side   = 'sender' | 'receiver' | 'involving'
     action = 'in' | 'ex'
-    chain  = a known chain string OR None for compound / multi-chain queries.
+    chain  = unused (kept for backward-compatible signature)
 
     Returns (sql_fragment, param_name) or None if cats is empty.
     """
     if not cats:
         return None
+    _ = chain
     param = f"{side}_{action}_cats"
     pphold = f"{{{param}:Array(String)}}"
 
     def match(col: str) -> str:
-        # `categories_lower` is pre-lowered in the dictionary's QUERY, so the
-        # per-row arrayMap(lower) that was here is no longer needed. Param
-        # values are lowercased Python-side before being bound.
-        return (
-            f"hasAny(dictGet('tradernick.wallet_labels', 'categories_lower', "
-            f"{_addr_expr(chain, col)}), {pphold})"
-        )
+        return f"hasAny({col}_categories, {pphold})"
 
     if side == "involving":
         match_expr = f"({match('sender')} OR {match('receiver')})"
@@ -405,7 +401,10 @@ async def aggregate(request):
             )) AS sum_value_usd,
             count() AS count{extra_select_sql}
         FROM (
-            SELECT chain, kind, token, time, amount, sender, receiver
+            SELECT
+                chain, kind, token, time, amount,
+                sender_categories, receiver_categories,
+                sender_entity, receiver_entity
             FROM tradernick.transfers
             WHERE {ckt_where}
               AND time >= {{since:DateTime}}
