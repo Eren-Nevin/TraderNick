@@ -124,11 +124,19 @@ CREATE TABLE IF NOT EXISTS tradernick.wallets
 ENGINE = ReplacingMergeTree(loaded_at)
 ORDER BY (address);
 
+-- Two extra attributes alongside `categories` / `entity`: their case-folded
+-- counterparts. Computing them inside the dictionary QUERY means lowering
+-- runs once per dictionary refresh (LIFETIME below), not per transfer row
+-- at filter time. The aggregate queries in services/data_server use the
+-- _lower attributes for filtering; /transfers/categories and
+-- /transfers/entities keep returning the original-case values for display.
 CREATE DICTIONARY IF NOT EXISTS tradernick.wallet_labels
 (
-    address     String,
-    categories  Array(String),
-    entity      Nullable(String) DEFAULT NULL
+    address          String,
+    categories       Array(String),
+    entity           Nullable(String) DEFAULT NULL,
+    categories_lower Array(String),
+    entity_lower     Nullable(String) DEFAULT NULL
 )
 PRIMARY KEY address
 SOURCE(CLICKHOUSE(
@@ -137,7 +145,15 @@ SOURCE(CLICKHOUSE(
     USER 'tradernick'
     PASSWORD 'tradernick'
     DB 'tradernick'
-    QUERY 'SELECT address, categories, entity FROM tradernick.wallets FINAL'
+    QUERY '
+        SELECT
+            address,
+            categories,
+            entity,
+            arrayMap(c -> lower(c), categories) AS categories_lower,
+            lower(entity)                        AS entity_lower
+        FROM tradernick.wallets FINAL
+    '
 ))
 LAYOUT(HASHED())
 LIFETIME(MIN 300 MAX 600);

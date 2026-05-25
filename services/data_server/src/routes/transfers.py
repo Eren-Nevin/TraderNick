@@ -70,9 +70,15 @@ def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[l
     `chain=None` means the query spans multiple chains (compound mode) and the
     dict lookup must normalise the address per-row.
     """
+    # The dict exposes pre-lowered `categories_lower` / `entity_lower`
+    # attributes alongside the original-case ones. Using them here avoids
+    # per-row arrayMap/lower() over hundreds of millions of rows — the
+    # lowering happens once per dictionary refresh (every 5-10 min) inside
+    # the dictionary's QUERY clause. /transfers/categories +
+    # /transfers/entities still return original case for nice UI display.
     def dg(col: str) -> str:
         return (
-            "dictGet('tradernick.wallet_labels', 'categories', "
+            "dictGet('tradernick.wallet_labels', 'categories_lower', "
             + _addr_expr(chain, col) + ")"
         )
 
@@ -85,7 +91,7 @@ def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[l
     # ever used as a JSON dict key, not as a SQL identifier.
     def dg_entity(col: str) -> str:
         return (
-            "dictGet('tradernick.wallet_labels', 'entity', "
+            "dictGet('tradernick.wallet_labels', 'entity_lower', "
             + _addr_expr(chain, col) + ")"
         )
 
@@ -106,8 +112,10 @@ def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[l
                 params[pname] = cats
                 pphold = f"{{{pname}:Array(String)}}"
 
+                # dg() now returns the pre-lowered `categories_lower` array,
+                # so no arrayMap/lower per row.
                 def cat_match(col: str) -> str:
-                    return f"hasAny(arrayMap(c -> lower(c), {dg(col)}), {pphold})"
+                    return f"hasAny({dg(col)}, {pphold})"
 
                 if side == "involving":
                     match = f"({cat_match('sender')} OR {cat_match('receiver')})"
@@ -128,8 +136,9 @@ def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[l
                 params[pname] = vals
                 pphold = f"{{{pname}:Array(String)}}"
 
+                # dg_entity() now returns `entity_lower` so no per-row lower().
                 def ent_match(col: str) -> str:
-                    return f"lower(coalesce({dg_entity(col)}, '')) IN {pphold}"
+                    return f"coalesce({dg_entity(col)}, '') IN {pphold}"
 
                 if side == "involving":
                     match = f"({ent_match('sender')} OR {ent_match('receiver')})"
@@ -159,9 +168,11 @@ def _build_entity_predicate(
     pphold = f"{{{param}:Array(String)}}"
 
     def match(col: str) -> str:
+        # `entity_lower` is pre-lowered in the dictionary's QUERY, so the
+        # per-row lower() that was here is no longer needed.
         return (
-            f"lower(coalesce(dictGet('tradernick.wallet_labels', 'entity', "
-            f"{_addr_expr(chain, col)}), '')) IN {pphold}"
+            f"coalesce(dictGet('tradernick.wallet_labels', 'entity_lower', "
+            f"{_addr_expr(chain, col)}), '') IN {pphold}"
         )
 
     if side == "involving":
@@ -190,12 +201,12 @@ def _build_wallet_predicate(
     pphold = f"{{{param}:Array(String)}}"
 
     def match(col: str) -> str:
-        # Case-insensitive: lower both the dictionary's category strings and the
-        # caller's supplied values (lowered in Python before being passed in).
+        # `categories_lower` is pre-lowered in the dictionary's QUERY, so the
+        # per-row arrayMap(lower) that was here is no longer needed. Param
+        # values are lowercased Python-side before being bound.
         return (
-            f"hasAny(arrayMap(c -> lower(c), "
-            f"dictGet('tradernick.wallet_labels', 'categories', "
-            f"{_addr_expr(chain, col)})), {pphold})"
+            f"hasAny(dictGet('tradernick.wallet_labels', 'categories_lower', "
+            f"{_addr_expr(chain, col)}), {pphold})"
         )
 
     if side == "involving":
