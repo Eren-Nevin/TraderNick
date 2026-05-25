@@ -10,7 +10,7 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = UNISWAP_CHART_KINDS;
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', ...UNISWAP_CHART_KINDS];
 
   function defaultLayout(): ChartInstanceT[] {
     // One chart per Uniswap-V3 chart kind, all pinned to ETH/USDC-WETH 0.05%
