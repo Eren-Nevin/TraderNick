@@ -550,17 +550,14 @@
   }
   .insert-plus-dot {
     pointer-events: none;
-    width: 18px;
-    height: 18px;
+    width: 22px;
+    height: 22px;
     border-radius: 9999px;
     background-color: rgb(24 24 27);            /* zinc-900 */
     border: 1px solid rgb(82 82 91);            /* zinc-600 */
     color: rgb(228 228 231);                    /* zinc-200 */
-    /* The + glyph stays at its previous typographic size; only the disc
-       shrinks. line-height is 16px so the glyph baselines centre in the
-       smaller circle. */
-    font-size: 16px;
-    line-height: 16px;
+    font-size: 22px;
+    line-height: 20px;
     text-align: center;
     display: inline-block;
     transition: background-color 120ms, border-color 120ms;
