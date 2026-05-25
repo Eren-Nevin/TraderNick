@@ -36,6 +36,8 @@
     unixSec,
     weekBoundariesSec,
     AAVE_KIND_TO_EVENT,
+    AAVE_NET_KIND_TO_EVENTS,
+    isAaveKind,
     type ChartHeight,
     type ChartInstance as ChartInstanceT,
     type ChartWidth,
@@ -360,9 +362,10 @@
       const ov = [...(instance.overlayTokens ?? [])].sort().join(',');
       return `${instance.kind}|${instance.token}|${instance.interval}|ov:${ov}`;
     }
-    if (AAVE_KIND_TO_EVENT[instance.kind]) {
-      // AAVE charts depend on chain + token (event_type derived from kind).
-      // Either axis may be a group name — fold the group flag into the key.
+    if (isAaveKind(instance.kind)) {
+      // AAVE charts (single-event + net) depend on chain + token (event_type
+      // derived from kind). Either axis may be a group name — fold the
+      // group flag into the key so toggling busts the cache.
       const cPart = activeChainGroup ? `cg:${activeChainGroup.name}` : (instance.chain ?? '');
       const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
       return `${instance.kind}|${cPart}|${tPart}|${instance.interval}`;
@@ -504,7 +507,7 @@
       let sinceIso: string;
       let untilIso: string;
       const isWideWindowKind =
-        instance.kind === 'transfer' || (AAVE_KIND_TO_EVENT[instance.kind] !== undefined);
+        instance.kind === 'transfer' || isAaveKind(instance.kind);
       if (isWideWindowKind) {
         const now = new Date();
         const tu = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
@@ -526,6 +529,74 @@
 
       let url = '';
       let pickArr: (body: Record<string, unknown>) => AnyDatum[] = () => [];
+      // AAVE net kinds (Net Deposit = deposits − withdrawals; Net Borrow =
+      // borrows − repays) fire two parallel /api/aave/aggregate calls and
+      // subtract on the client. Same (chain, token, interval) shape as the
+      // single-event kinds — the only difference is the dual fetch.
+      const aaveNetEvents = AAVE_NET_KIND_TO_EVENTS[instance.kind];
+      if (aaveNetEvents) {
+        const [posEvent, negEvent] = aaveNetEvents;
+        const buildAaveQs = (event: string) => {
+          const qs = new URLSearchParams({
+            event,
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '5000'
+          });
+          if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
+          else qs.set('chain', instance.chain ?? 'ETH');
+          if (activeTokenGroup !== null) qs.set('token_group', activeTokenGroup);
+          else qs.set('token', instance.token);
+          if (forceFresh) qs.set('fresh', '1');
+          return qs;
+        };
+        const [posRes, negRes] = await Promise.all([
+          queuedFetch(`/api/aave/aggregate?${buildAaveQs(posEvent)}`, { signal }),
+          queuedFetch(`/api/aave/aggregate?${buildAaveQs(negEvent)}`, { signal })
+        ]);
+        if (!posRes.ok) throw new Error(`${instance.kind} ${posRes.status}`);
+        if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
+        const posBody = await posRes.json();
+        const negBody = await negRes.json();
+        const negByTime = new Map<number, { amount: number; usd: number; count: number }>();
+        for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+          negByTime.set(r.time, {
+            amount: r.sum_amount,
+            usd: r.sum_value_usd,
+            count: r.count
+          });
+        }
+        const out: Record<string, number>[] = [];
+        const seen = new Set<number>();
+        for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
+          const n = negByTime.get(r.time) ?? { amount: 0, usd: 0, count: 0 };
+          out.push({
+            time: r.time,
+            sum_amount: r.sum_amount - n.amount,
+            sum_value_usd: r.sum_value_usd - n.usd,
+            count: r.count + n.count
+          });
+          seen.add(r.time);
+        }
+        for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+          if (seen.has(r.time)) continue;
+          out.push({
+            time: r.time,
+            sum_amount: -r.sum_amount,
+            sum_value_usd: -r.sum_value_usd,
+            count: r.count
+          });
+        }
+        out.sort((a, b) => a.time - b.time);
+        data = out as unknown as AnyDatum[];
+        since = sinceIso;
+        until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
       // AAVE chart kinds all hit the same /api/aave/aggregate endpoint with
       // a different `event=` param — handle them together up front to keep
       // the per-kind switch tidy. Token groups (USDC+USDT, Stables) map to
@@ -1095,7 +1166,7 @@
         instance.width === 1 ? 'flex-wrap' : ''
       ].join(' ')}
     >
-      {#if AAVE_KIND_TO_EVENT[instance.kind]}
+      {#if isAaveKind(instance.kind)}
         <!-- AAVE kinds: chain dropdown (5 EVMs + chain groups) + token
              <select> with a "Token group" optgroup so the user can pick
              e.g. "USDC+USDT" or "Stables" and the chart sums across the
@@ -1691,7 +1762,7 @@
         formatY={fmtUsdAxis}
         formatTooltip={fmtUsdTooltip}
       />
-    {:else if AAVE_KIND_TO_EVENT[instance.kind]}
+    {:else if isAaveKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={aaveLinesD}

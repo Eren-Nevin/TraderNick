@@ -249,13 +249,9 @@
               .slice(0, 5)
           : [];
       }
-      // AAVE chart kinds need a `chain` (single — no compound here) just
-      // like the transfer kind. Default to the page's preferred chain.
-      if (
-        inst.kind === 'aave_deposit' || inst.kind === 'aave_withdraw' ||
-        inst.kind === 'aave_borrow' || inst.kind === 'aave_repay' ||
-        inst.kind === 'aave_flashloan' || inst.kind === 'aave_liquidation'
-      ) {
+      // AAVE chart kinds (single-event + net) need a `chain` just like the
+      // transfer kind. Default to the page's preferred chain.
+      if (inst.kind.startsWith('aave_')) {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
       }
       if (inst.kind === 'transfer') {

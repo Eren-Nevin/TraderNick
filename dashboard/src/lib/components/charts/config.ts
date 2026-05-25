@@ -234,8 +234,10 @@ export type ChartKind =
   | 'pc'
   | 'aave_deposit'
   | 'aave_withdraw'
+  | 'aave_net_deposit'
   | 'aave_borrow'
   | 'aave_repay'
+  | 'aave_net_borrow'
   | 'aave_flashloan'
   | 'aave_liquidation';
 
@@ -251,8 +253,10 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   pc: 'Price Comparison',
   aave_deposit: 'AAVE Deposits',
   aave_withdraw: 'AAVE Withdrawals',
+  aave_net_deposit: 'AAVE Net Deposit',
   aave_borrow: 'AAVE Borrows',
   aave_repay: 'AAVE Repays',
+  aave_net_borrow: 'AAVE Net Borrow',
   aave_flashloan: 'AAVE Flash Loans',
   aave_liquidation: 'AAVE Liquidations'
 };
@@ -263,13 +267,15 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
 export const AAVE_CHART_KINDS: ChartKind[] = [
   'aave_deposit',
   'aave_withdraw',
+  'aave_net_deposit',
   'aave_borrow',
   'aave_repay',
+  'aave_net_borrow',
   'aave_flashloan',
   'aave_liquidation'
 ];
 
-/** Map from a ChartKind to the AAVE event slug the data_server expects. */
+/** Map from a single-event ChartKind to the AAVE event slug. */
 export const AAVE_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
   aave_deposit: 'deposit',
   aave_withdraw: 'withdraw',
@@ -278,6 +284,22 @@ export const AAVE_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
   aave_flashloan: 'flashloan',
   aave_liquidation: 'liquidation'
 };
+
+/** Net AAVE kinds — each fetches two regular event aggregates in parallel
+ *  and plots positive − negative per bucket. positive[0] is added,
+ *  positive[1] is subtracted. */
+export const AAVE_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  aave_net_deposit: ['deposit', 'withdraw'],
+  aave_net_borrow: ['borrow', 'repay']
+};
+
+/** True for any AAVE kind (single-event or net). */
+export function isAaveKind(kind: ChartKind): boolean {
+  return (
+    AAVE_KIND_TO_EVENT[kind] !== undefined ||
+    AAVE_NET_KIND_TO_EVENTS[kind] !== undefined
+  );
+}
 
 export type MAConfig = {
   enabled: boolean;
@@ -433,10 +455,11 @@ export function newChartInstance(
   if (kind === 'pc') {
     base.overlayTokens = [];
   }
-  if (AAVE_KIND_TO_EVENT[kind]) {
-    // AAVE charts behave like transfer charts — keyed by (chain, token) —
-    // so we surface the same selectors. Default eth_market is empty, which
-    // the data_server treats as "all markets".
+  if (isAaveKind(kind)) {
+    // AAVE charts (single-event + net) behave like transfer charts —
+    // keyed by (chain, token) — so we surface the same selectors.
+    // Default eth_market is empty, which the data_server treats as
+    // "all markets".
     base.chain = defaults.chain ?? 'ETH';
   }
   if (kind === 'transfer') {
