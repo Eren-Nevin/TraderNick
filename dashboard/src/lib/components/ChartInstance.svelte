@@ -42,6 +42,21 @@
   import type { View } from '$lib/chart-zoom';
   import { queuedFetch } from '$lib/fetch-queue';
 
+  // Module-scope cache survives component remounts. svelte-dnd-action
+  // destroys and recreates the chart component when its DOM node moves
+  // (drag-drop reorder), which would otherwise reset loadedKey and trigger
+  // a fresh fetch for data that hasn't actually changed. Keyed by
+  // `instance.id` (stable per chart) + cache invalidates whenever loadKey
+  // differs, so any real change still re-fetches.
+  type LoadCacheEntry = {
+    key: string;
+    data: AnyDatum[];
+    since: string;
+    until: string;
+    localView: View;
+  };
+  const loadCache: Map<string, LoadCacheEntry> = new Map();
+
   type AnyDatum =
     | Candle
     | OpenInterestRow
@@ -304,6 +319,18 @@
   $effect(() => {
     const key = loadKey();
     if (key === loadedKey) return;
+    // Remount fast-path: if we previously loaded the exact same key for this
+    // chart id (e.g. the user just drag-reordered and svelte-dnd-action
+    // recreated the component), restore from cache and skip the fetch.
+    const cached = loadCache.get(instance.id);
+    if (cached && cached.key === key) {
+      data = cached.data;
+      since = cached.since;
+      until = cached.until;
+      localView = cached.localView;
+      loadedKey = key;
+      return;
+    }
     void load();
   });
 
@@ -481,6 +508,13 @@
           localView = defaultView(sinceIso, untilIso);
           since = sinceIso;
           until = untilIso;
+          loadCache.set(instance.id, {
+            key: loadedKey,
+            data,
+            since,
+            until,
+            localView
+          });
           return;
         }
       }
@@ -492,6 +526,13 @@
       until = untilIso;
       loadedKey = loadKey();
       localView = defaultView(sinceIso, untilIso);
+      loadCache.set(instance.id, {
+        key: loadedKey,
+        data,
+        since,
+        until,
+        localView
+      });
     } catch (e) {
       // Superseded by a newer load() — silent. The newer load owns `loading`
       // and will surface its own state.
