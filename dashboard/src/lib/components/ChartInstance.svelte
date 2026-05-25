@@ -364,7 +364,8 @@
   async function loadTransferMerged(
     sinceIso: string,
     untilIso: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    forceFresh = false
   ) {
     // Netflow path: two parallel fetches (the two locked filter sets) merged
     // by time bucket. Net = positive.sum_value_usd − negative.sum_value_usd.
@@ -375,6 +376,7 @@
           const arr = filter[k as FilterKey] ?? [];
           if (arr.length) qs.set(k, arr.join(','));
         }
+        if (forceFresh) qs.set('fresh', '1');
         return qs;
       };
       const [posRes, negRes] = await Promise.all([
@@ -418,6 +420,7 @@
       const arr = f[k as FilterKey] ?? [];
       if (arr.length) qs.set(k, arr.join(','));
     }
+    if (forceFresh) qs.set('fresh', '1');
     const res = await queuedFetch(`/api/transfers/aggregate?${qs}`, { signal });
     if (!res.ok) throw new Error(`transfers ${res.status}`);
     const body = await res.json();
@@ -431,7 +434,7 @@
     data = out as unknown as AnyDatum[];
   }
 
-  async function load() {
+  async function load(forceFresh = false) {
     // Cancel any prior load so it frees its queue slot immediately.
     if (currentLoad) currentLoad.abort();
     const controller = new AbortController();
@@ -503,7 +506,7 @@
           // Transfer kind does its own multi-fetch + merge so the chart can show
           // a main (unfiltered) line alongside up to MAX_EXTRA_SERIES filtered
           // overlays. Skip the single-URL pickArr path below.
-          await loadTransferMerged(sinceIso, untilIso, signal);
+          await loadTransferMerged(sinceIso, untilIso, signal, forceFresh);
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
           since = sinceIso;
@@ -550,14 +553,15 @@
     }
   }
 
-  /** Force a fresh fetch — bypasses the `loadedKey === key` short-circuit
-   *  so the user can recover from a timeout / 503 without changing any
-   *  selector. Wired to the header refresh button. Allowed mid-load:
-   *  load() will abort the prior in-flight fetch via currentLoad so a
-   *  stuck request can be replaced. */
+  /** Force a fresh fetch — bypasses the `loadedKey === key` short-circuit,
+   *  evicts this chart's entry from the remount cache, and sends `?fresh=1`
+   *  so the data_server's response cache also recomputes. Wired to the
+   *  header refresh button. Allowed mid-load: load() will abort the prior
+   *  in-flight fetch via currentLoad so a stuck request can be replaced. */
   async function reload() {
     loadedKey = '';
-    await load();
+    loadCache.delete(instance.id);
+    await load(true);
   }
 
   // ---- derived series / lines / extra computed data ----

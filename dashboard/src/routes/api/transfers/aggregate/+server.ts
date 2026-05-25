@@ -14,6 +14,8 @@ const PASSTHROUGH = [
   'since',
   'until',
   'limit',
+  // bypasses the server-side response cache
+  'fresh',
   // wallet category filter passthrough
   'sender_in',
   'sender_ex',

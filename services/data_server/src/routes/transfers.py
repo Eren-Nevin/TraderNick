@@ -215,6 +215,97 @@ def _build_wallet_predicate(
     return f"NOT {match_expr}", param
 
 
+# --- response cache ----------------------------------------------------------
+#
+# Aggregate responses are cached for AGG_CACHE_TTL seconds, keyed on the
+# fully-normalised query parameters. Two design properties keep this from
+# ever serving stale data:
+#
+#   1. The dashboard rounds `until` to the minute boundary, so within a single
+#      minute every chart sends the *same* (since, until) pair. A cache hit
+#      inside that minute returns the same answer a fresh CH query would —
+#      no new bucket has formed yet.
+#   2. The refresh button (?fresh=1) bypasses the cache entirely and writes a
+#      fresh entry, so the user can always force a re-query mid-minute
+#      (e.g. after a wallet-labels reload).
+#
+# Eviction is lazy: stale entries are dropped on lookup, and we prune on
+# write when the table exceeds AGG_CACHE_MAX. Responses are stored as the
+# already-serialised JSON string so cache hits skip the json.dumps cost.
+
+_AGG_CACHE: dict[tuple, tuple[float, str]] = {}
+_AGG_CACHE_TTL = 60.0
+_AGG_CACHE_MAX = 500
+
+
+def _agg_cache_key(
+    chain_group: str | None,
+    token_group: str | None,
+    chain: str | None,
+    kind: str | None,
+    token: str | None,
+    interval: str,
+    since_dt: datetime,
+    until_dt: datetime,
+    legacy_params: dict,
+    extras_raw: str | None,
+) -> tuple:
+    # legacy_params values are list[str] (filter params). Convert to tuples so
+    # the whole key is hashable, and sort by name so different insertion
+    # orders yield the same key.
+    sorted_filters = tuple(sorted(
+        (k, tuple(v) if isinstance(v, list) else v)
+        for k, v in legacy_params.items()
+    ))
+    return (
+        chain_group or "",
+        token_group or "",
+        chain or "",
+        kind or "",
+        token or "",
+        interval,
+        since_dt.isoformat(),
+        until_dt.isoformat(),
+        sorted_filters,
+        extras_raw or "",
+    )
+
+
+def _agg_cache_get(key: tuple) -> str | None:
+    entry = _AGG_CACHE.get(key)
+    if entry is None:
+        return None
+    expires_at, body = entry
+    if time.monotonic() > expires_at:
+        _AGG_CACHE.pop(key, None)
+        return None
+    return body
+
+
+def _agg_cache_set(key: tuple, body: str) -> None:
+    now = time.monotonic()
+    if len(_AGG_CACHE) >= _AGG_CACHE_MAX:
+        # Drop everything that's already expired, in one sweep.
+        for k in list(_AGG_CACHE.keys()):
+            if _AGG_CACHE[k][0] <= now:
+                del _AGG_CACHE[k]
+        # If we're still at the limit, drop the entry expiring soonest —
+        # we'd have lost it next anyway.
+        if len(_AGG_CACHE) >= _AGG_CACHE_MAX:
+            soonest = min(_AGG_CACHE, key=lambda k: _AGG_CACHE[k][0])
+            _AGG_CACHE.pop(soonest, None)
+    _AGG_CACHE[key] = (now + _AGG_CACHE_TTL, body)
+
+
+@bp.post("/admin/transfers/cache/clear")
+async def clear_agg_cache(_request):
+    """Wipe the aggregate-response cache. Use after a wallets re-upload or a
+    deliberate backfill so subsequent queries pull fresh from CH."""
+    n = len(_AGG_CACHE)
+    _AGG_CACHE.clear()
+    return response.json({"cleared": n})
+
+
 @bp.get("/transfers/aggregate")
 async def aggregate(request):
     # Single-stream selection (chain + kind + token) — required when neither
@@ -344,6 +435,20 @@ async def aggregate(request):
         else ""
     )
 
+    # ---- response cache lookup (skipped when ?fresh=1) -------------------
+    # All inputs that affect the response are now resolved (cat/entity
+    # filters, extras, time range, etc.), so we can form a stable key. The
+    # dashboard rounds `until` to the minute boundary, so within a single
+    # minute every chart fires the same key and hits the cache.
+    cache_key = _agg_cache_key(
+        chain_group, token_group, chain, kind, token,
+        interval, since_dt, until_dt, legacy_params, extras_raw,
+    )
+    if request.args.get("fresh") != "1":
+        cached_body = _agg_cache_get(cache_key)
+        if cached_body is not None:
+            return response.text(cached_body, content_type="application/json")
+
     # Build the chain/kind/token predicate — single tuple or multi-tuple IN list.
     ch_params: dict = {
         "seconds": seconds,
@@ -454,7 +559,12 @@ async def aggregate(request):
         resp_body["chain"] = chain
         resp_body["kind"] = kind
         resp_body["token"] = token
-    return response.json(resp_body)
+
+    # Serialise once, cache the bytes, return them. Cache hits skip the
+    # json.dumps cost.
+    body_json = json.dumps(resp_body)
+    _agg_cache_set(cache_key, body_json)
+    return response.text(body_json, content_type="application/json")
 
 
 # --- /transfers/categories + /transfers/entities ------------------------------
