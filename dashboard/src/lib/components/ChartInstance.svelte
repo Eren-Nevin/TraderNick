@@ -308,9 +308,17 @@
   // Optional week-marker overlay: dotted vertical lines at the start of each
   // Saturday and Monday (UTC) inside the loaded window. Skipped when the
   // toggle is off so we don't waste CPU computing boundaries.
+  //   - zinc-400 (#a1a1aa) so the lines actually read against the dark chart
+  //     background — chart-grid (zinc-700) was too dim to see.
+  //   - dash "2,4" + width 1 keeps them narrow / clearly "annotation"-style
+  //     rather than competing with the data series.
   let weekVRefLines = $derived(
     instance.showWeekLines
-      ? weekBoundariesSec(xExtent[0], xExtent[1]).map((t) => ({ time: t }))
+      ? weekBoundariesSec(xExtent[0], xExtent[1]).map((t) => ({
+          time: t,
+          color: '#a1a1aa',
+          dash: '2,4'
+        }))
       : []
   );
 
