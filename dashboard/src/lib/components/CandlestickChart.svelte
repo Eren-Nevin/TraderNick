@@ -45,7 +45,10 @@
   let svgEl = $state<SVGSVGElement | null>(null);
   let width = $state(800);
 
-  const MARGIN = { top: 12, right: 70, bottom: 26, left: 56 };
+  // Bottom margin used to be 26 (same as LineChart) but OHLCV doesn't
+  // really need that much room for the date-only tick labels, so the
+  // chart ended up with visible dead space below the volume pane.
+  const MARGIN = { top: 12, right: 70, bottom: 18, left: 56 };
   const PRICE_FRACTION = 0.78;
   const GAP = 8;
 
