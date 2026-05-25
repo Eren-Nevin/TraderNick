@@ -53,16 +53,39 @@
   let sharedHoverTime = $state<number | null>(null);
 
   let insertOpen = $state(false);
+  // When set, the next addChart/addTemplate/addTemplateVariant splices the
+  // new chart at this index (pushing subsequent charts down). When null, the
+  // chart is appended to the end. Set by the per-chart "+" hover button so
+  // the menu can be reused with the right insertion target.
+  let insertIdx = $state<number | null>(null);
+  // Viewport coords of the "+" that triggered the menu, used so the menu can
+  // appear next to the click instead of always at the bottom pad. null when
+  // the menu was triggered from the bottom "+ Insert Chart" pad.
+  let insertMenuPos = $state<{ x: number; y: number } | null>(null);
   // IDs of templates whose parameter sub-list is currently expanded in the menu.
   let expandedTemplates = $state<Set<string>>(new Set());
 
   function openInsert() {
     if (instances.length >= MAX_CHARTS) return;
     insertOpen = !insertOpen;
+    insertIdx = null;
+    insertMenuPos = null;
     if (!insertOpen) expandedTemplates = new Set();
+  }
+  function openInsertAt(idx: number, ev: MouseEvent) {
+    if (instances.length >= MAX_CHARTS) return;
+    insertIdx = idx;
+    // Anchor the menu to the clicked +. getBoundingClientRect would be more
+    // precise; using clientX/Y is fine since the menu uses translate-X to
+    // centre itself on the anchor.
+    insertMenuPos = { x: ev.clientX, y: ev.clientY };
+    insertOpen = true;
+    expandedTemplates = new Set();
   }
   function closeInsert() {
     insertOpen = false;
+    insertIdx = null;
+    insertMenuPos = null;
     expandedTemplates = new Set();
   }
   function toggleTemplateExpand(id: string) {
@@ -71,30 +94,32 @@
     else next.add(id);
     expandedTemplates = next;
   }
+  /** Splice `inst` at insertIdx (or append if null), then close the menu. */
+  function placeInstance(inst: ChartInstanceT) {
+    const at = insertIdx;
+    if (at === null || at < 0 || at >= instances.length) {
+      instances = [...instances, inst];
+    } else {
+      instances = [...instances.slice(0, at), inst, ...instances.slice(at)];
+    }
+    closeInsert();
+  }
   function addChart(kind: ChartKind) {
     if (instances.length >= MAX_CHARTS) return;
     const tk = defaultToken ?? tokens[0] ?? 'BTC';
-    const inst = newChartInstance(kind, { token: tk, chain: defaultChain });
-    instances = [...instances, inst];
-    insertOpen = false;
+    placeInstance(newChartInstance(kind, { token: tk, chain: defaultChain }));
   }
   function addTemplate(t: ChartTemplate) {
     if (instances.length >= MAX_CHARTS || !t.build) return;
     const tk = defaultToken ?? tokens[0] ?? 'BTC';
-    const inst = t.build({ token: tk, chain: defaultChain });
-    instances = [...instances, inst];
-    insertOpen = false;
-    expandedTemplates = new Set();
+    placeInstance(t.build({ token: tk, chain: defaultChain }));
   }
   function addTemplateVariant(
     build: (defaults: { token: string; chain?: string }) => ChartInstanceT
   ) {
     if (instances.length >= MAX_CHARTS) return;
     const tk = defaultToken ?? tokens[0] ?? 'BTC';
-    const inst = build({ token: tk, chain: defaultChain });
-    instances = [...instances, inst];
-    insertOpen = false;
-    expandedTemplates = new Set();
+    placeInstance(build({ token: tk, chain: defaultChain }));
   }
   function removeChart(id: string) {
     instances = instances.filter((i) => i.id !== id);
@@ -354,7 +379,19 @@
     <div
       animate:flip={{ duration: FLIP_MS }}
       style="grid-column: span {inst.width}; grid-row: span {inst.height};"
+      class="relative insert-host"
     >
+      <!-- "+" hover zone sitting in the row-gap above this chart. Clicking
+           opens the insert menu pre-set to insert *before* this chart. -->
+      <button
+        type="button"
+        class="insert-plus"
+        aria-label="Insert chart before this one"
+        title="Insert chart here"
+        onclick={(e) => openInsertAt(idx, e)}
+      >
+        <span class="insert-plus-dot">+</span>
+      </button>
       <ChartInstance
         bind:instance={instances[idx]}
         {tokens}
@@ -373,6 +410,64 @@
   {/each}
 </section>
 
+{#snippet insertMenuBody()}
+  {#if templates.length > 0}
+    <div class="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-widest text-zinc-500">
+      Templates
+    </div>
+    {#each templates as t (t.id)}
+      {#if t.variants && t.variants.length > 0}
+        <button
+          type="button"
+          onclick={() => toggleTemplateExpand(t.id)}
+          class="flex items-center justify-between w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+          aria-expanded={expandedTemplates.has(t.id)}
+        >
+          <span>{t.label}</span>
+          <span class="text-zinc-500 text-[10px] ml-2"
+            >{expandedTemplates.has(t.id) ? '▾' : '▸'}</span
+          >
+        </button>
+        {#if expandedTemplates.has(t.id)}
+          <div class="bg-zinc-900/40">
+            {#each t.variants as v (v.id)}
+              <button
+                type="button"
+                onclick={() => addTemplateVariant(v.build)}
+                class="block w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+              >{v.label}</button>
+            {/each}
+          </div>
+        {/if}
+      {:else if t.build}
+        <button
+          type="button"
+          onclick={() => addTemplate(t)}
+          class="block w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+        >{t.label}</button>
+      {/if}
+    {/each}
+    <div class="border-t border-zinc-800 my-1"></div>
+  {/if}
+  <div class="px-3 pt-0.5 pb-0.5 text-[10px] uppercase tracking-widest text-zinc-500">
+    Blank chart
+  </div>
+  {#each availableKinds as k (k)}
+    <button
+      type="button"
+      onclick={() => addChart(k)}
+      class="block w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+    >{CHART_KIND_LABELS[k]}</button>
+  {/each}
+  <div class="border-t border-zinc-800 mt-1 pt-1">
+    <button
+      type="button"
+      onclick={closeInsert}
+      class="block w-full text-left px-3 py-1 text-[10px] uppercase tracking-widest text-zinc-500 hover:text-zinc-300"
+    >Cancel</button>
+  </div>
+{/snippet}
+
 {#if instances.length < MAX_CHARTS}
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
     <div
@@ -385,68 +480,86 @@
         onclick={openInsert}
         class="text-sm text-zinc-400 hover:text-zinc-100 px-3 py-2"
       >+ Insert Chart</button>
-      {#if insertOpen}
+      {#if insertOpen && insertMenuPos === null}
         <div
           class="absolute z-30 top-12 left-1/2 -translate-x-1/2 bg-zinc-950 border border-zinc-700 rounded-md shadow-xl shadow-black/60 py-1 min-w-[260px] max-h-[60vh] overflow-y-auto"
           role="menu"
         >
-          {#if templates.length > 0}
-            <div class="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-widest text-zinc-500">
-              Templates
-            </div>
-            {#each templates as t (t.id)}
-              {#if t.variants && t.variants.length > 0}
-                <button
-                  type="button"
-                  onclick={() => toggleTemplateExpand(t.id)}
-                  class="flex items-center justify-between w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-                  aria-expanded={expandedTemplates.has(t.id)}
-                >
-                  <span>{t.label}</span>
-                  <span class="text-zinc-500 text-[10px] ml-2"
-                    >{expandedTemplates.has(t.id) ? '▾' : '▸'}</span
-                  >
-                </button>
-                {#if expandedTemplates.has(t.id)}
-                  <div class="bg-zinc-900/40">
-                    {#each t.variants as v (v.id)}
-                      <button
-                        type="button"
-                        onclick={() => addTemplateVariant(v.build)}
-                        class="block w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-                      >{v.label}</button>
-                    {/each}
-                  </div>
-                {/if}
-              {:else if t.build}
-                <button
-                  type="button"
-                  onclick={() => addTemplate(t)}
-                  class="block w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-                >{t.label}</button>
-              {/if}
-            {/each}
-            <div class="border-t border-zinc-800 my-1"></div>
-          {/if}
-          <div class="px-3 pt-0.5 pb-0.5 text-[10px] uppercase tracking-widest text-zinc-500">
-            Blank chart
-          </div>
-          {#each availableKinds as k (k)}
-            <button
-              type="button"
-              onclick={() => addChart(k)}
-              class="block w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-            >{CHART_KIND_LABELS[k]}</button>
-          {/each}
-          <div class="border-t border-zinc-800 mt-1 pt-1">
-            <button
-              type="button"
-              onclick={closeInsert}
-              class="block w-full text-left px-3 py-1 text-[10px] uppercase tracking-widest text-zinc-500 hover:text-zinc-300"
-            >Cancel</button>
-          </div>
+          {@render insertMenuBody()}
         </div>
       {/if}
     </div>
   </div>
 {/if}
+
+<!-- Floating insert menu — anchored to the per-chart "+" that opened it. -->
+{#if insertOpen && insertMenuPos !== null}
+  <!-- Click-outside scrim. Captures clicks anywhere on the page and closes the menu. -->
+  <div
+    class="fixed inset-0 z-40"
+    onclick={closeInsert}
+    role="presentation"
+  ></div>
+  <div
+    class="fixed z-50 bg-zinc-950 border border-zinc-700 rounded-md shadow-xl shadow-black/60 py-1 min-w-[260px] max-h-[60vh] overflow-y-auto"
+    style="left: {Math.min(Math.max(insertMenuPos.x - 130, 8), (typeof window !== 'undefined' ? window.innerWidth : 1200) - 268)}px; top: {insertMenuPos.y + 8}px;"
+    role="menu"
+    onclick={(e) => e.stopPropagation()}
+    onkeydown={(e) => { if (e.key === 'Escape') closeInsert(); }}
+  >
+    {@render insertMenuBody()}
+  </div>
+{/if}
+
+<style>
+  /* Insert-between-charts affordance. Each chart wrapper hosts an absolute
+     button overhanging the row gap above it. The button is invisible until
+     the wrapper is hovered, at which point a small "+" circle appears
+     centred at the top.
+
+     The hit area is wider than the visible circle (full chart width × 24px
+     tall) so a casual hover near the top of the chart triggers it. The
+     circle uses pointer-events: none so the click target is the whole bar,
+     not just the dot. */
+  .insert-host > .insert-plus {
+    position: absolute;
+    top: -16px;
+    left: 0;
+    right: 0;
+    height: 24px;
+    z-index: 20;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    transition: opacity 120ms ease;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+  }
+  /* Show when the wrapper is hovered, or when the button itself is
+     focus-visible (keyboard access). */
+  .insert-host:hover > .insert-plus,
+  .insert-host > .insert-plus:focus-visible {
+    opacity: 1;
+  }
+  .insert-plus-dot {
+    pointer-events: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 9999px;
+    background-color: rgb(24 24 27);            /* zinc-900 */
+    border: 1px solid rgb(82 82 91);            /* zinc-600 */
+    color: rgb(228 228 231);                    /* zinc-200 */
+    font-size: 16px;
+    line-height: 22px;
+    text-align: center;
+    display: inline-block;
+    transition: background-color 120ms, border-color 120ms;
+  }
+  .insert-host > .insert-plus:hover .insert-plus-dot {
+    background-color: rgb(59 130 246 / 0.25);   /* blue-500/25 */
+    border-color: rgb(96 165 250);              /* blue-400 */
+    color: rgb(219 234 254);                    /* blue-100 */
+  }
+</style>
