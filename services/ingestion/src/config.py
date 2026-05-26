@@ -81,8 +81,14 @@ LIDO_ETH_EVENTS = _parse_csv_list_raw(
 LIDO_L2_EVENTS = _parse_csv_list_raw(
     os.environ.get("LIDO_L2_EVENTS", "l2_deposit,l2_withdrawal_request")
 )
+# DeFiStream's catalogue lists 9 L2s for Lido coverage, but the runtime
+# API only has ARB + BASE configured today — the others return
+# "Network X not configured". We keep just the live two in the default so
+# the poller doesn't burn rate budget on dead chains every minute. Add
+# more to the env var as DeFiStream lights them up; the backfill driver
+# already fast-forwards any "not configured" chain on its own.
 LIDO_L2_CHAINS = _parse_csv_list(
-    os.environ.get("LIDO_L2_CHAINS", "ARB,BASE,OP,ZK,MANTLE,MODE,SONEIUM,UNI,ZIRCUIT")
+    os.environ.get("LIDO_L2_CHAINS", "ARB,BASE")
 )
 
 
