@@ -2,7 +2,7 @@ import { INTERNAL_DATA_SERVER_URL } from '$lib/server/env';
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
-const PASSTHROUGH = ['event', 'chain', 'interval', 'since', 'until', 'limit', 'fresh'];
+const PASSTHROUGH = ['event', 'chain', 'chain_group', 'interval', 'since', 'until', 'limit', 'fresh'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

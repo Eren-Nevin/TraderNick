@@ -41,6 +41,7 @@
   <DynamicChartLayout
     tokens={data.tokens}
     lidoChains={data.lidoChains}
+    chainGroups={data.chainGroups}
     storageKey="tradernick:staking:layout:v1"
     availableKinds={AVAILABLE_KINDS}
     defaultChain="ARB"

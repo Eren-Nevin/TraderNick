@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from sanic import Blueprint, response
 
 from clickhouse import client
+from routes.groups import is_chain_group, resolve_chain_group
 from routes.ohlcv import INTERVAL_SECONDS
 
 bp = Blueprint("lido")
@@ -50,21 +51,44 @@ async def aggregate(request):
     table, amount_col = _EVENT_TABLES[event]
 
     chain = request.args.get("chain")
+    chain_group = request.args.get("chain_group")
     interval = request.args.get("interval", "1h")
     since = request.args.get("since")
     until = request.args.get("until")
     limit = int(request.args.get("limit", "10000"))
 
-    if not chain:
-        return response.json({"error": "missing chain"}, status=400)
     if interval not in INTERVAL_SECONDS:
         return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
     if not since or not until:
         return response.json({"error": "missing since/until"}, status=400)
 
+    # Resolve chain axis: single chain OR a server-defined group (e.g. EVM,
+    # All). When grouped, predicate becomes `chain IN (...)` so the sum
+    # spans every chain in the group that has rows for this event.
+    if chain_group:
+        if not is_chain_group(chain_group):
+            return response.json({"error": f"unknown chain_group {chain_group!r}"}, status=400)
+        chains = await resolve_chain_group(chain_group)
+    elif chain:
+        chains = [chain.upper()]
+    else:
+        return response.json({"error": "missing chain (or chain_group)"}, status=400)
+
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since)
     until_dt = _parse_iso(until)
+
+    if len(chains) == 1:
+        chain_where = "chain = {chain:String}"
+        ch_extra = {"chain": chains[0]}
+    else:
+        # Build a literal `IN (...)` — `chains` comes from the server-side
+        # group catalogue (never raw user input) but we still defensively
+        # quote-escape each element.
+        def _q(s: str) -> str:
+            return "'" + s.replace("'", "''") + "'"
+        chain_where = f"chain IN ({', '.join(_q(c) for c in chains)})"
+        ch_extra = {}
 
     sql = f"""
         SELECT
@@ -73,7 +97,7 @@ async def aggregate(request):
             sum(coalesce(value_usd, 0))                AS sum_value_usd,
             count()                                    AS count
         FROM {table}
-        WHERE chain = {{chain:String}}
+        WHERE {chain_where}
           AND time >= {{since:DateTime}}
           AND time <  {{until:DateTime}}
         GROUP BY bucket
@@ -84,10 +108,10 @@ async def aggregate(request):
     ch = await client()
     rows = await ch.query(sql, parameters={
         "seconds": seconds,
-        "chain": chain.upper(),
         "since": since_dt,
         "until": until_dt,
         "limit": limit,
+        **ch_extra,
     })
     series = [
         {
@@ -98,12 +122,13 @@ async def aggregate(request):
         }
         for r in rows.result_rows
     ]
-    return response.json({
-        "event": event,
-        "chain": chain.upper(),
-        "interval": interval,
-        "series": series,
-    })
+    body = {"event": event, "interval": interval, "series": series}
+    if chain_group:
+        body["chain_group"] = chain_group
+        body["chains"] = chains
+    else:
+        body["chain"] = chains[0]
+    return response.json(body)
 
 
 @bp.get("/lido/streams")

@@ -200,7 +200,9 @@
     const list = seen.size > 0 ? Array.from(seen).sort() : _L2_FALLBACK;
     return list;
   });
-  // Auto-snap when the chosen chain isn't in the available list.
+  // Auto-snap when the chosen chain isn't in the available list. A chain
+  // group selection (e.g. 'EVM') counts as valid — skip the snap so the
+  // user's compound choice survives a chains-list refetch.
   $effect(() => {
     if (!isLidoKind(instance.kind)) return;
     const list = lidoChainsForKind;
@@ -209,6 +211,7 @@
       if (instance.chain !== 'ETH') instance.chain = 'ETH';
       return;
     }
+    if (activeChainGroup) return;
     if (!instance.chain || !list.includes(instance.chain)) {
       instance.chain = list[0];
     }
@@ -501,10 +504,12 @@
       return `${instance.kind}|${cPart}|${pPart}|${instance.interval}`;
     }
     if (isLidoKind(instance.kind)) {
-      // Lido charts are keyed only by (kind, chain, interval) — no token /
-      // pool axis. L1 kinds are ETH-pinned but we include the chain anyway
-      // for consistency.
-      const cPart = instance.chain ?? '';
+      // Lido charts are keyed by (kind, chain | chain_group, interval). L1
+      // kinds are ETH-pinned but we include the axis anyway. The cg: prefix
+      // makes "EVM" (group) cache-distinct from a literal "EVM" chain name.
+      const cPart = activeChainGroup
+        ? `cg:${activeChainGroup.name}`
+        : (instance.chain ?? '');
       return `${instance.kind}|${cPart}|${instance.interval}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
@@ -749,12 +754,20 @@
         const buildLidoQs = (event: string) => {
           const qs = new URLSearchParams({
             event,
-            chain: instance.chain ?? 'ETH',
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
             limit: '5000'
           });
+          // L2 kinds can select a chain group (EVM / All) which the server
+          // expands to a `chain IN (...)` predicate. L1 kinds stay ETH-pinned
+          // — the auto-snap effect forces instance.chain to 'ETH' so no
+          // group case is reachable for them.
+          if (activeChainGroup) {
+            qs.set('chain_group', activeChainGroup.name);
+          } else {
+            qs.set('chain', instance.chain ?? 'ETH');
+          }
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
@@ -1503,18 +1516,32 @@
       ].join(' ')}
     >
       {#if isLidoKind(instance.kind)}
-        <!-- Lido kinds: a single chain dropdown. L1 kinds are ETH-pinned
-             (selector shows just ETH, disabled-looking but kept for layout
-             symmetry). L2 kinds get the list of L2 chains that DeFiStream
-             has actually delivered for this kind's event. -->
+        <!-- Lido kinds: chain dropdown. L1 kinds are ETH-pinned (disabled).
+             L2 kinds list the chains DeFiStream has actually delivered for
+             this kind's event PLUS any compound chain groups (EVM, All)
+             surfaced by the server. Selecting a group resolves to
+             `chain IN (...)` server-side. -->
         <select
           bind:value={instance.chain}
           disabled={LIDO_L1_KINDS.has(instance.kind)}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          {#each lidoChainsForKind as c (c)}
-            <option value={c}>{c}</option>
-          {/each}
+          {#if !LIDO_L1_KINDS.has(instance.kind) && chainGroups.length > 0}
+            <optgroup label="Chain">
+              {#each lidoChainsForKind as c (c)}
+                <option value={c}>{c}</option>
+              {/each}
+            </optgroup>
+            <optgroup label="Chain group">
+              {#each chainGroups as g (g.name)}
+                <option value={g.name} title={g.description}>Σ {g.label}</option>
+              {/each}
+            </optgroup>
+          {:else}
+            {#each lidoChainsForKind as c (c)}
+              <option value={c}>{c}</option>
+            {/each}
+          {/if}
         </select>
       {:else if isUniswapKind(instance.kind)}
         <!-- Uniswap kinds: chain dropdown (only chains that have ingested
