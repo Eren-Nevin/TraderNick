@@ -274,6 +274,7 @@ export type ChartKind =
   | 'lido_withdrawal_claimed'
   | 'lido_net_stake'
   | 'lido_net_request_stake'
+  | 'lido_request_pending'
   | 'lido_l2_deposit'
   | 'lido_l2_withdrawal_request'
   | 'lido_l2_net';
@@ -307,6 +308,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   lido_withdrawal_claimed: 'Lido Withdrawal Claims',
   lido_net_stake: 'Lido Net Stake',
   lido_net_request_stake: 'Lido Net Request Stake',
+  lido_request_pending: 'Lido Request Pending',
   lido_l2_deposit: 'Lido L2 Deposits',
   lido_l2_withdrawal_request: 'Lido L2 Withdrawal Requests',
   lido_l2_net: 'Lido L2 Net'
@@ -394,6 +396,7 @@ export const LIDO_CHART_KINDS: ChartKind[] = [
   'lido_withdrawal_claimed',
   'lido_net_stake',
   'lido_net_request_stake',
+  'lido_request_pending',
   'lido_l2_deposit',
   'lido_l2_withdrawal_request',
   'lido_l2_net'
@@ -421,6 +424,11 @@ export const LIDO_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
 export const LIDO_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
   lido_net_stake: ['deposit', 'withdrawal_claimed'],
   lido_net_request_stake: ['deposit', 'withdrawal_request'],
+  // Pending queue depth: requests that have been made but not yet
+  // finalised. Positive value = unstake queue is growing (requests
+  // arriving faster than claims clear). Goes negative when a batch of
+  // claims settles old requests in a window with few new requests.
+  lido_request_pending: ['withdrawal_request', 'withdrawal_claimed'],
   lido_l2_net: ['l2_deposit', 'l2_withdrawal_request']
 };
 
@@ -430,7 +438,8 @@ export const LIDO_L1_KINDS = new Set<ChartKind>([
   'lido_withdrawal_request',
   'lido_withdrawal_claimed',
   'lido_net_stake',
-  'lido_net_request_stake'
+  'lido_net_request_stake',
+  'lido_request_pending'
 ]);
 
 /** True for any Lido kind (single-event or net). */

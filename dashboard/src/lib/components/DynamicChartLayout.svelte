@@ -288,7 +288,8 @@
           inst.kind === 'lido_withdrawal_request' ||
           inst.kind === 'lido_withdrawal_claimed' ||
           inst.kind === 'lido_net_stake' ||
-          inst.kind === 'lido_net_request_stake';
+          inst.kind === 'lido_net_request_stake' ||
+          inst.kind === 'lido_request_pending';
         const ch = typeof r.chain === 'string' ? r.chain : (isL1 ? 'ETH' : (defaultChain ?? 'ARB'));
         inst.chain = isL1 ? 'ETH' : ch;
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
