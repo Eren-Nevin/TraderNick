@@ -1133,9 +1133,20 @@
   // The backend prices each transfer with the ASOF-nearest 1m OHLCV close,
   // so this number is honest dollars — no longer token amount with a "$"
   // formatter slapped on.
-  let transferMainLabel = $derived(
-    instance.netFilter ? 'Netflow' : (activeFilterIsAny ? activeFilterLabel : 'Total')
-  );
+  // For *template* transfer charts (CeX Inflow, Hyperliquid Outflow, etc.)
+  // the tooltip legend should read "<TemplateName> <Token>" — much more
+  // useful than the generic "Netflow" / "Total" / auto-named filter blob
+  // when comparing multiple template charts side-by-side. The token can be
+  // a compound (token group name) — instance.token holds either form, so
+  // a single field works for both. Non-template transfer charts keep the
+  // previous Netflow / auto-name / Total fallback.
+  let transferMainLabel = $derived.by(() => {
+    if (typeof instance.templateName === 'string' && instance.templateName.length > 0) {
+      return `${instance.templateName} ${instance.token}`;
+    }
+    if (instance.netFilter) return 'Netflow';
+    return activeFilterIsAny ? activeFilterLabel : 'Total';
+  });
   let transferLinesD = $derived([
     ...(instance.showPoint
       ? [{
