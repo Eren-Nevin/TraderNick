@@ -273,9 +273,12 @@
           : [];
       }
       // AAVE chart kinds (single-event + net) need a `chain` just like the
-      // transfer kind. Default to the page's preferred chain.
+      // transfer kind. Default to the page's preferred chain. valueMode
+      // ('usd' / 'amount') is restored if previously set; otherwise default
+      // to 'usd' so the chart keeps its old behaviour after migration.
       if (inst.kind.startsWith('aave_')) {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
       }
       // Lido chart kinds need a `chain` but no token / pool. L1 kinds are
       // ETH-pinned; L2 kinds default to ARB (highest wstETH bridge volume).
@@ -288,6 +291,7 @@
           inst.kind === 'lido_net_request_stake';
         const ch = typeof r.chain === 'string' ? r.chain : (isL1 ? 'ETH' : (defaultChain ?? 'ARB'));
         inst.chain = isL1 ? 'ETH' : ch;
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
       }
       // Uniswap chart kinds also need a `chain`, plus a `uniPool` 3-tuple
       // (symbol0 / symbol1 / fee). Validate the pool shape; fall back to a

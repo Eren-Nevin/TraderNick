@@ -28,6 +28,8 @@
     SIZE_CYCLE,
     TOP_TRADERS_LINES,
     defaultView,
+    fmtAmountAxis,
+    fmtAmountTooltip,
     fmtUsdAxis,
     fmtUsdTooltip,
     lookbackWindow,
@@ -1299,17 +1301,27 @@
     ...cumulativeLines
   ]);
 
-  // AAVE event lines — same shape as the transfer chart: one cyan series of
-  // sum_value_usd per bucket, with the chart's MAs computed on it. Falls
-  // back to sum_amount for tokens without a USD valuation (rare).
+  // For event-driven kinds (AAVE / Lido) the user can toggle between
+  // sum_value_usd (default) and sum_amount via instance.valueMode. Both
+  // fields come back from /aave/aggregate + /lido/aggregate today, so no
+  // server change is needed — the toggle just picks which one to plot
+  // and swaps the axis/tooltip formatter to match.
+  let useUsdValue = $derived((instance.valueMode ?? 'usd') === 'usd');
+  let valueField = $derived(useUsdValue ? 'sum_value_usd' : 'sum_amount');
+  let valueAxisFn = $derived(useUsdValue ? fmtUsdAxis : fmtAmountAxis);
+  let valueTooltipFn = $derived(useUsdValue ? fmtUsdTooltip : fmtAmountTooltip);
+
+  // AAVE event lines — cyan main series + the chart's MAs. With
+  // valueMode='amount' we plot sum_amount (raw token units, summed across
+  // whatever the chain/token-group selector resolves to) instead of USD.
   let aaveLinesD = $derived([
     ...(instance.showPoint
       ? [{
           key: 'main',
-          label: CHART_KIND_LABELS[instance.kind] ?? 'AAVE',
+          label: (CHART_KIND_LABELS[instance.kind] ?? 'AAVE') + (useUsdValue ? '' : ' (amount)'),
           color: '#06b6d4',
           compute: (d: Record<string, number>) =>
-            (d.sum_value_usd ?? 0) || (d.sum_amount ?? 0)
+            (d[valueField] ?? 0) || (d.sum_value_usd ?? 0) || (d.sum_amount ?? 0)
         }]
       : []),
     ...cumulativeLines
@@ -1331,17 +1343,18 @@
     ...cumulativeLines
   ]);
 
-  // Lido event lines — identical shape to AAVE/Uniswap. The fallback
-  // sum_amount-when-no-value_usd matters more here because some L2
-  // bridge rows ship without USD pricing.
+  // Lido event lines — identical shape to AAVE. With valueMode='amount' the
+  // series shows raw token units (stETH for L1 deposits/requests, ETH for
+  // claims, wstETH for L2 events); USD mode is the default. Useful for
+  // tracking unit flow when ETH price swings make USD totals noisy.
   let lidoLinesD = $derived([
     ...(instance.showPoint
       ? [{
           key: 'main',
-          label: CHART_KIND_LABELS[instance.kind] ?? 'Lido',
+          label: (CHART_KIND_LABELS[instance.kind] ?? 'Lido') + (useUsdValue ? '' : ' (amount)'),
           color: '#06b6d4',
           compute: (d: Record<string, number>) =>
-            (d.sum_value_usd ?? 0) || (d.sum_amount ?? 0)
+            (d[valueField] ?? 0) || (d.sum_value_usd ?? 0) || (d.sum_amount ?? 0)
         }]
       : []),
     ...cumulativeLines
@@ -1769,6 +1782,31 @@
         <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
         Week lines
       </label>
+      {#if isAaveKind(instance.kind) || isLidoKind(instance.kind)}
+        <!-- USD ⇆ Amount toggle. Uniswap is intentionally excluded — its
+             amount column mixes token0+token1 (or amount_sold across both
+             swap sides), so the toggle would have no clean unit. -->
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Y axis</span>
+        <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
+          <button
+            type="button"
+            onclick={() => (instance.valueMode = 'usd')}
+            class={'px-2 py-0.5 text-[11px] ' + ((instance.valueMode ?? 'usd') === 'usd'
+              ? 'bg-zinc-800 text-zinc-100'
+              : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="Plot sum of value_usd"
+          >USD</button>
+          <button
+            type="button"
+            onclick={() => (instance.valueMode = 'amount')}
+            class={'px-2 py-0.5 text-[11px] border-l border-zinc-700 ' + (instance.valueMode === 'amount'
+              ? 'bg-zinc-800 text-zinc-100'
+              : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="Plot sum of raw token amount (units depend on the event)"
+          >Amount</button>
+        </div>
+      {/if}
       <span class="w-px h-4 bg-zinc-800"></span>
       {#each instance.mas as ma, idx}
         <div class="flex items-center gap-1.5">
@@ -2180,8 +2218,8 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={fmtUsdAxis}
-        formatTooltip={fmtUsdTooltip}
+        formatY={valueAxisFn}
+        formatTooltip={valueTooltipFn}
       />
     {:else if isUniswapKind(instance.kind)}
       <LineChart
@@ -2208,8 +2246,8 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={fmtUsdAxis}
-        formatTooltip={fmtUsdTooltip}
+        formatY={valueAxisFn}
+        formatTooltip={valueTooltipFn}
       />
     {/if}
 

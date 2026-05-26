@@ -105,6 +105,29 @@ export function fmtUsdTooltip(v: number) {
   return `${sign}$${abs.toFixed(2)}`;
 }
 
+/** Token-amount formatters — same K/M/B abbreviation as the USD ones but
+ *  without the $ prefix. Used when an event-driven chart is toggled to
+ *  amount mode (sum of raw token amount instead of USD value). */
+export function fmtAmountAxis(v: number) {
+  const abs = Math.abs(v);
+  const sign = v < 0 ? '-' : '';
+  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(2)}B`;
+  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(0)}K`;
+  if (abs >= 1)   return `${sign}${abs.toFixed(0)}`;
+  return `${sign}${abs.toFixed(3)}`;
+}
+
+export function fmtAmountTooltip(v: number) {
+  const abs = Math.abs(v);
+  const sign = v < 0 ? '-' : '';
+  if (abs >= 1e9) return `${sign}${(abs / 1e9).toFixed(3)}B`;
+  if (abs >= 1e6) return `${sign}${(abs / 1e6).toFixed(2)}M`;
+  if (abs >= 1e3) return `${sign}${(abs / 1e3).toFixed(1)}K`;
+  if (abs >= 1)   return `${sign}${abs.toFixed(2)}`;
+  return `${sign}${abs.toFixed(4)}`;
+}
+
 /** Return the Unix-second timestamps for every Saturday- and Monday-00:00
  *  UTC inside [sinceSec, untilSec]. Used by the optional "Week lines"
  *  overlay so users can eyeball weekly cycles. */
@@ -507,6 +530,11 @@ export type ChartInstance = {
   overInput?: string;
   // ohlcv only
   pin?: boolean;
+  /** For event-driven chart kinds (AAVE / Lido) that emit both a USD value
+   *  AND a raw token amount per row: which one to plot. Default 'usd'. The
+   *  toggle is hidden for Uniswap kinds because the amount field mixes
+   *  token0+token1 (or amount_sold across t0/t1) and has no clean unit. */
+  valueMode?: 'usd' | 'amount';
   // pc (Price Comparison) only — list of tokens to compare alongside
   // `instance.token`. Each one is fetched via /api/ohlcv and added as a
   // rebased % line. The primary `instance.token` is itself one of the
@@ -602,6 +630,7 @@ export function newChartInstance(
     // Default eth_market is empty, which the data_server treats as
     // "all markets".
     base.chain = defaults.chain ?? 'ETH';
+    base.valueMode = 'usd';
   }
   if (kind === 'transfer') {
     base.chain = defaults.chain ?? 'ETH';
@@ -618,6 +647,7 @@ export function newChartInstance(
     // pinned to ETH by construction; L2 kinds default to ARB (highest
     // wstETH bridge volume), the user can flip via the chain dropdown.
     base.chain = LIDO_L1_KINDS.has(kind) ? 'ETH' : (defaults.chain ?? 'ARB');
+    base.valueMode = 'usd';
   }
   return base;
 }
