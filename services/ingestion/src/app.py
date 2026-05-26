@@ -6,7 +6,11 @@ import tempfile
 
 from sanic import Sanic, response
 
-from scripts.bootstrap_wallets import load_into_clickhouse
+from scripts.bootstrap_wallets import (
+    load_into_clickhouse,
+    rematerialize_status,
+    rematerialize_transfers,
+)
 
 import config
 from jobs.manager import (
@@ -310,6 +314,20 @@ async def admin_wallets(request):
     - JSON path:        `{"path": "/app/data/wallets.parquet"}` — loads directly from
       an already-mounted file. Path must be readable by the ingestion container.
     """
+    # `skip_rematerialize=true` (multipart form field or JSON body field) skips
+    # the post-load rematerialize. Useful for tests or bulk imports where you
+    # want to batch multiple wallet edits before paying the rewrite cost.
+    skip_remat = False
+    try:
+        if hasattr(request, "form") and request.form is not None:
+            v = request.form.get("skip_rematerialize")
+            if v is not None:
+                skip_remat = str(v).lower() in ("1", "true", "yes")
+    except Exception:
+        pass
+    if not skip_remat and request.json is not None:
+        skip_remat = bool(request.json.get("skip_rematerialize", False))
+
     uploaded = request.files.get("file") if hasattr(request, "files") else None
     if uploaded is not None:
         tmp = tempfile.NamedTemporaryFile(prefix="wallets-upload-", suffix=".parquet", delete=False)
@@ -322,6 +340,8 @@ async def admin_wallets(request):
                 os.unlink(tmp.name)
             except OSError:
                 pass
+        if not skip_remat:
+            summary["rematerialize"] = await rematerialize_transfers()
         return response.json(summary)
 
     body = request.json or {}
@@ -335,4 +355,26 @@ async def admin_wallets(request):
         summary = await load_into_clickhouse(path)
     except FileNotFoundError:
         return response.json({"error": f"path not found: {path}"}, status=404)
+    if not skip_remat:
+        summary["rematerialize"] = await rematerialize_transfers()
     return response.json(summary)
+
+
+@app.post("/admin/wallets/rematerialize")
+async def admin_rematerialize(_request):
+    """Force a rebuild of the transfers table's wallet-derived columns + skip
+    indexes. Use after editing tradernick.wallets directly in ClickHouse (e.g.
+    a one-off INSERT to label a single address) — without this, the MATERIALIZED
+    columns and set() skip indexes on existing rows still encode the old
+    dictionary state, and filter queries silently return no data for the new
+    label.
+
+    Mutations are dispatched async; GET /admin/wallets/rematerialize/status to
+    poll progress.
+    """
+    return response.json(await rematerialize_transfers())
+
+
+@app.get("/admin/wallets/rematerialize/status")
+async def admin_rematerialize_status(_request):
+    return response.json(await rematerialize_status())

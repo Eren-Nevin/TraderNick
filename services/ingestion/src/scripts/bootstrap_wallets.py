@@ -145,6 +145,186 @@ async def load_into_clickhouse(src_path: str) -> dict:
     }
 
 
+# Columns whose values come from `dictGet(tradernick.wallet_labels, ...)` and
+# therefore need to be rewritten when the wallets table changes. Keep this in
+# sync with the MATERIALIZED columns declared in clickhouse/init/01_schema.sql.
+_TRANSFERS_WALLET_COLUMNS = (
+    "sender_categories",
+    "receiver_categories",
+    "sender_entity",
+    "receiver_entity",
+)
+
+# Skip indexes layered on top of those columns. We DROP + ADD them rather
+# than MATERIALIZE INDEX in place because in CH 24.x MATERIALIZE INDEX can
+# carry over the prior index state and continue producing false negatives
+# (this is what was actually biting us — see commit history). DROP + ADD
+# resets the index to "empty" and the subsequent MATERIALIZE INDEX builds
+# it from the current column data.
+_TRANSFERS_WALLET_INDEXES: tuple[tuple[str, str, str, int], ...] = (
+    # (index_name, column_expr, type_def, granularity)
+    ("idx_sender_categories",   "sender_categories",   "set(100)", 4),
+    ("idx_receiver_categories", "receiver_categories", "set(100)", 4),
+    ("idx_sender_entity",       "sender_entity",       "set(500)", 4),
+    ("idx_receiver_entity",     "receiver_entity",     "set(500)", 4),
+)
+
+
+async def _wait_for_mutations(ch, *, table: str, prefix: str, timeout_s: float = 7200.0):
+    """Poll system.mutations until every recent mutation matching `prefix` is
+    done. Used between the column-rewrite and index-rebuild phases so DROP
+    INDEX doesn't bounce off in-flight column mutations.
+    """
+    import asyncio as _asyncio  # local import — module is asyncio-aware
+    db, tbl = table.split(".", 1)
+    deadline = _asyncio.get_event_loop().time() + timeout_s
+    while True:
+        rows = await ch.query(
+            """
+            SELECT countIf(NOT is_done)
+            FROM system.mutations
+            WHERE database = {db:String}
+              AND table = {tbl:String}
+              AND command LIKE {pref:String}
+              AND create_time > now() - INTERVAL 1 DAY
+            """,
+            parameters={"db": db, "tbl": tbl, "pref": prefix + "%"},
+        )
+        n = int(rows.result_rows[0][0]) if rows.result_rows else 0
+        if n == 0:
+            return
+        if _asyncio.get_event_loop().time() > deadline:
+            raise RuntimeError(f"timed out waiting for {prefix} mutations on {table}")
+        await _asyncio.sleep(5)
+
+
+async def _rematerialize_worker(table: str):
+    """The long-running half of rematerialize_transfers — runs as a Sanic
+    background task so the POST endpoint returns immediately."""
+    ch = await async_client()
+    try:
+        log.info("rematerialize[worker]: reloading wallet_labels dictionary")
+        await ch.command("SYSTEM RELOAD DICTIONARY tradernick.wallet_labels")
+
+        materialize_cols = ", ".join(f"MATERIALIZE COLUMN {c}" for c in _TRANSFERS_WALLET_COLUMNS)
+        log.info("rematerialize[worker]: kicking MATERIALIZE COLUMN ×%d", len(_TRANSFERS_WALLET_COLUMNS))
+        await ch.command(
+            f"ALTER TABLE {table} {materialize_cols} SETTINGS mutations_sync = 0, alter_sync = 0"
+        )
+
+        # Wait for the column rewrites to settle before touching the indexes —
+        # DROP INDEX will block on any in-flight mutation against the same
+        # table, and we'd rather hold that wait inside this background task
+        # than inside the HTTP request.
+        log.info("rematerialize[worker]: waiting for MATERIALIZE COLUMN to finish")
+        await _wait_for_mutations(ch, table=table, prefix="MATERIALIZE COLUMN ")
+
+        # Index reset — DROP every one, then ADD them back, then MATERIALIZE.
+        # `alter_sync = 0` so the DDL returns once metadata is applied (no
+        # extra replica sync wait — we're single-node anyway).
+        for name, _col, _type, _gran in _TRANSFERS_WALLET_INDEXES:
+            try:
+                await ch.command(
+                    f"ALTER TABLE {table} DROP INDEX {name} SETTINGS alter_sync = 0"
+                )
+                log.info("rematerialize[worker]: dropped %s", name)
+            except Exception as exc:
+                log.info("rematerialize[worker]: skip DROP INDEX %s (%s)", name, exc)
+        adds = ", ".join(
+            f"ADD INDEX {name} {col} TYPE {t} GRANULARITY {g}"
+            for name, col, t, g in _TRANSFERS_WALLET_INDEXES
+        )
+        await ch.command(f"ALTER TABLE {table} {adds} SETTINGS alter_sync = 0")
+        log.info("rematerialize[worker]: re-added %d indexes", len(_TRANSFERS_WALLET_INDEXES))
+
+        materialize_idx = ", ".join(
+            f"MATERIALIZE INDEX {n}" for n, _c, _t, _g in _TRANSFERS_WALLET_INDEXES
+        )
+        await ch.command(
+            f"ALTER TABLE {table} {materialize_idx} SETTINGS mutations_sync = 0, alter_sync = 0"
+        )
+        log.info("rematerialize[worker]: kicked MATERIALIZE INDEX ×%d", len(_TRANSFERS_WALLET_INDEXES))
+    except Exception:
+        log.exception("rematerialize[worker]: failed")
+
+
+async def rematerialize_transfers(*, table: str = "tradernick.transfers") -> dict:
+    """Apply the post-wallet-change recovery sequence to the transfers table.
+
+    Schema-side, `<sender|receiver>_categories` and `<sender|receiver>_entity`
+    are MATERIALIZED columns sourced from the wallet_labels dictionary, with
+    set() skip indexes layered on top. Adding or editing rows in the wallets
+    table doesn't retroactively update either — historical rows keep whatever
+    the dictGet returned at insert time, and the skip indexes encode the old
+    granule-level value set. The fix is:
+
+      1. SYSTEM RELOAD DICTIONARY — refresh the in-memory dict.
+      2. MATERIALIZE COLUMN ×4 — rewrite each materialized column for every
+         existing part using the current dictionary state.
+      3. Wait for column mutations to finish (so DROP INDEX doesn't block).
+      4. DROP INDEX + ADD INDEX + MATERIALIZE INDEX ×4 — fully reset each
+         skip index. DROP+ADD because in CH 24.x MATERIALIZE INDEX alone can
+         preserve prior granule-set state and keep skipping rows that now
+         match.
+
+    The whole sequence runs as a Sanic background task so the HTTP request
+    returns immediately. Caller polls /admin/wallets/rematerialize/status for
+    progress. We import the Sanic app lazily so this module also works from
+    the standalone `python -m scripts.bootstrap_wallets` CLI path.
+    """
+    try:
+        from sanic import Sanic
+        app = Sanic.get_app("tradernick_ingestion")
+        app.add_task(_rematerialize_worker(table))
+        dispatch = "background_task"
+    except Exception:
+        # Not running inside Sanic (e.g. CLI bootstrap). Run inline.
+        await _rematerialize_worker(table)
+        dispatch = "inline"
+    return {
+        "ok": True,
+        "table": table,
+        "columns": list(_TRANSFERS_WALLET_COLUMNS),
+        "indexes": [n for n, _c, _t, _g in _TRANSFERS_WALLET_INDEXES],
+        "dispatch": dispatch,
+        "note": "poll /admin/wallets/rematerialize/status for progress",
+    }
+
+
+async def rematerialize_status(*, table: str = "tradernick.transfers") -> dict:
+    """Return outstanding wallet-related mutations on the transfers table."""
+    ch = await async_client()
+    rows = await ch.query(
+        """
+        SELECT mutation_id, command, is_done, parts_to_do, latest_failed_part, latest_fail_reason
+        FROM system.mutations
+        WHERE database = splitByChar('.', {table:String})[1]
+          AND table    = splitByChar('.', {table:String})[2]
+          AND (command LIKE 'MATERIALIZE COLUMN %' OR command LIKE 'MATERIALIZE INDEX %')
+        ORDER BY create_time DESC, command
+        LIMIT 32
+        """,
+        parameters={"table": table},
+    )
+    mutations = [
+        {
+            "mutation_id": r[0],
+            "command": r[1],
+            "is_done": bool(r[2]),
+            "parts_to_do": int(r[3]),
+            "latest_failed_part": r[4] or None,
+            "latest_fail_reason": r[5] or None,
+        }
+        for r in rows.result_rows
+    ]
+    pending = [m for m in mutations if not m["is_done"]]
+    return {
+        "table": table,
+        "in_progress": len(pending),
+        "mutations": mutations,
+    }
+
+
 async def main_async(argv: list[str] | None = None):
     p = argparse.ArgumentParser()
     p.add_argument("--src", default=DEFAULT_PARQUET, help=f"path to wallets parquet (default {DEFAULT_PARQUET})")
