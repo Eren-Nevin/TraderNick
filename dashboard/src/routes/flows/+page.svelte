@@ -123,12 +123,22 @@
       : { receiver_all_in: [`${perp}-Deposit`, 'Perp'], sender_ex: ['Perp'] };
   }
   function perpOutflowFilter(perp: Perp): TF {
-    // Mirror of the CeX Outflow tightening with 'CEX' swapped for 'Perp':
-    // sender must carry BOTH 'Hot-Wallet' AND 'Perp' so non-perp hot wallets
-    // are excluded. Receiver must NOT be perp.
-    const f: TF = { sender_all_in: ['Hot-Wallet', 'Perp'], receiver_ex: ['Perp'] };
-    if (perp !== 'All') f.sender_entity_in = [perp];
-    return f;
+    // Sender must carry BOTH 'Hot-Wallet' AND 'Perp' so non-perp hot wallets
+    // are excluded. Receiver constraint depends on which variant:
+    //   - 'All': receiver category not Perp (i.e. exits the whole perp set)
+    //   - specific perp: receiver entity != that perp (i.e. funds leaving
+    //     THIS perp specifically; a Hyperliquid → GMX transfer should still
+    //     count as Hyperliquid outflow). Using entity_ex over category_ex
+    //     here matters because category_ex would also drop moves to other
+    //     perps' deposit addresses.
+    if (perp === 'All') {
+      return { sender_all_in: ['Hot-Wallet', 'Perp'], receiver_ex: ['Perp'] };
+    }
+    return {
+      sender_all_in: ['Hot-Wallet', 'Perp'],
+      sender_entity_in: [perp],
+      receiver_entity_ex: [perp]
+    };
   }
   function perpInflowBuild(perp: Perp) {
     const name = perp === 'All' ? 'Perp Inflow' : `${perp} Inflow`;
