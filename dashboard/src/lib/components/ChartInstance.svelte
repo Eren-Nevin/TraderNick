@@ -873,25 +873,46 @@
           if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
           const posBody = await posRes.json();
           const negBody = await negRes.json();
-          const negByTime = new Map<number, { amount: number; usd: number; count: number }>();
+          // Uniswap net liquidity also tracks per-token amounts so amount
+          // mode can render token0 and token1 on separate axes.
+          type UniNegRow = {
+            amount: number; usd: number; count: number;
+            amount0: number; amount1: number;
+          };
+          const negByTime = new Map<number, UniNegRow>();
           for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
-            negByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd, count: r.count });
+            negByTime.set(r.time, {
+              amount: r.sum_amount,
+              usd: r.sum_value_usd,
+              count: r.count,
+              amount0: r.sum_amount0 ?? 0,
+              amount1: r.sum_amount1 ?? 0
+            });
           }
           const out: Record<string, number>[] = [];
           const seen = new Set<number>();
           for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
-            const n = negByTime.get(r.time) ?? { amount: 0, usd: 0, count: 0 };
+            const n = negByTime.get(r.time) ?? { amount: 0, usd: 0, count: 0, amount0: 0, amount1: 0 };
             out.push({
               time: r.time,
               sum_amount: r.sum_amount - n.amount,
               sum_value_usd: r.sum_value_usd - n.usd,
+              sum_amount0: (r.sum_amount0 ?? 0) - n.amount0,
+              sum_amount1: (r.sum_amount1 ?? 0) - n.amount1,
               count: r.count + n.count
             });
             seen.add(r.time);
           }
           for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
             if (seen.has(r.time)) continue;
-            out.push({ time: r.time, sum_amount: -r.sum_amount, sum_value_usd: -r.sum_value_usd, count: r.count });
+            out.push({
+              time: r.time,
+              sum_amount: -r.sum_amount,
+              sum_value_usd: -r.sum_value_usd,
+              sum_amount0: -(r.sum_amount0 ?? 0),
+              sum_amount1: -(r.sum_amount1 ?? 0),
+              count: r.count
+            });
           }
           out.sort((a, b) => a.time - b.time);
           data = out as unknown as AnyDatum[];
@@ -1327,21 +1348,52 @@
     ...cumulativeLines
   ]);
 
-  // Uniswap event lines — same shape as the AAVE chart: cyan sum_value_usd
-  // series + the MAs. The chart label flips between "Net …" for net-* kinds
-  // and the underlying event name for the four single-event kinds.
-  let uniswapLinesD = $derived([
-    ...(instance.showPoint
-      ? [{
-          key: 'main',
-          label: CHART_KIND_LABELS[instance.kind] ?? 'Uniswap',
-          color: '#06b6d4',
-          compute: (d: Record<string, number>) =>
-            (d.sum_value_usd ?? 0) || (d.sum_amount ?? 0)
-        }]
-      : []),
-    ...cumulativeLines
-  ]);
+  // Uniswap chart lines. USD mode (default): one cyan sum_value_usd line.
+  // Amount mode: two lines (token0 on primary axis, token1 on secondary
+  // axis) — each token has its own scale because t0/t1 magnitudes can be
+  // off by 4-6 orders (e.g. USDC vs WETH). The toggle is hidden in the
+  // settings UI for uniswap_net_swap_flow (which is intrinsically a
+  // directional USD chart with no clean per-token amount split).
+  let uniswapValueModeEffective = $derived(
+    instance.kind === 'uniswap_net_swap_flow' ? 'usd' : (instance.valueMode ?? 'usd')
+  );
+  let uniswapLinesD = $derived.by(() => {
+    if (uniswapValueModeEffective === 'amount') {
+      const sym0 = instance.uniPool?.symbol0 ?? 't0';
+      const sym1 = instance.uniPool?.symbol1 ?? 't1';
+      const base = instance.showPoint
+        ? [
+            {
+              key: 'amt0',
+              label: sym0,
+              color: '#06b6d4',
+              axis: 'primary' as const,
+              compute: (d: Record<string, number>) => d.sum_amount0 ?? 0
+            },
+            {
+              key: 'amt1',
+              label: sym1,
+              color: '#f59e0b',
+              axis: 'secondary' as const,
+              compute: (d: Record<string, number>) => d.sum_amount1 ?? 0
+            }
+          ]
+        : [];
+      return [...base, ...cumulativeLines];
+    }
+    return [
+      ...(instance.showPoint
+        ? [{
+            key: 'main',
+            label: CHART_KIND_LABELS[instance.kind] ?? 'Uniswap',
+            color: '#06b6d4',
+            compute: (d: Record<string, number>) =>
+              (d.sum_value_usd ?? 0) || (d.sum_amount ?? 0)
+          }]
+        : []),
+      ...cumulativeLines
+    ];
+  });
 
   // Lido event lines — identical shape to AAVE. With valueMode='amount' the
   // series shows raw token units (stETH for L1 deposits/requests, ETH for
@@ -1782,10 +1834,12 @@
         <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
         Week lines
       </label>
-      {#if isAaveKind(instance.kind) || isLidoKind(instance.kind)}
-        <!-- USD ⇆ Amount toggle. Uniswap is intentionally excluded — its
-             amount column mixes token0+token1 (or amount_sold across both
-             swap sides), so the toggle would have no clean unit. -->
+      {#if isAaveKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow')}
+        <!-- USD ⇆ Amount toggle. For AAVE / Lido the chart shows a single
+             series in either mode. For Uniswap (except net_swap_flow which
+             is intrinsically directional USD), Amount mode renders TWO
+             lines — token0 on the primary axis and token1 on a secondary
+             axis — because their magnitudes can be orders apart. -->
         <span class="w-px h-4 bg-zinc-800"></span>
         <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Y axis</span>
         <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
@@ -1803,7 +1857,9 @@
             class={'px-2 py-0.5 text-[11px] border-l border-zinc-700 ' + (instance.valueMode === 'amount'
               ? 'bg-zinc-800 text-zinc-100'
               : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
-            title="Plot sum of raw token amount (units depend on the event)"
+            title={isUniswapKind(instance.kind)
+              ? 'Plot raw token0 + token1 amounts on independent axes'
+              : 'Plot sum of raw token amount (units depend on the event)'}
           >Amount</button>
         </div>
       {/if}
@@ -2232,8 +2288,10 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={fmtUsdAxis}
-        formatTooltip={fmtUsdTooltip}
+        formatY={uniswapValueModeEffective === 'amount' ? fmtAmountAxis : fmtUsdAxis}
+        formatTooltip={uniswapValueModeEffective === 'amount' ? fmtAmountTooltip : fmtUsdTooltip}
+        formatY2={uniswapValueModeEffective === 'amount' ? fmtAmountAxis : undefined}
+        formatTooltip2={uniswapValueModeEffective === 'amount' ? fmtAmountTooltip : undefined}
       />
     {:else if isLidoKind(instance.kind)}
       <LineChart

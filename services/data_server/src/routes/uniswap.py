@@ -87,6 +87,24 @@ async def aggregate(request):
     since_dt = _parse_iso(since)
     until_dt = _parse_iso(until)
 
+    # Per-token amount columns — let the dashboard plot token0 / token1
+    # separately when the user picks Amount mode. LP events have explicit
+    # amount0 / amount1 cols on the row; swap rows store amount_sold +
+    # amount_bought with token_sold / token_bought tags, so we reconstruct
+    # per-token totals via sumIf.
+    if event == "swap":
+        amount0_expr = (
+            "sumIf(amount_sold, token_sold = {symbol0:String}) +"
+            " sumIf(amount_bought, token_bought = {symbol0:String})"
+        )
+        amount1_expr = (
+            "sumIf(amount_sold, token_sold = {symbol1:String}) +"
+            " sumIf(amount_bought, token_bought = {symbol1:String})"
+        )
+    else:
+        amount0_expr = "sum(amount0)"
+        amount1_expr = "sum(amount1)"
+
     # Swap-specific extra columns: directional value_usd split via sumIf on
     # token_sold == symbol0. Subtraction (t0t1 - t1t0) is Net Swap Flow.
     swap_extra_cols = ""
@@ -100,6 +118,8 @@ async def aggregate(request):
         SELECT
             toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
             sum({amount_expr})                          AS sum_amount,
+            {amount0_expr}                              AS sum_amount0,
+            {amount1_expr}                              AS sum_amount1,
             sum(coalesce(value_usd, 0))                 AS sum_value_usd,
             count()                                     AS count{swap_extra_cols}
         FROM {table}
@@ -126,15 +146,20 @@ async def aggregate(request):
         "limit": limit,
     })
 
+    # Column order matches the SELECT above:
+    #   bucket, sum_amount, sum_amount0, sum_amount1, sum_value_usd, count
+    #   [, sum_value_usd_t0t1, sum_value_usd_t1t0]   ← swap only
     if event == "swap":
         series = [
             {
                 "time": int(r[0]),
                 "sum_amount": float(r[1]),
-                "sum_value_usd": float(r[2]),
-                "count": int(r[3]),
-                "sum_value_usd_t0t1": float(r[4]),
-                "sum_value_usd_t1t0": float(r[5]),
+                "sum_amount0": float(r[2]),
+                "sum_amount1": float(r[3]),
+                "sum_value_usd": float(r[4]),
+                "count": int(r[5]),
+                "sum_value_usd_t0t1": float(r[6]),
+                "sum_value_usd_t1t0": float(r[7]),
             }
             for r in rows.result_rows
         ]
@@ -143,8 +168,10 @@ async def aggregate(request):
             {
                 "time": int(r[0]),
                 "sum_amount": float(r[1]),
-                "sum_value_usd": float(r[2]),
-                "count": int(r[3]),
+                "sum_amount0": float(r[2]),
+                "sum_amount1": float(r[3]),
+                "sum_value_usd": float(r[4]),
+                "count": int(r[5]),
             }
             for r in rows.result_rows
         ]

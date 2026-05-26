@@ -641,6 +641,9 @@ export function newChartInstance(
     // Conservative default: canonical USDC/WETH 0.05%. The page-level loader
     // will replace this with the first available pool from /uniswap/streams.
     base.uniPool = { symbol0: 'USDC', symbol1: 'WETH', fee: 500 };
+    // Default USD for the headline series. Amount mode is per-chart and
+    // not meaningful for net_swap_flow (see ChartInstance for the gate).
+    base.valueMode = 'usd';
   }
   if (isLidoKind(kind)) {
     // Lido charts are chain-only (no token / pool axis). L1 kinds are

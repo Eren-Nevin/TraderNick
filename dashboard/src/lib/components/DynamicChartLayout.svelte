@@ -296,7 +296,10 @@
       // Uniswap chart kinds also need a `chain`, plus a `uniPool` 3-tuple
       // (symbol0 / symbol1 / fee). Validate the pool shape; fall back to a
       // canonical default so a corrupt save can't strand the chart.
+      // valueMode supported on all uniswap_* except net_swap_flow (which
+      // ignores it at the chart layer).
       if (inst.kind.startsWith('uniswap_')) {
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         const rp = r.uniPool;
         if (
