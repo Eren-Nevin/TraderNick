@@ -32,6 +32,20 @@ log = logging.getLogger(__name__)
 DEFAULT_PARQUET = os.environ.get("WALLETS_PARQUET_PATH", "/app/data/wallets.parquet")
 
 
+# Manual wallet entries appended after every parquet load. The Horatio
+# wallets parquet doesn't ship labels for perp-DEX bridges, so we hard-code
+# the few we care about here. A row appears in the table exactly the same
+# shape as parquet-loaded rows (address / categories / entity); EVM ones
+# also get lowercased automatically via _normalize_rows.
+MANUAL_WALLETS: list[dict] = [
+    {
+        "address": "0x2df1c51e09aecf9cacb7bc98cb1742757f163df7",
+        "categories": ["Perp", "Deposit", "Hyperliquid-Bridge", "Hot-Wallet", "Hyperliquid-Deposit"],
+        "entity": "Hyperliquid",
+    },
+]
+
+
 def _prefix_bucket(addr: str) -> str:
     if not addr:
         return "(empty)"
@@ -89,6 +103,22 @@ async def load_into_clickhouse(src_path: str) -> dict:
     log.info("reading parquet from %s", src_path)
     df = pl.read_parquet(src_path)
     log.info("source rows: %d", len(df))
+    # Splice the hardcoded MANUAL_WALLETS in before normalisation so EVM ones
+    # get the same lowercase-duplicate treatment as parquet rows. We map the
+    # column names to match the source parquet shape (wallet/categories/entity).
+    if MANUAL_WALLETS:
+        manual_df = pl.DataFrame(
+            {
+                "wallet":     [w["address"] for w in MANUAL_WALLETS],
+                "categories": [w["categories"] for w in MANUAL_WALLETS],
+                "entity":     [w["entity"] for w in MANUAL_WALLETS],
+            }
+        )
+        # Align column types/order with the source parquet to avoid concat
+        # surprises if the parquet evolves.
+        keep = [c for c in df.columns if c in manual_df.columns]
+        df = pl.concat([df.select(keep), manual_df.select(keep)], how="diagonal_relaxed")
+        log.info("appended %d manual wallets (post-merge total: %d)", len(MANUAL_WALLETS), len(df))
     rows = _normalize_rows(df)
     log.info("normalised rows (including EVM lowercase variants): %d", len(rows))
 

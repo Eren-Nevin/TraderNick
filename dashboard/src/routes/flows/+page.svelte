@@ -93,6 +93,44 @@
     };
   }
 
+  // Parameterised perp-DEX templates. Mirrors the CeX trio but keyed off the
+  // 'Perp' umbrella category + per-perp entity label. Hyperliquid is the
+  // only perp currently labelled in the wallets parquet; the 'All' variant
+  // matches every Perp-tagged wallet so adding GMX / Aevo / etc later is a
+  // pure data change (no code edit needed).
+  const PERPS = ['All', 'Hyperliquid'] as const;
+  type Perp = (typeof PERPS)[number];
+
+  function perpInflowFilter(perp: Perp): TF {
+    return perp === 'All'
+      ? { receiver_in: ['Perp'] }
+      : { receiver_in: [`${perp}-Deposit`] };
+  }
+  function perpOutflowFilter(perp: Perp): TF {
+    const f: TF = { sender_in: ['Hot-Wallet'], receiver_ex: ['Perp'] };
+    if (perp !== 'All') f.sender_entity_in = [perp];
+    return f;
+  }
+  function perpInflowBuild(perp: Perp) {
+    const name = perp === 'All' ? 'Perp Inflow' : `${perp} Inflow`;
+    return buildTemplate(name, perpInflowFilter(perp));
+  }
+  function perpOutflowBuild(perp: Perp) {
+    const name = perp === 'All' ? 'Perp Outflow' : `${perp} Outflow`;
+    return buildTemplate(name, perpOutflowFilter(perp));
+  }
+  function perpNetflowBuild(perp: Perp) {
+    const positive = perpInflowFilter(perp);
+    const negative = perpOutflowFilter(perp);
+    const name = perp === 'All' ? 'Perp Netflow' : `${perp} Netflow`;
+    return (defaults: { token: string; chain?: string }) => {
+      const inst = newChartInstance('transfer', defaults);
+      inst.netFilter = { positive: { ...positive }, negative: { ...negative } };
+      inst.templateName = name;
+      return inst;
+    };
+  }
+
   const TEMPLATES: ChartTemplate[] = [
     {
       id: 'tpl-cex-inflow',
@@ -125,6 +163,33 @@
       id: 'tpl-cex-internal',
       label: 'CeX Internal Flow',
       build: buildTemplate('CeX Internal Flow', { sender_in: ['CEX'], receiver_in: ['CEX'] })
+    },
+    {
+      id: 'tpl-perp-inflow',
+      label: 'Perp Inflow',
+      variants: PERPS.map((p) => ({
+        id: `tpl-perp-inflow-${p.toLowerCase()}`,
+        label: p,
+        build: perpInflowBuild(p)
+      }))
+    },
+    {
+      id: 'tpl-perp-outflow',
+      label: 'Perp Outflow',
+      variants: PERPS.map((p) => ({
+        id: `tpl-perp-outflow-${p.toLowerCase()}`,
+        label: p,
+        build: perpOutflowBuild(p)
+      }))
+    },
+    {
+      id: 'tpl-perp-netflow',
+      label: 'Perp Netflow',
+      variants: PERPS.map((p) => ({
+        id: `tpl-perp-netflow-${p.toLowerCase()}`,
+        label: p,
+        build: perpNetflowBuild(p)
+      }))
     }
   ];
 </script>
