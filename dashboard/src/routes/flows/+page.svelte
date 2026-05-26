@@ -65,7 +65,11 @@
     return buildTemplate(name, filter);
   }
   function cexOutflowBuild(cex: Cex) {
-    const filter: TF = { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] };
+    // Mirror of the Inflow tightening (symmetric): sender must carry BOTH
+    // 'Hot-Wallet' AND 'CEX' (categories AND), receiver must NOT be CEX.
+    // Excludes non-CEX hot wallets (perp bridges, MEV bots, …) that share
+    // the 'Hot-Wallet' tag but aren't exchanges.
+    const filter: TF = { sender_all_in: ['Hot-Wallet', 'CEX'], receiver_ex: ['CEX'] };
     if (cex !== 'All') filter.sender_entity_in = [cex];
     const name = cex === 'All' ? 'CeX Outflow' : `${cex} Outflow`;
     return buildTemplate(name, filter);
@@ -83,7 +87,9 @@
       : { receiver_all_in: [`${cex}-Deposit`, 'CEX'], sender_ex: ['CEX'] };
   }
   function outflowFilter(cex: Cex): TF {
-    const f: TF = { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] };
+    // Same sender_all_in tightening as cexOutflowBuild above, applied to
+    // the netflow's negative side.
+    const f: TF = { sender_all_in: ['Hot-Wallet', 'CEX'], receiver_ex: ['CEX'] };
     if (cex !== 'All') f.sender_entity_in = [cex];
     return f;
   }
