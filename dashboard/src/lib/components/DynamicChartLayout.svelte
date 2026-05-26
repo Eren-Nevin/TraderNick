@@ -56,6 +56,12 @@
 
   let syncZoom = $state(true);
   let syncToken = $state(false);
+  // Master "Sync Weekend lines" toggle — flipping it propagates the value
+  // to every chart's instance.showWeekLines so the page-level switch is
+  // an actual master override, not just a label. The flag itself isn't
+  // persisted (mirrors syncToken's ephemeral behaviour); the per-instance
+  // showWeekLines values it sets DO persist via the layout save effect.
+  let syncWeekLines = $state(false);
   let sharedView = $state<View>(null);
   let sharedHoverTime = $state<number | null>(null);
 
@@ -153,6 +159,15 @@
       instances = instances.map((i) => ({ ...i, token: t }));
     }
     syncToken = next;
+  }
+  function toggleSyncWeekLines(next: boolean) {
+    // Push the new value to every chart so the toggle behaves like a
+    // master override. On enable → every chart shows weekend lines; on
+    // disable → every chart hides them. Per-chart toggles still work
+    // afterwards but won't sync back (the master toggle is one-shot,
+    // matching Sync Token).
+    instances = instances.map((i) => ({ ...i, showWeekLines: next }));
+    syncWeekLines = next;
   }
   function onTokenChange(id: string, newToken: string) {
     if (syncToken) {
@@ -396,6 +411,15 @@
       class="accent-zinc-400"
     />
     Sync Token
+  </label>
+  <label class="text-xs text-zinc-400 flex items-center gap-2">
+    <input
+      type="checkbox"
+      checked={syncWeekLines}
+      onchange={(e) => toggleSyncWeekLines(e.currentTarget.checked)}
+      class="accent-zinc-400"
+    />
+    Sync Weekend lines
   </label>
   <button type="button" onclick={resetLayout} class="text-xs text-zinc-500 hover:text-zinc-200"
     >Reset layout</button
