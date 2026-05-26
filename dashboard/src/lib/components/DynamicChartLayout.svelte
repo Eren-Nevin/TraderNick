@@ -319,6 +319,7 @@
       }
       if (inst.kind === 'transfer') {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         // Migration: the previous compound-token registry had a "Native" entry
         // that was a virtual cross-chain bundle. It's been removed; the native
         // assets (ETH on ETH/ARB/BASE, BNB on BSC, POL on POLYGON) are being

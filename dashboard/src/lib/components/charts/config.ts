@@ -635,6 +635,7 @@ export function newChartInstance(
   if (kind === 'transfer') {
     base.chain = defaults.chain ?? 'ETH';
     base.filter = {};
+    base.valueMode = 'usd';
   }
   if (isUniswapKind(kind)) {
     base.chain = defaults.chain ?? 'ETH';

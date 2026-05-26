@@ -1274,12 +1274,16 @@
         }
         case 'transfer': {
           const arr = data as TransferBucket[];
-          // MAs follow the same series the chart plots — USD value, ASOF-
-          // priced server-side from binance_ohlcv_1m.
-          const arrMa = maArray(arr.map((b) => b.sum_value_usd), ma.length, ma.type);
+          // MAs follow whatever the main series is plotting — USD value by
+          // default, raw token amount when the chart is in Amount mode.
+          const useUsd = (instance.valueMode ?? 'usd') === 'usd';
+          const arrMa = maArray(
+            arr.map((b) => (useUsd ? b.sum_value_usd : b.sum_amount)),
+            ma.length, ma.type
+          );
           out.push({
             key: `cum_transfer_${idx}`,
-            label: `USD ${tag}`,
+            label: `${useUsd ? 'USD' : 'Amount'} ${tag}`,
             color,
             dash: SUB_DASH[0],
             compute: (_d: TransferBucket, i: number) => arrMa[i]
@@ -1309,14 +1313,20 @@
     if (instance.netFilter) return 'Netflow';
     return activeFilterIsAny ? activeFilterLabel : 'Total';
   });
+  // Transfer chart respects instance.valueMode — same toggle plumbing as
+  // AAVE / Lido. Default 'usd'; the netflow merge already carries both
+  // sum_value_usd and sum_amount so amount mode flips cleanly without a
+  // refetch. The label gets an "(amount)" suffix when the chart is in
+  // amount mode so the tooltip / legend stay self-describing.
+  let transferUseUsd = $derived((instance.valueMode ?? 'usd') === 'usd');
   let transferLinesD = $derived([
     ...(instance.showPoint
       ? [{
           key: 'main',
-          label: transferMainLabel,
+          label: transferMainLabel + (transferUseUsd ? '' : ' (amount)'),
           color: '#06b6d4',
           compute: (d: TransferBucket & Record<string, number>) =>
-            d.sum_value_usd ?? 0
+            (transferUseUsd ? d.sum_value_usd : d.sum_amount) ?? 0
         }]
       : []),
     ...cumulativeLines
@@ -1834,7 +1844,7 @@
         <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
         Week lines
       </label>
-      {#if isAaveKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow')}
+      {#if instance.kind === 'transfer' || isAaveKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow')}
         <!-- USD ⇆ Amount toggle. For AAVE / Lido the chart shows a single
              series in either mode. For Uniswap (except net_swap_flow which
              is intrinsically directional USD), Amount mode renders TWO
@@ -2260,8 +2270,8 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={fmtUsdAxis}
-        formatTooltip={fmtUsdTooltip}
+        formatY={transferUseUsd ? fmtUsdAxis : fmtAmountAxis}
+        formatTooltip={transferUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
       />
     {:else if isAaveKind(instance.kind)}
       <LineChart
