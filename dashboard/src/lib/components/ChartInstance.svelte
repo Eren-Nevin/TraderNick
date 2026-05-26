@@ -1554,7 +1554,7 @@
 >
   <div
     class={[
-      'px-4 py-2 border-b border-zinc-800 bg-gradient-to-b from-zinc-900/40 to-transparent',
+      'px-4 py-2 border-b border-zinc-800 chart-titlebar-bg',
       // 1×1 stacks title above controls; bigger sizes keep them side-by-side.
       instance.width === 1
         ? 'flex flex-col items-stretch gap-1.5'

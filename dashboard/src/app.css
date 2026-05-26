@@ -75,3 +75,16 @@ html.light .hover\:text-red-300:hover { color: #b91c1c; }
 html.light .bg-red-950\/40 { background-color: #fee2e2; }
 html.light .border-red-900 { border-color: #fecaca; }
 html.light .text-red-300 { color: #b91c1c; }
+
+/* --- Chart panel title bar gradient ---
+ * Subtle dark tint at the top of each chart's title bar. In dark mode
+ * this barely reads against bg-zinc-950; in light mode the Tailwind
+ * `from-zinc-900/40` literal stays dark (no theme override applies to
+ * gradient stops), so it draws as an ugly dark band on a white panel.
+ * Use a custom class with theme-flipped colors instead. */
+.chart-titlebar-bg {
+  background-image: linear-gradient(to bottom, rgba(24, 24, 27, 0.40), transparent);
+}
+html.light .chart-titlebar-bg {
+  background-image: linear-gradient(to bottom, rgba(228, 228, 231, 0.55), transparent);
+}
