@@ -226,9 +226,9 @@
 
   // ---- transfer "extra series" form state ----
   type FilterKey =
-    | 'sender_in' | 'sender_ex'
-    | 'receiver_in' | 'receiver_ex'
-    | 'involving_in' | 'involving_ex'
+    | 'sender_in' | 'sender_ex' | 'sender_all_in'
+    | 'receiver_in' | 'receiver_ex' | 'receiver_all_in'
+    | 'involving_in' | 'involving_ex' | 'involving_all_in'
     | 'sender_entity_in' | 'sender_entity_ex'
     | 'receiver_entity_in' | 'receiver_entity_ex'
     | 'involving_entity_in' | 'involving_entity_ex'
@@ -236,9 +236,9 @@
     | 'receiver_addr_in' | 'receiver_addr_ex'
     | 'involving_addr_in' | 'involving_addr_ex';
   const CAT_FILTER_KEYS: FilterKey[] = [
-    'sender_in', 'sender_ex',
-    'receiver_in', 'receiver_ex',
-    'involving_in', 'involving_ex'
+    'sender_in', 'sender_ex', 'sender_all_in',
+    'receiver_in', 'receiver_ex', 'receiver_all_in',
+    'involving_in', 'involving_ex', 'involving_all_in'
   ];
   const ENT_FILTER_KEYS: FilterKey[] = [
     'sender_entity_in', 'sender_entity_ex',
@@ -254,10 +254,13 @@
   const EMPTY_PENDING: Record<FilterKey, string> = {
     sender_in: '',
     sender_ex: '',
+    sender_all_in: '',
     receiver_in: '',
     receiver_ex: '',
+    receiver_all_in: '',
     involving_in: '',
     involving_ex: '',
+    involving_all_in: '',
     sender_entity_in: '',
     sender_entity_ex: '',
     receiver_entity_in: '',
@@ -298,10 +301,13 @@
     const parts: string[] = [];
     if (f.involving_in?.length) parts.push(`involving_${f.involving_in.join('+')}`);
     if (f.involving_ex?.length) parts.push(`not_involving_${f.involving_ex.join('+')}`);
+    if (f.involving_all_in?.length) parts.push(`involving_all_${f.involving_all_in.join('+')}`);
     if (f.sender_in?.length) parts.push(`from_${f.sender_in.join('+')}`);
     if (f.sender_ex?.length) parts.push(`from_not_${f.sender_ex.join('+')}`);
+    if (f.sender_all_in?.length) parts.push(`from_all_${f.sender_all_in.join('+')}`);
     if (f.receiver_in?.length) parts.push(`to_${f.receiver_in.join('+')}`);
     if (f.receiver_ex?.length) parts.push(`to_not_${f.receiver_ex.join('+')}`);
+    if (f.receiver_all_in?.length) parts.push(`to_all_${f.receiver_all_in.join('+')}`);
     if (f.involving_entity_in?.length) parts.push(`involving_ent_${f.involving_entity_in.join('+')}`);
     if (f.involving_entity_ex?.length) parts.push(`not_involving_ent_${f.involving_entity_ex.join('+')}`);
     if (f.sender_entity_in?.length) parts.push(`from_ent_${f.sender_entity_in.join('+')}`);

@@ -382,12 +382,20 @@ export function defaultMAs(): MAConfig[] {
 
 export type TransferFilters = {
   // Wallet *category* filters (multi-valued list-of-string per wallet).
+  // _in  = at least one of the listed categories present on that side (hasAny)
+  // _ex  = none of the listed categories present on that side
+  // _all_in = every listed category present on that side (hasAll) — used to
+  //          intersect umbrellas like 'Deposit' with 'CEX' so perp bridges
+  //          (Deposit + Perp, no CEX) get excluded from CeX-flow templates.
   sender_in?: string[];
   sender_ex?: string[];
+  sender_all_in?: string[];
   receiver_in?: string[];
   receiver_ex?: string[];
+  receiver_all_in?: string[];
   involving_in?: string[];
   involving_ex?: string[];
+  involving_all_in?: string[];
   // Wallet *entity* filters (single nullable string per wallet, e.g. "Binance").
   sender_entity_in?: string[];
   sender_entity_ex?: string[];

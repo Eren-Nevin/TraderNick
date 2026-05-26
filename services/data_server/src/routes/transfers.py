@@ -15,6 +15,11 @@ _FILTER_KEYS = (
     "sender_in", "sender_ex",
     "receiver_in", "receiver_ex",
     "involving_in", "involving_ex",
+    # AND-semantic category filters: receiver categories must contain ALL of
+    # the listed values (not just any of them). Useful for narrowing a broad
+    # umbrella category like 'Deposit' with a co-tag like 'CEX' so you don't
+    # also pick up perp-bridge wallets that share the umbrella.
+    "sender_all_in", "receiver_all_in", "involving_all_in",
     "sender_entity_in", "sender_entity_ex",
     "receiver_entity_in", "receiver_entity_ex",
     "involving_entity_in", "involving_entity_ex",
@@ -114,8 +119,9 @@ def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[l
         cf = spec.get("filters") or {}
         preds: list[str] = []
         # Categories — list-of-string per wallet; case-insensitive hasAny.
+        # 'all_in' uses hasAll() — every listed category must be present.
         for side in ("sender", "receiver", "involving"):
-            for action in ("in", "ex"):
+            for action in ("in", "ex", "all_in"):
                 key = f"{side}_{action}"
                 cats = cf.get(key)
                 if not cats or not isinstance(cats, list):
@@ -127,16 +133,16 @@ def _build_extra_sumif_clauses(chain: str | None, extras: list[dict]) -> tuple[l
                 params[pname] = cats
                 pphold = f"{{{pname}:Array(String)}}"
 
-                # dg() now returns the materialized `<col>_categories` column —
-                # bare hasAny() against the array, no dictGet at query time.
-                def cat_match(col: str) -> str:
-                    return f"hasAny({dg(col)}, {pphold})"
+                fn = "hasAll" if action == "all_in" else "hasAny"
+
+                def cat_match(col: str, _fn: str = fn) -> str:
+                    return f"{_fn}({dg(col)}, {pphold})"
 
                 if side == "involving":
                     match = f"({cat_match('sender')} OR {cat_match('receiver')})"
                 else:
                     match = cat_match(side)
-                preds.append(match if action == "in" else f"NOT {match}")
+                preds.append(match if action != "ex" else f"NOT {match}")
         # Entities — single nullable string per wallet; case-insensitive IN.
         for side in ("sender", "receiver", "involving"):
             for action in ("in", "ex"):
@@ -207,8 +213,12 @@ def _build_wallet_predicate(
     prunes granules that don't contain any of the requested categories.
 
     side   = 'sender' | 'receiver' | 'involving'
-    action = 'in' | 'ex'
+    action = 'in' | 'ex' | 'all_in'
     chain  = unused (kept for backward-compatible signature)
+
+    'in'     → hasAny(cats)     — overlap (OR over the list)
+    'ex'     → NOT hasAny(cats) — no overlap
+    'all_in' → hasAll(cats)     — contains every listed category (AND)
 
     Returns (sql_fragment, param_name) or None if cats is empty.
     """
@@ -218,16 +228,27 @@ def _build_wallet_predicate(
     param = f"{side}_{action}_cats"
     pphold = f"{{{param}:Array(String)}}"
 
-    def match(col: str) -> str:
-        return f"hasAny({col}_categories, {pphold})"
+    def match(col: str, fn: str = "hasAny") -> str:
+        return f"{fn}({col}_categories, {pphold})"
 
+    if action == "all_in":
+        if side == "involving":
+            # Each side must contain ALL — but "involving" just means at least
+            # one side qualifies, so OR over per-side hasAll(). Keeps the
+            # intuition that involving_all_in=['A','B'] means "sender carries
+            # both A and B, or receiver carries both A and B".
+            match_expr = f"({match('sender', 'hasAll')} OR {match('receiver', 'hasAll')})"
+        else:
+            match_expr = match(side, "hasAll")
+        return match_expr, param
+
+    # 'in' / 'ex' — hasAny semantics
     if side == "involving":
         match_expr = f"({match('sender')} OR {match('receiver')})"
     else:
         match_expr = match(side)
     if action == "in":
         return match_expr, param
-    # action == 'ex' — must NOT overlap with the supplied categories
     return f"NOT {match_expr}", param
 
 
@@ -423,6 +444,10 @@ async def aggregate(request):
         ("receiver",  "ex", _parse_csv(request.args.get("receiver_ex"))),
         ("involving", "in", _parse_csv(request.args.get("involving_in"))),
         ("involving", "ex", _parse_csv(request.args.get("involving_ex"))),
+        # AND filters — every listed category must be present on that side.
+        ("sender",    "all_in", _parse_csv(request.args.get("sender_all_in"))),
+        ("receiver",  "all_in", _parse_csv(request.args.get("receiver_all_in"))),
+        ("involving", "all_in", _parse_csv(request.args.get("involving_all_in"))),
     ]
     entity_specs = [
         ("sender",    "in", _parse_csv(request.args.get("sender_entity_in"))),

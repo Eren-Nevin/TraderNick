@@ -53,10 +53,14 @@
   type Cex = (typeof CEXES)[number];
 
   function cexInflowBuild(cex: Cex) {
+    // Receiver must carry the deposit umbrella AND the CEX tag (excludes
+    // things like the Hyperliquid bridge that's tagged 'Deposit' but not
+    // 'CEX'). Sender must NOT be a CEX wallet so we don't double-count
+    // CEX-internal moves — those land under "CeX Internal Flow".
     const filter: TF =
       cex === 'All'
-        ? { receiver_in: ['Deposit'] }
-        : { receiver_in: [`${cex}-Deposit`] };
+        ? { receiver_all_in: ['Deposit', 'CEX'], sender_ex: ['CEX'] }
+        : { receiver_all_in: [`${cex}-Deposit`, 'CEX'], sender_ex: ['CEX'] };
     const name = cex === 'All' ? 'CeX Inflow' : `${cex} Inflow`;
     return buildTemplate(name, filter);
   }
@@ -72,9 +76,11 @@
   // them client-side. Positive = net deposits into CeX (accumulation),
   // negative = net withdrawals (distribution).
   function inflowFilter(cex: Cex): TF {
+    // Same receiver intersection + sender-excludes-CEX as cexInflowBuild
+    // above, applied to the netflow's positive side.
     return cex === 'All'
-      ? { receiver_in: ['Deposit'] }
-      : { receiver_in: [`${cex}-Deposit`] };
+      ? { receiver_all_in: ['Deposit', 'CEX'], sender_ex: ['CEX'] }
+      : { receiver_all_in: [`${cex}-Deposit`, 'CEX'], sender_ex: ['CEX'] };
   }
   function outflowFilter(cex: Cex): TF {
     const f: TF = { sender_in: ['Hot-Wallet'], receiver_ex: ['CEX'] };
