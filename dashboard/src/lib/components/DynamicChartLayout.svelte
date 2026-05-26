@@ -43,7 +43,7 @@
     defaultChain?: string;
   } = $props();
 
-  const MAX_CHARTS = 10;
+  const MAX_CHARTS = 20;
   const FLIP_MS = 250;
   // Drive the validator off CHART_KIND_LABELS so adding a new ChartKind
   // doesn't silently invalidate every saved layout that uses it. (Previous
