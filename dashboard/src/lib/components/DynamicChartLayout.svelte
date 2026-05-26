@@ -21,6 +21,7 @@
     tokens,
     streams = [],
     uniPools = [],
+    lidoChains = [],
     tokenGroups = [],
     chainGroups = [],
     storageKey,
@@ -33,6 +34,7 @@
     tokens: string[];
     streams?: TransferStream[];
     uniPools?: import('$lib/api').UniswapStream[];
+    lidoChains?: { event: string; chain: string; rows: number }[];
     tokenGroups?: TokenGroup[];
     chainGroups?: ChainGroup[];
     storageKey: string;
@@ -275,6 +277,17 @@
       if (inst.kind.startsWith('aave_')) {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
       }
+      // Lido chart kinds need a `chain` but no token / pool. L1 kinds are
+      // ETH-pinned; L2 kinds default to ARB (highest wstETH bridge volume).
+      if (inst.kind.startsWith('lido_')) {
+        const isL1 =
+          inst.kind === 'lido_deposit' ||
+          inst.kind === 'lido_withdrawal_request' ||
+          inst.kind === 'lido_withdrawal_claimed' ||
+          inst.kind === 'lido_net_stake';
+        const ch = typeof r.chain === 'string' ? r.chain : (isL1 ? 'ETH' : (defaultChain ?? 'ARB'));
+        inst.chain = isL1 ? 'ETH' : ch;
+      }
       // Uniswap chart kinds also need a `chain`, plus a `uniPool` 3-tuple
       // (symbol0 / symbol1 / fee). Validate the pool shape; fall back to a
       // canonical default so a corrupt save can't strand the chart.
@@ -455,6 +468,7 @@
         {tokens}
         {streams}
         {uniPools}
+        {lidoChains}
         {tokenGroups}
         {chainGroups}
         {syncZoom}

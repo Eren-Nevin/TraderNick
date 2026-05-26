@@ -8,6 +8,7 @@ from routes.trade_volume import bp as trade_volume_bp
 from routes.transfers import bp as transfers_bp
 from routes.transfers_streams import bp as transfers_streams_bp
 from routes.uniswap import bp as uniswap_bp
+from routes.lido import bp as lido_bp
 
 app = Sanic("tradernick_data_server")
 app.config.RESPONSE_TIMEOUT = 60
@@ -20,6 +21,7 @@ app.blueprint(transfers_streams_bp)
 app.blueprint(groups_bp)
 app.blueprint(aave_bp)
 app.blueprint(uniswap_bp)
+app.blueprint(lido_bp)
 
 
 @app.get("/health")

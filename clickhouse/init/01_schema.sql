@@ -437,3 +437,107 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_collects
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index);
+
+-- ---------------------------------------------------------------------------
+-- Lido liquid-staking events
+-- ---------------------------------------------------------------------------
+-- DeFiStream exposes 5 Lido event types: 3 mainnet (deposit / withdrawal_request
+-- / withdrawal_claimed — staking + the unstake state machine) and 2 L2 bridge
+-- events (l2_deposit = bridging WSTETH onto L2; l2_withdrawal_request = burning
+-- bridged WSTETH to redeem on mainnet). Each is its own table so the row shape
+-- stays narrow; the chain column lets a single L2 table cover all 9 L2s we
+-- ingest. ORDER BY (chain, time, tx_id, log_index) prunes by chain first then
+-- time-range. ReplacingMergeTree(ingested_at) dedupes if we re-fetch a chunk.
+
+CREATE TABLE IF NOT EXISTS tradernick.lido_deposits
+(
+    chain         LowCardinality(String),
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    sender        String             CODEC(ZSTD(3)),
+    referral      String             CODEC(ZSTD(3)),
+    minted_amount Float64            CODEC(Gorilla, ZSTD(3)),
+    minted_token  LowCardinality(String),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.lido_withdrawal_requests
+(
+    chain         LowCardinality(String),
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    request_id    UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    requestor     String             CODEC(ZSTD(3)),
+    owner         String             CODEC(ZSTD(3)),
+    burned_amount Float64            CODEC(Gorilla, ZSTD(3)),
+    burned_token  LowCardinality(String),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.lido_withdrawal_claims
+(
+    chain           LowCardinality(String),
+    time            DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number    UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id           String             CODEC(ZSTD(3)),
+    log_index       UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    request_id      UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    receiver        String             CODEC(ZSTD(3)),
+    owner           String             CODEC(ZSTD(3)),
+    withdraw_amount Float64            CODEC(Gorilla, ZSTD(3)),
+    withdraw_token  LowCardinality(String),
+    burned_token    LowCardinality(String),
+    value_usd       Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at     DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.lido_l2_deposits
+(
+    chain         LowCardinality(String),
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    sender        String             CODEC(ZSTD(3)),
+    receiver      String             CODEC(ZSTD(3)),
+    minted_amount Float64            CODEC(Gorilla, ZSTD(3)),
+    minted_token  LowCardinality(String),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.lido_l2_withdrawal_requests
+(
+    chain         LowCardinality(String),
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    sender        String             CODEC(ZSTD(3)),
+    receiver      String             CODEC(ZSTD(3)),
+    burned_amount Float64            CODEC(Gorilla, ZSTD(3)),
+    burned_token  LowCardinality(String),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, time, tx_id, log_index);

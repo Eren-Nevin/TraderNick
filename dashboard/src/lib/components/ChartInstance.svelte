@@ -43,6 +43,10 @@
     UNISWAP_NET_KIND_TO_EVENTS,
     isUniswapKind,
     fmtUniPool,
+    LIDO_KIND_TO_EVENT,
+    LIDO_NET_KIND_TO_EVENTS,
+    LIDO_L1_KINDS,
+    isLidoKind,
     type ChartHeight,
     type ChartInstance as ChartInstanceT,
     type ChartWidth,
@@ -81,6 +85,7 @@
     tokens,
     streams = [],
     uniPools = [],
+    lidoChains = [],
     tokenGroups = [],
     chainGroups = [],
     syncZoom,
@@ -95,6 +100,7 @@
     tokens: string[];
     streams?: TransferStream[];
     uniPools?: UniswapStream[];
+    lidoChains?: { event: string; chain: string; rows: number }[];
     tokenGroups?: import('$lib/api').TokenGroup[];
     chainGroups?: import('$lib/api').ChainGroup[];
     syncZoom: boolean;
@@ -168,6 +174,45 @@
     if (!s0 || !s1 || !fee) return;
     instance.uniPool = { symbol0: s0, symbol1: s1, fee: Number(fee) };
   }
+
+  // ---- lido-kind helpers (derived from `lidoChains`) ----
+  // L1 kinds are ETH-pinned; L2 kinds get the dropdown of L2 chains that
+  // actually have data for THIS kind's underlying event. Returns the
+  // chain list to surface in the selector — empty (fallback) goes to the
+  // hard-coded L2 list so the dropdown still works pre-backfill.
+  const _L2_FALLBACK = ['ARB', 'BASE', 'OP', 'ZK', 'MANTLE', 'MODE', 'SONEIUM', 'UNI', 'ZIRCUIT'];
+  let lidoChainsForKind = $derived.by<string[]>(() => {
+    if (!isLidoKind(instance.kind)) return [];
+    if (LIDO_L1_KINDS.has(instance.kind)) return ['ETH'];
+    // L2 kinds: filter streams to the relevant event(s) for the kind.
+    const targetEvents: string[] = (() => {
+      const single = LIDO_KIND_TO_EVENT[instance.kind];
+      if (single) return [single];
+      const net = LIDO_NET_KIND_TO_EVENTS[instance.kind];
+      return net ? [net[0], net[1]] : [];
+    })();
+    const seen = new Set<string>();
+    for (const s of lidoChains) {
+      if (!targetEvents.includes(s.event)) continue;
+      if (s.chain === 'ETH') continue;
+      seen.add(s.chain);
+    }
+    const list = seen.size > 0 ? Array.from(seen).sort() : _L2_FALLBACK;
+    return list;
+  });
+  // Auto-snap when the chosen chain isn't in the available list.
+  $effect(() => {
+    if (!isLidoKind(instance.kind)) return;
+    const list = lidoChainsForKind;
+    if (list.length === 0) return;
+    if (LIDO_L1_KINDS.has(instance.kind)) {
+      if (instance.chain !== 'ETH') instance.chain = 'ETH';
+      return;
+    }
+    if (!instance.chain || !list.includes(instance.chain)) {
+      instance.chain = list[0];
+    }
+  });
 
   // ---- transfer-kind helpers (derived from `streams`) ----
   let chains = $derived(
@@ -455,6 +500,13 @@
       const pPart = uniPoolKey(instance.uniPool);
       return `${instance.kind}|${cPart}|${pPart}|${instance.interval}`;
     }
+    if (isLidoKind(instance.kind)) {
+      // Lido charts are keyed only by (kind, chain, interval) — no token /
+      // pool axis. L1 kinds are ETH-pinned but we include the chain anyway
+      // for consistency.
+      const cPart = instance.chain ?? '';
+      return `${instance.kind}|${cPart}|${instance.interval}`;
+    }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
 
@@ -594,7 +646,8 @@
       const isWideWindowKind =
         instance.kind === 'transfer' ||
         isAaveKind(instance.kind) ||
-        isUniswapKind(instance.kind);
+        isUniswapKind(instance.kind) ||
+        isLidoKind(instance.kind);
       if (isWideWindowKind) {
         const now = new Date();
         const tu = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
@@ -688,6 +741,79 @@
       // a different `event=` param — handle them together up front to keep
       // the per-kind switch tidy. Token groups (USDC+USDT, Stables) map to
       // ?token_group=... server-side instead of a single token.
+      // Lido chart kinds — chain-only, no token axis. The 4 single-event
+      // kinds hit /api/lido/aggregate once; the 2 net kinds (Net Stake,
+      // Net L2) fire two parallel fetches and subtract per bucket — same
+      // pattern as AAVE Net Deposit / Net Borrow.
+      if (isLidoKind(instance.kind)) {
+        const buildLidoQs = (event: string) => {
+          const qs = new URLSearchParams({
+            event,
+            chain: instance.chain ?? 'ETH',
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '5000'
+          });
+          if (forceFresh) qs.set('fresh', '1');
+          return qs;
+        };
+        const lidoNetEvents = LIDO_NET_KIND_TO_EVENTS[instance.kind];
+        if (lidoNetEvents) {
+          const [posEvent, negEvent] = lidoNetEvents;
+          const [posRes, negRes] = await Promise.all([
+            queuedFetch(`/api/lido/aggregate?${buildLidoQs(posEvent)}`, { signal }),
+            queuedFetch(`/api/lido/aggregate?${buildLidoQs(negEvent)}`, { signal })
+          ]);
+          if (!posRes.ok) throw new Error(`${instance.kind} ${posRes.status}`);
+          if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
+          const posBody = await posRes.json();
+          const negBody = await negRes.json();
+          const negByTime = new Map<number, { amount: number; usd: number; count: number }>();
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            negByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd, count: r.count });
+          }
+          const out: Record<string, number>[] = [];
+          const seen = new Set<number>();
+          for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
+            const n = negByTime.get(r.time) ?? { amount: 0, usd: 0, count: 0 };
+            out.push({
+              time: r.time,
+              sum_amount: r.sum_amount - n.amount,
+              sum_value_usd: r.sum_value_usd - n.usd,
+              count: r.count + n.count
+            });
+            seen.add(r.time);
+          }
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            if (seen.has(r.time)) continue;
+            out.push({ time: r.time, sum_amount: -r.sum_amount, sum_value_usd: -r.sum_value_usd, count: r.count });
+          }
+          out.sort((a, b) => a.time - b.time);
+          data = out as unknown as AnyDatum[];
+          since = sinceIso;
+          until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        const lidoEvent = LIDO_KIND_TO_EVENT[instance.kind];
+        if (!lidoEvent) throw new Error(`unmapped lido kind ${instance.kind}`);
+        const res = await queuedFetch(
+          `/api/lido/aggregate?${buildLidoQs(lidoEvent)}`,
+          { signal }
+        );
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = (body.series ?? []) as AnyDatum[];
+        since = sinceIso;
+        until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
       // Uniswap chart kinds. The single-event ones hit /api/uniswap/aggregate
       // once. uniswap_net_liquidity needs two parallel calls (deposit −
       // withdraw, by sum_amount of amount0+amount1). uniswap_net_swap_flow
@@ -1192,6 +1318,22 @@
     ...cumulativeLines
   ]);
 
+  // Lido event lines — identical shape to AAVE/Uniswap. The fallback
+  // sum_amount-when-no-value_usd matters more here because some L2
+  // bridge rows ship without USD pricing.
+  let lidoLinesD = $derived([
+    ...(instance.showPoint
+      ? [{
+          key: 'main',
+          label: CHART_KIND_LABELS[instance.kind] ?? 'Lido',
+          color: '#06b6d4',
+          compute: (d: Record<string, number>) =>
+            (d.sum_value_usd ?? 0) || (d.sum_amount ?? 0)
+        }]
+      : []),
+    ...cumulativeLines
+  ]);
+
   // bs / sz: bar series (Point toggle controls visibility)
   let bsBars = $derived(instance.showPoint ? BUYER_SELLER_SERIES : []);
   let szBars = $derived(
@@ -1360,7 +1502,21 @@
         instance.width === 1 ? 'flex-wrap' : ''
       ].join(' ')}
     >
-      {#if isUniswapKind(instance.kind)}
+      {#if isLidoKind(instance.kind)}
+        <!-- Lido kinds: a single chain dropdown. L1 kinds are ETH-pinned
+             (selector shows just ETH, disabled-looking but kept for layout
+             symmetry). L2 kinds get the list of L2 chains that DeFiStream
+             has actually delivered for this kind's event. -->
+        <select
+          bind:value={instance.chain}
+          disabled={LIDO_L1_KINDS.has(instance.kind)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-60 disabled:cursor-not-allowed"
+        >
+          {#each lidoChainsForKind as c (c)}
+            <option value={c}>{c}</option>
+          {/each}
+        </select>
+      {:else if isUniswapKind(instance.kind)}
         <!-- Uniswap kinds: chain dropdown (only chains that have ingested
              pools) + a pool dropdown filtered to that chain. Pools are
              sorted by total rows desc so the most-traded pool floats to
@@ -2004,6 +2160,20 @@
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={uniswapLinesD}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
+      />
+    {:else if isLidoKind(instance.kind)}
+      <LineChart
+        data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
+        lines={lidoLinesD}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}

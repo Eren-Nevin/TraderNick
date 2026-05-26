@@ -8,7 +8,8 @@
     { href: '/trades', label: 'Trades', short: 'T' },
     { href: '/flows', label: 'Flows', short: 'F' },
     { href: '/lending', label: 'Lending', short: 'L' },
-    { href: '/dex', label: 'DeX', short: 'D' }
+    { href: '/dex', label: 'DeX', short: 'D' },
+    { href: '/staking', label: 'Staking', short: 'S' }
   ];
 
   onMount(() => themeStore.hydrate());

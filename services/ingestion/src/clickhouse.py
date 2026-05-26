@@ -571,3 +571,156 @@ UNISWAP_EVENTS = {
     "withdraw": ("withdrawals", "tradernick.uniswap_withdrawals", UNISWAP_WITHDRAWALS_COLUMNS, uniswap_withdrawals_df_to_rows),
     "collect":  ("collects",    "tradernick.uniswap_collects",    UNISWAP_COLLECTS_COLUMNS,    uniswap_collects_df_to_rows),
 }
+
+
+# ---------------------------------------------------------------------------
+# Lido liquid-staking events
+# ---------------------------------------------------------------------------
+# Mainnet flow:
+#   - deposit: user sends ETH, gets STETH minted. minted_amount + minted_token.
+#   - withdrawal_request: user burns STETH, receives a queued request_id.
+#   - withdrawal_claimed: queued request_id is finalised; user gets ETH back.
+#
+# L2 flow:
+#   - l2_deposit: user bridges STETH (mainnet) → WSTETH (L2); on the L2 side
+#     this looks like a mint into the bridge-deployed token.
+#   - l2_withdrawal_request: user burns WSTETH on L2 to reverse the bridge.
+#
+# All five events share the same first 5 columns (chain, time, block_number,
+# tx_id, log_index). Per-event columns differ but the ingest pattern is the
+# same: row-by-row transform → insert.
+
+LIDO_DEPOSITS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "sender", "referral",
+    "minted_amount", "minted_token",
+    "value_usd",
+]
+LIDO_WITHDRAWAL_REQUESTS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "request_id", "requestor", "owner",
+    "burned_amount", "burned_token",
+    "value_usd",
+]
+LIDO_WITHDRAWAL_CLAIMS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "request_id", "receiver", "owner",
+    "withdraw_amount", "withdraw_token", "burned_token",
+    "value_usd",
+]
+LIDO_L2_DEPOSITS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "sender", "receiver",
+    "minted_amount", "minted_token",
+    "value_usd",
+]
+LIDO_L2_WITHDRAWAL_REQUESTS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "sender", "receiver",
+    "burned_amount", "burned_token",
+    "value_usd",
+]
+
+
+def _lido_value_usd(r):
+    raw = r.get("value_usd")
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _lido_base_cols(r, *, chain: str) -> list:
+    """The 5 head columns shared by every Lido event table."""
+    return [
+        chain,
+        _to_naive_utc(r["time"]),
+        int(r["block_number"]),
+        str(r["tx_id"]) if r.get("tx_id") else "",
+        int(r["log_index"]) if r.get("log_index") is not None else 0,
+    ]
+
+
+def lido_deposits_df_to_rows(df: pl.DataFrame, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_lido_base_cols(r, chain=chain) + [
+            str(r["sender"]) if r.get("sender") else "",
+            str(r["referral"]) if r.get("referral") else "",
+            float(r["minted_amount"]) if r.get("minted_amount") is not None else 0.0,
+            str(r["minted_token"]) if r.get("minted_token") else "",
+            _lido_value_usd(r),
+        ])
+    return rows
+
+
+def lido_withdrawal_requests_df_to_rows(df: pl.DataFrame, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_lido_base_cols(r, chain=chain) + [
+            int(r["request_id"]) if r.get("request_id") is not None else 0,
+            str(r["requestor"]) if r.get("requestor") else "",
+            str(r["owner"]) if r.get("owner") else "",
+            float(r["burned_amount"]) if r.get("burned_amount") is not None else 0.0,
+            str(r["burned_token"]) if r.get("burned_token") else "",
+            _lido_value_usd(r),
+        ])
+    return rows
+
+
+def lido_withdrawal_claims_df_to_rows(df: pl.DataFrame, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_lido_base_cols(r, chain=chain) + [
+            int(r["request_id"]) if r.get("request_id") is not None else 0,
+            str(r["receiver"]) if r.get("receiver") else "",
+            str(r["owner"]) if r.get("owner") else "",
+            float(r["withdraw_amount"]) if r.get("withdraw_amount") is not None else 0.0,
+            str(r["withdraw_token"]) if r.get("withdraw_token") else "",
+            str(r["burned_token"]) if r.get("burned_token") else "",
+            _lido_value_usd(r),
+        ])
+    return rows
+
+
+def lido_l2_deposits_df_to_rows(df: pl.DataFrame, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_lido_base_cols(r, chain=chain) + [
+            str(r["sender"]) if r.get("sender") else "",
+            str(r["receiver"]) if r.get("receiver") else "",
+            float(r["minted_amount"]) if r.get("minted_amount") is not None else 0.0,
+            str(r["minted_token"]) if r.get("minted_token") else "",
+            _lido_value_usd(r),
+        ])
+    return rows
+
+
+def lido_l2_withdrawal_requests_df_to_rows(df: pl.DataFrame, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_lido_base_cols(r, chain=chain) + [
+            str(r["sender"]) if r.get("sender") else "",
+            str(r["receiver"]) if r.get("receiver") else "",
+            float(r["burned_amount"]) if r.get("burned_amount") is not None else 0.0,
+            str(r["burned_token"]) if r.get("burned_token") else "",
+            _lido_value_usd(r),
+        ])
+    return rows
+
+
+# event key → (DeFiStream method name on lido client, target CH table,
+# column list, row transform). Same dispatch pattern as AAVE_EVENTS /
+# UNISWAP_EVENTS. The L1 events live on ETH only; the L2 ones live on the
+# 9 L2 chains supported by DeFiStream's Lido coverage.
+LIDO_EVENTS = {
+    "deposit":              ("deposits",              "tradernick.lido_deposits",              LIDO_DEPOSITS_COLUMNS,              lido_deposits_df_to_rows),
+    "withdrawal_request":   ("withdrawal_requests",   "tradernick.lido_withdrawal_requests",   LIDO_WITHDRAWAL_REQUESTS_COLUMNS,   lido_withdrawal_requests_df_to_rows),
+    # DeFiStream Python client uses the slightly-odd `withdrawals_claimed`
+    # (plural on the first word); the wire event name stays singular.
+    "withdrawal_claimed":   ("withdrawals_claimed",   "tradernick.lido_withdrawal_claims",     LIDO_WITHDRAWAL_CLAIMS_COLUMNS,     lido_withdrawal_claims_df_to_rows),
+    "l2_deposit":           ("l2_deposits",           "tradernick.lido_l2_deposits",           LIDO_L2_DEPOSITS_COLUMNS,           lido_l2_deposits_df_to_rows),
+    "l2_withdrawal_request":("l2_withdrawal_requests","tradernick.lido_l2_withdrawal_requests",LIDO_L2_WITHDRAWAL_REQUESTS_COLUMNS,lido_l2_withdrawal_requests_df_to_rows),
+}

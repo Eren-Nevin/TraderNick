@@ -24,6 +24,7 @@ from jobs.manager import (
     JOB_TYPE_BACKFILL_RAW_TRADES,
     JOB_TYPE_BACKFILL_AAVE_EVENTS,
     JOB_TYPE_BACKFILL_UNISWAP_EVENTS,
+    JOB_TYPE_BACKFILL_LIDO_EVENTS,
     JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS,
     JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS,
     JobManager,
@@ -84,6 +85,7 @@ async def startup(app_, _loop):
         "tron_trc20_transfers",
         "aave_events",
         "uniswap_events",
+        "lido_events",
     ])
     app_.ctx.jobs = JobManager()
     try:
@@ -302,6 +304,33 @@ def _extract_uniswap_events(body):
 @app.post("/jobs/backfill/uniswap_events")
 async def backfill_uniswap_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_UNISWAP_EVENTS, _extract_uniswap_events)
+
+
+_LIDO_VALID_EVENTS = (
+    "deposit", "withdrawal_request", "withdrawal_claimed",
+    "l2_deposit", "l2_withdrawal_request",
+)
+
+
+def _extract_lido_events(body):
+    chains = body.get("chains") or (["ETH"] + list(config.LIDO_L2_CHAINS))
+    if not isinstance(chains, list):
+        return "chains must be a list", None
+    events = body.get("events") or list(_LIDO_VALID_EVENTS)
+    if not isinstance(events, list):
+        return "events must be a list", None
+    unknown = [e for e in events if e not in _LIDO_VALID_EVENTS]
+    if unknown:
+        return f"unknown events: {unknown}", None
+    return None, {
+        "chains": [str(c).upper() for c in chains],
+        "events": list(events),
+    }
+
+
+@app.post("/jobs/backfill/lido_events")
+async def backfill_lido_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_LIDO_EVENTS, _extract_lido_events)
 
 
 @app.post("/admin/wallets")

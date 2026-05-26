@@ -245,7 +245,14 @@ export type ChartKind =
   | 'uniswap_withdraw'
   | 'uniswap_collect'
   | 'uniswap_net_liquidity'
-  | 'uniswap_net_swap_flow';
+  | 'uniswap_net_swap_flow'
+  | 'lido_deposit'
+  | 'lido_withdrawal_request'
+  | 'lido_withdrawal_claimed'
+  | 'lido_net_stake'
+  | 'lido_l2_deposit'
+  | 'lido_l2_withdrawal_request'
+  | 'lido_l2_net';
 
 export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ohlcv: 'OHLCV',
@@ -270,7 +277,14 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   uniswap_withdraw: 'Uniswap V3 Withdrawals',
   uniswap_collect: 'Uniswap V3 Collects',
   uniswap_net_liquidity: 'Uniswap V3 Net Liquidity',
-  uniswap_net_swap_flow: 'Uniswap V3 Net Swap Flow'
+  uniswap_net_swap_flow: 'Uniswap V3 Net Swap Flow',
+  lido_deposit: 'Lido Deposits',
+  lido_withdrawal_request: 'Lido Withdrawal Requests',
+  lido_withdrawal_claimed: 'Lido Withdrawal Claims',
+  lido_net_stake: 'Lido Net Stake',
+  lido_l2_deposit: 'Lido L2 Deposits',
+  lido_l2_withdrawal_request: 'Lido L2 Withdrawal Requests',
+  lido_l2_net: 'Lido L2 Net'
 };
 
 /** AAVE chart kinds collected for convenience (loop over them on the
@@ -344,6 +358,51 @@ export function isUniswapKind(kind: ChartKind): boolean {
     UNISWAP_KIND_TO_EVENT[kind] !== undefined ||
     UNISWAP_NET_KIND_TO_EVENTS[kind] !== undefined ||
     kind === 'uniswap_net_swap_flow'
+  );
+}
+
+/** Lido chart kinds (Staking page default layout order). 3 mainnet events
+ *  + Net Stake (deposits − claims) + 2 L2 events + Net L2 (bridge in/out). */
+export const LIDO_CHART_KINDS: ChartKind[] = [
+  'lido_deposit',
+  'lido_withdrawal_request',
+  'lido_withdrawal_claimed',
+  'lido_net_stake',
+  'lido_l2_deposit',
+  'lido_l2_withdrawal_request',
+  'lido_l2_net'
+];
+
+/** Single-event Lido kinds → DeFiStream-side event slug. */
+export const LIDO_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  lido_deposit: 'deposit',
+  lido_withdrawal_request: 'withdrawal_request',
+  lido_withdrawal_claimed: 'withdrawal_claimed',
+  lido_l2_deposit: 'l2_deposit',
+  lido_l2_withdrawal_request: 'l2_withdrawal_request'
+};
+
+/** Net Lido kinds — two parallel fetches, client subtracts.
+ *    Net Stake = deposit − withdrawal_claimed  (net stETH/ETH minted)
+ *    Net L2    = l2_deposit − l2_withdrawal_request  (net wstETH bridged in) */
+export const LIDO_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  lido_net_stake: ['deposit', 'withdrawal_claimed'],
+  lido_l2_net: ['l2_deposit', 'l2_withdrawal_request']
+};
+
+/** Lido kinds that run on mainnet (ETH-only chain selector). */
+export const LIDO_L1_KINDS = new Set<ChartKind>([
+  'lido_deposit',
+  'lido_withdrawal_request',
+  'lido_withdrawal_claimed',
+  'lido_net_stake'
+]);
+
+/** True for any Lido kind (single-event or net). */
+export function isLidoKind(kind: ChartKind): boolean {
+  return (
+    LIDO_KIND_TO_EVENT[kind] !== undefined ||
+    LIDO_NET_KIND_TO_EVENTS[kind] !== undefined
   );
 }
 
@@ -541,6 +600,12 @@ export function newChartInstance(
     // Conservative default: canonical USDC/WETH 0.05%. The page-level loader
     // will replace this with the first available pool from /uniswap/streams.
     base.uniPool = { symbol0: 'USDC', symbol1: 'WETH', fee: 500 };
+  }
+  if (isLidoKind(kind)) {
+    // Lido charts are chain-only (no token / pool axis). L1 kinds are
+    // pinned to ETH by construction; L2 kinds default to ARB (highest
+    // wstETH bridge volume), the user can flip via the chain dropdown.
+    base.chain = LIDO_L1_KINDS.has(kind) ? 'ETH' : (defaults.chain ?? 'ARB');
   }
   return base;
 }

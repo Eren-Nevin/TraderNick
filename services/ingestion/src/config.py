@@ -69,6 +69,22 @@ AAVE_EVENTS_CHAINS = _parse_csv_list(os.environ.get("AAVE_EVENTS_CHAINS", ""))
 AAVE_ETH_MARKETS = _parse_csv_list_raw(os.environ.get("AAVE_ETH_MARKETS", "Core,Prime,EtherFi"))
 AAVE_EVENTS_ENABLED = os.environ.get("AAVE_EVENTS_ENABLED", "1") == "1"
 
+# --- Lido liquid-staking events -------------------------------------------
+# Mainnet events live only on ETH (stETH ⇆ ETH). L2 events live on the
+# bridge-deployed wstETH chains DeFiStream covers (currently ARB, BASE,
+# OP, ZK, MANTLE, MODE, SONEIUM, UNI, ZIRCUIT — 9 chains). The L2 chain
+# list is parametrised so a new bridge deployment is a pure-env change.
+LIDO_EVENTS_ENABLED = os.environ.get("LIDO_EVENTS_ENABLED", "1") == "1"
+LIDO_ETH_EVENTS = _parse_csv_list_raw(
+    os.environ.get("LIDO_ETH_EVENTS", "deposit,withdrawal_request,withdrawal_claimed")
+)
+LIDO_L2_EVENTS = _parse_csv_list_raw(
+    os.environ.get("LIDO_L2_EVENTS", "l2_deposit,l2_withdrawal_request")
+)
+LIDO_L2_CHAINS = _parse_csv_list(
+    os.environ.get("LIDO_L2_CHAINS", "ARB,BASE,OP,ZK,MANTLE,MODE,SONEIUM,UNI,ZIRCUIT")
+)
+
 
 # Uniswap V3 — each pool is (chain, symbol0, symbol1, fee_tier). Pools are
 # semicolon-separated groups, each group is `<chain>:<pool>,<pool>...` where
