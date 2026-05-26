@@ -114,12 +114,19 @@
   type Perp = (typeof PERPS)[number];
 
   function perpInflowFilter(perp: Perp): TF {
+    // Mirror of the CeX Inflow tightening with 'CEX' swapped for 'Perp':
+    // receiver must carry the deposit umbrella AND the Perp tag. Sender
+    // must NOT be a perp wallet so we don't double-count perp-internal
+    // moves between a bridge and its hot wallet.
     return perp === 'All'
-      ? { receiver_in: ['Perp'] }
-      : { receiver_in: [`${perp}-Deposit`] };
+      ? { receiver_all_in: ['Deposit', 'Perp'], sender_ex: ['Perp'] }
+      : { receiver_all_in: [`${perp}-Deposit`, 'Perp'], sender_ex: ['Perp'] };
   }
   function perpOutflowFilter(perp: Perp): TF {
-    const f: TF = { sender_in: ['Hot-Wallet'], receiver_ex: ['Perp'] };
+    // Mirror of the CeX Outflow tightening with 'CEX' swapped for 'Perp':
+    // sender must carry BOTH 'Hot-Wallet' AND 'Perp' so non-perp hot wallets
+    // are excluded. Receiver must NOT be perp.
+    const f: TF = { sender_all_in: ['Hot-Wallet', 'Perp'], receiver_ex: ['Perp'] };
     if (perp !== 'All') f.sender_entity_in = [perp];
     return f;
   }
