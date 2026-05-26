@@ -250,6 +250,7 @@ export type ChartKind =
   | 'lido_withdrawal_request'
   | 'lido_withdrawal_claimed'
   | 'lido_net_stake'
+  | 'lido_net_request_stake'
   | 'lido_l2_deposit'
   | 'lido_l2_withdrawal_request'
   | 'lido_l2_net';
@@ -282,6 +283,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   lido_withdrawal_request: 'Lido Withdrawal Requests',
   lido_withdrawal_claimed: 'Lido Withdrawal Claims',
   lido_net_stake: 'Lido Net Stake',
+  lido_net_request_stake: 'Lido Net Request Stake',
   lido_l2_deposit: 'Lido L2 Deposits',
   lido_l2_withdrawal_request: 'Lido L2 Withdrawal Requests',
   lido_l2_net: 'Lido L2 Net'
@@ -368,6 +370,7 @@ export const LIDO_CHART_KINDS: ChartKind[] = [
   'lido_withdrawal_request',
   'lido_withdrawal_claimed',
   'lido_net_stake',
+  'lido_net_request_stake',
   'lido_l2_deposit',
   'lido_l2_withdrawal_request',
   'lido_l2_net'
@@ -383,10 +386,18 @@ export const LIDO_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
 };
 
 /** Net Lido kinds — two parallel fetches, client subtracts.
- *    Net Stake = deposit − withdrawal_claimed  (net stETH/ETH minted)
- *    Net L2    = l2_deposit − l2_withdrawal_request  (net wstETH bridged in) */
+ *    Net Stake         = deposit − withdrawal_claimed  (net stETH actually
+ *                        leaving the system: claims unstake; the request-
+ *                        only stage is committed but not yet redeemable)
+ *    Net Request Stake = deposit − withdrawal_request  (net stETH growth
+ *                        if the queue eventually clears — useful for
+ *                        forward-looking sentiment, since requests precede
+ *                        claims by the validator unstake window)
+ *    Net L2            = l2_deposit − l2_withdrawal_request  (net wstETH
+ *                        bridged in to L2) */
 export const LIDO_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
   lido_net_stake: ['deposit', 'withdrawal_claimed'],
+  lido_net_request_stake: ['deposit', 'withdrawal_request'],
   lido_l2_net: ['l2_deposit', 'l2_withdrawal_request']
 };
 
@@ -395,7 +406,8 @@ export const LIDO_L1_KINDS = new Set<ChartKind>([
   'lido_deposit',
   'lido_withdrawal_request',
   'lido_withdrawal_claimed',
-  'lido_net_stake'
+  'lido_net_stake',
+  'lido_net_request_stake'
 ]);
 
 /** True for any Lido kind (single-event or net). */

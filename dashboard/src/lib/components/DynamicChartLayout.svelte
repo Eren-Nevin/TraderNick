@@ -284,7 +284,8 @@
           inst.kind === 'lido_deposit' ||
           inst.kind === 'lido_withdrawal_request' ||
           inst.kind === 'lido_withdrawal_claimed' ||
-          inst.kind === 'lido_net_stake';
+          inst.kind === 'lido_net_stake' ||
+          inst.kind === 'lido_net_request_stake';
         const ch = typeof r.chain === 'string' ? r.chain : (isL1 ? 'ETH' : (defaultChain ?? 'ARB'));
         inst.chain = isL1 ? 'ETH' : ch;
       }
