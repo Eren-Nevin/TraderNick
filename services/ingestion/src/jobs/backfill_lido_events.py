@@ -92,12 +92,17 @@ def _is_rate_limit(exc: Exception) -> bool:
 
 
 def _is_not_supported(exc: Exception) -> bool:
-    """DeFiStream returns a 400/404 with these messages when an (event, chain)
-    isn't supported (e.g. l2_deposit on a chain without a Lido bridge, or a
-    mainnet event queried on an L2)."""
+    """DeFiStream returns a 400/404 with one of several messages when an
+    (event, chain) isn't supported on the live API: 'not found', 'not
+    available', 'not supported', or 'not configured' (this last one is what
+    OP returned for the Lido events — listed as supported by the catalogue
+    but missing from runtime config)."""
     msg = str(exc).lower()
     return (
-        "not found" in msg or "not available" in msg or "not supported" in msg
+        "not found" in msg
+        or "not available" in msg
+        or "not supported" in msg
+        or "not configured" in msg
     )
 
 
