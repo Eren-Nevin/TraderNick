@@ -308,7 +308,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   lido_withdrawal_claimed: 'Lido Withdrawal Claims',
   lido_net_stake: 'Lido Net Stake',
   lido_net_request_stake: 'Lido Net Request Stake',
-  lido_request_pending: 'Lido Request Pending',
+  lido_request_pending: 'Lido New Pending Requests',
   lido_l2_deposit: 'Lido L2 Deposits',
   lido_l2_withdrawal_request: 'Lido L2 Withdrawal Requests',
   lido_l2_net: 'Lido L2 Net'
