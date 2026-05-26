@@ -549,6 +549,21 @@
       {/if}
     </div>
   </div>
+{:else}
+  <!-- At MAX_CHARTS — the bottom Insert Chart pad and the per-chart "+"
+       hover buttons are silently inert. Surface this so the user knows why
+       clicking + does nothing, rather than just removing the affordance. -->
+  <div
+    class="rounded-xl border border-dashed border-amber-700/60 bg-amber-900/10 px-4 py-3 text-xs text-amber-300 flex items-center gap-2"
+    role="status"
+  >
+    <span class="text-base leading-none">⚠</span>
+    <span>
+      <strong class="font-semibold">Max {MAX_CHARTS} charts reached.</strong>
+      Remove a chart (its ✕ button) to insert another. This cap exists to
+      keep page-level fetches in budget — each chart is its own data load.
+    </span>
+  </div>
 {/if}
 
 <!-- Floating insert menu — anchored to the per-chart "+" that opened it. -->
