@@ -313,3 +313,40 @@ AERO_LIVE_POOLS_DEFAULT = "BASE:USDC/WETH/100"
 AERO_LIVE_POOLS = _parse_aero_cl_pools(
     os.environ.get("AERO_LIVE_POOLS", AERO_LIVE_POOLS_DEFAULT)
 )
+
+
+# --- Aerodrome basic pools (Solidly-style v1, BASE only) -------------------
+# Grammar: `BASE:<sym0/sym1/stable>,...` where stable is 'v' (vAMM, false)
+# or 's' (sAMM, true). Per-pair stable flag is part of the pool identity.
+def _parse_aero_basic_pools(raw: str) -> list[tuple[str, str, str, bool]]:
+    out: list[tuple[str, str, str, bool]] = []
+    for group in raw.split(";"):
+        group = group.strip()
+        if not group or ":" not in group:
+            continue
+        chain, pools_str = group.split(":", 1)
+        chain = chain.strip().upper()
+        for pool in pools_str.split(","):
+            parts = pool.strip().split("/")
+            if len(parts) != 3:
+                continue
+            sym_a, sym_b, st_s = parts[0].strip(), parts[1].strip(), parts[2].strip().lower()
+            if not sym_a or not sym_b or st_s not in ("v", "s"):
+                continue
+            symbol0, symbol1 = sorted([sym_a.upper(), sym_b.upper()])
+            out.append((chain, symbol0, symbol1, st_s == "s"))
+    return out
+
+
+AERO_BASIC_POOLS_DEFAULT = (
+    # Top basic-pool vAMMs by volume — all on BASE.
+    "BASE:USDC/WETH/v,USDC/AERO/v,WETH/AERO/v,USDC/CBBTC/v"
+)
+AERO_BASIC_POOLS = _parse_aero_basic_pools(
+    os.environ.get("AERO_BASIC_POOLS", AERO_BASIC_POOLS_DEFAULT)
+)
+AERO_BASIC_ENABLED = os.environ.get("AERO_BASIC_ENABLED", "1") == "1"
+AERO_BASIC_LIVE_POOLS_DEFAULT = "BASE:USDC/WETH/v"
+AERO_BASIC_LIVE_POOLS = _parse_aero_basic_pools(
+    os.environ.get("AERO_BASIC_LIVE_POOLS", AERO_BASIC_LIVE_POOLS_DEFAULT)
+)

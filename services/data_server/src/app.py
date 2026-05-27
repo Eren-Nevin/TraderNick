@@ -13,6 +13,7 @@ from routes.aave_v2 import bp as aave_v2_bp
 from routes.uniswap_v2 import bp as uniswap_v2_bp
 from routes.uniswap_v4 import bp as uniswap_v4_bp
 from routes.aero import bp as aero_bp
+from routes.aero_basic import bp as aero_basic_bp
 
 app = Sanic("tradernick_data_server")
 app.config.RESPONSE_TIMEOUT = 60
@@ -30,6 +31,7 @@ app.blueprint(aave_v2_bp)
 app.blueprint(uniswap_v2_bp)
 app.blueprint(uniswap_v4_bp)
 app.blueprint(aero_bp)
+app.blueprint(aero_basic_bp)
 
 
 @app.get("/health")

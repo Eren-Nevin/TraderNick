@@ -29,6 +29,7 @@ from jobs.manager import (
     JOB_TYPE_BACKFILL_UNISWAP_V2_EVENTS,
     JOB_TYPE_BACKFILL_UNISWAP_V4_EVENTS,
     JOB_TYPE_BACKFILL_AERO_EVENTS,
+    JOB_TYPE_BACKFILL_AERO_BASIC_EVENTS,
     JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS,
     JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS,
     JobManager,
@@ -94,6 +95,7 @@ async def startup(app_, _loop):
         "uniswap_v2_events",
         "uniswap_v4_events",
         "aero_events",
+        "aero_basic_events",
     ])
     app_.ctx.jobs = JobManager()
     try:
@@ -452,6 +454,35 @@ def _extract_aero_events(body):
 @app.post("/jobs/backfill/aero_events")
 async def backfill_aero_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AERO_EVENTS, _extract_aero_events)
+
+
+_AERO_BASIC_VALID_EVENTS = ("swap", "deposit", "withdraw", "claim")
+
+
+def _extract_aero_basic_events(body):
+    pools = body.get("pools")
+    if pools is None:
+        pools = [[c, s0, s1, st] for (c, s0, s1, st) in config.AERO_BASIC_POOLS]
+    if not pools or not isinstance(pools, list):
+        return "missing pools (list of [chain, sym0, sym1, stable])", None
+    norm = []
+    for p in pools:
+        if not isinstance(p, list) or len(p) != 4:
+            return "each pool must be [chain, sym0, sym1, stable]", None
+        sym0, sym1 = sorted([str(p[1]).upper(), str(p[2]).upper()])
+        norm.append([str(p[0]).upper(), sym0, sym1, bool(p[3])])
+    events = body.get("events") or list(_AERO_BASIC_VALID_EVENTS)
+    if not isinstance(events, list):
+        return "events must be a list", None
+    unknown = [e for e in events if e not in _AERO_BASIC_VALID_EVENTS]
+    if unknown:
+        return f"unknown events: {unknown}", None
+    return None, {"pools": norm, "events": list(events)}
+
+
+@app.post("/jobs/backfill/aero_basic_events")
+async def backfill_aero_basic_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AERO_BASIC_EVENTS, _extract_aero_basic_events)
 
 
 @app.post("/admin/wallets")

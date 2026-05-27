@@ -311,8 +311,25 @@
         inst.chain = isL1 ? 'ETH' : ch;
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
       }
-      // Aerodrome chart kinds (BASE-only, concentrated pools).
-      if (inst.kind.startsWith('aero_')) {
+      // Aerodrome basic-pool chart kinds (BASE-only, Solidly v1).
+      if (inst.kind.startsWith('aero_basic_')) {
+        inst.chain = 'BASE';
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
+        const rp = r.aeroBasicPool as Record<string, unknown> | undefined;
+        if (rp && typeof rp.symbol0 === 'string' && typeof rp.symbol1 === 'string' && typeof rp.stable === 'boolean') {
+          inst.aeroBasicPool = {
+            symbol0: (rp.symbol0 as string).toUpperCase(),
+            symbol1: (rp.symbol1 as string).toUpperCase(),
+            stable: rp.stable as boolean
+          };
+        } else {
+          inst.aeroBasicPool = { symbol0: 'USDC', symbol1: 'WETH', stable: false };
+        }
+      }
+      // Aerodrome concentrated chart kinds. NOTE: this branch must come
+      // AFTER the aero_basic_ branch since startsWith('aero_') matches
+      // both — the basic branch sets aeroBasicPool, this one sets aeroPool.
+      else if (inst.kind.startsWith('aero_')) {
         inst.chain = 'BASE';
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         const rp = r.aeroPool as Record<string, unknown> | undefined;

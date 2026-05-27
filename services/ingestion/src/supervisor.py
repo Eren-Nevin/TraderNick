@@ -24,6 +24,7 @@ GROUP_MODULES = {
     "uniswap_v2_events": "groups.uniswap_v2_events",
     "uniswap_v4_events": "groups.uniswap_v4_events",
     "aero_events": "groups.aero_events",
+    "aero_basic_events": "groups.aero_basic_events",
 }
 
 

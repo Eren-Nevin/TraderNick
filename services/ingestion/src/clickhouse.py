@@ -1236,3 +1236,117 @@ AERO_CL_EVENTS = {
     "withdraw": ("withdrawals", "tradernick.aero_concentrated_withdrawals", AERO_CL_WITHDRAWALS_COLUMNS, aero_cl_withdrawals_df_to_rows),
     "collect":  ("collects",    "tradernick.aero_concentrated_collects",    AERO_CL_COLLECTS_COLUMNS,    aero_cl_collects_df_to_rows),
 }
+
+
+# ---------------------------------------------------------------------------
+# Aerodrome basic-pool events (Solidly v1-style, BASE only)
+# ---------------------------------------------------------------------------
+# Pool identity: (chain=BASE, sym0, sym1, stable). 4 events; gauge-style
+# claims (basic-only; concentrated uses collect instead). Wire is the same
+# camelCase mix as the concentrated swap event.
+
+AERO_BASIC_SWAPS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "stable",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "swapper", "recipient",
+    "token_sold", "token_bought", "amount_sold", "amount_bought",
+    "value_usd",
+]
+AERO_BASIC_DEPOSITS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "stable",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "sender",
+    "amount0", "amount1",
+    "value_usd",
+]
+AERO_BASIC_WITHDRAWALS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "stable",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "owner", "recipient",
+    "amount0", "amount1",
+    "value_usd",
+]
+AERO_BASIC_CLAIMS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "stable",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "sender", "recipient",
+    "amount0", "amount1",
+    "value_usd",
+]
+
+
+def _aero_basic_head(r, *, chain, symbol0, symbol1, stable):
+    return [
+        chain, symbol0, symbol1, 1 if stable else 0,
+        _to_naive_utc(r["time"]),
+        int(r["block_number"]),
+        str(r["tx_id"]) if r.get("tx_id") else "",
+        int(r["log_index"]) if r.get("log_index") is not None else 0,
+    ]
+
+
+def aero_basic_swaps_df_to_rows(df, *, chain, symbol0, symbol1, stable):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_aero_basic_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1, stable=stable) + [
+            str(r["pool_address"]) if r.get("pool_address") else "",
+            str(r["swapper"]) if r.get("swapper") else "",
+            str(r["recipient"]) if r.get("recipient") else "",
+            str(r["tokenSold"]) if r.get("tokenSold") else "",
+            str(r["tokenBought"]) if r.get("tokenBought") else "",
+            float(r["amountSold"]) if r.get("amountSold") is not None else 0.0,
+            float(r["amountBought"]) if r.get("amountBought") is not None else 0.0,
+            _v_usd(r),
+        ])
+    return rows
+
+
+def aero_basic_deposits_df_to_rows(df, *, chain, symbol0, symbol1, stable):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_aero_basic_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1, stable=stable) + [
+            str(r["pool_address"]) if r.get("pool_address") else "",
+            str(r["sender"]) if r.get("sender") else "",
+            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
+            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            _v_usd(r),
+        ])
+    return rows
+
+
+def aero_basic_withdrawals_df_to_rows(df, *, chain, symbol0, symbol1, stable):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_aero_basic_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1, stable=stable) + [
+            str(r["pool_address"]) if r.get("pool_address") else "",
+            str(r["owner"]) if r.get("owner") else "",
+            # Mirror Uniswap V2 withdraw: the wire field for the receiving
+            # address is `to` (not `recipient`).
+            str(r["to"]) if r.get("to") else "",
+            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
+            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            _v_usd(r),
+        ])
+    return rows
+
+
+def aero_basic_claims_df_to_rows(df, *, chain, symbol0, symbol1, stable):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_aero_basic_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1, stable=stable) + [
+            str(r["pool_address"]) if r.get("pool_address") else "",
+            str(r["sender"]) if r.get("sender") else "",
+            str(r["recipient"]) if r.get("recipient") else "",
+            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
+            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            _v_usd(r),
+        ])
+    return rows
+
+
+AERO_BASIC_EVENTS = {
+    "swap":     ("swaps",       "tradernick.aero_basic_swaps",       AERO_BASIC_SWAPS_COLUMNS,       aero_basic_swaps_df_to_rows),
+    "deposit":  ("deposits",    "tradernick.aero_basic_deposits",    AERO_BASIC_DEPOSITS_COLUMNS,    aero_basic_deposits_df_to_rows),
+    "withdraw": ("withdrawals", "tradernick.aero_basic_withdrawals", AERO_BASIC_WITHDRAWALS_COLUMNS, aero_basic_withdrawals_df_to_rows),
+    "claim":    ("claims",      "tradernick.aero_basic_claims",      AERO_BASIC_CLAIMS_COLUMNS,      aero_basic_claims_df_to_rows),
+}

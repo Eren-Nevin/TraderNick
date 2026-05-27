@@ -285,6 +285,11 @@ export type ChartKind =
   | 'aero_withdraw'
   | 'aero_collect'
   | 'aero_net_liquidity'
+  | 'aero_basic_swap'
+  | 'aero_basic_deposit'
+  | 'aero_basic_withdraw'
+  | 'aero_basic_claim'
+  | 'aero_basic_net_liquidity'
   | 'uniswap_swap'
   | 'uniswap_deposit'
   | 'uniswap_withdraw'
@@ -341,6 +346,11 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   aero_withdraw: 'Aerodrome Withdrawals',
   aero_collect: 'Aerodrome Collects',
   aero_net_liquidity: 'Aerodrome Net Liquidity',
+  aero_basic_swap: 'Aerodrome Basic Swaps',
+  aero_basic_deposit: 'Aerodrome Basic Deposits',
+  aero_basic_withdraw: 'Aerodrome Basic Withdrawals',
+  aero_basic_claim: 'Aerodrome Basic Claims',
+  aero_basic_net_liquidity: 'Aerodrome Basic Net Liquidity',
   uniswap_swap: 'Uniswap V3 Swaps',
   uniswap_deposit: 'Uniswap V3 Deposits',
   uniswap_withdraw: 'Uniswap V3 Withdrawals',
@@ -547,11 +557,42 @@ export function isAeroKind(kind: ChartKind): boolean {
   );
 }
 
-/** Aero pool identity: (chain=BASE, sym0, sym1, tick_spacing). */
+/** Aero (concentrated) pool identity: (chain=BASE, sym0, sym1, tick_spacing). */
 export type AeroPool = {
   symbol0: string;
   symbol1: string;
   tick_spacing: number;
+};
+
+/** Aerodrome BASIC pool chart kinds (Solidly v1, BASE only). Pool identity
+ *  is (sym0, sym1, stable) — no fee tier, no tick spacing. 4 events: swap,
+ *  deposit, withdraw, claim (basic-only — concentrated uses collect). */
+export const AERO_BASIC_CHART_KINDS: ChartKind[] = [
+  'aero_basic_swap',
+  'aero_basic_deposit',
+  'aero_basic_withdraw',
+  'aero_basic_claim',
+  'aero_basic_net_liquidity'
+];
+export const AERO_BASIC_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  aero_basic_swap: 'swap',
+  aero_basic_deposit: 'deposit',
+  aero_basic_withdraw: 'withdraw',
+  aero_basic_claim: 'claim'
+};
+export const AERO_BASIC_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  aero_basic_net_liquidity: ['deposit', 'withdraw']
+};
+export function isAeroBasicKind(kind: ChartKind): boolean {
+  return (
+    AERO_BASIC_KIND_TO_EVENT[kind] !== undefined ||
+    AERO_BASIC_NET_KIND_TO_EVENTS[kind] !== undefined
+  );
+}
+export type AeroBasicPool = {
+  symbol0: string;
+  symbol1: string;
+  stable: boolean;
 };
 
 /** Group label used when bucketing chart kinds in the Insert menu. The
@@ -566,6 +607,7 @@ export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('uniswap_v4_')) return 'Uniswap V4';
   if (kind.startsWith('uniswap_')) return 'Uniswap V3';
   if (kind.startsWith('lido_')) return 'Lido';
+  if (kind.startsWith('aero_basic_')) return 'Aerodrome Basic';
   if (kind.startsWith('aero_')) return 'Aerodrome';
   return null;
 }
@@ -594,7 +636,8 @@ const _GROUP_ORDER: Record<string, number> = {
   'Uniswap V2': 30,
   'Uniswap V3': 31,
   'Uniswap V4': 32,
-  'Aerodrome':  40
+  'Aerodrome':  40,
+  'Aerodrome Basic': 41
 };
 export function chartKindGroupOrder(group: string): number {
   return _GROUP_ORDER[group] ?? 99;
@@ -769,6 +812,8 @@ export type ChartInstance = {
   uniV4Pool?: UniV4Pool;
   // aero_* only: Aerodrome concentrated-pool tuple (BASE chain implied)
   aeroPool?: AeroPool;
+  // aero_basic_* only: Aerodrome basic-pool tuple — (sym0, sym1, stable)
+  aeroBasicPool?: AeroBasicPool;
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -897,6 +942,12 @@ export function newChartInstance(
     base.chain = 'BASE';
     // Default to USDC/WETH ts=100 (top Aero CL pool by volume).
     base.aeroPool = { symbol0: 'USDC', symbol1: 'WETH', tick_spacing: 100 };
+    base.valueMode = 'usd';
+  }
+  if (isAeroBasicKind(kind)) {
+    base.chain = 'BASE';
+    // Default to USDC/WETH vAMM (top basic pool by volume).
+    base.aeroBasicPool = { symbol0: 'USDC', symbol1: 'WETH', stable: false };
     base.valueMode = 'usd';
   }
   if (isLidoKind(kind)) {

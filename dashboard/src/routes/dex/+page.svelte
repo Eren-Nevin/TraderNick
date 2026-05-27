@@ -5,6 +5,7 @@
     UNISWAP_V2_CHART_KINDS,
     UNISWAP_V4_CHART_KINDS,
     AERO_CHART_KINDS,
+    AERO_BASIC_CHART_KINDS,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind
@@ -22,7 +23,8 @@
     // a one-line edit: drop the comment and re-add UNISWAP_V4_CHART_KINDS.
     // ...UNISWAP_V4_CHART_KINDS,
     ...UNISWAP_V2_CHART_KINDS,
-    ...AERO_CHART_KINDS
+    ...AERO_CHART_KINDS,
+    ...AERO_BASIC_CHART_KINDS
   ];
 
   function defaultLayout(): ChartInstanceT[] {

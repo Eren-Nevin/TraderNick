@@ -955,3 +955,95 @@ CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_collects
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index);
+
+-- ---------------------------------------------------------------------------
+-- Aerodrome basic-pool events (Solidly-style v1 AMM, BASE only)
+-- ---------------------------------------------------------------------------
+-- Aero basic pools come in two variants per pair via the `stable` flag:
+--   stable=0 → vAMM (constant-product, like Uniswap V2)
+--   stable=1 → sAMM (stableswap curve for like-priced pairs)
+-- Pool identity is (BASE, sym0, sym1, stable) — no fee tier, no tick range.
+-- 4 events: swap, deposit, withdraw, claims (basic pools have a gauge-style
+-- claim event for veAERO holders; this is NOT the same as concentrated's
+-- per-position collect).
+
+CREATE TABLE IF NOT EXISTS tradernick.aero_basic_swaps (
+    chain         LowCardinality(String),
+    symbol0       LowCardinality(String),
+    symbol1       LowCardinality(String),
+    stable        UInt8,
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address  String             CODEC(ZSTD(3)),
+    swapper       String             CODEC(ZSTD(3)),
+    recipient     String             CODEC(ZSTD(3)),
+    token_sold    LowCardinality(String),
+    token_bought  LowCardinality(String),
+    amount_sold   Float64            CODEC(Gorilla, ZSTD(3)),
+    amount_bought Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aero_basic_deposits (
+    chain         LowCardinality(String),
+    symbol0       LowCardinality(String),
+    symbol1       LowCardinality(String),
+    stable        UInt8,
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address  String             CODEC(ZSTD(3)),
+    sender        String             CODEC(ZSTD(3)),
+    amount0       Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aero_basic_withdrawals (
+    chain         LowCardinality(String),
+    symbol0       LowCardinality(String),
+    symbol1       LowCardinality(String),
+    stable        UInt8,
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address  String             CODEC(ZSTD(3)),
+    owner         String             CODEC(ZSTD(3)),
+    recipient     String             CODEC(ZSTD(3)),
+    amount0       Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aero_basic_claims (
+    chain         LowCardinality(String),
+    symbol0       LowCardinality(String),
+    symbol1       LowCardinality(String),
+    stable        UInt8,
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address  String             CODEC(ZSTD(3)),
+    sender        String             CODEC(ZSTD(3)),
+    recipient     String             CODEC(ZSTD(3)),
+    amount0       Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index);

@@ -56,6 +56,9 @@
     AERO_KIND_TO_EVENT,
     AERO_NET_KIND_TO_EVENTS,
     isAeroKind,
+    AERO_BASIC_KIND_TO_EVENT,
+    AERO_BASIC_NET_KIND_TO_EVENTS,
+    isAeroBasicKind,
     fmtUniPool,
     LIDO_KIND_TO_EVENT,
     LIDO_NET_KIND_TO_EVENTS,
@@ -527,6 +530,11 @@
       const pPart = p ? `${p.symbol0}|${p.symbol1}|${p.tick_spacing}` : '';
       return `${instance.kind}|${instance.chain ?? 'BASE'}|${pPart}|${instance.interval}`;
     }
+    if (isAeroBasicKind(instance.kind)) {
+      const p = instance.aeroBasicPool;
+      const pPart = p ? `${p.symbol0}|${p.symbol1}|${p.stable ? 's' : 'v'}` : '';
+      return `${instance.kind}|${instance.chain ?? 'BASE'}|${pPart}|${instance.interval}`;
+    }
     if (isLidoKind(instance.kind)) {
       // Lido charts are keyed by (kind, chain | chain_group, interval). L1
       // kinds are ETH-pinned but we include the axis anyway. The cg: prefix
@@ -680,6 +688,7 @@
         isUniswapV2Kind(instance.kind) ||
         isUniswapV4Kind(instance.kind) ||
         isAeroKind(instance.kind) ||
+        isAeroBasicKind(instance.kind) ||
         isLidoKind(instance.kind);
       if (isWideWindowKind) {
         const now = new Date();
@@ -996,6 +1005,97 @@
         const eventForKind = UNISWAP_V4_KIND_TO_EVENT[instance.kind];
         if (!eventForKind) throw new Error(`unmapped uniswap_v4 kind ${instance.kind}`);
         const res = await queuedFetch(`/api/uniswap_v4/aggregate?${buildV4Qs(eventForKind)}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = (body.series ?? []) as AnyDatum[];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Aerodrome BASIC pools (Solidly v1, BASE only). Pool keyed by
+      // (sym0, sym1, stable). Same fetch shape as concentrated minus
+      // tick_spacing plus the stable flag.
+      if (isAeroBasicKind(instance.kind)) {
+        const pool = instance.aeroBasicPool;
+        if (!pool) {
+          data = []; since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        const buildAeroBasicQs = (event: string) => {
+          const qs = new URLSearchParams({
+            event,
+            chain: instance.chain ?? 'BASE',
+            symbol0: pool.symbol0,
+            symbol1: pool.symbol1,
+            stable: pool.stable ? '1' : '0',
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '5000'
+          });
+          if (forceFresh) qs.set('fresh', '1');
+          return qs;
+        };
+        const netEvs = AERO_BASIC_NET_KIND_TO_EVENTS[instance.kind];
+        if (netEvs) {
+          const [posEvent, negEvent] = netEvs;
+          const [posRes, negRes] = await Promise.all([
+            queuedFetch(`/api/aero_basic/aggregate?${buildAeroBasicQs(posEvent)}`, { signal }),
+            queuedFetch(`/api/aero_basic/aggregate?${buildAeroBasicQs(negEvent)}`, { signal })
+          ]);
+          if (!posRes.ok) throw new Error(`${instance.kind} ${posRes.status}`);
+          if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
+          const posBody = await posRes.json();
+          const negBody = await negRes.json();
+          type Row = { amount: number; usd: number; count: number; amount0: number; amount1: number };
+          const negByTime = new Map<number, Row>();
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            negByTime.set(r.time, {
+              amount: r.sum_amount, usd: r.sum_value_usd, count: r.count,
+              amount0: r.sum_amount0 ?? 0, amount1: r.sum_amount1 ?? 0
+            });
+          }
+          const out: Record<string, number>[] = [];
+          const seen = new Set<number>();
+          for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
+            const n = negByTime.get(r.time) ?? { amount: 0, usd: 0, count: 0, amount0: 0, amount1: 0 };
+            out.push({
+              time: r.time,
+              sum_amount: r.sum_amount - n.amount,
+              sum_value_usd: r.sum_value_usd - n.usd,
+              sum_amount0: (r.sum_amount0 ?? 0) - n.amount0,
+              sum_amount1: (r.sum_amount1 ?? 0) - n.amount1,
+              count: r.count + n.count
+            });
+            seen.add(r.time);
+          }
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            if (seen.has(r.time)) continue;
+            out.push({
+              time: r.time,
+              sum_amount: -r.sum_amount,
+              sum_value_usd: -r.sum_value_usd,
+              sum_amount0: -(r.sum_amount0 ?? 0),
+              sum_amount1: -(r.sum_amount1 ?? 0),
+              count: r.count
+            });
+          }
+          out.sort((a, b) => a.time - b.time);
+          data = out as unknown as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        const eventForKind = AERO_BASIC_KIND_TO_EVENT[instance.kind];
+        if (!eventForKind) throw new Error(`unmapped aero_basic kind ${instance.kind}`);
+        const res = await queuedFetch(`/api/aero_basic/aggregate?${buildAeroBasicQs(eventForKind)}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
         const body = await res.json();
         data = (body.series ?? []) as AnyDatum[];
@@ -1741,10 +1841,12 @@
       // is in. V4 / Aero hold their own pool shapes alongside uniPool (V3/V2).
       const sym0 = (instance.uniV4Pool?.symbol0
                  ?? instance.aeroPool?.symbol0
+                 ?? instance.aeroBasicPool?.symbol0
                  ?? instance.uniPool?.symbol0
                  ?? 't0');
       const sym1 = (instance.uniV4Pool?.symbol1
                  ?? instance.aeroPool?.symbol1
+                 ?? instance.aeroBasicPool?.symbol1
                  ?? instance.uniPool?.symbol1
                  ?? 't1');
       const base = instance.showPoint
@@ -2103,6 +2205,17 @@
             <span class="text-zinc-500 ml-1">ts={instance.aeroPool.tick_spacing}</span>
           </span>
         {/if}
+      {:else if isAeroBasicKind(instance.kind)}
+        <!-- Aerodrome basic: BASE-only; pool = (sym0, sym1, stable). The
+             stable flag chip distinguishes vAMM (constant-product) from
+             sAMM (stableswap curve). -->
+        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">BASE</span>
+        {#if instance.aeroBasicPool}
+          <span class="text-zinc-100 text-xs font-medium px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">
+            {instance.aeroBasicPool.symbol0}/{instance.aeroBasicPool.symbol1}
+            <span class="text-zinc-500 ml-1">{instance.aeroBasicPool.stable ? 'sAMM' : 'vAMM'}</span>
+          </span>
+        {/if}
       {:else if isAaveKind(instance.kind)}
         <!-- AAVE kinds: chain dropdown (5 EVMs + chain groups) + token
              <select> with a "Token group" optgroup so the user can pick
@@ -2299,7 +2412,7 @@
         <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
         Week lines
       </label>
-      {#if instance.kind === 'transfer' || isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow') || isUniswapV2Kind(instance.kind) || instance.kind === 'uniswap_v4_swap' || (isAeroKind(instance.kind) && instance.kind !== 'aero_net_liquidity') || instance.kind === 'aero_net_liquidity'}
+      {#if instance.kind === 'transfer' || isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow') || isUniswapV2Kind(instance.kind) || instance.kind === 'uniswap_v4_swap' || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
         <!-- USD ⇆ Amount toggle. For AAVE / Lido the chart shows a single
              series in either mode. For Uniswap (except net_swap_flow which
              is intrinsically directional USD), Amount mode renders TWO
@@ -2742,7 +2855,7 @@
         formatY={valueAxisFn}
         formatTooltip={valueTooltipFn}
       />
-    {:else if isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind) || isUniswapV4Kind(instance.kind) || isAeroKind(instance.kind)}
+    {:else if isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind) || isUniswapV4Kind(instance.kind) || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={uniswapLinesD}
