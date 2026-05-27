@@ -30,6 +30,7 @@ from jobs.manager import (
     JOB_TYPE_BACKFILL_UNISWAP_V4_EVENTS,
     JOB_TYPE_BACKFILL_AERO_EVENTS,
     JOB_TYPE_BACKFILL_AERO_BASIC_EVENTS,
+    JOB_TYPE_BACKFILL_AAVE_V4_EVENTS,
     JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS,
     JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS,
     JobManager,
@@ -96,6 +97,7 @@ async def startup(app_, _loop):
         "uniswap_v4_events",
         "aero_events",
         "aero_basic_events",
+        "aave_v4_events",
     ])
     app_.ctx.jobs = JobManager()
     try:
@@ -483,6 +485,27 @@ def _extract_aero_basic_events(body):
 @app.post("/jobs/backfill/aero_basic_events")
 async def backfill_aero_basic_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AERO_BASIC_EVENTS, _extract_aero_basic_events)
+
+
+_AAVE_V4_VALID_EVENTS = ("deposit", "withdraw", "borrow", "repay", "liquidation")
+
+
+def _extract_aave_v4_events(body):
+    chains = body.get("chains") or list(config.AAVE_V4_CHAINS)
+    if not chains or not isinstance(chains, list):
+        return "missing chains (list)", None
+    events = body.get("events") or list(_AAVE_V4_VALID_EVENTS)
+    if not isinstance(events, list):
+        return "events must be a list", None
+    unknown = [e for e in events if e not in _AAVE_V4_VALID_EVENTS]
+    if unknown:
+        return f"unknown events: {unknown}", None
+    return None, {"chains": [str(c).upper() for c in chains], "events": list(events)}
+
+
+@app.post("/jobs/backfill/aave_v4_events")
+async def backfill_aave_v4_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AAVE_V4_EVENTS, _extract_aave_v4_events)
 
 
 @app.post("/admin/wallets")

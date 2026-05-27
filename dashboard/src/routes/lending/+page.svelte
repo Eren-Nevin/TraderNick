@@ -3,6 +3,7 @@
   import {
     AAVE_CHART_KINDS,
     AAVE_V2_CHART_KINDS,
+    AAVE_V4_CHART_KINDS,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind
@@ -11,7 +12,7 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', ...AAVE_CHART_KINDS, ...AAVE_V2_CHART_KINDS];
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', ...AAVE_CHART_KINDS, ...AAVE_V2_CHART_KINDS, ...AAVE_V4_CHART_KINDS];
 
   function defaultLayout(): ChartInstanceT[] {
     // One chart per AAVE event type, all pinned to ETH/USDC by default —

@@ -1350,3 +1350,86 @@ AERO_BASIC_EVENTS = {
     "withdraw": ("withdrawals", "tradernick.aero_basic_withdrawals", AERO_BASIC_WITHDRAWALS_COLUMNS, aero_basic_withdrawals_df_to_rows),
     "claim":    ("claims",      "tradernick.aero_basic_claims",      AERO_BASIC_CLAIMS_COLUMNS,      aero_basic_claims_df_to_rows),
 }
+
+
+# ---------------------------------------------------------------------------
+# AAVE v4 events (ETH only)
+# ---------------------------------------------------------------------------
+# V4 introduces hub-and-spoke: spoke contract + reserve_id replace V3's
+# eth_market axis. Each event also carries `shares` (aToken shares
+# minted/burned). No flashloan event in V4. 5 events total.
+
+AAVE_V4_DEPOSITS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "spoke", "reserve_id", "caller", "user", "token", "amount", "shares",
+    "value_usd",
+]
+AAVE_V4_WITHDRAWALS_COLUMNS = AAVE_V4_DEPOSITS_COLUMNS  # same shape
+AAVE_V4_BORROWS_COLUMNS     = AAVE_V4_DEPOSITS_COLUMNS  # same shape
+AAVE_V4_REPAYS_COLUMNS      = AAVE_V4_DEPOSITS_COLUMNS  # same shape
+AAVE_V4_LIQUIDATIONS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "spoke", "user", "liquidator",
+    "collateral_token", "collateral_amount",
+    "debt_token", "debt_amount",
+    "value_usd",
+]
+
+
+def _v4_head(r, *, chain):
+    return [
+        chain,
+        _to_naive_utc(r["time"]),
+        int(r["block_number"]),
+        str(r["tx_id"]) if r.get("tx_id") else "",
+        int(r["log_index"]) if r.get("log_index") is not None else 0,
+    ]
+
+
+def _v4_lend_df_to_rows(df, *, chain):
+    """Shared transform for deposit/withdraw/borrow/repay — they all have
+    the same wire shape (token-keyed lend operations)."""
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_v4_head(r, chain=chain) + [
+            str(r["spoke"]) if r.get("spoke") else "",
+            int(r["reserve_id"]) if r.get("reserve_id") is not None else 0,
+            str(r["caller"]) if r.get("caller") else "",
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]) if r.get("amount") is not None else 0.0,
+            float(r["shares"]) if r.get("shares") is not None else 0.0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def aave_v4_deposits_df_to_rows(df, *, chain):     return _v4_lend_df_to_rows(df, chain=chain)
+def aave_v4_withdrawals_df_to_rows(df, *, chain):  return _v4_lend_df_to_rows(df, chain=chain)
+def aave_v4_borrows_df_to_rows(df, *, chain):      return _v4_lend_df_to_rows(df, chain=chain)
+def aave_v4_repays_df_to_rows(df, *, chain):       return _v4_lend_df_to_rows(df, chain=chain)
+
+
+def aave_v4_liquidations_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_v4_head(r, chain=chain) + [
+            str(r["spoke"]) if r.get("spoke") else "",
+            str(r["user"]) if r.get("user") else "",
+            str(r["liquidator"]) if r.get("liquidator") else "",
+            str(r["collateral_token"]) if r.get("collateral_token") else "",
+            float(r["collateral_amount"]) if r.get("collateral_amount") is not None else 0.0,
+            str(r["debt_token"]) if r.get("debt_token") else "",
+            float(r["debt_amount"]) if r.get("debt_amount") is not None else 0.0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+AAVE_V4_EVENTS = {
+    "deposit":     ("deposits",     "tradernick.aave_v4_deposits",     AAVE_V4_DEPOSITS_COLUMNS,     aave_v4_deposits_df_to_rows),
+    "withdraw":    ("withdrawals",  "tradernick.aave_v4_withdrawals",  AAVE_V4_WITHDRAWALS_COLUMNS,  aave_v4_withdrawals_df_to_rows),
+    "borrow":      ("borrows",      "tradernick.aave_v4_borrows",      AAVE_V4_BORROWS_COLUMNS,      aave_v4_borrows_df_to_rows),
+    "repay":       ("repays",       "tradernick.aave_v4_repays",       AAVE_V4_REPAYS_COLUMNS,       aave_v4_repays_df_to_rows),
+    "liquidation": ("liquidations", "tradernick.aave_v4_liquidations", AAVE_V4_LIQUIDATIONS_COLUMNS, aave_v4_liquidations_df_to_rows),
+}

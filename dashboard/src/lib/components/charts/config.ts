@@ -271,6 +271,13 @@ export type ChartKind =
   | 'aave_v2_net_borrow'
   | 'aave_v2_flashloan'
   | 'aave_v2_liquidation'
+  | 'aave_v4_deposit'
+  | 'aave_v4_withdraw'
+  | 'aave_v4_net_deposit'
+  | 'aave_v4_borrow'
+  | 'aave_v4_repay'
+  | 'aave_v4_net_borrow'
+  | 'aave_v4_liquidation'
   | 'uniswap_v2_swap'
   | 'uniswap_v2_deposit'
   | 'uniswap_v2_withdraw'
@@ -332,6 +339,13 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   aave_v2_net_borrow: 'AAVE V2 Net Borrow',
   aave_v2_flashloan: 'AAVE V2 Flash Loans',
   aave_v2_liquidation: 'AAVE V2 Liquidations',
+  aave_v4_deposit: 'AAVE V4 Deposits',
+  aave_v4_withdraw: 'AAVE V4 Withdrawals',
+  aave_v4_net_deposit: 'AAVE V4 Net Deposit',
+  aave_v4_borrow: 'AAVE V4 Borrows',
+  aave_v4_repay: 'AAVE V4 Repays',
+  aave_v4_net_borrow: 'AAVE V4 Net Borrow',
+  aave_v4_liquidation: 'AAVE V4 Liquidations',
   uniswap_v2_swap: 'Uniswap V2 Swaps',
   uniswap_v2_deposit: 'Uniswap V2 Deposits',
   uniswap_v2_withdraw: 'Uniswap V2 Withdrawals',
@@ -435,6 +449,32 @@ export const AAVE_V2_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, stri
 };
 export function isAaveV2Kind(kind: ChartKind): boolean {
   return AAVE_V2_KIND_TO_EVENT[kind] !== undefined || AAVE_V2_NET_KIND_TO_EVENTS[kind] !== undefined;
+}
+
+/** AAVE V4 chart kinds — ETH-only currently (V4 launched mainnet-only).
+ *  5 events (no flashloan in V4). Same Lending-page layout pattern as V2/V3. */
+export const AAVE_V4_CHART_KINDS: ChartKind[] = [
+  'aave_v4_deposit',
+  'aave_v4_withdraw',
+  'aave_v4_net_deposit',
+  'aave_v4_borrow',
+  'aave_v4_repay',
+  'aave_v4_net_borrow',
+  'aave_v4_liquidation'
+];
+export const AAVE_V4_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  aave_v4_deposit: 'deposit',
+  aave_v4_withdraw: 'withdraw',
+  aave_v4_borrow: 'borrow',
+  aave_v4_repay: 'repay',
+  aave_v4_liquidation: 'liquidation'
+};
+export const AAVE_V4_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  aave_v4_net_deposit: ['deposit', 'withdraw'],
+  aave_v4_net_borrow: ['borrow', 'repay']
+};
+export function isAaveV4Kind(kind: ChartKind): boolean {
+  return AAVE_V4_KIND_TO_EVENT[kind] !== undefined || AAVE_V4_NET_KIND_TO_EVENTS[kind] !== undefined;
 }
 
 /** Uniswap chart kinds collected for the DeX page (default layout order). */
@@ -602,6 +642,7 @@ export type AeroBasicPool = {
  *  top of the menu. */
 export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('aave_v2_')) return 'AAVE V2';
+  if (kind.startsWith('aave_v4_')) return 'AAVE V4';
   if (kind.startsWith('aave_')) return 'AAVE V3';
   if (kind.startsWith('uniswap_v2_')) return 'Uniswap V2';
   if (kind.startsWith('uniswap_v4_')) return 'Uniswap V4';
@@ -632,6 +673,7 @@ export function chartKindShortLabel(kind: ChartKind): string {
 const _GROUP_ORDER: Record<string, number> = {
   'AAVE V2':    10,
   'AAVE V3':    11,
+  'AAVE V4':    12,
   'Lido':       20,
   'Uniswap V2': 30,
   'Uniswap V3': 31,
@@ -905,6 +947,11 @@ export function newChartInstance(
   if (isAaveV2Kind(kind)) {
     // V2 only has two configured chains (ETH + POLYGON) — defaults to ETH.
     base.chain = defaults.chain ?? 'ETH';
+    base.valueMode = 'usd';
+  }
+  if (isAaveV4Kind(kind)) {
+    // V4 is mainnet-only for now; default ETH.
+    base.chain = 'ETH';
     base.valueMode = 'usd';
   }
   if (kind === 'transfer') {

@@ -178,6 +178,11 @@ UNI_V3_LIVE_POOLS = _parse_uniswap_pools(
 AAVE_V2_EVENTS_ENABLED = os.environ.get("AAVE_V2_EVENTS_ENABLED", "1") == "1"
 AAVE_V2_CHAINS = _parse_csv_list(os.environ.get("AAVE_V2_CHAINS", "ETH,POLYGON"))
 
+# --- AAVE v4 events --------------------------------------------------------
+# V4 launched on ETH-only as of late 2025/early 2026. 5 events (no flashloan).
+AAVE_V4_EVENTS_ENABLED = os.environ.get("AAVE_V4_EVENTS_ENABLED", "1") == "1"
+AAVE_V4_CHAINS = _parse_csv_list(os.environ.get("AAVE_V4_CHAINS", "ETH"))
+
 
 # --- Uniswap V2 pools ------------------------------------------------------
 # V2 has no fee tier (fixed 0.30%), so the pool grammar is
