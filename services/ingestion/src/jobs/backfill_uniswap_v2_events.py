@@ -69,9 +69,14 @@ def _is_rate_limit(exc: Exception) -> bool:
 
 
 def _is_not_supported(exc: Exception) -> bool:
+    """DeFiStream uses slightly different wording per protocol. V3 says
+    'Uniswap pool not found'; V2 says 'Uniswap V2 pair not found' (since
+    V2 uses pair contracts, not pools). Match both, plus the more generic
+    'not available/supported/configured' phrasings other endpoints emit."""
     m = str(exc).lower()
     return (
-        "pool not found" in m or "not available" in m or "not supported" in m
+        "pool not found" in m or "pair not found" in m
+        or "not available" in m or "not supported" in m
         or "not configured" in m
     )
 
