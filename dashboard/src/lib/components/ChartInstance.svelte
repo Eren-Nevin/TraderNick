@@ -41,9 +41,15 @@
     AAVE_KIND_TO_EVENT,
     AAVE_NET_KIND_TO_EVENTS,
     isAaveKind,
+    AAVE_V2_KIND_TO_EVENT,
+    AAVE_V2_NET_KIND_TO_EVENTS,
+    isAaveV2Kind,
     UNISWAP_KIND_TO_EVENT,
     UNISWAP_NET_KIND_TO_EVENTS,
     isUniswapKind,
+    UNISWAP_V2_KIND_TO_EVENT,
+    UNISWAP_V2_NET_KIND_TO_EVENTS,
+    isUniswapV2Kind,
     fmtUniPool,
     LIDO_KIND_TO_EVENT,
     LIDO_NET_KIND_TO_EVENTS,
@@ -489,18 +495,20 @@
       const ov = [...(instance.overlayTokens ?? [])].sort().join(',');
       return `${instance.kind}|${instance.token}|${instance.interval}|ov:${ov}`;
     }
-    if (isAaveKind(instance.kind)) {
+    if (isAaveKind(instance.kind) || isAaveV2Kind(instance.kind)) {
       // AAVE charts (single-event + net) depend on chain + token (event_type
       // derived from kind). Either axis may be a group name — fold the
-      // group flag into the key so toggling busts the cache.
+      // group flag into the key so toggling busts the cache. Same shape
+      // for AAVE V2 (different endpoint, identical key shape).
       const cPart = activeChainGroup ? `cg:${activeChainGroup.name}` : (instance.chain ?? '');
       const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
       return `${instance.kind}|${cPart}|${tPart}|${instance.interval}`;
     }
-    if (isUniswapKind(instance.kind)) {
+    if (isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind)) {
       // Uniswap charts are keyed by (kind, chain, pool, interval). The pool
-      // is the 3-tuple (symbol0, symbol1, fee). instance.token is unused for
-      // these kinds — pair identity replaces it.
+      // is the 3-tuple (symbol0, symbol1, fee) — V2 uses fee=0 as a
+      // sentinel for "no fee tier" (single 0.30% pool). instance.token is
+      // unused for these kinds.
       const cPart = instance.chain ?? '';
       const pPart = uniPoolKey(instance.uniPool);
       return `${instance.kind}|${cPart}|${pPart}|${instance.interval}`;
@@ -653,7 +661,9 @@
       const isWideWindowKind =
         instance.kind === 'transfer' ||
         isAaveKind(instance.kind) ||
+        isAaveV2Kind(instance.kind) ||
         isUniswapKind(instance.kind) ||
+        isUniswapV2Kind(instance.kind) ||
         isLidoKind(instance.kind);
       if (isWideWindowKind) {
         const now = new Date();
@@ -676,6 +686,75 @@
 
       let url = '';
       let pickArr: (body: Record<string, unknown>) => AnyDatum[] = () => [];
+      // AAVE V2 chart kinds — same fetch shape as V3 minus eth_market.
+      if (isAaveV2Kind(instance.kind)) {
+        const buildV2Qs = (event: string) => {
+          const qs = new URLSearchParams({
+            event,
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '5000'
+          });
+          if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
+          else qs.set('chain', instance.chain ?? 'ETH');
+          if (activeTokenGroup !== null) qs.set('token_group', activeTokenGroup);
+          else qs.set('token', instance.token);
+          if (forceFresh) qs.set('fresh', '1');
+          return qs;
+        };
+        const netV2Events = AAVE_V2_NET_KIND_TO_EVENTS[instance.kind];
+        if (netV2Events) {
+          const [posEvent, negEvent] = netV2Events;
+          const [posRes, negRes] = await Promise.all([
+            queuedFetch(`/api/aave_v2/aggregate?${buildV2Qs(posEvent)}`, { signal }),
+            queuedFetch(`/api/aave_v2/aggregate?${buildV2Qs(negEvent)}`, { signal })
+          ]);
+          if (!posRes.ok) throw new Error(`${instance.kind} ${posRes.status}`);
+          if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
+          const posBody = await posRes.json();
+          const negBody = await negRes.json();
+          const negByTime = new Map<number, { amount: number; usd: number; count: number }>();
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            negByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd, count: r.count });
+          }
+          const out: Record<string, number>[] = [];
+          const seen = new Set<number>();
+          for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
+            const n = negByTime.get(r.time) ?? { amount: 0, usd: 0, count: 0 };
+            out.push({
+              time: r.time,
+              sum_amount: r.sum_amount - n.amount,
+              sum_value_usd: r.sum_value_usd - n.usd,
+              count: r.count + n.count
+            });
+            seen.add(r.time);
+          }
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            if (seen.has(r.time)) continue;
+            out.push({ time: r.time, sum_amount: -r.sum_amount, sum_value_usd: -r.sum_value_usd, count: r.count });
+          }
+          out.sort((a, b) => a.time - b.time);
+          data = out as unknown as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        const v2Event = AAVE_V2_KIND_TO_EVENT[instance.kind];
+        if (v2Event) {
+          const res = await queuedFetch(`/api/aave_v2/aggregate?${buildV2Qs(v2Event)}`, { signal });
+          if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+          const body = await res.json();
+          data = (body.series ?? []) as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+      }
       // AAVE net kinds (Net Deposit = deposits − withdrawals; Net Borrow =
       // borrows − repays) fire two parallel /api/aave/aggregate calls and
       // subtract on the client. Same (chain, token, interval) shape as the
@@ -824,6 +903,99 @@
         data = (body.series ?? []) as AnyDatum[];
         since = sinceIso;
         until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Uniswap V2 chart kinds — same fetch shape as V3 minus the fee_tier
+      // axis (V2 has no fee tier — single 0.30% pool per pair). Net
+      // liquidity also tracks per-token amounts for dual-axis Amount mode.
+      if (isUniswapV2Kind(instance.kind)) {
+        const pool = instance.uniPool;
+        if (!pool || !instance.chain) {
+          data = [];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        const buildUniV2Qs = (event: string) => {
+          const qs = new URLSearchParams({
+            event,
+            chain: instance.chain ?? 'ETH',
+            symbol0: pool.symbol0,
+            symbol1: pool.symbol1,
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '5000'
+          });
+          if (forceFresh) qs.set('fresh', '1');
+          return qs;
+        };
+        const netEvs = UNISWAP_V2_NET_KIND_TO_EVENTS[instance.kind];
+        if (netEvs) {
+          const [posEvent, negEvent] = netEvs;
+          const [posRes, negRes] = await Promise.all([
+            queuedFetch(`/api/uniswap_v2/aggregate?${buildUniV2Qs(posEvent)}`, { signal }),
+            queuedFetch(`/api/uniswap_v2/aggregate?${buildUniV2Qs(negEvent)}`, { signal })
+          ]);
+          if (!posRes.ok) throw new Error(`${instance.kind} ${posRes.status}`);
+          if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
+          const posBody = await posRes.json();
+          const negBody = await negRes.json();
+          type Row = { amount: number; usd: number; count: number; amount0: number; amount1: number };
+          const negByTime = new Map<number, Row>();
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            negByTime.set(r.time, {
+              amount: r.sum_amount, usd: r.sum_value_usd, count: r.count,
+              amount0: r.sum_amount0 ?? 0, amount1: r.sum_amount1 ?? 0
+            });
+          }
+          const out: Record<string, number>[] = [];
+          const seen = new Set<number>();
+          for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
+            const n = negByTime.get(r.time) ?? { amount: 0, usd: 0, count: 0, amount0: 0, amount1: 0 };
+            out.push({
+              time: r.time,
+              sum_amount: r.sum_amount - n.amount,
+              sum_value_usd: r.sum_value_usd - n.usd,
+              sum_amount0: (r.sum_amount0 ?? 0) - n.amount0,
+              sum_amount1: (r.sum_amount1 ?? 0) - n.amount1,
+              count: r.count + n.count
+            });
+            seen.add(r.time);
+          }
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            if (seen.has(r.time)) continue;
+            out.push({
+              time: r.time,
+              sum_amount: -r.sum_amount,
+              sum_value_usd: -r.sum_value_usd,
+              sum_amount0: -(r.sum_amount0 ?? 0),
+              sum_amount1: -(r.sum_amount1 ?? 0),
+              count: r.count
+            });
+          }
+          out.sort((a, b) => a.time - b.time);
+          data = out as unknown as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        const eventForKind = UNISWAP_V2_KIND_TO_EVENT[instance.kind];
+        if (!eventForKind) throw new Error(`unmapped uniswap_v2 kind ${instance.kind}`);
+        const res = await queuedFetch(
+          `/api/uniswap_v2/aggregate?${buildUniV2Qs(eventForKind)}`, { signal }
+        );
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = (body.series ?? []) as AnyDatum[];
+        since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
         loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
@@ -1345,6 +1517,7 @@
   // AAVE event lines — cyan main series + the chart's MAs. With
   // valueMode='amount' we plot sum_amount (raw token units, summed across
   // whatever the chain/token-group selector resolves to) instead of USD.
+  // Shared between V2 and V3 (same shape of {sum_amount, sum_value_usd}).
   let aaveLinesD = $derived([
     ...(instance.showPoint
       ? [{
@@ -1648,6 +1821,56 @@
             {/each}
           {/if}
         </select>
+      {:else if isAaveV2Kind(instance.kind)}
+        <!-- AAVE V2: ETH + POLYGON only (the two chains DeFiStream has
+             V2 configured for). Same token selector + token-group support
+             as V3 since the data shape is identical. -->
+        <select
+          bind:value={instance.chain}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          {#each ['ETH','POLYGON'] as c (c)}
+            <option value={c}>{c}</option>
+          {/each}
+        </select>
+        <select
+          value={instance.token}
+          onchange={(e) => (instance.token = e.currentTarget.value)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          <optgroup label="Tokens">
+            {#each ['USDC','USDT','DAI','WETH','WBTC','LINK'] as t (t)}
+              <option value={t}>{t}</option>
+            {/each}
+            {#if instance.token && !['USDC','USDT','DAI','WETH','WBTC','LINK'].includes(instance.token) && !tokenGroups.some((g) => g.name === instance.token)}
+              <option value={instance.token}>{instance.token}</option>
+            {/if}
+          </optgroup>
+          {#if tokenGroups.length > 0}
+            <optgroup label="Token group">
+              {#each tokenGroups as g (g.name)}
+                <option value={g.name} title={g.description}>Σ {g.label}</option>
+              {/each}
+            </optgroup>
+          {/if}
+        </select>
+      {:else if isUniswapV2Kind(instance.kind)}
+        <!-- Uniswap V2: chain dropdown (same EVM set) + pool dropdown.
+             No fee tier — fmtUniPool's "0.00%" sentinel is suppressed for
+             V2 below. -->
+        <select
+          bind:value={instance.chain}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          {#each ['ETH','ARB','BASE','BSC','POLYGON'] as c (c)}
+            <option value={c}>{c}</option>
+          {/each}
+        </select>
+        {#if instance.uniPool}
+          <span class="text-zinc-100 text-xs font-medium px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">
+            {instance.uniPool.symbol0}/{instance.uniPool.symbol1}
+          </span>
+        {/if}
       {:else if isAaveKind(instance.kind)}
         <!-- AAVE kinds: chain dropdown (5 EVMs + chain groups) + token
              <select> with a "Token group" optgroup so the user can pick
@@ -1844,7 +2067,7 @@
         <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
         Week lines
       </label>
-      {#if instance.kind === 'transfer' || isAaveKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow')}
+      {#if instance.kind === 'transfer' || isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow') || isUniswapV2Kind(instance.kind)}
         <!-- USD ⇆ Amount toggle. For AAVE / Lido the chart shows a single
              series in either mode. For Uniswap (except net_swap_flow which
              is intrinsically directional USD), Amount mode renders TWO
@@ -2273,7 +2496,7 @@
         formatY={transferUseUsd ? fmtUsdAxis : fmtAmountAxis}
         formatTooltip={transferUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
       />
-    {:else if isAaveKind(instance.kind)}
+    {:else if isAaveKind(instance.kind) || isAaveV2Kind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={aaveLinesD}
@@ -2287,7 +2510,7 @@
         formatY={valueAxisFn}
         formatTooltip={valueTooltipFn}
       />
-    {:else if isUniswapKind(instance.kind)}
+    {:else if isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={uniswapLinesD}

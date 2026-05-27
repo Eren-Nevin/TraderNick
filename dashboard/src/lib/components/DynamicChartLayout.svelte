@@ -276,6 +276,7 @@
       // transfer kind. Default to the page's preferred chain. valueMode
       // ('usd' / 'amount') is restored if previously set; otherwise default
       // to 'usd' so the chart keeps its old behaviour after migration.
+      // Covers both `aave_*` (V3) and `aave_v2_*` because of the prefix.
       if (inst.kind.startsWith('aave_')) {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
@@ -298,7 +299,8 @@
       // (symbol0 / symbol1 / fee). Validate the pool shape; fall back to a
       // canonical default so a corrupt save can't strand the chart.
       // valueMode supported on all uniswap_* except net_swap_flow (which
-      // ignores it at the chart layer).
+      // ignores it at the chart layer). Covers V2 too (uniswap_v2_*) —
+      // V2 uses fee=0 as a sentinel for "no fee tier".
       if (inst.kind.startsWith('uniswap_')) {
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');

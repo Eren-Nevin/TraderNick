@@ -170,3 +170,61 @@ UNISWAP_V3_LIVE_POOLS_DEFAULT = (
 UNI_V3_LIVE_POOLS = _parse_uniswap_pools(
     os.environ.get("UNI_V3_LIVE_POOLS", UNISWAP_V3_LIVE_POOLS_DEFAULT)
 )
+
+# --- AAVE v2 events --------------------------------------------------------
+# V2 is wound down on most networks — only ETH + POLYGON have any meaningful
+# remaining volume. AVAX is listed by DeFiStream's catalogue but the runtime
+# rejects with "not configured" so we leave it off the live default.
+AAVE_V2_EVENTS_ENABLED = os.environ.get("AAVE_V2_EVENTS_ENABLED", "1") == "1"
+AAVE_V2_CHAINS = _parse_csv_list(os.environ.get("AAVE_V2_CHAINS", "ETH,POLYGON"))
+
+
+# --- Uniswap V2 pools ------------------------------------------------------
+# V2 has no fee tier (fixed 0.30%), so the pool grammar is
+# `<chain>:<sym0/sym1>,<sym0/sym1>;<chain2>:...`. _parse_uniswap_pools is
+# fee-tier-aware so we reuse it with a sentinel fee=0 (which the V2 callers
+# strip away before issuing requests).
+def _parse_uniswap_v2_pools(raw: str) -> list[tuple[str, str, str]]:
+    out: list[tuple[str, str, str]] = []
+    for group in raw.split(";"):
+        group = group.strip()
+        if not group or ":" not in group:
+            continue
+        chain, pools_str = group.split(":", 1)
+        chain = chain.strip().upper()
+        for pool in pools_str.split(","):
+            pool = pool.strip()
+            parts = pool.split("/")
+            if len(parts) != 2:
+                continue
+            sym_a, sym_b = parts[0].strip(), parts[1].strip()
+            if not sym_a or not sym_b:
+                continue
+            symbol0, symbol1 = sorted([sym_a.upper(), sym_b.upper()])
+            out.append((chain, symbol0, symbol1))
+    return out
+
+
+UNISWAP_V2_POOLS_DEFAULT = (
+    # ETH — V2 still sees real volume on the canonical USDC/WETH + WBTC pairs
+    "ETH:USDC/WETH,USDT/WETH,DAI/WETH,WBTC/WETH,DAI/USDC"
+    ";"
+    # ARB / BASE / BSC / POLYGON have Uniswap V2 deployments (2023 redeploys)
+    # but volume is thin — keep a small set for forward compatibility.
+    "ARB:USDC/WETH,USDT/WETH"
+    ";"
+    "BASE:USDC/WETH,CBBTC/WETH"
+    ";"
+    "BSC:USDC/WETH,USDT/WETH"
+    ";"
+    "POLYGON:USDC/WETH"
+)
+UNI_V2_POOLS = _parse_uniswap_v2_pools(
+    os.environ.get("UNI_V2_POOLS", UNISWAP_V2_POOLS_DEFAULT)
+)
+UNI_V2_ENABLED = os.environ.get("UNI_V2_ENABLED", "1") == "1"
+# Trimmed live-poll subset — same shared rate-budget reasoning as V3.
+UNISWAP_V2_LIVE_POOLS_DEFAULT = "ETH:USDC/WETH,USDT/WETH,DAI/USDC"
+UNI_V2_LIVE_POOLS = _parse_uniswap_v2_pools(
+    os.environ.get("UNI_V2_LIVE_POOLS", UNISWAP_V2_LIVE_POOLS_DEFAULT)
+)

@@ -2,6 +2,7 @@
   import DynamicChartLayout from '$lib/components/DynamicChartLayout.svelte';
   import {
     UNISWAP_CHART_KINDS,
+    UNISWAP_V2_CHART_KINDS,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind
@@ -10,7 +11,7 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', ...UNISWAP_CHART_KINDS];
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', ...UNISWAP_CHART_KINDS, ...UNISWAP_V2_CHART_KINDS];
 
   function defaultLayout(): ChartInstanceT[] {
     // One chart per Uniswap-V3 chart kind, all pinned to ETH/USDC-WETH 0.05%

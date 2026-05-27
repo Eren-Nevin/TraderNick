@@ -20,6 +20,8 @@ GROUP_MODULES = {
     "aave_events": "groups.aave_events",
     "uniswap_events": "groups.uniswap_events",
     "lido_events": "groups.lido_events",
+    "aave_v2_events": "groups.aave_v2_events",
+    "uniswap_v2_events": "groups.uniswap_v2_events",
 }
 
 

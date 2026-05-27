@@ -541,3 +541,192 @@ CREATE TABLE IF NOT EXISTS tradernick.lido_l2_withdrawal_requests
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (chain, time, tx_id, log_index);
+
+-- ---------------------------------------------------------------------------
+-- AAVE v2 events (legacy mainnet + Polygon pools)
+-- ---------------------------------------------------------------------------
+-- V2 uses a single pool per chain (no eth_market_type axis like V3) and only
+-- supports ETH + POLYGON in DeFiStream. Schemas are the V3 ones minus the
+-- eth_market column. Borrows + flashloans both lack borrow_rate / premium
+-- on V2 vs V3, but we keep the fields for forward compatibility.
+
+CREATE TABLE IF NOT EXISTS tradernick.aave_v2_deposits
+(
+    chain         LowCardinality(String),
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    user          String             CODEC(ZSTD(3)),
+    token         LowCardinality(String),
+    amount        Float64            CODEC(Gorilla, ZSTD(3)),
+    on_behalf_of  String             CODEC(ZSTD(3)),
+    referral_code UInt32             CODEC(T64, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aave_v2_withdrawals
+(
+    chain        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    user         String             CODEC(ZSTD(3)),
+    token        LowCardinality(String),
+    amount       Float64            CODEC(Gorilla, ZSTD(3)),
+    recipient    String             CODEC(ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aave_v2_borrows
+(
+    chain              LowCardinality(String),
+    time               DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number       UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id              String             CODEC(ZSTD(3)),
+    log_index          UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    user               String             CODEC(ZSTD(3)),
+    token              LowCardinality(String),
+    amount             Float64            CODEC(Gorilla, ZSTD(3)),
+    on_behalf_of       String             CODEC(ZSTD(3)),
+    interest_rate_mode UInt8              CODEC(T64, ZSTD(3)),
+    borrow_rate        Float64            CODEC(Gorilla, ZSTD(3)),
+    referral_code      UInt32             CODEC(T64, ZSTD(3)),
+    value_usd          Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at        DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aave_v2_repays
+(
+    chain        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    user         String             CODEC(ZSTD(3)),
+    token        LowCardinality(String),
+    amount       Float64            CODEC(Gorilla, ZSTD(3)),
+    repayer      String             CODEC(ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aave_v2_flashloans
+(
+    chain         LowCardinality(String),
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    user          String             CODEC(ZSTD(3)),
+    token         LowCardinality(String),
+    amount        Float64            CODEC(Gorilla, ZSTD(3)),
+    target        String             CODEC(ZSTD(3)),
+    premium       Float64            CODEC(Gorilla, ZSTD(3)),
+    referral_code UInt32             CODEC(T64, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aave_v2_liquidations
+(
+    chain                        LowCardinality(String),
+    time                         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number                 UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id                        String             CODEC(ZSTD(3)),
+    log_index                    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    owner                        String             CODEC(ZSTD(3)),
+    liquidator                   String             CODEC(ZSTD(3)),
+    debt_token                   LowCardinality(String),
+    debt_to_cover                Float64            CODEC(Gorilla, ZSTD(3)),
+    collateral_token             LowCardinality(String),
+    liquidated_collateral_amount Float64            CODEC(Gorilla, ZSTD(3)),
+    receive_a_token              UInt8              CODEC(T64, ZSTD(3)),
+    value_usd                    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at                  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, debt_token, time, tx_id, log_index);
+
+-- ---------------------------------------------------------------------------
+-- Uniswap V2 events
+-- ---------------------------------------------------------------------------
+-- V2 has only 3 events (swap / deposit / withdrawal — no collect because LP
+-- fees auto-compound into the pool token). No fee_tier (V2 = fixed 0.30%),
+-- no tick/range fields. Pool identity is just (chain, symbol0, symbol1).
+-- DeFiStream's V2 client uses camelCase for swap fields (tokenSold,
+-- amountSold) — we normalise to snake_case in the transform layer.
+
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_v2_swaps
+(
+    chain         LowCardinality(String),
+    symbol0       LowCardinality(String),
+    symbol1       LowCardinality(String),
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pair_address  String             CODEC(ZSTD(3)),
+    swapper       String             CODEC(ZSTD(3)),
+    recipient     String             CODEC(ZSTD(3)),
+    token_sold    LowCardinality(String),
+    token_bought  LowCardinality(String),
+    amount_sold   Float64            CODEC(Gorilla, ZSTD(3)),
+    amount_bought Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_v2_deposits
+(
+    chain        LowCardinality(String),
+    symbol0      LowCardinality(String),
+    symbol1      LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pair_address String             CODEC(ZSTD(3)),
+    sender       String             CODEC(ZSTD(3)),
+    amount0      Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1      Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_v2_withdrawals
+(
+    chain        LowCardinality(String),
+    symbol0      LowCardinality(String),
+    symbol1      LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pair_address String             CODEC(ZSTD(3)),
+    owner        String             CODEC(ZSTD(3)),
+    recipient    String             CODEC(ZSTD(3)),
+    amount0      Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1      Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, time, tx_id, log_index);

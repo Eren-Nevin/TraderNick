@@ -25,6 +25,8 @@ from jobs.manager import (
     JOB_TYPE_BACKFILL_AAVE_EVENTS,
     JOB_TYPE_BACKFILL_UNISWAP_EVENTS,
     JOB_TYPE_BACKFILL_LIDO_EVENTS,
+    JOB_TYPE_BACKFILL_AAVE_V2_EVENTS,
+    JOB_TYPE_BACKFILL_UNISWAP_V2_EVENTS,
     JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS,
     JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS,
     JobManager,
@@ -86,6 +88,8 @@ async def startup(app_, _loop):
         "aave_events",
         "uniswap_events",
         "lido_events",
+        "aave_v2_events",
+        "uniswap_v2_events",
     ])
     app_.ctx.jobs = JobManager()
     try:
@@ -331,6 +335,56 @@ def _extract_lido_events(body):
 @app.post("/jobs/backfill/lido_events")
 async def backfill_lido_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_LIDO_EVENTS, _extract_lido_events)
+
+
+_AAVE_V2_VALID_EVENTS = ("deposit", "withdraw", "borrow", "repay", "flashloan", "liquidation")
+
+
+def _extract_aave_v2_events(body):
+    chains = body.get("chains") or list(config.AAVE_V2_CHAINS)
+    if not chains or not isinstance(chains, list):
+        return "missing chains (list)", None
+    events = body.get("events") or list(_AAVE_V2_VALID_EVENTS)
+    if not isinstance(events, list):
+        return "events must be a list", None
+    unknown = [e for e in events if e not in _AAVE_V2_VALID_EVENTS]
+    if unknown:
+        return f"unknown events: {unknown}", None
+    return None, {"chains": [str(c).upper() for c in chains], "events": list(events)}
+
+
+@app.post("/jobs/backfill/aave_v2_events")
+async def backfill_aave_v2_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AAVE_V2_EVENTS, _extract_aave_v2_events)
+
+
+_UNI_V2_VALID_EVENTS = ("swap", "deposit", "withdraw")
+
+
+def _extract_uniswap_v2_events(body):
+    pools = body.get("pools")
+    if pools is None:
+        pools = [[c, s0, s1] for (c, s0, s1) in config.UNI_V2_POOLS]
+    if not pools or not isinstance(pools, list):
+        return "missing pools (list of [chain, symbol0, symbol1])", None
+    norm: list[list] = []
+    for p in pools:
+        if not isinstance(p, list) or len(p) != 3:
+            return "each pool must be [chain, symbol0, symbol1]", None
+        sym0, sym1 = sorted([str(p[1]).upper(), str(p[2]).upper()])
+        norm.append([str(p[0]).upper(), sym0, sym1])
+    events = body.get("events") or list(_UNI_V2_VALID_EVENTS)
+    if not isinstance(events, list):
+        return "events must be a list", None
+    unknown = [e for e in events if e not in _UNI_V2_VALID_EVENTS]
+    if unknown:
+        return f"unknown events: {unknown}", None
+    return None, {"pools": norm, "events": list(events)}
+
+
+@app.post("/jobs/backfill/uniswap_v2_events")
+async def backfill_uniswap_v2_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_UNISWAP_V2_EVENTS, _extract_uniswap_v2_events)
 
 
 @app.post("/admin/wallets")

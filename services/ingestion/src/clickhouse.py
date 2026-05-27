@@ -724,3 +724,271 @@ LIDO_EVENTS = {
     "l2_deposit":           ("l2_deposits",           "tradernick.lido_l2_deposits",           LIDO_L2_DEPOSITS_COLUMNS,           lido_l2_deposits_df_to_rows),
     "l2_withdrawal_request":("l2_withdrawal_requests","tradernick.lido_l2_withdrawal_requests",LIDO_L2_WITHDRAWAL_REQUESTS_COLUMNS,lido_l2_withdrawal_requests_df_to_rows),
 }
+
+
+# ---------------------------------------------------------------------------
+# AAVE v2 events (legacy mainnet + Polygon)
+# ---------------------------------------------------------------------------
+# Same 6-event taxonomy as V3 but without the eth_market axis (V2 was a
+# single pool per chain). Transforms parallel the V3 versions — only
+# difference is the dropped eth_market column.
+
+AAVE_V2_DEPOSITS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "user", "token", "amount", "on_behalf_of", "referral_code", "value_usd",
+]
+AAVE_V2_WITHDRAWALS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "user", "token", "amount", "recipient", "value_usd",
+]
+AAVE_V2_BORROWS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "user", "token", "amount", "on_behalf_of",
+    "interest_rate_mode", "borrow_rate", "referral_code", "value_usd",
+]
+AAVE_V2_REPAYS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "user", "token", "amount", "repayer", "value_usd",
+]
+AAVE_V2_FLASHLOANS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "user", "token", "amount", "target", "premium", "referral_code", "value_usd",
+]
+AAVE_V2_LIQUIDATIONS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "owner", "liquidator",
+    "debt_token", "debt_to_cover",
+    "collateral_token", "liquidated_collateral_amount",
+    "receive_a_token", "value_usd",
+]
+
+
+def aave_v2_deposits_df_to_rows(df, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            chain,
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]),
+            str(r["on_behalf_of"]) if r.get("on_behalf_of") else "",
+            int(r["referral_code"]) if r.get("referral_code") is not None else 0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def aave_v2_withdrawals_df_to_rows(df, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            chain,
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]),
+            str(r["recipient"]) if r.get("recipient") else "",
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def aave_v2_borrows_df_to_rows(df, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            chain,
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]),
+            str(r["on_behalf_of"]) if r.get("on_behalf_of") else "",
+            int(r["interest_rate_mode"]) if r.get("interest_rate_mode") is not None else 0,
+            float(r["borrow_rate"]) if r.get("borrow_rate") is not None else 0.0,
+            int(r["referral_code"]) if r.get("referral_code") is not None else 0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def aave_v2_repays_df_to_rows(df, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            chain,
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]),
+            str(r["repayer"]) if r.get("repayer") else "",
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def aave_v2_flashloans_df_to_rows(df, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            chain,
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]),
+            str(r["target"]) if r.get("target") else "",
+            float(r["premium"]) if r.get("premium") is not None else 0.0,
+            int(r["referral_code"]) if r.get("referral_code") is not None else 0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def aave_v2_liquidations_df_to_rows(df, *, chain: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            chain,
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["owner"]) if r.get("owner") else "",
+            str(r["liquidator"]) if r.get("liquidator") else "",
+            str(r["debt_token"]) if r.get("debt_token") else "",
+            float(r["debt_to_cover"]) if r.get("debt_to_cover") is not None else 0.0,
+            str(r["collateral_token"]) if r.get("collateral_token") else "",
+            float(r["liquidated_collateral_amount"]) if r.get("liquidated_collateral_amount") is not None else 0.0,
+            _aave_bool(r, "receive_a_token"),
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+AAVE_V2_EVENTS = {
+    "deposit":     ("deposits",     "tradernick.aave_v2_deposits",     AAVE_V2_DEPOSITS_COLUMNS,     aave_v2_deposits_df_to_rows),
+    "withdraw":    ("withdrawals",  "tradernick.aave_v2_withdrawals",  AAVE_V2_WITHDRAWALS_COLUMNS,  aave_v2_withdrawals_df_to_rows),
+    "borrow":      ("borrows",      "tradernick.aave_v2_borrows",      AAVE_V2_BORROWS_COLUMNS,      aave_v2_borrows_df_to_rows),
+    "repay":       ("repays",       "tradernick.aave_v2_repays",       AAVE_V2_REPAYS_COLUMNS,       aave_v2_repays_df_to_rows),
+    "flashloan":   ("flashloans",   "tradernick.aave_v2_flashloans",   AAVE_V2_FLASHLOANS_COLUMNS,   aave_v2_flashloans_df_to_rows),
+    "liquidation": ("liquidations", "tradernick.aave_v2_liquidations", AAVE_V2_LIQUIDATIONS_COLUMNS, aave_v2_liquidations_df_to_rows),
+}
+
+
+# ---------------------------------------------------------------------------
+# Uniswap V2 events
+# ---------------------------------------------------------------------------
+# V2 has 3 events (no collect — fees auto-compound). No fee_tier (single
+# 0.30% per pool). Pool identity is (chain, symbol0, symbol1). DeFiStream's
+# V2 swap response uses camelCase (tokenSold / amountSold) — normalise here.
+
+UNISWAP_V2_SWAPS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "time", "block_number", "tx_id", "log_index",
+    "pair_address", "swapper", "recipient",
+    "token_sold", "token_bought", "amount_sold", "amount_bought",
+    "value_usd",
+]
+UNISWAP_V2_DEPOSITS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "time", "block_number", "tx_id", "log_index",
+    "pair_address", "sender",
+    "amount0", "amount1",
+    "value_usd",
+]
+UNISWAP_V2_WITHDRAWALS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "time", "block_number", "tx_id", "log_index",
+    "pair_address", "owner", "recipient",
+    "amount0", "amount1",
+    "value_usd",
+]
+
+
+def _uni_v2_value_usd(r):
+    raw = r.get("value_usd")
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def uniswap_v2_swaps_df_to_rows(df, *, chain: str, symbol0: str, symbol1: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            chain, symbol0, symbol1,
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["pair_address"]) if r.get("pair_address") else "",
+            str(r["swapper"]) if r.get("swapper") else "",
+            str(r["recipient"]) if r.get("recipient") else "",
+            # camelCase on the wire — normalise.
+            str(r["tokenSold"]) if r.get("tokenSold") else "",
+            str(r["tokenBought"]) if r.get("tokenBought") else "",
+            float(r["amountSold"]) if r.get("amountSold") is not None else 0.0,
+            float(r["amountBought"]) if r.get("amountBought") is not None else 0.0,
+            _uni_v2_value_usd(r),
+        ])
+    return rows
+
+
+def uniswap_v2_deposits_df_to_rows(df, *, chain: str, symbol0: str, symbol1: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            chain, symbol0, symbol1,
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["pair_address"]) if r.get("pair_address") else "",
+            str(r["sender"]) if r.get("sender") else "",
+            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
+            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            _uni_v2_value_usd(r),
+        ])
+    return rows
+
+
+def uniswap_v2_withdrawals_df_to_rows(df, *, chain: str, symbol0: str, symbol1: str):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            chain, symbol0, symbol1,
+            _to_naive_utc(r["time"]),
+            int(r["block_number"]),
+            str(r["tx_id"]) if r.get("tx_id") else "",
+            int(r["log_index"]) if r.get("log_index") is not None else 0,
+            str(r["pair_address"]) if r.get("pair_address") else "",
+            str(r["owner"]) if r.get("owner") else "",
+            # Defistream withdrawal exposes `to` (not `recipient`) on the wire.
+            str(r["to"]) if r.get("to") else "",
+            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
+            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            _uni_v2_value_usd(r),
+        ])
+    return rows
+
+
+UNISWAP_V2_EVENTS = {
+    "swap":     ("swaps",       "tradernick.uniswap_v2_swaps",       UNISWAP_V2_SWAPS_COLUMNS,       uniswap_v2_swaps_df_to_rows),
+    "deposit":  ("deposits",    "tradernick.uniswap_v2_deposits",    UNISWAP_V2_DEPOSITS_COLUMNS,    uniswap_v2_deposits_df_to_rows),
+    "withdraw": ("withdrawals", "tradernick.uniswap_v2_withdrawals", UNISWAP_V2_WITHDRAWALS_COLUMNS, uniswap_v2_withdrawals_df_to_rows),
+}

@@ -263,6 +263,18 @@ export type ChartKind =
   | 'aave_net_borrow'
   | 'aave_flashloan'
   | 'aave_liquidation'
+  | 'aave_v2_deposit'
+  | 'aave_v2_withdraw'
+  | 'aave_v2_net_deposit'
+  | 'aave_v2_borrow'
+  | 'aave_v2_repay'
+  | 'aave_v2_net_borrow'
+  | 'aave_v2_flashloan'
+  | 'aave_v2_liquidation'
+  | 'uniswap_v2_swap'
+  | 'uniswap_v2_deposit'
+  | 'uniswap_v2_withdraw'
+  | 'uniswap_v2_net_liquidity'
   | 'uniswap_swap'
   | 'uniswap_deposit'
   | 'uniswap_withdraw'
@@ -297,6 +309,18 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   aave_net_borrow: 'AAVE Net Borrow',
   aave_flashloan: 'AAVE Flash Loans',
   aave_liquidation: 'AAVE Liquidations',
+  aave_v2_deposit: 'AAVE V2 Deposits',
+  aave_v2_withdraw: 'AAVE V2 Withdrawals',
+  aave_v2_net_deposit: 'AAVE V2 Net Deposit',
+  aave_v2_borrow: 'AAVE V2 Borrows',
+  aave_v2_repay: 'AAVE V2 Repays',
+  aave_v2_net_borrow: 'AAVE V2 Net Borrow',
+  aave_v2_flashloan: 'AAVE V2 Flash Loans',
+  aave_v2_liquidation: 'AAVE V2 Liquidations',
+  uniswap_v2_swap: 'Uniswap V2 Swaps',
+  uniswap_v2_deposit: 'Uniswap V2 Deposits',
+  uniswap_v2_withdraw: 'Uniswap V2 Withdrawals',
+  uniswap_v2_net_liquidity: 'Uniswap V2 Net Liquidity',
   uniswap_swap: 'Uniswap V3 Swaps',
   uniswap_deposit: 'Uniswap V3 Deposits',
   uniswap_withdraw: 'Uniswap V3 Withdrawals',
@@ -354,6 +378,35 @@ export function isAaveKind(kind: ChartKind): boolean {
   );
 }
 
+/** AAVE V2 chart kinds (legacy mainnet + Polygon). Same 6-event + 2-net
+ *  taxonomy as V3 minus the eth_market axis (V2 was a single pool per
+ *  chain). The Lending page exposes these alongside the V3 kinds. */
+export const AAVE_V2_CHART_KINDS: ChartKind[] = [
+  'aave_v2_deposit',
+  'aave_v2_withdraw',
+  'aave_v2_net_deposit',
+  'aave_v2_borrow',
+  'aave_v2_repay',
+  'aave_v2_net_borrow',
+  'aave_v2_flashloan',
+  'aave_v2_liquidation'
+];
+export const AAVE_V2_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  aave_v2_deposit: 'deposit',
+  aave_v2_withdraw: 'withdraw',
+  aave_v2_borrow: 'borrow',
+  aave_v2_repay: 'repay',
+  aave_v2_flashloan: 'flashloan',
+  aave_v2_liquidation: 'liquidation'
+};
+export const AAVE_V2_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  aave_v2_net_deposit: ['deposit', 'withdraw'],
+  aave_v2_net_borrow: ['borrow', 'repay']
+};
+export function isAaveV2Kind(kind: ChartKind): boolean {
+  return AAVE_V2_KIND_TO_EVENT[kind] !== undefined || AAVE_V2_NET_KIND_TO_EVENTS[kind] !== undefined;
+}
+
 /** Uniswap chart kinds collected for the DeX page (default layout order). */
 export const UNISWAP_CHART_KINDS: ChartKind[] = [
   'uniswap_swap',
@@ -385,6 +438,29 @@ export function isUniswapKind(kind: ChartKind): boolean {
     UNISWAP_KIND_TO_EVENT[kind] !== undefined ||
     UNISWAP_NET_KIND_TO_EVENTS[kind] !== undefined ||
     kind === 'uniswap_net_swap_flow'
+  );
+}
+
+/** Uniswap V2 chart kinds. No collect (V2 auto-compounds fees), no
+ *  net_swap_flow (V2 swap rows lack the directional USD split V3 has). */
+export const UNISWAP_V2_CHART_KINDS: ChartKind[] = [
+  'uniswap_v2_swap',
+  'uniswap_v2_deposit',
+  'uniswap_v2_withdraw',
+  'uniswap_v2_net_liquidity'
+];
+export const UNISWAP_V2_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  uniswap_v2_swap: 'swap',
+  uniswap_v2_deposit: 'deposit',
+  uniswap_v2_withdraw: 'withdraw'
+};
+export const UNISWAP_V2_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  uniswap_v2_net_liquidity: ['deposit', 'withdraw']
+};
+export function isUniswapV2Kind(kind: ChartKind): boolean {
+  return (
+    UNISWAP_V2_KIND_TO_EVENT[kind] !== undefined ||
+    UNISWAP_V2_NET_KIND_TO_EVENTS[kind] !== undefined
   );
 }
 
@@ -641,6 +717,11 @@ export function newChartInstance(
     base.chain = defaults.chain ?? 'ETH';
     base.valueMode = 'usd';
   }
+  if (isAaveV2Kind(kind)) {
+    // V2 only has two configured chains (ETH + POLYGON) — defaults to ETH.
+    base.chain = defaults.chain ?? 'ETH';
+    base.valueMode = 'usd';
+  }
   if (kind === 'transfer') {
     base.chain = defaults.chain ?? 'ETH';
     base.filter = {};
@@ -653,6 +734,14 @@ export function newChartInstance(
     base.uniPool = { symbol0: 'USDC', symbol1: 'WETH', fee: 500 };
     // Default USD for the headline series. Amount mode is per-chart and
     // not meaningful for net_swap_flow (see ChartInstance for the gate).
+    base.valueMode = 'usd';
+  }
+  if (isUniswapV2Kind(kind)) {
+    base.chain = defaults.chain ?? 'ETH';
+    // V2 has no fee tier — reuse the uniPool shape with fee=0 as a sentinel.
+    // ChartInstance treats fee=0 as "V2" when issuing requests so the
+    // selector + fetch paths don't need a parallel shape.
+    base.uniPool = { symbol0: 'USDC', symbol1: 'WETH', fee: 0 };
     base.valueMode = 'usd';
   }
   if (isLidoKind(kind)) {
