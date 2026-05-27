@@ -503,6 +503,29 @@ def uniswap_swaps_df_to_rows(
     return rows
 
 
+def _aligned_amounts(r, *, symbol0: str, symbol1: str) -> tuple[float, float]:
+    """Align wire (amount0, amount1) to our canonical (symbol0, symbol1).
+
+    Pool contracts emit amount0/amount1 in token-address order, which only
+    sometimes matches alphabetic order. DeFiStream returns the wire values
+    as-is with a `token0`/`token1` label pair so the consumer can re-align.
+    We compare wire's `token0` against our canonical `symbol0`; if it
+    matches, store wire's amount0/1 directly. If wire's `token0` matches
+    our `symbol1`, swap so the row's amount0 column always corresponds to
+    the row's symbol0 column.
+
+    Examples:
+      USDC/WETH on ETH:  USDC < WETH addr → wire token0=USDC → no swap
+      USDC/WETH on BASE: WETH < USDC addr → wire token0=WETH → SWAP
+    """
+    wire_t0 = str(r.get("token0") or "").upper()
+    a0 = float(r["amount0"]) if r.get("amount0") is not None else 0.0
+    a1 = float(r["amount1"]) if r.get("amount1") is not None else 0.0
+    if wire_t0 == symbol1.upper() and wire_t0 != symbol0.upper():
+        return a1, a0  # swap
+    return a0, a1
+
+
 def _uniswap_lp_event_df_to_rows(
     df: pl.DataFrame, *, chain: str, symbol0: str, symbol1: str, fee_tier: int,
     include_sender: bool, include_recipient: bool,
@@ -529,9 +552,9 @@ def _uniswap_lp_event_df_to_rows(
         row.append(str(r["owner"]) if r.get("owner") else "")
         if include_recipient:
             row.append(str(r["recipient"]) if r.get("recipient") else "")
+        a0, a1 = _aligned_amounts(r, symbol0=symbol0, symbol1=symbol1)
         row.extend([
-            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
-            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            a0, a1,
             int(r["tick_lower"]) if r.get("tick_lower") is not None else 0,
             int(r["tick_upper"]) if r.get("tick_upper") is not None else 0,
             float(r["price_lower"]) if r.get("price_lower") is not None else 0.0,
@@ -952,6 +975,7 @@ def uniswap_v2_swaps_df_to_rows(df, *, chain: str, symbol0: str, symbol1: str):
 def uniswap_v2_deposits_df_to_rows(df, *, chain: str, symbol0: str, symbol1: str):
     rows = []
     for r in df.iter_rows(named=True):
+        a0, a1 = _aligned_amounts(r, symbol0=symbol0, symbol1=symbol1)
         rows.append([
             chain, symbol0, symbol1,
             _to_naive_utc(r["time"]),
@@ -960,8 +984,7 @@ def uniswap_v2_deposits_df_to_rows(df, *, chain: str, symbol0: str, symbol1: str
             int(r["log_index"]) if r.get("log_index") is not None else 0,
             str(r["pair_address"]) if r.get("pair_address") else "",
             str(r["sender"]) if r.get("sender") else "",
-            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
-            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            a0, a1,
             _uni_v2_value_usd(r),
         ])
     return rows
@@ -970,6 +993,7 @@ def uniswap_v2_deposits_df_to_rows(df, *, chain: str, symbol0: str, symbol1: str
 def uniswap_v2_withdrawals_df_to_rows(df, *, chain: str, symbol0: str, symbol1: str):
     rows = []
     for r in df.iter_rows(named=True):
+        a0, a1 = _aligned_amounts(r, symbol0=symbol0, symbol1=symbol1)
         rows.append([
             chain, symbol0, symbol1,
             _to_naive_utc(r["time"]),
@@ -980,8 +1004,7 @@ def uniswap_v2_withdrawals_df_to_rows(df, *, chain: str, symbol0: str, symbol1: 
             str(r["owner"]) if r.get("owner") else "",
             # Defistream withdrawal exposes `to` (not `recipient`) on the wire.
             str(r["to"]) if r.get("to") else "",
-            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
-            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            a0, a1,
             _uni_v2_value_usd(r),
         ])
     return rows
@@ -1199,9 +1222,9 @@ def _aero_cl_lp_df_to_rows(df, *, chain, symbol0, symbol1, tick_spacing,
         head.append(str(r["owner"]) if r.get("owner") else "")
         if include_recipient:
             head.append(str(r["recipient"]) if r.get("recipient") else "")
+        a0, a1 = _aligned_amounts(r, symbol0=symbol0, symbol1=symbol1)
         head.extend([
-            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
-            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            a0, a1,
             int(r["tick_lower"]) if r.get("tick_lower") is not None else 0,
             int(r["tick_upper"]) if r.get("tick_upper") is not None else 0,
             float(r["price_lower"]) if r.get("price_lower") is not None else 0.0,
@@ -1304,11 +1327,11 @@ def aero_basic_swaps_df_to_rows(df, *, chain, symbol0, symbol1, stable):
 def aero_basic_deposits_df_to_rows(df, *, chain, symbol0, symbol1, stable):
     rows = []
     for r in df.iter_rows(named=True):
+        a0, a1 = _aligned_amounts(r, symbol0=symbol0, symbol1=symbol1)
         rows.append(_aero_basic_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1, stable=stable) + [
             str(r["pool_address"]) if r.get("pool_address") else "",
             str(r["sender"]) if r.get("sender") else "",
-            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
-            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            a0, a1,
             _v_usd(r),
         ])
     return rows
@@ -1317,14 +1340,14 @@ def aero_basic_deposits_df_to_rows(df, *, chain, symbol0, symbol1, stable):
 def aero_basic_withdrawals_df_to_rows(df, *, chain, symbol0, symbol1, stable):
     rows = []
     for r in df.iter_rows(named=True):
+        a0, a1 = _aligned_amounts(r, symbol0=symbol0, symbol1=symbol1)
         rows.append(_aero_basic_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1, stable=stable) + [
             str(r["pool_address"]) if r.get("pool_address") else "",
             str(r["owner"]) if r.get("owner") else "",
             # Mirror Uniswap V2 withdraw: the wire field for the receiving
             # address is `to` (not `recipient`).
             str(r["to"]) if r.get("to") else "",
-            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
-            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            a0, a1,
             _v_usd(r),
         ])
     return rows
@@ -1333,12 +1356,12 @@ def aero_basic_withdrawals_df_to_rows(df, *, chain, symbol0, symbol1, stable):
 def aero_basic_claims_df_to_rows(df, *, chain, symbol0, symbol1, stable):
     rows = []
     for r in df.iter_rows(named=True):
+        a0, a1 = _aligned_amounts(r, symbol0=symbol0, symbol1=symbol1)
         rows.append(_aero_basic_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1, stable=stable) + [
             str(r["pool_address"]) if r.get("pool_address") else "",
             str(r["sender"]) if r.get("sender") else "",
             str(r["recipient"]) if r.get("recipient") else "",
-            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
-            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            a0, a1,
             _v_usd(r),
         ])
     return rows
