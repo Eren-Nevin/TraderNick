@@ -7,6 +7,8 @@
   import {
     CHART_KIND_LABELS,
     MAX_MAS,
+    chartKindGroup,
+    chartKindShortLabel,
     defaultMAs,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
@@ -79,13 +81,25 @@
   let insertMenuPos = $state<{ x: number; y: number } | null>(null);
   // IDs of templates whose parameter sub-list is currently expanded in the menu.
   let expandedTemplates = $state<Set<string>>(new Set());
+  // Protocol-group names that are currently expanded in the Insert menu.
+  // The Insert menu organises event-driven chart kinds (AAVE / Uniswap /
+  // Lido / Aero / …) under a collapsible parent so the flat 18+ row list
+  // doesn't dominate the menu. Single-family kinds (OHLCV, Token Flow,
+  // Volume by Size, etc.) stay flat at the top.
+  let expandedGroups = $state<Set<string>>(new Set());
+
+  function toggleGroupExpand(name: string) {
+    const next = new Set(expandedGroups);
+    if (next.has(name)) next.delete(name); else next.add(name);
+    expandedGroups = next;
+  }
 
   function openInsert() {
     if (instances.length >= MAX_CHARTS) return;
     insertOpen = !insertOpen;
     insertIdx = null;
     insertMenuPos = null;
-    if (!insertOpen) expandedTemplates = new Set();
+    if (!insertOpen) { expandedTemplates = new Set(); expandedGroups = new Set(); }
   }
   function openInsertAt(idx: number, ev: MouseEvent) {
     if (instances.length >= MAX_CHARTS) return;
@@ -102,6 +116,7 @@
     insertIdx = null;
     insertMenuPos = null;
     expandedTemplates = new Set();
+    expandedGroups = new Set();
   }
   function toggleTemplateExpand(id: string) {
     const next = new Set(expandedTemplates);
@@ -573,12 +588,51 @@
   <div class="px-3 pt-0.5 pb-0.5 text-[10px] uppercase tracking-widest text-zinc-500">
     Blank chart
   </div>
-  {#each availableKinds as k (k)}
+  {@const _flat = availableKinds.filter((k) => chartKindGroup(k) === null)}
+  {@const _grouped = (() => {
+    // Bucket the event-driven kinds by their protocol group (AAVE V3,
+    // Uniswap V4, etc.), preserving the order availableKinds was given.
+    const m = new Map<string, ChartKind[]>();
+    for (const k of availableKinds) {
+      const g = chartKindGroup(k);
+      if (!g) continue;
+      if (!m.has(g)) m.set(g, []);
+      m.get(g)!.push(k);
+    }
+    return Array.from(m.entries());
+  })()}
+  <!-- Top-level (single-kind families: OHLCV, Token Flow, …). -->
+  {#each _flat as k (k)}
     <button
       type="button"
       onclick={() => addChart(k)}
       class="block w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
     >{CHART_KIND_LABELS[k]}</button>
+  {/each}
+  <!-- Grouped (protocol families with multiple event-driven kinds). -->
+  {#each _grouped as [groupName, groupKinds] (groupName)}
+    <button
+      type="button"
+      onclick={() => toggleGroupExpand(groupName)}
+      class="flex items-center justify-between w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
+      aria-expanded={expandedGroups.has(groupName)}
+    >
+      <span>{groupName}</span>
+      <span class="text-zinc-500 text-[10px] ml-2"
+        >{groupKinds.length} <span class="ml-1">{expandedGroups.has(groupName) ? '▾' : '▸'}</span></span
+      >
+    </button>
+    {#if expandedGroups.has(groupName)}
+      <div class="bg-zinc-900/40">
+        {#each groupKinds as k (k)}
+          <button
+            type="button"
+            onclick={() => addChart(k)}
+            class="block w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+          >{chartKindShortLabel(k)}</button>
+        {/each}
+      </div>
+    {/if}
   {/each}
   <div class="border-t border-zinc-800 mt-1 pt-1">
     <button

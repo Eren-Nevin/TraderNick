@@ -554,6 +554,34 @@ export type AeroPool = {
   tick_spacing: number;
 };
 
+/** Group label used when bucketing chart kinds in the Insert menu. The
+ *  group level lets us collapse the 18+ event-driven kinds into a single
+ *  parent row per protocol (AAVE V3 / Uniswap V4 / Aerodrome / …). Single-
+ *  family kinds (OHLCV, Token Flow, …) return null and render flat at the
+ *  top of the menu. */
+export function chartKindGroup(kind: ChartKind): string | null {
+  if (kind.startsWith('aave_v2_')) return 'AAVE V2';
+  if (kind.startsWith('aave_')) return 'AAVE V3';
+  if (kind.startsWith('uniswap_v2_')) return 'Uniswap V2';
+  if (kind.startsWith('uniswap_v4_')) return 'Uniswap V4';
+  if (kind.startsWith('uniswap_')) return 'Uniswap V3';
+  if (kind.startsWith('lido_')) return 'Lido';
+  if (kind.startsWith('aero_')) return 'Aerodrome';
+  return null;
+}
+
+/** Trim the protocol prefix off a chart-kind label so it reads naturally
+ *  under a grouped parent in the Insert menu. E.g. "AAVE V3 Deposits" →
+ *  "Deposits" when shown under the "AAVE V3" group header. */
+export function chartKindShortLabel(kind: ChartKind): string {
+  const full = CHART_KIND_LABELS[kind] ?? kind;
+  const group = chartKindGroup(kind);
+  if (group && full.startsWith(group + ' ')) {
+    return full.slice(group.length + 1);
+  }
+  return full;
+}
+
 /** Lido chart kinds (Staking page default layout order). 3 mainnet events
  *  + Net Stake (deposits − claims) + 2 L2 events + Net L2 (bridge in/out). */
 export const LIDO_CHART_KINDS: ChartKind[] = [
