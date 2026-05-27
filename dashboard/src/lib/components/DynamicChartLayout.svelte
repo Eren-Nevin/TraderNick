@@ -295,13 +295,49 @@
         inst.chain = isL1 ? 'ETH' : ch;
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
       }
+      // Aerodrome chart kinds (BASE-only, concentrated pools).
+      if (inst.kind.startsWith('aero_')) {
+        inst.chain = 'BASE';
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
+        const rp = r.aeroPool as Record<string, unknown> | undefined;
+        if (rp && typeof rp.symbol0 === 'string' && typeof rp.symbol1 === 'string' && typeof rp.tick_spacing === 'number') {
+          inst.aeroPool = {
+            symbol0: (rp.symbol0 as string).toUpperCase(),
+            symbol1: (rp.symbol1 as string).toUpperCase(),
+            tick_spacing: rp.tick_spacing as number
+          };
+        } else {
+          inst.aeroPool = { symbol0: 'USDC', symbol1: 'WETH', tick_spacing: 100 };
+        }
+      }
       // Uniswap chart kinds also need a `chain`, plus a `uniPool` 3-tuple
       // (symbol0 / symbol1 / fee). Validate the pool shape; fall back to a
       // canonical default so a corrupt save can't strand the chart.
       // valueMode supported on all uniswap_* except net_swap_flow (which
       // ignores it at the chart layer). Covers V2 too (uniswap_v2_*) —
-      // V2 uses fee=0 as a sentinel for "no fee tier".
-      if (inst.kind.startsWith('uniswap_')) {
+      // V2 uses fee=0 as a sentinel for "no fee tier". V4 carries a
+      // separate uniV4Pool with extra tick_spacing + hooks fields.
+      if (inst.kind.startsWith('uniswap_v4_')) {
+        inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
+        const rp = r.uniV4Pool as Record<string, unknown> | undefined;
+        if (rp && typeof rp.symbol0 === 'string' && typeof rp.symbol1 === 'string'
+            && typeof rp.fee === 'number' && typeof rp.tick_spacing === 'number'
+            && typeof rp.hooks === 'string') {
+          inst.uniV4Pool = {
+            symbol0: (rp.symbol0 as string).toUpperCase(),
+            symbol1: (rp.symbol1 as string).toUpperCase(),
+            fee: rp.fee as number,
+            tick_spacing: rp.tick_spacing as number,
+            hooks: rp.hooks as string
+          };
+        } else {
+          inst.uniV4Pool = {
+            symbol0: 'USDC', symbol1: 'WETH', fee: 500, tick_spacing: 10,
+            hooks: '0x0000000000000000000000000000000000000000'
+          };
+        }
+      } else if (inst.kind.startsWith('uniswap_')) {
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         const rp = r.uniPool;

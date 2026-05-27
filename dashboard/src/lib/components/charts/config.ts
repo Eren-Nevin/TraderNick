@@ -275,6 +275,16 @@ export type ChartKind =
   | 'uniswap_v2_deposit'
   | 'uniswap_v2_withdraw'
   | 'uniswap_v2_net_liquidity'
+  | 'uniswap_v4_swap'
+  | 'uniswap_v4_deposit'
+  | 'uniswap_v4_withdraw'
+  | 'uniswap_v4_initialize'
+  | 'uniswap_v4_net_liquidity'
+  | 'aero_swap'
+  | 'aero_deposit'
+  | 'aero_withdraw'
+  | 'aero_collect'
+  | 'aero_net_liquidity'
   | 'uniswap_swap'
   | 'uniswap_deposit'
   | 'uniswap_withdraw'
@@ -321,6 +331,16 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   uniswap_v2_deposit: 'Uniswap V2 Deposits',
   uniswap_v2_withdraw: 'Uniswap V2 Withdrawals',
   uniswap_v2_net_liquidity: 'Uniswap V2 Net Liquidity',
+  uniswap_v4_swap: 'Uniswap V4 Swaps',
+  uniswap_v4_deposit: 'Uniswap V4 Deposits',
+  uniswap_v4_withdraw: 'Uniswap V4 Withdrawals',
+  uniswap_v4_initialize: 'Uniswap V4 Pool Initializations',
+  uniswap_v4_net_liquidity: 'Uniswap V4 Net Liquidity',
+  aero_swap: 'Aerodrome Swaps',
+  aero_deposit: 'Aerodrome Deposits',
+  aero_withdraw: 'Aerodrome Withdrawals',
+  aero_collect: 'Aerodrome Collects',
+  aero_net_liquidity: 'Aerodrome Net Liquidity',
   uniswap_swap: 'Uniswap V3 Swaps',
   uniswap_deposit: 'Uniswap V3 Deposits',
   uniswap_withdraw: 'Uniswap V3 Withdrawals',
@@ -463,6 +483,76 @@ export function isUniswapV2Kind(kind: ChartKind): boolean {
     UNISWAP_V2_NET_KIND_TO_EVENTS[kind] !== undefined
   );
 }
+
+/** Uniswap V4 chart kinds. V4 LP events lack amount0/amount1 — only
+ *  liquidity_delta — so Amount mode on deposit/withdraw isn't meaningful
+ *  (the data_server returns 0 for sum_amount0/1 on those events). The
+ *  initialize kind is a pool-creation counter. */
+export const UNISWAP_V4_CHART_KINDS: ChartKind[] = [
+  'uniswap_v4_swap',
+  'uniswap_v4_deposit',
+  'uniswap_v4_withdraw',
+  'uniswap_v4_net_liquidity',
+  'uniswap_v4_initialize'
+];
+export const UNISWAP_V4_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  uniswap_v4_swap: 'swap',
+  uniswap_v4_deposit: 'deposit',
+  uniswap_v4_withdraw: 'withdraw',
+  uniswap_v4_initialize: 'initialize'
+};
+export const UNISWAP_V4_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  uniswap_v4_net_liquidity: ['deposit', 'withdraw']
+};
+export function isUniswapV4Kind(kind: ChartKind): boolean {
+  return (
+    UNISWAP_V4_KIND_TO_EVENT[kind] !== undefined ||
+    UNISWAP_V4_NET_KIND_TO_EVENTS[kind] !== undefined
+  );
+}
+
+/** V4 pool identity needs fee + tick_spacing + hooks alongside the
+ *  symbol pair. We extend UniPool conceptually but model the extra
+ *  fields as a separate optional shape on ChartInstance to avoid
+ *  breaking the V3 selector code. */
+export type UniV4Pool = {
+  symbol0: string;
+  symbol1: string;
+  fee: number;
+  tick_spacing: number;
+  hooks: string;
+};
+
+/** Aerodrome (concentrated-pool only) chart kinds. BASE chain only. */
+export const AERO_CHART_KINDS: ChartKind[] = [
+  'aero_swap',
+  'aero_deposit',
+  'aero_withdraw',
+  'aero_collect',
+  'aero_net_liquidity'
+];
+export const AERO_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  aero_swap: 'swap',
+  aero_deposit: 'deposit',
+  aero_withdraw: 'withdraw',
+  aero_collect: 'collect'
+};
+export const AERO_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  aero_net_liquidity: ['deposit', 'withdraw']
+};
+export function isAeroKind(kind: ChartKind): boolean {
+  return (
+    AERO_KIND_TO_EVENT[kind] !== undefined ||
+    AERO_NET_KIND_TO_EVENTS[kind] !== undefined
+  );
+}
+
+/** Aero pool identity: (chain=BASE, sym0, sym1, tick_spacing). */
+export type AeroPool = {
+  symbol0: string;
+  symbol1: string;
+  tick_spacing: number;
+};
 
 /** Lido chart kinds (Staking page default layout order). 3 mainnet events
  *  + Net Stake (deposits − claims) + 2 L2 events + Net L2 (bridge in/out). */
@@ -629,6 +719,10 @@ export type ChartInstance = {
   chain?: string;
   // uniswap_* only: the pool (symbol0/symbol1/fee) on the selected chain
   uniPool?: UniPool;
+  // uniswap_v4_* only: V4 adds tick_spacing + hooks to the pool tuple
+  uniV4Pool?: UniV4Pool;
+  // aero_* only: Aerodrome concentrated-pool tuple (BASE chain implied)
+  aeroPool?: AeroPool;
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -742,6 +836,21 @@ export function newChartInstance(
     // ChartInstance treats fee=0 as "V2" when issuing requests so the
     // selector + fetch paths don't need a parallel shape.
     base.uniPool = { symbol0: 'USDC', symbol1: 'WETH', fee: 0 };
+    base.valueMode = 'usd';
+  }
+  if (isUniswapV4Kind(kind)) {
+    base.chain = defaults.chain ?? 'ETH';
+    // Canonical V4 pool: USDC/WETH 0.05% fee, tick_spacing=10, no hooks.
+    base.uniV4Pool = {
+      symbol0: 'USDC', symbol1: 'WETH', fee: 500, tick_spacing: 10,
+      hooks: '0x0000000000000000000000000000000000000000'
+    };
+    base.valueMode = 'usd';
+  }
+  if (isAeroKind(kind)) {
+    base.chain = 'BASE';
+    // Default to USDC/WETH ts=100 (top Aero CL pool by volume).
+    base.aeroPool = { symbol0: 'USDC', symbol1: 'WETH', tick_spacing: 100 };
     base.valueMode = 'usd';
   }
   if (isLidoKind(kind)) {

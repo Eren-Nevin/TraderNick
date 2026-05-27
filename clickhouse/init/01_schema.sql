@@ -730,3 +730,228 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_v2_withdrawals
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (chain, symbol0, symbol1, time, tx_id, log_index);
+
+-- ---------------------------------------------------------------------------
+-- Uniswap V4 events
+-- ---------------------------------------------------------------------------
+-- V4 pool identity is the 6-tuple (chain, sym0, sym1, fee, tick_spacing, hooks)
+-- — fee is per-pool not per-tier (V4 supports dynamic fees via hooks), and
+-- the hooks address differentiates otherwise-identical pools. ORDER BY drops
+-- hooks (almost always 0x0 in V1) but keeps it as a regular column so we
+-- can support hook-bearing pools without a schema change.
+--
+-- LP events (deposit/withdraw) ONLY emit liquidity_delta — V4 doesn't put
+-- amount0/amount1 on the LP log, since amounts derive from the range +
+-- current price. We store liquidity_delta as the headline amount;
+-- per-token amount columns aren't applicable.
+
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_v4_swaps
+(
+    chain            LowCardinality(String),
+    symbol0          LowCardinality(String),
+    symbol1          LowCardinality(String),
+    fee              UInt32,
+    tick_spacing     UInt32,
+    hooks            LowCardinality(String),
+    time             DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number     UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id            String             CODEC(ZSTD(3)),
+    log_index        UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_id          String             CODEC(ZSTD(3)),
+    sender           String             CODEC(ZSTD(3)),
+    token_sold       LowCardinality(String),
+    token_bought     LowCardinality(String),
+    amount_sold      Float64            CODEC(Gorilla, ZSTD(3)),
+    amount_bought    Float64            CODEC(Gorilla, ZSTD(3)),
+    sqrt_based_price Float64            CODEC(Gorilla, ZSTD(3)),
+    liquidity        Float64            CODEC(Gorilla, ZSTD(3)),
+    tick             Int32              CODEC(T64, ZSTD(3)),
+    value_usd        Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at      DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_v4_deposits
+(
+    chain            LowCardinality(String),
+    symbol0          LowCardinality(String),
+    symbol1          LowCardinality(String),
+    fee              UInt32,
+    tick_spacing     UInt32,
+    hooks            LowCardinality(String),
+    time             DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number     UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id            String             CODEC(ZSTD(3)),
+    log_index        UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_id          String             CODEC(ZSTD(3)),
+    sender           String             CODEC(ZSTD(3)),
+    tick_lower       Int32              CODEC(T64, ZSTD(3)),
+    tick_upper       Int32              CODEC(T64, ZSTD(3)),
+    price_lower      Float64            CODEC(Gorilla, ZSTD(3)),
+    price_upper      Float64            CODEC(Gorilla, ZSTD(3)),
+    liquidity_delta  Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd        Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at      DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_v4_withdrawals
+(
+    chain            LowCardinality(String),
+    symbol0          LowCardinality(String),
+    symbol1          LowCardinality(String),
+    fee              UInt32,
+    tick_spacing     UInt32,
+    hooks            LowCardinality(String),
+    time             DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number     UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id            String             CODEC(ZSTD(3)),
+    log_index        UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_id          String             CODEC(ZSTD(3)),
+    sender           String             CODEC(ZSTD(3)),
+    tick_lower       Int32              CODEC(T64, ZSTD(3)),
+    tick_upper       Int32              CODEC(T64, ZSTD(3)),
+    price_lower      Float64            CODEC(Gorilla, ZSTD(3)),
+    price_upper      Float64            CODEC(Gorilla, ZSTD(3)),
+    liquidity_delta  Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd        Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at      DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index);
+
+-- initialize fires once per pool deployment — useful for a "new pool count"
+-- chart on the DeX page. The symbol0/symbol1 columns come from the V4 client
+-- args (the wire emits raw currency addresses).
+CREATE TABLE IF NOT EXISTS tradernick.uniswap_v4_initializes
+(
+    chain             LowCardinality(String),
+    symbol0           LowCardinality(String),
+    symbol1           LowCardinality(String),
+    fee               UInt32,
+    tick_spacing      UInt32,
+    hooks             LowCardinality(String),
+    time              DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number      UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id             String             CODEC(ZSTD(3)),
+    log_index         UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_id           String             CODEC(ZSTD(3)),
+    currency0_addr    String             CODEC(ZSTD(3)),
+    currency1_addr    String             CODEC(ZSTD(3)),
+    initial_sqrt_x96  Float64            CODEC(Gorilla, ZSTD(3)),
+    initial_tick      Int32              CODEC(T64, ZSTD(3)),
+    ingested_at       DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index);
+
+-- ---------------------------------------------------------------------------
+-- Aerodrome concentrated-pool events (BASE only)
+-- ---------------------------------------------------------------------------
+-- Aero has two pool families — `basic` (Solidly-style) and `concentrated`
+-- (V3-style cl pools). DeFiStream's `claims` event and the `basic` pool
+-- shape are currently broken server-side (decode_worker error / stable
+-- flag rejection), so V1 covers only concentrated pools: swap / deposit /
+-- withdraw / collect. Pool identity is (BASE, symbol0, symbol1, tick_spacing).
+
+CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_swaps
+(
+    chain            LowCardinality(String),
+    symbol0          LowCardinality(String),
+    symbol1          LowCardinality(String),
+    tick_spacing     UInt32,
+    time             DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number     UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id            String             CODEC(ZSTD(3)),
+    log_index        UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address     String             CODEC(ZSTD(3)),
+    swapper          String             CODEC(ZSTD(3)),
+    recipient        String             CODEC(ZSTD(3)),
+    token_sold       LowCardinality(String),
+    token_bought     LowCardinality(String),
+    amount_sold      Float64            CODEC(Gorilla, ZSTD(3)),
+    amount_bought    Float64            CODEC(Gorilla, ZSTD(3)),
+    sqrt_based_price Float64            CODEC(Gorilla, ZSTD(3)),
+    liquidity        Float64            CODEC(Gorilla, ZSTD(3)),
+    tick             Int32              CODEC(T64, ZSTD(3)),
+    value_usd        Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at      DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_deposits
+(
+    chain         LowCardinality(String),
+    symbol0       LowCardinality(String),
+    symbol1       LowCardinality(String),
+    tick_spacing  UInt32,
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address  String             CODEC(ZSTD(3)),
+    sender        String             CODEC(ZSTD(3)),
+    owner         String             CODEC(ZSTD(3)),
+    amount0       Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1       Float64            CODEC(Gorilla, ZSTD(3)),
+    tick_lower    Int32              CODEC(T64, ZSTD(3)),
+    tick_upper    Int32              CODEC(T64, ZSTD(3)),
+    price_lower   Float64            CODEC(Gorilla, ZSTD(3)),
+    price_upper   Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_withdrawals
+(
+    chain         LowCardinality(String),
+    symbol0       LowCardinality(String),
+    symbol1       LowCardinality(String),
+    tick_spacing  UInt32,
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address  String             CODEC(ZSTD(3)),
+    owner         String             CODEC(ZSTD(3)),
+    amount0       Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1       Float64            CODEC(Gorilla, ZSTD(3)),
+    tick_lower    Int32              CODEC(T64, ZSTD(3)),
+    tick_upper    Int32              CODEC(T64, ZSTD(3)),
+    price_lower   Float64            CODEC(Gorilla, ZSTD(3)),
+    price_upper   Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_collects
+(
+    chain         LowCardinality(String),
+    symbol0       LowCardinality(String),
+    symbol1       LowCardinality(String),
+    tick_spacing  UInt32,
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    pool_address  String             CODEC(ZSTD(3)),
+    owner         String             CODEC(ZSTD(3)),
+    recipient     String             CODEC(ZSTD(3)),
+    amount0       Float64            CODEC(Gorilla, ZSTD(3)),
+    amount1       Float64            CODEC(Gorilla, ZSTD(3)),
+    tick_lower    Int32              CODEC(T64, ZSTD(3)),
+    tick_upper    Int32              CODEC(T64, ZSTD(3)),
+    price_lower   Float64            CODEC(Gorilla, ZSTD(3)),
+    price_upper   Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index);

@@ -228,3 +228,87 @@ UNISWAP_V2_LIVE_POOLS_DEFAULT = "ETH:USDC/WETH,USDT/WETH,DAI/USDC"
 UNI_V2_LIVE_POOLS = _parse_uniswap_v2_pools(
     os.environ.get("UNI_V2_LIVE_POOLS", UNISWAP_V2_LIVE_POOLS_DEFAULT)
 )
+
+
+# --- Uniswap V4 pools ------------------------------------------------------
+# V4 pool identity: (chain, sym0, sym1, fee, tick_spacing, hooks). Grammar:
+#   `<chain>:<sym0/sym1/fee/tick_spacing>[/<hooks>],...;<chain2>:...`
+# hooks defaults to the zero address when omitted. Pairs auto-canonicalise
+# (alphabetic order).
+def _parse_uniswap_v4_pools(raw: str) -> list[tuple[str, str, str, int, int, str]]:
+    out: list[tuple[str, str, str, int, int, str]] = []
+    for group in raw.split(";"):
+        group = group.strip()
+        if not group or ":" not in group:
+            continue
+        chain, pools_str = group.split(":", 1)
+        chain = chain.strip().upper()
+        for pool in pools_str.split(","):
+            pool = pool.strip()
+            parts = pool.split("/")
+            if len(parts) < 4:
+                continue
+            sym_a, sym_b, fee_s, ts_s = parts[0].strip(), parts[1].strip(), parts[2].strip(), parts[3].strip()
+            hooks = parts[4].strip() if len(parts) >= 5 else "0x0000000000000000000000000000000000000000"
+            if not sym_a or not sym_b:
+                continue
+            try:
+                fee = int(fee_s); ts = int(ts_s)
+            except ValueError:
+                continue
+            symbol0, symbol1 = sorted([sym_a.upper(), sym_b.upper()])
+            out.append((chain, symbol0, symbol1, fee, ts, hooks))
+    return out
+
+
+UNISWAP_V4_POOLS_DEFAULT = (
+    # V4 launched on ETH first; canonical pools all with hooks=0x0.
+    "ETH:USDC/WETH/500/10,USDT/WETH/500/10,USDC/USDT/100/1,WBTC/WETH/3000/60,DAI/USDC/100/1"
+)
+UNI_V4_POOLS = _parse_uniswap_v4_pools(
+    os.environ.get("UNI_V4_POOLS", UNISWAP_V4_POOLS_DEFAULT)
+)
+UNI_V4_ENABLED = os.environ.get("UNI_V4_ENABLED", "1") == "1"
+# Trimmed live-poll subset — keep just the top USDC/WETH pool live to
+# minimise rate-budget impact alongside the V2/V3 pollers.
+UNI_V4_LIVE_POOLS_DEFAULT = "ETH:USDC/WETH/500/10"
+UNI_V4_LIVE_POOLS = _parse_uniswap_v4_pools(
+    os.environ.get("UNI_V4_LIVE_POOLS", UNI_V4_LIVE_POOLS_DEFAULT)
+)
+
+
+# --- Aerodrome (BASE-only, concentrated pools) -----------------------------
+# Grammar: `BASE:<sym0/sym1/tick_spacing>,...` (single chain so no `;`).
+def _parse_aero_cl_pools(raw: str) -> list[tuple[str, str, str, int]]:
+    out: list[tuple[str, str, str, int]] = []
+    for group in raw.split(";"):
+        group = group.strip()
+        if not group or ":" not in group:
+            continue
+        chain, pools_str = group.split(":", 1)
+        chain = chain.strip().upper()
+        for pool in pools_str.split(","):
+            parts = pool.strip().split("/")
+            if len(parts) != 3:
+                continue
+            try:
+                ts = int(parts[2].strip())
+            except ValueError:
+                continue
+            symbol0, symbol1 = sorted([parts[0].strip().upper(), parts[1].strip().upper()])
+            if not symbol0 or not symbol1:
+                continue
+            out.append((chain, symbol0, symbol1, ts))
+    return out
+
+
+AERO_CL_POOLS_DEFAULT = (
+    # Top Aero concentrated pools by volume — all on BASE.
+    "BASE:USDC/WETH/100,USDC/WETH/1,CBBTC/USDC/100,CBBTC/WETH/200,AERO/USDC/200,AERO/WETH/200"
+)
+AERO_POOLS = _parse_aero_cl_pools(os.environ.get("AERO_POOLS", AERO_CL_POOLS_DEFAULT))
+AERO_ENABLED = os.environ.get("AERO_ENABLED", "1") == "1"
+AERO_LIVE_POOLS_DEFAULT = "BASE:USDC/WETH/100"
+AERO_LIVE_POOLS = _parse_aero_cl_pools(
+    os.environ.get("AERO_LIVE_POOLS", AERO_LIVE_POOLS_DEFAULT)
+)

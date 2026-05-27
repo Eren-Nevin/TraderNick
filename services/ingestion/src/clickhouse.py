@@ -992,3 +992,247 @@ UNISWAP_V2_EVENTS = {
     "deposit":  ("deposits",    "tradernick.uniswap_v2_deposits",    UNISWAP_V2_DEPOSITS_COLUMNS,    uniswap_v2_deposits_df_to_rows),
     "withdraw": ("withdrawals", "tradernick.uniswap_v2_withdrawals", UNISWAP_V2_WITHDRAWALS_COLUMNS, uniswap_v2_withdrawals_df_to_rows),
 }
+
+
+# ---------------------------------------------------------------------------
+# Uniswap V4 events
+# ---------------------------------------------------------------------------
+# Pool identity: (chain, sym0, sym1, fee, tick_spacing, hooks). LP events
+# DON'T expose amount0/amount1 — V4 emits only liquidity_delta (signed for
+# withdraw). swap rows look V3-shaped (sqrt_based_price, liquidity, tick)
+# but use `sender` (no recipient — V4 is callback-based).
+# Wire fields: tokenSold / amountSold / etc. (camelCase) — normalised here.
+
+UNISWAP_V4_SWAPS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "fee", "tick_spacing", "hooks",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_id", "sender",
+    "token_sold", "token_bought", "amount_sold", "amount_bought",
+    "sqrt_based_price", "liquidity", "tick",
+    "value_usd",
+]
+UNISWAP_V4_DEPOSITS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "fee", "tick_spacing", "hooks",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_id", "sender",
+    "tick_lower", "tick_upper", "price_lower", "price_upper",
+    "liquidity_delta", "value_usd",
+]
+UNISWAP_V4_WITHDRAWALS_COLUMNS = UNISWAP_V4_DEPOSITS_COLUMNS  # same shape
+UNISWAP_V4_INITIALIZES_COLUMNS = [
+    "chain", "symbol0", "symbol1", "fee", "tick_spacing", "hooks",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_id", "currency0_addr", "currency1_addr",
+    "initial_sqrt_x96", "initial_tick",
+]
+
+
+def _v_usd(r):
+    raw = r.get("value_usd")
+    if raw is None or raw == "":
+        return None
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _v4_pool_head(r, *, chain, symbol0, symbol1, fee, tick_spacing, hooks):
+    """Shared 6-tuple pool identity + 4 row-locator columns."""
+    return [
+        chain, symbol0, symbol1, int(fee), int(tick_spacing), hooks,
+        _to_naive_utc(r["time"]),
+        int(r["block_number"]),
+        str(r["tx_id"]) if r.get("tx_id") else "",
+        int(r["log_index"]) if r.get("log_index") is not None else 0,
+    ]
+
+
+def uniswap_v4_swaps_df_to_rows(df, *, chain, symbol0, symbol1, fee, tick_spacing, hooks):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_v4_pool_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1,
+                                  fee=fee, tick_spacing=tick_spacing, hooks=hooks) + [
+            str(r["pool_id"]) if r.get("pool_id") else "",
+            str(r["sender"]) if r.get("sender") else "",
+            str(r["tokenSold"]) if r.get("tokenSold") else "",
+            str(r["tokenBought"]) if r.get("tokenBought") else "",
+            float(r["amountSold"]) if r.get("amountSold") is not None else 0.0,
+            float(r["amountBought"]) if r.get("amountBought") is not None else 0.0,
+            float(r["sqrt_based_price"]) if r.get("sqrt_based_price") is not None else 0.0,
+            float(r["liquidity"]) if r.get("liquidity") is not None else 0.0,
+            int(r["tick"]) if r.get("tick") is not None else 0,
+            _v_usd(r),
+        ])
+    return rows
+
+
+def _v4_lp_df_to_rows(df, *, chain, symbol0, symbol1, fee, tick_spacing, hooks):
+    """Shared deposit/withdraw transform — V4 LP events only emit
+    liquidity_delta (positive on deposit, negative on withdraw)."""
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_v4_pool_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1,
+                                  fee=fee, tick_spacing=tick_spacing, hooks=hooks) + [
+            str(r["pool_id"]) if r.get("pool_id") else "",
+            str(r["sender"]) if r.get("sender") else "",
+            int(r["tick_lower"]) if r.get("tick_lower") is not None else 0,
+            int(r["tick_upper"]) if r.get("tick_upper") is not None else 0,
+            float(r["price_lower"]) if r.get("price_lower") is not None else 0.0,
+            float(r["price_upper"]) if r.get("price_upper") is not None else 0.0,
+            float(r["liquidity_delta"]) if r.get("liquidity_delta") is not None else 0.0,
+            _v_usd(r),
+        ])
+    return rows
+
+
+def uniswap_v4_deposits_df_to_rows(df, *, chain, symbol0, symbol1, fee, tick_spacing, hooks):
+    return _v4_lp_df_to_rows(df, chain=chain, symbol0=symbol0, symbol1=symbol1,
+                              fee=fee, tick_spacing=tick_spacing, hooks=hooks)
+
+
+def uniswap_v4_withdrawals_df_to_rows(df, *, chain, symbol0, symbol1, fee, tick_spacing, hooks):
+    return _v4_lp_df_to_rows(df, chain=chain, symbol0=symbol0, symbol1=symbol1,
+                              fee=fee, tick_spacing=tick_spacing, hooks=hooks)
+
+
+def uniswap_v4_initializes_df_to_rows(df, *, chain, symbol0, symbol1, fee, tick_spacing, hooks):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_v4_pool_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1,
+                                  fee=fee, tick_spacing=tick_spacing, hooks=hooks) + [
+            str(r["pool_id"]) if r.get("pool_id") else "",
+            str(r["currency0"]) if r.get("currency0") else "",
+            str(r["currency1"]) if r.get("currency1") else "",
+            float(r["sqrt_price_x96"]) if r.get("sqrt_price_x96") is not None else 0.0,
+            int(r["tick"]) if r.get("tick") is not None else 0,
+        ])
+    return rows
+
+
+UNISWAP_V4_EVENTS = {
+    "swap":       ("swaps",        "tradernick.uniswap_v4_swaps",        UNISWAP_V4_SWAPS_COLUMNS,        uniswap_v4_swaps_df_to_rows),
+    "deposit":    ("deposits",     "tradernick.uniswap_v4_deposits",     UNISWAP_V4_DEPOSITS_COLUMNS,     uniswap_v4_deposits_df_to_rows),
+    "withdraw":   ("withdrawals",  "tradernick.uniswap_v4_withdrawals",  UNISWAP_V4_WITHDRAWALS_COLUMNS,  uniswap_v4_withdrawals_df_to_rows),
+    "initialize": ("initializes",  "tradernick.uniswap_v4_initializes",  UNISWAP_V4_INITIALIZES_COLUMNS,  uniswap_v4_initializes_df_to_rows),
+}
+
+
+# ---------------------------------------------------------------------------
+# Aerodrome concentrated-pool events (BASE only, V1 scope)
+# ---------------------------------------------------------------------------
+# Same shape as Uniswap V3 minus fee_tier (Aero uses tick_spacing alone to
+# distinguish CL pool tiers). swap rows carry sqrt_based_price/liquidity/tick;
+# LP events expose amount0/amount1 directly. Wire is camelCase for swap.
+
+AERO_CL_SWAPS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "tick_spacing",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "swapper", "recipient",
+    "token_sold", "token_bought", "amount_sold", "amount_bought",
+    "sqrt_based_price", "liquidity", "tick",
+    "value_usd",
+]
+AERO_CL_DEPOSITS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "tick_spacing",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "sender", "owner",
+    "amount0", "amount1",
+    "tick_lower", "tick_upper", "price_lower", "price_upper",
+    "value_usd",
+]
+AERO_CL_WITHDRAWALS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "tick_spacing",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "owner",
+    "amount0", "amount1",
+    "tick_lower", "tick_upper", "price_lower", "price_upper",
+    "value_usd",
+]
+AERO_CL_COLLECTS_COLUMNS = [
+    "chain", "symbol0", "symbol1", "tick_spacing",
+    "time", "block_number", "tx_id", "log_index",
+    "pool_address", "owner", "recipient",
+    "amount0", "amount1",
+    "tick_lower", "tick_upper", "price_lower", "price_upper",
+    "value_usd",
+]
+
+
+def _aero_cl_head(r, *, chain, symbol0, symbol1, tick_spacing):
+    return [
+        chain, symbol0, symbol1, int(tick_spacing),
+        _to_naive_utc(r["time"]),
+        int(r["block_number"]),
+        str(r["tx_id"]) if r.get("tx_id") else "",
+        int(r["log_index"]) if r.get("log_index") is not None else 0,
+    ]
+
+
+def aero_cl_swaps_df_to_rows(df, *, chain, symbol0, symbol1, tick_spacing):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_aero_cl_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1, tick_spacing=tick_spacing) + [
+            str(r["pool_address"]) if r.get("pool_address") else "",
+            str(r["swapper"]) if r.get("swapper") else "",
+            str(r["recipient"]) if r.get("recipient") else "",
+            str(r["tokenSold"]) if r.get("tokenSold") else "",
+            str(r["tokenBought"]) if r.get("tokenBought") else "",
+            float(r["amountSold"]) if r.get("amountSold") is not None else 0.0,
+            float(r["amountBought"]) if r.get("amountBought") is not None else 0.0,
+            float(r["sqrt_based_price"]) if r.get("sqrt_based_price") is not None else 0.0,
+            float(r["liquidity"]) if r.get("liquidity") is not None else 0.0,
+            int(r["tick"]) if r.get("tick") is not None else 0,
+            _v_usd(r),
+        ])
+    return rows
+
+
+def _aero_cl_lp_df_to_rows(df, *, chain, symbol0, symbol1, tick_spacing,
+                          include_sender, include_recipient):
+    rows = []
+    for r in df.iter_rows(named=True):
+        head = _aero_cl_head(r, chain=chain, symbol0=symbol0, symbol1=symbol1, tick_spacing=tick_spacing)
+        head.append(str(r["pool_address"]) if r.get("pool_address") else "")
+        if include_sender:
+            head.append(str(r["sender"]) if r.get("sender") else "")
+        head.append(str(r["owner"]) if r.get("owner") else "")
+        if include_recipient:
+            head.append(str(r["recipient"]) if r.get("recipient") else "")
+        head.extend([
+            float(r["amount0"]) if r.get("amount0") is not None else 0.0,
+            float(r["amount1"]) if r.get("amount1") is not None else 0.0,
+            int(r["tick_lower"]) if r.get("tick_lower") is not None else 0,
+            int(r["tick_upper"]) if r.get("tick_upper") is not None else 0,
+            float(r["price_lower"]) if r.get("price_lower") is not None else 0.0,
+            float(r["price_upper"]) if r.get("price_upper") is not None else 0.0,
+            _v_usd(r),
+        ])
+        rows.append(head)
+    return rows
+
+
+def aero_cl_deposits_df_to_rows(df, *, chain, symbol0, symbol1, tick_spacing):
+    return _aero_cl_lp_df_to_rows(df, chain=chain, symbol0=symbol0, symbol1=symbol1,
+                                  tick_spacing=tick_spacing,
+                                  include_sender=True, include_recipient=False)
+
+
+def aero_cl_withdrawals_df_to_rows(df, *, chain, symbol0, symbol1, tick_spacing):
+    return _aero_cl_lp_df_to_rows(df, chain=chain, symbol0=symbol0, symbol1=symbol1,
+                                  tick_spacing=tick_spacing,
+                                  include_sender=False, include_recipient=False)
+
+
+def aero_cl_collects_df_to_rows(df, *, chain, symbol0, symbol1, tick_spacing):
+    return _aero_cl_lp_df_to_rows(df, chain=chain, symbol0=symbol0, symbol1=symbol1,
+                                  tick_spacing=tick_spacing,
+                                  include_sender=False, include_recipient=True)
+
+
+AERO_CL_EVENTS = {
+    "swap":     ("swaps",       "tradernick.aero_concentrated_swaps",       AERO_CL_SWAPS_COLUMNS,       aero_cl_swaps_df_to_rows),
+    "deposit":  ("deposits",    "tradernick.aero_concentrated_deposits",    AERO_CL_DEPOSITS_COLUMNS,    aero_cl_deposits_df_to_rows),
+    "withdraw": ("withdrawals", "tradernick.aero_concentrated_withdrawals", AERO_CL_WITHDRAWALS_COLUMNS, aero_cl_withdrawals_df_to_rows),
+    "collect":  ("collects",    "tradernick.aero_concentrated_collects",    AERO_CL_COLLECTS_COLUMNS,    aero_cl_collects_df_to_rows),
+}

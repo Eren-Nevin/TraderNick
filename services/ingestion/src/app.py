@@ -27,6 +27,8 @@ from jobs.manager import (
     JOB_TYPE_BACKFILL_LIDO_EVENTS,
     JOB_TYPE_BACKFILL_AAVE_V2_EVENTS,
     JOB_TYPE_BACKFILL_UNISWAP_V2_EVENTS,
+    JOB_TYPE_BACKFILL_UNISWAP_V4_EVENTS,
+    JOB_TYPE_BACKFILL_AERO_EVENTS,
     JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS,
     JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS,
     JobManager,
@@ -90,6 +92,8 @@ async def startup(app_, _loop):
         "lido_events",
         "aave_v2_events",
         "uniswap_v2_events",
+        "uniswap_v4_events",
+        "aero_events",
     ])
     app_.ctx.jobs = JobManager()
     try:
@@ -385,6 +389,69 @@ def _extract_uniswap_v2_events(body):
 @app.post("/jobs/backfill/uniswap_v2_events")
 async def backfill_uniswap_v2_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_UNISWAP_V2_EVENTS, _extract_uniswap_v2_events)
+
+
+_UNI_V4_VALID_EVENTS = ("swap", "deposit", "withdraw", "initialize")
+
+
+def _extract_uniswap_v4_events(body):
+    pools = body.get("pools")
+    if pools is None:
+        pools = [[c, s0, s1, fee, ts, hk] for (c, s0, s1, fee, ts, hk) in config.UNI_V4_POOLS]
+    if not pools or not isinstance(pools, list):
+        return "missing pools (list of [chain, sym0, sym1, fee, tick_spacing, hooks])", None
+    norm = []
+    for p in pools:
+        if not isinstance(p, list) or len(p) < 5:
+            return "each pool must be [chain, sym0, sym1, fee, tick_spacing, (hooks)]", None
+        try:
+            fee = int(p[3]); ts = int(p[4])
+        except (TypeError, ValueError):
+            return "fee + tick_spacing must be ints", None
+        hooks = p[5] if len(p) >= 6 else "0x0000000000000000000000000000000000000000"
+        sym0, sym1 = sorted([str(p[1]).upper(), str(p[2]).upper()])
+        norm.append([str(p[0]).upper(), sym0, sym1, fee, ts, str(hooks)])
+    events = body.get("events") or list(_UNI_V4_VALID_EVENTS)
+    if not isinstance(events, list): return "events must be a list", None
+    unknown = [e for e in events if e not in _UNI_V4_VALID_EVENTS]
+    if unknown: return f"unknown events: {unknown}", None
+    return None, {"pools": norm, "events": list(events)}
+
+
+@app.post("/jobs/backfill/uniswap_v4_events")
+async def backfill_uniswap_v4_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_UNISWAP_V4_EVENTS, _extract_uniswap_v4_events)
+
+
+_AERO_VALID_EVENTS = ("swap", "deposit", "withdraw", "collect")
+
+
+def _extract_aero_events(body):
+    pools = body.get("pools")
+    if pools is None:
+        pools = [[c, s0, s1, ts] for (c, s0, s1, ts) in config.AERO_POOLS]
+    if not pools or not isinstance(pools, list):
+        return "missing pools (list of [chain, sym0, sym1, tick_spacing])", None
+    norm = []
+    for p in pools:
+        if not isinstance(p, list) or len(p) != 4:
+            return "each pool must be [chain, sym0, sym1, tick_spacing]", None
+        try:
+            ts = int(p[3])
+        except (TypeError, ValueError):
+            return "tick_spacing must be an int", None
+        sym0, sym1 = sorted([str(p[1]).upper(), str(p[2]).upper()])
+        norm.append([str(p[0]).upper(), sym0, sym1, ts])
+    events = body.get("events") or list(_AERO_VALID_EVENTS)
+    if not isinstance(events, list): return "events must be a list", None
+    unknown = [e for e in events if e not in _AERO_VALID_EVENTS]
+    if unknown: return f"unknown events: {unknown}", None
+    return None, {"pools": norm, "events": list(events)}
+
+
+@app.post("/jobs/backfill/aero_events")
+async def backfill_aero_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AERO_EVENTS, _extract_aero_events)
 
 
 @app.post("/admin/wallets")
