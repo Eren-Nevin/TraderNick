@@ -582,6 +582,24 @@ export function chartKindShortLabel(kind: ChartKind): string {
   return full;
 }
 
+/** Stable order applied when rendering grouped chart kinds in the Insert
+ *  menu — version-ascending within each protocol family (V2 → V3 → V4),
+ *  protocols in adoption order overall. Pages can compose their
+ *  `availableKinds` in any sequence and the menu still renders the same
+ *  visual order. Unknown groups fall back to alphabetic. */
+const _GROUP_ORDER: Record<string, number> = {
+  'AAVE V2':    10,
+  'AAVE V3':    11,
+  'Lido':       20,
+  'Uniswap V2': 30,
+  'Uniswap V3': 31,
+  'Uniswap V4': 32,
+  'Aerodrome':  40
+};
+export function chartKindGroupOrder(group: string): number {
+  return _GROUP_ORDER[group] ?? 99;
+}
+
 /** Lido chart kinds (Staking page default layout order). 3 mainnet events
  *  + Net Stake (deposits − claims) + 2 L2 events + Net L2 (bridge in/out). */
 export const LIDO_CHART_KINDS: ChartKind[] = [

@@ -8,6 +8,7 @@
     CHART_KIND_LABELS,
     MAX_MAS,
     chartKindGroup,
+    chartKindGroupOrder,
     chartKindShortLabel,
     defaultMAs,
     newChartInstance,
@@ -591,7 +592,11 @@
   {@const _flat = availableKinds.filter((k) => chartKindGroup(k) === null)}
   {@const _grouped = (() => {
     // Bucket the event-driven kinds by their protocol group (AAVE V3,
-    // Uniswap V4, etc.), preserving the order availableKinds was given.
+    // Uniswap V4, etc.), then sort the groups by chartKindGroupOrder so
+    // versions inside a family render in ascending order (V2 → V3 → V4)
+    // regardless of how the page composed `availableKinds`. Items inside
+    // each group preserve their page-given order so per-page customisation
+    // still works for the leaf listing.
     const m = new Map<string, ChartKind[]>();
     for (const k of availableKinds) {
       const g = chartKindGroup(k);
@@ -599,7 +604,12 @@
       if (!m.has(g)) m.set(g, []);
       m.get(g)!.push(k);
     }
-    return Array.from(m.entries());
+    return Array.from(m.entries())
+      .sort(([a], [b]) => {
+        const da = chartKindGroupOrder(a);
+        const db = chartKindGroupOrder(b);
+        return da !== db ? da - db : a.localeCompare(b);
+      });
   })()}
   <!-- Top-level (single-kind families: OHLCV, Token Flow, …). -->
   {#each _flat as k (k)}
