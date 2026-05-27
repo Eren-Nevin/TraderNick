@@ -16,7 +16,11 @@
   const AVAILABLE_KINDS: ChartKind[] = [
     'ohlcv',
     ...UNISWAP_CHART_KINDS,
-    ...UNISWAP_V4_CHART_KINDS,
+    // Uniswap V4 hidden from the menu until pools are configured
+    // (UNI_V4_POOLS / UNI_V4_LIVE_POOLS empty by default). The ChartKind
+    // entries + fetch / render paths are still wired so re-enabling is
+    // a one-line edit: drop the comment and re-add UNISWAP_V4_CHART_KINDS.
+    // ...UNISWAP_V4_CHART_KINDS,
     ...UNISWAP_V2_CHART_KINDS,
     ...AERO_CHART_KINDS
   ];

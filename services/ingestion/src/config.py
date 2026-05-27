@@ -261,17 +261,18 @@ def _parse_uniswap_v4_pools(raw: str) -> list[tuple[str, str, str, int, int, str
     return out
 
 
-UNISWAP_V4_POOLS_DEFAULT = (
-    # V4 launched on ETH first; canonical pools all with hooks=0x0.
-    "ETH:USDC/WETH/500/10,USDT/WETH/500/10,USDC/USDT/100/1,WBTC/WETH/3000/60,DAI/USDC/100/1"
-)
+UNISWAP_V4_POOLS_DEFAULT = ""
+# V4 pool list is deliberately empty by default — the canonical V3 pool
+# names don't map cleanly to V4 (V4 needs fee + tick_spacing + hooks per
+# pool, often differing per real-world deployment). The live group +
+# backfill driver both idle when this list is empty, so the protocol
+# stays dormant until pools are supplied via the UNI_V4_POOLS env var
+# or the /jobs/backfill/uniswap_v4_events endpoint's `pools` arg.
 UNI_V4_POOLS = _parse_uniswap_v4_pools(
     os.environ.get("UNI_V4_POOLS", UNISWAP_V4_POOLS_DEFAULT)
 )
 UNI_V4_ENABLED = os.environ.get("UNI_V4_ENABLED", "1") == "1"
-# Trimmed live-poll subset — keep just the top USDC/WETH pool live to
-# minimise rate-budget impact alongside the V2/V3 pollers.
-UNI_V4_LIVE_POOLS_DEFAULT = "ETH:USDC/WETH/500/10"
+UNI_V4_LIVE_POOLS_DEFAULT = ""
 UNI_V4_LIVE_POOLS = _parse_uniswap_v4_pools(
     os.environ.get("UNI_V4_LIVE_POOLS", UNI_V4_LIVE_POOLS_DEFAULT)
 )
