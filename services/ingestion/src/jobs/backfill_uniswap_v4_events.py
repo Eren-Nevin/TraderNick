@@ -24,6 +24,7 @@ def _on_sigterm(*_):
 def _utcnow(): return datetime.now(timezone.utc).replace(tzinfo=None)
 def _parse_iso(s): return datetime.fromisoformat(s.replace("Z", "")).replace(tzinfo=None)
 def _iso_z(dt): return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+def _sql_dt(dt): return dt.strftime("%Y-%m-%d %H:%M:%S")  # CH DateTime literal
 
 
 async def _load_job(job_id):
@@ -118,7 +119,7 @@ async def main(job_id):
                 where = (f"chain = '{safe_ident(c)}' AND symbol0 = '{safe_ident(s0)}'"
                          f" AND symbol1 = '{safe_ident(s1)}' AND fee = {int(fee)}"
                          f" AND tick_spacing = {int(ts)}"
-                         f" AND time >= '{_iso_z(since)}' AND time <  '{_iso_z(until)}'")
+                         f" AND time >= '{_sql_dt(since)}' AND time <  '{_sql_dt(until)}'")
                 log.info("force purge: %s WHERE %s", table, where)
                 await ch.command(f"ALTER TABLE {table} DELETE WHERE {where}")
 

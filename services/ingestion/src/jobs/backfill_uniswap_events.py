@@ -53,6 +53,11 @@ def _iso_z(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def _sql_dt(dt: datetime) -> str:
+    """CH DateTime literal — space separator, no Z suffix."""
+    return dt.strftime("%Y-%m-%d %H:%M:%S")
+
+
 async def _load_job(job_id: str) -> dict:
     ch = await async_client()
     rows = await ch.query(
@@ -186,8 +191,8 @@ async def main(job_id: str):
                     f" AND symbol0 = '{safe_ident(sym0)}'"
                     f" AND symbol1 = '{safe_ident(sym1)}'"
                     f" AND fee_tier = {int(fee)}"
-                    f" AND time >= '{_iso_z(since)}'"
-                    f" AND time <  '{_iso_z(until)}'"
+                    f" AND time >= '{_sql_dt(since)}'"
+                    f" AND time <  '{_sql_dt(until)}'"
                 )
                 log.info("force purge: ALTER %s DELETE %s", table, where)
                 await ch.command(f"ALTER TABLE {table} DELETE WHERE {where}")
