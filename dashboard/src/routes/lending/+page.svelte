@@ -20,12 +20,18 @@
     ...SPARK_CHART_KINDS, ...MORPHO_CHART_KINDS
   ];
 
+  // Default to the USDC+USDT compound token group on every lending chart —
+  // matches how stablecoin TVL is usually read (combined, not single-asset).
+  // The group resolves server-side via token_group=USDC+USDT on the AAVE /
+  // Morpho / Spark aggregate endpoints.
+  const LENDING_DEFAULT_TOKEN = 'USDC+USDT';
+
   function defaultLayout(): ChartInstanceT[] {
-    // One chart per AAVE event type, all pinned to ETH/USDC by default —
-    // the row layout means 4 charts fit on row 1 (3 in row 2) at 4×4. The
-    // user can swap token/chain per chart.
+    // One chart per AAVE event type, all on ETH and the USDC+USDT group by
+    // default — the row layout means 4 charts fit on row 1 (3 in row 2) at
+    // 4×4. The user can swap token/chain per chart.
     return AAVE_CHART_KINDS.map((kind) => {
-      const inst = newChartInstance(kind, { token: 'USDC', chain: 'ETH' });
+      const inst = newChartInstance(kind, { token: LENDING_DEFAULT_TOKEN, chain: 'ETH' });
       inst.interval = '4h';
       return inst;
     });
@@ -49,6 +55,7 @@
     storageKey="tradernick:lending:layout:v1"
     availableKinds={AVAILABLE_KINDS}
     defaultChain="ETH"
+    defaultToken={LENDING_DEFAULT_TOKEN}
     {defaultLayout}
   />
 
