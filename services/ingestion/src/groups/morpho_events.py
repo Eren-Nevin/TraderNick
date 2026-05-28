@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from defistream import AsyncDeFiStream
 import config
 from clickhouse import MORPHO_EVENTS, async_client
+from gap_fill import latest_time, resolve_since, run_chunked
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [morpho_events] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -38,20 +39,7 @@ async def fetch_and_insert(ds, *, chain, event, since, until) -> int:
     raise last_exc
 
 
-async def main():
-    if not config.DEFISTREAM_API_KEY: log.error("DEFISTREAM_API_KEY not set"); sys.exit(2)
-    if not config.MORPHO_EVENTS_ENABLED:
-        log.info("MORPHO_EVENTS_ENABLED=0; idling")
-        while True: await asyncio.sleep(3600)
-    chains = config.MORPHO_CHAINS
-    if not chains:
-        log.info("no MORPHO_CHAINS; idling")
-        while True: await asyncio.sleep(3600)
-    calls = [(c, ev) for c in chains for ev in MORPHO_EVENTS]
-    ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
-    sem = asyncio.Semaphore(TICK_CONCURRENCY)
-    log.info("polling morpho chains=%s -> %d calls/tick (every %ss, overlap=%dm)",
-             chains, len(calls), POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES)
+async def live_loop(ds, calls, sem):
     while True:
         tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
         now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -65,6 +53,59 @@ async def main():
                     log.exception("%s/%s fetch failed: %s", chain, ev, exc)
         await asyncio.gather(*(_one(*c) for c in calls))
         await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
+
+
+async def gap_fill_task(ds, chains, sem, t_start):
+    """Patch [last_seen, t_start] per (chain, event) so a docker restart
+    doesn't leave holes. Runs concurrently with the live loop — t_start
+    is captured BEFORE the live loop starts so the live loop's overlap
+    window already covers [t_start, now] and no race opens up."""
+    ch = await async_client()
+    async def _one(chain, event):
+        _method, table, _cols, _tf = MORPHO_EVENTS[event]
+        last_seen = await latest_time(
+            ch, table=table,
+            where="chain = {chain:String}",
+            parameters={"chain": chain},
+        )
+        since = resolve_since(last_seen, t_start=t_start)
+        if since >= t_start:
+            return
+        label = f"morpho_events/{chain}/{event}"
+        log.info("%s gap-fill since=%s until=%s (last_seen=%s)", label, since, t_start, last_seen)
+        async def call(s, u):
+            async with sem:
+                return await fetch_and_insert(ds, chain=chain, event=event, since=s, until=u)
+        total = await run_chunked(label=label, since=since, until=t_start, call=call)
+        log.info("%s gap-fill done total_rows=%d", label, total)
+    await asyncio.gather(
+        *(_one(c, ev) for c in chains for ev in MORPHO_EVENTS),
+        return_exceptions=True,
+    )
+
+
+async def main():
+    if not config.DEFISTREAM_API_KEY: log.error("DEFISTREAM_API_KEY not set"); sys.exit(2)
+    if not config.MORPHO_EVENTS_ENABLED:
+        log.info("MORPHO_EVENTS_ENABLED=0; idling")
+        while True: await asyncio.sleep(3600)
+    chains = config.MORPHO_CHAINS
+    if not chains:
+        log.info("no MORPHO_CHAINS; idling")
+        while True: await asyncio.sleep(3600)
+    calls = [(c, ev) for c in chains for ev in MORPHO_EVENTS]
+    ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
+    sem = asyncio.Semaphore(TICK_CONCURRENCY)
+    # Capture restart-time BEFORE the live loop spins up. gap_fill_task
+    # patches up to this instant; live_loop covers anything after it via
+    # its normal POLL_OVERLAP_MINUTES window — no race between the two.
+    t_start = datetime.now(timezone.utc).replace(tzinfo=None)
+    log.info("polling morpho chains=%s -> %d calls/tick (every %ss, overlap=%dm) + gap-fill from watermark",
+             chains, len(calls), POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES)
+    await asyncio.gather(
+        live_loop(ds, calls, sem),
+        gap_fill_task(ds, chains, sem, t_start),
+    )
 
 
 if __name__ == "__main__":

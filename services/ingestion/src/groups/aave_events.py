@@ -31,6 +31,7 @@ from defistream import AsyncDeFiStream
 
 import config
 from clickhouse import AAVE_EVENTS, async_client
+from gap_fill import latest_time, resolve_since, run_chunked
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [aave_events] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -105,32 +106,59 @@ async def main():
     calls = _plan_calls(chains, config.AAVE_ETH_MARKETS)
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     sem = asyncio.Semaphore(TICK_CONCURRENCY)
+    t_start = datetime.now(timezone.utc).replace(tzinfo=None)
     log.info(
-        "polling aave_v3 chains=%s eth_markets=%s -> %d calls/tick (concurrency=%d) every %ss (overlap=%dm)",
+        "polling aave_v3 chains=%s eth_markets=%s -> %d calls/tick (concurrency=%d) every %ss (overlap=%dm) + gap-fill from watermark",
         chains, config.AAVE_ETH_MARKETS, len(calls), TICK_CONCURRENCY,
         POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES,
     )
 
-    while True:
-        tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
+    async def live_loop():
+        while True:
+            tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
 
+            async def _one(chain, market, event):
+                async with sem:
+                    try:
+                        n = await fetch_and_insert(
+                            ds, chain=chain, eth_market=market, event=event,
+                            since=since, until=now,
+                        )
+                        label = f"{chain}" + (f"/{market}" if market else "") + f"/{event}"
+                        log.info("%s rows=%d", label, n)
+                    except Exception as exc:
+                        label = f"{chain}" + (f"/{market}" if market else "") + f"/{event}"
+                        log.exception("%s fetch failed: %s", label, exc)
+
+            await asyncio.gather(*(_one(*c) for c in calls))
+            await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
+
+    async def gap_fill_task():
+        ch = await async_client()
         async def _one(chain, market, event):
-            async with sem:
-                try:
-                    n = await fetch_and_insert(
-                        ds, chain=chain, eth_market=market, event=event,
-                        since=since, until=now,
+            _method, table, _cols, _tf = AAVE_EVENTS[event]
+            last_seen = await latest_time(
+                ch, table=table,
+                where="chain = {chain:String} AND eth_market = {market:String}",
+                parameters={"chain": chain, "market": market},
+            )
+            since = resolve_since(last_seen, t_start=t_start)
+            if since >= t_start:
+                return
+            label = "aave_events/" + chain + (f"/{market}" if market else "") + f"/{event}"
+            log.info("%s gap-fill since=%s until=%s (last_seen=%s)", label, since, t_start, last_seen)
+            async def call(s, u):
+                async with sem:
+                    return await fetch_and_insert(
+                        ds, chain=chain, eth_market=market, event=event, since=s, until=u,
                     )
-                    label = f"{chain}" + (f"/{market}" if market else "") + f"/{event}"
-                    log.info("%s rows=%d", label, n)
-                except Exception as exc:
-                    label = f"{chain}" + (f"/{market}" if market else "") + f"/{event}"
-                    log.exception("%s fetch failed: %s", label, exc)
+            total = await run_chunked(label=label, since=since, until=t_start, call=call)
+            log.info("%s gap-fill done total_rows=%d", label, total)
+        await asyncio.gather(*(_one(*c) for c in calls), return_exceptions=True)
 
-        await asyncio.gather(*(_one(*c) for c in calls))
-        await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
+    await asyncio.gather(live_loop(), gap_fill_task())
 
 
 if __name__ == "__main__":
