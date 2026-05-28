@@ -1157,3 +1157,271 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v4_liquidations
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (chain, debt_token, time, tx_id, log_index);
+
+-- ---------------------------------------------------------------------------
+-- Morpho events (ETH + BASE)
+-- ---------------------------------------------------------------------------
+-- Morpho Blue's isolated-market architecture: each (loan_token, collateral_
+-- token, oracle, irm, lltv) tuple is hashed into a market_id (32-byte) that
+-- uniquely identifies an isolated lending market. Supply/withdraw/borrow/
+-- repay events carry market_id + assets + shares + token. Collateral events
+-- have no shares (collateral isn't share-accounted). Liquidations have a
+-- rich shape with repaid + seized + bad-debt amounts. Skip flashloans —
+-- DeFiStream's decode worker is broken for that event today.
+
+CREATE TABLE IF NOT EXISTS tradernick.morpho_supplies
+(
+    chain        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market_id    String             CODEC(ZSTD(3)),
+    caller       String             CODEC(ZSTD(3)),
+    on_behalf    String             CODEC(ZSTD(3)),
+    token        LowCardinality(String),
+    assets       Float64            CODEC(Gorilla, ZSTD(3)),
+    shares       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.morpho_withdrawals
+(
+    chain        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market_id    String             CODEC(ZSTD(3)),
+    caller       String             CODEC(ZSTD(3)),
+    on_behalf    String             CODEC(ZSTD(3)),
+    receiver     String             CODEC(ZSTD(3)),
+    token        LowCardinality(String),
+    assets       Float64            CODEC(Gorilla, ZSTD(3)),
+    shares       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.morpho_borrows
+(
+    chain        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market_id    String             CODEC(ZSTD(3)),
+    caller       String             CODEC(ZSTD(3)),
+    on_behalf    String             CODEC(ZSTD(3)),
+    receiver     String             CODEC(ZSTD(3)),
+    token        LowCardinality(String),
+    assets       Float64            CODEC(Gorilla, ZSTD(3)),
+    shares       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.morpho_repays
+(
+    chain        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market_id    String             CODEC(ZSTD(3)),
+    caller       String             CODEC(ZSTD(3)),
+    on_behalf    String             CODEC(ZSTD(3)),
+    token        LowCardinality(String),
+    assets       Float64            CODEC(Gorilla, ZSTD(3)),
+    shares       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.morpho_supply_collaterals
+(
+    chain        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market_id    String             CODEC(ZSTD(3)),
+    caller       String             CODEC(ZSTD(3)),
+    on_behalf    String             CODEC(ZSTD(3)),
+    token        LowCardinality(String),
+    assets       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.morpho_withdraw_collaterals
+(
+    chain        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market_id    String             CODEC(ZSTD(3)),
+    caller       String             CODEC(ZSTD(3)),
+    on_behalf    String             CODEC(ZSTD(3)),
+    receiver     String             CODEC(ZSTD(3)),
+    token        LowCardinality(String),
+    assets       Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.morpho_liquidations
+(
+    chain             LowCardinality(String),
+    time              DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number      UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id             String             CODEC(ZSTD(3)),
+    log_index         UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market_id         String             CODEC(ZSTD(3)),
+    caller            String             CODEC(ZSTD(3)),
+    borrower          String             CODEC(ZSTD(3)),
+    loan_token        LowCardinality(String),
+    collateral_token  LowCardinality(String),
+    repaid_assets     Float64            CODEC(Gorilla, ZSTD(3)),
+    repaid_shares     Float64            CODEC(Gorilla, ZSTD(3)),
+    seized_assets     Float64            CODEC(Gorilla, ZSTD(3)),
+    bad_debt_assets   Float64            CODEC(Gorilla, ZSTD(3)),
+    bad_debt_shares   Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd         Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at       DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, loan_token, time, tx_id, log_index);
+
+-- ---------------------------------------------------------------------------
+-- Spark events (ETH only)
+-- ---------------------------------------------------------------------------
+-- Spark is a Maker/Sky-managed fork of AAVE V3 — same 6-event taxonomy and
+-- per-event shape minus the eth_market axis (Spark has a single market).
+
+CREATE TABLE IF NOT EXISTS tradernick.spark_deposits
+(
+    chain         LowCardinality(String),
+    time          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id         String             CODEC(ZSTD(3)),
+    log_index     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    user          String             CODEC(ZSTD(3)),
+    token         LowCardinality(String),
+    amount        Float64            CODEC(Gorilla, ZSTD(3)),
+    on_behalf_of  String             CODEC(ZSTD(3)),
+    referral_code UInt32             CODEC(T64, ZSTD(3)),
+    value_usd     Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.spark_withdrawals
+(
+    chain        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    user         String             CODEC(ZSTD(3)),
+    token        LowCardinality(String),
+    amount       Float64            CODEC(Gorilla, ZSTD(3)),
+    recipient    String             CODEC(ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.spark_borrows
+(
+    chain              LowCardinality(String),
+    time               DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number       UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id              String             CODEC(ZSTD(3)),
+    log_index          UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    user               String             CODEC(ZSTD(3)),
+    token              LowCardinality(String),
+    amount             Float64            CODEC(Gorilla, ZSTD(3)),
+    on_behalf_of       String             CODEC(ZSTD(3)),
+    interest_rate_mode UInt8              CODEC(T64, ZSTD(3)),
+    borrow_rate        Float64            CODEC(Gorilla, ZSTD(3)),
+    referral_code      UInt32             CODEC(T64, ZSTD(3)),
+    value_usd          Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at        DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.spark_repays
+(
+    chain        LowCardinality(String),
+    time         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id        String             CODEC(ZSTD(3)),
+    log_index    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    user         String             CODEC(ZSTD(3)),
+    token        LowCardinality(String),
+    amount       Float64            CODEC(Gorilla, ZSTD(3)),
+    repayer      String             CODEC(ZSTD(3)),
+    use_a_tokens UInt8              CODEC(T64, ZSTD(3)),
+    value_usd    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.spark_flashloans
+(
+    chain              LowCardinality(String),
+    time               DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number       UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id              String             CODEC(ZSTD(3)),
+    log_index          UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    user               String             CODEC(ZSTD(3)),
+    token              LowCardinality(String),
+    amount             Float64            CODEC(Gorilla, ZSTD(3)),
+    target             String             CODEC(ZSTD(3)),
+    interest_rate_mode UInt8              CODEC(T64, ZSTD(3)),
+    premium            Float64            CODEC(Gorilla, ZSTD(3)),
+    referral_code      UInt32             CODEC(T64, ZSTD(3)),
+    value_usd          Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at        DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, token, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.spark_liquidations
+(
+    chain                        LowCardinality(String),
+    time                         DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number                 UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id                        String             CODEC(ZSTD(3)),
+    log_index                    UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    owner                        String             CODEC(ZSTD(3)),
+    liquidator                   String             CODEC(ZSTD(3)),
+    debt_token                   LowCardinality(String),
+    debt_to_cover                Float64            CODEC(Gorilla, ZSTD(3)),
+    collateral_token             LowCardinality(String),
+    liquidated_collateral_amount Float64            CODEC(Gorilla, ZSTD(3)),
+    receive_a_token              UInt8              CODEC(T64, ZSTD(3)),
+    value_usd                    Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at                  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, debt_token, time, tx_id, log_index);

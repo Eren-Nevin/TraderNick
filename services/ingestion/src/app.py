@@ -31,6 +31,8 @@ from jobs.manager import (
     JOB_TYPE_BACKFILL_AERO_EVENTS,
     JOB_TYPE_BACKFILL_AERO_BASIC_EVENTS,
     JOB_TYPE_BACKFILL_AAVE_V4_EVENTS,
+    JOB_TYPE_BACKFILL_MORPHO_EVENTS,
+    JOB_TYPE_BACKFILL_SPARK_EVENTS,
     JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS,
     JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS,
     JobManager,
@@ -98,6 +100,8 @@ async def startup(app_, _loop):
         "aero_events",
         "aero_basic_events",
         "aave_v4_events",
+        "morpho_events",
+        "spark_events",
     ])
     app_.ctx.jobs = JobManager()
     try:
@@ -506,6 +510,51 @@ def _extract_aave_v4_events(body):
 @app.post("/jobs/backfill/aave_v4_events")
 async def backfill_aave_v4_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AAVE_V4_EVENTS, _extract_aave_v4_events)
+
+
+_MORPHO_VALID_EVENTS = (
+    "supply", "withdraw", "borrow", "repay",
+    "supply_collateral", "withdraw_collateral", "liquidation",
+)
+
+
+def _extract_morpho_events(body):
+    chains = body.get("chains") or list(config.MORPHO_CHAINS)
+    if not chains or not isinstance(chains, list):
+        return "missing chains (list)", None
+    events = body.get("events") or list(_MORPHO_VALID_EVENTS)
+    if not isinstance(events, list):
+        return "events must be a list", None
+    unknown = [e for e in events if e not in _MORPHO_VALID_EVENTS]
+    if unknown:
+        return f"unknown events: {unknown}", None
+    return None, {"chains": [str(c).upper() for c in chains], "events": list(events)}
+
+
+@app.post("/jobs/backfill/morpho_events")
+async def backfill_morpho_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_MORPHO_EVENTS, _extract_morpho_events)
+
+
+_SPARK_VALID_EVENTS = ("deposit", "withdraw", "borrow", "repay", "flashloan", "liquidation")
+
+
+def _extract_spark_events(body):
+    chains = body.get("chains") or list(config.SPARK_CHAINS)
+    if not chains or not isinstance(chains, list):
+        return "missing chains (list)", None
+    events = body.get("events") or list(_SPARK_VALID_EVENTS)
+    if not isinstance(events, list):
+        return "events must be a list", None
+    unknown = [e for e in events if e not in _SPARK_VALID_EVENTS]
+    if unknown:
+        return f"unknown events: {unknown}", None
+    return None, {"chains": [str(c).upper() for c in chains], "events": list(events)}
+
+
+@app.post("/jobs/backfill/spark_events")
+async def backfill_spark_events(request):
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_SPARK_EVENTS, _extract_spark_events)
 
 
 @app.post("/admin/wallets")

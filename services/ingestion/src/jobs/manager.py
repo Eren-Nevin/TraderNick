@@ -30,6 +30,8 @@ JOB_TYPE_BACKFILL_UNISWAP_V4_EVENTS = "backfill_uniswap_v4_events"
 JOB_TYPE_BACKFILL_AERO_EVENTS = "backfill_aero_events"
 JOB_TYPE_BACKFILL_AERO_BASIC_EVENTS = "backfill_aero_basic_events"
 JOB_TYPE_BACKFILL_AAVE_V4_EVENTS = "backfill_aave_v4_events"
+JOB_TYPE_BACKFILL_MORPHO_EVENTS = "backfill_morpho_events"
+JOB_TYPE_BACKFILL_SPARK_EVENTS = "backfill_spark_events"
 JOB_MODULES = {
     JOB_TYPE_BACKFILL_OHLCV: "jobs.backfill_binance_ohlcv",
     JOB_TYPE_BACKFILL_RAW_TRADES: "jobs.backfill_binance_raw_trades",
@@ -50,6 +52,8 @@ JOB_MODULES = {
     JOB_TYPE_BACKFILL_AERO_EVENTS: "jobs.backfill_aero_events",
     JOB_TYPE_BACKFILL_AERO_BASIC_EVENTS: "jobs.backfill_aero_basic_events",
     JOB_TYPE_BACKFILL_AAVE_V4_EVENTS: "jobs.backfill_aave_v4_events",
+    JOB_TYPE_BACKFILL_MORPHO_EVENTS: "jobs.backfill_morpho_events",
+    JOB_TYPE_BACKFILL_SPARK_EVENTS: "jobs.backfill_spark_events",
 }
 
 

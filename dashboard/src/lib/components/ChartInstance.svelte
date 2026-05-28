@@ -47,6 +47,12 @@
     AAVE_V4_KIND_TO_EVENT,
     AAVE_V4_NET_KIND_TO_EVENTS,
     isAaveV4Kind,
+    MORPHO_KIND_TO_EVENT,
+    MORPHO_NET_KIND_TO_EVENTS,
+    isMorphoKind,
+    SPARK_KIND_TO_EVENT,
+    SPARK_NET_KIND_TO_EVENTS,
+    isSparkKind,
     UNISWAP_KIND_TO_EVENT,
     UNISWAP_NET_KIND_TO_EVENTS,
     isUniswapKind,
@@ -507,7 +513,7 @@
       const ov = [...(instance.overlayTokens ?? [])].sort().join(',');
       return `${instance.kind}|${instance.token}|${instance.interval}|ov:${ov}`;
     }
-    if (isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind)) {
+    if (isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind)) {
       // AAVE charts (single-event + net) depend on chain + token (event_type
       // derived from kind). Either axis may be a group name — fold the
       // group flag into the key so toggling busts the cache. Same shape
@@ -688,6 +694,8 @@
         isAaveKind(instance.kind) ||
         isAaveV2Kind(instance.kind) ||
         isAaveV4Kind(instance.kind) ||
+        isMorphoKind(instance.kind) ||
+        isSparkKind(instance.kind) ||
         isUniswapKind(instance.kind) ||
         isUniswapV2Kind(instance.kind) ||
         isUniswapV4Kind(instance.kind) ||
@@ -715,6 +723,146 @@
 
       let url = '';
       let pickArr: (body: Record<string, unknown>) => AnyDatum[] = () => [];
+      // Morpho chart kinds — ETH + BASE. 7 events including the unique
+      // supply_collateral / withdraw_collateral pair for Morpho Blue's
+      // isolated-market architecture. Same (chain, token) fetch shape.
+      if (isMorphoKind(instance.kind)) {
+        const buildMorphoQs = (event: string) => {
+          const qs = new URLSearchParams({
+            event,
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '5000'
+          });
+          if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
+          else qs.set('chain', instance.chain ?? 'ETH');
+          if (activeTokenGroup !== null) qs.set('token_group', activeTokenGroup);
+          else qs.set('token', instance.token);
+          if (forceFresh) qs.set('fresh', '1');
+          return qs;
+        };
+        const netEvs = MORPHO_NET_KIND_TO_EVENTS[instance.kind];
+        if (netEvs) {
+          const [posEvent, negEvent] = netEvs;
+          const [posRes, negRes] = await Promise.all([
+            queuedFetch(`/api/morpho/aggregate?${buildMorphoQs(posEvent)}`, { signal }),
+            queuedFetch(`/api/morpho/aggregate?${buildMorphoQs(negEvent)}`, { signal })
+          ]);
+          if (!posRes.ok) throw new Error(`${instance.kind} ${posRes.status}`);
+          if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
+          const posBody = await posRes.json();
+          const negBody = await negRes.json();
+          const negByTime = new Map<number, { amount: number; usd: number; count: number }>();
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            negByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd, count: r.count });
+          }
+          const out: Record<string, number>[] = [];
+          const seen = new Set<number>();
+          for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
+            const n = negByTime.get(r.time) ?? { amount: 0, usd: 0, count: 0 };
+            out.push({
+              time: r.time,
+              sum_amount: r.sum_amount - n.amount,
+              sum_value_usd: r.sum_value_usd - n.usd,
+              count: r.count + n.count
+            });
+            seen.add(r.time);
+          }
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            if (seen.has(r.time)) continue;
+            out.push({ time: r.time, sum_amount: -r.sum_amount, sum_value_usd: -r.sum_value_usd, count: r.count });
+          }
+          out.sort((a, b) => a.time - b.time);
+          data = out as unknown as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        const morphoEvent = MORPHO_KIND_TO_EVENT[instance.kind];
+        if (morphoEvent) {
+          const res = await queuedFetch(`/api/morpho/aggregate?${buildMorphoQs(morphoEvent)}`, { signal });
+          if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+          const body = await res.json();
+          data = (body.series ?? []) as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+      }
+      // Spark chart kinds — ETH-only, 6 events (AAVE V3 fork).
+      if (isSparkKind(instance.kind)) {
+        const buildSparkQs = (event: string) => {
+          const qs = new URLSearchParams({
+            event,
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '5000'
+          });
+          if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
+          else qs.set('chain', instance.chain ?? 'ETH');
+          if (activeTokenGroup !== null) qs.set('token_group', activeTokenGroup);
+          else qs.set('token', instance.token);
+          if (forceFresh) qs.set('fresh', '1');
+          return qs;
+        };
+        const netEvs = SPARK_NET_KIND_TO_EVENTS[instance.kind];
+        if (netEvs) {
+          const [posEvent, negEvent] = netEvs;
+          const [posRes, negRes] = await Promise.all([
+            queuedFetch(`/api/spark/aggregate?${buildSparkQs(posEvent)}`, { signal }),
+            queuedFetch(`/api/spark/aggregate?${buildSparkQs(negEvent)}`, { signal })
+          ]);
+          if (!posRes.ok) throw new Error(`${instance.kind} ${posRes.status}`);
+          if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
+          const posBody = await posRes.json();
+          const negBody = await negRes.json();
+          const negByTime = new Map<number, { amount: number; usd: number; count: number }>();
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            negByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd, count: r.count });
+          }
+          const out: Record<string, number>[] = [];
+          const seen = new Set<number>();
+          for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
+            const n = negByTime.get(r.time) ?? { amount: 0, usd: 0, count: 0 };
+            out.push({
+              time: r.time,
+              sum_amount: r.sum_amount - n.amount,
+              sum_value_usd: r.sum_value_usd - n.usd,
+              count: r.count + n.count
+            });
+            seen.add(r.time);
+          }
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            if (seen.has(r.time)) continue;
+            out.push({ time: r.time, sum_amount: -r.sum_amount, sum_value_usd: -r.sum_value_usd, count: r.count });
+          }
+          out.sort((a, b) => a.time - b.time);
+          data = out as unknown as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        const sparkEvent = SPARK_KIND_TO_EVENT[instance.kind];
+        if (sparkEvent) {
+          const res = await queuedFetch(`/api/spark/aggregate?${buildSparkQs(sparkEvent)}`, { signal });
+          if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+          const body = await res.json();
+          data = (body.series ?? []) as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+      }
       // AAVE V4 chart kinds — ETH-only, 5 events (no flashloan). Same
       // (chain, token) fetch shape as V2/V3 minus eth_market.
       if (isAaveV4Kind(instance.kind)) {
@@ -2200,6 +2348,64 @@
             {/each}
           {/if}
         </select>
+      {:else if isMorphoKind(instance.kind)}
+        <!-- Morpho: ETH + BASE. Same token selector pattern as V2/V3.
+             Markets (market_id) are summed across — they aren't a chart
+             dimension in V1. -->
+        <select
+          bind:value={instance.chain}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          {#each ['ETH','BASE'] as c (c)}
+            <option value={c}>{c}</option>
+          {/each}
+        </select>
+        <select
+          value={instance.token}
+          onchange={(e) => (instance.token = e.currentTarget.value)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          <optgroup label="Tokens">
+            {#each ['USDC','USDT','DAI','PYUSD','WETH','WBTC','CBBTC','WSTETH','WEETH'] as t (t)}
+              <option value={t}>{t}</option>
+            {/each}
+            {#if instance.token && !['USDC','USDT','DAI','PYUSD','WETH','WBTC','CBBTC','WSTETH','WEETH'].includes(instance.token) && !tokenGroups.some((g) => g.name === instance.token)}
+              <option value={instance.token}>{instance.token}</option>
+            {/if}
+          </optgroup>
+          {#if tokenGroups.length > 0}
+            <optgroup label="Token group">
+              {#each tokenGroups as g (g.name)}
+                <option value={g.name} title={g.description}>Σ {g.label}</option>
+              {/each}
+            </optgroup>
+          {/if}
+        </select>
+      {:else if isSparkKind(instance.kind)}
+        <!-- Spark: ETH-only (AAVE V3 fork by Sky/Maker). Static ETH chip
+             + token selector identical to V3. -->
+        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">ETH</span>
+        <select
+          value={instance.token}
+          onchange={(e) => (instance.token = e.currentTarget.value)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          <optgroup label="Tokens">
+            {#each ['USDC','USDT','DAI','USDS','WETH','WBTC','WSTETH','WEETH','RETH','SDAI'] as t (t)}
+              <option value={t}>{t}</option>
+            {/each}
+            {#if instance.token && !['USDC','USDT','DAI','USDS','WETH','WBTC','WSTETH','WEETH','RETH','SDAI'].includes(instance.token) && !tokenGroups.some((g) => g.name === instance.token)}
+              <option value={instance.token}>{instance.token}</option>
+            {/if}
+          </optgroup>
+          {#if tokenGroups.length > 0}
+            <optgroup label="Token group">
+              {#each tokenGroups as g (g.name)}
+                <option value={g.name} title={g.description}>Σ {g.label}</option>
+              {/each}
+            </optgroup>
+          {/if}
+        </select>
       {:else if isAaveV4Kind(instance.kind)}
         <!-- AAVE V4: ETH-only (V4 is mainnet-only currently). Static
              chain chip + the same token selector as V2/V3. -->
@@ -2511,7 +2717,7 @@
         <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
         Week lines
       </label>
-      {#if instance.kind === 'transfer' || isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow') || isUniswapV2Kind(instance.kind) || instance.kind === 'uniswap_v4_swap' || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
+      {#if instance.kind === 'transfer' || isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow') || isUniswapV2Kind(instance.kind) || instance.kind === 'uniswap_v4_swap' || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
         <!-- USD ⇆ Amount toggle. For AAVE / Lido the chart shows a single
              series in either mode. For Uniswap (except net_swap_flow which
              is intrinsically directional USD), Amount mode renders TWO
@@ -2940,7 +3146,7 @@
         formatY={transferUseUsd ? fmtUsdAxis : fmtAmountAxis}
         formatTooltip={transferUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
       />
-    {:else if isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind)}
+    {:else if isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={aaveLinesD}

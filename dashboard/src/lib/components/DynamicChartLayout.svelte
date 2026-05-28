@@ -292,8 +292,13 @@
       // transfer kind. Default to the page's preferred chain. valueMode
       // ('usd' / 'amount') is restored if previously set; otherwise default
       // to 'usd' so the chart keeps its old behaviour after migration.
-      // Covers both `aave_*` (V3) and `aave_v2_*` because of the prefix.
+      // Covers both `aave_*` (V3) and `aave_v2_*` / `aave_v4_*`.
       if (inst.kind.startsWith('aave_')) {
+        inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
+      }
+      // Morpho / Spark — same shape (chain + valueMode), separate prefix.
+      if (inst.kind.startsWith('morpho_') || inst.kind.startsWith('spark_')) {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
       }

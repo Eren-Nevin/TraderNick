@@ -26,6 +26,8 @@ GROUP_MODULES = {
     "aero_events": "groups.aero_events",
     "aero_basic_events": "groups.aero_basic_events",
     "aave_v4_events": "groups.aave_v4_events",
+    "morpho_events": "groups.morpho_events",
+    "spark_events": "groups.spark_events",
 }
 
 

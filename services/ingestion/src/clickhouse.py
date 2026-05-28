@@ -1456,3 +1456,259 @@ AAVE_V4_EVENTS = {
     "repay":       ("repays",       "tradernick.aave_v4_repays",       AAVE_V4_REPAYS_COLUMNS,       aave_v4_repays_df_to_rows),
     "liquidation": ("liquidations", "tradernick.aave_v4_liquidations", AAVE_V4_LIQUIDATIONS_COLUMNS, aave_v4_liquidations_df_to_rows),
 }
+
+
+# ---------------------------------------------------------------------------
+# Morpho events (ETH + BASE)
+# ---------------------------------------------------------------------------
+# Morpho Blue's isolated-market architecture: each market_id is a 32-byte
+# hash identifying a unique (loan, collateral, oracle, IRM, lltv) tuple.
+# Supply/withdraw/borrow/repay carry assets + shares; collateral events
+# have no shares. Liquidations have repaid + seized + bad_debt fields.
+# Flashloans are skipped — DeFiStream's decode worker is broken for the
+# event today.
+
+MORPHO_SUPPLIES_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market_id", "caller", "on_behalf", "token", "assets", "shares", "value_usd",
+]
+MORPHO_REPAYS_COLUMNS = MORPHO_SUPPLIES_COLUMNS  # identical shape
+MORPHO_WITHDRAWALS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market_id", "caller", "on_behalf", "receiver",
+    "token", "assets", "shares", "value_usd",
+]
+MORPHO_BORROWS_COLUMNS = MORPHO_WITHDRAWALS_COLUMNS  # same shape
+MORPHO_SUPPLY_COLLATERALS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market_id", "caller", "on_behalf", "token", "assets", "value_usd",
+]
+MORPHO_WITHDRAW_COLLATERALS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market_id", "caller", "on_behalf", "receiver",
+    "token", "assets", "value_usd",
+]
+MORPHO_LIQUIDATIONS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market_id", "caller", "borrower",
+    "loan_token", "collateral_token",
+    "repaid_assets", "repaid_shares", "seized_assets",
+    "bad_debt_assets", "bad_debt_shares",
+    "value_usd",
+]
+
+
+def _morpho_head(r, *, chain):
+    return [
+        chain,
+        _to_naive_utc(r["time"]),
+        int(r["block_number"]),
+        str(r["tx_id"]) if r.get("tx_id") else "",
+        int(r["log_index"]) if r.get("log_index") is not None else 0,
+    ]
+
+
+def _morpho_lend_df_to_rows(df, *, chain, include_receiver, include_shares):
+    """Shared transform for the 4 main lending events (supply/withdraw/
+    borrow/repay). The two collateral events use a similar shape with
+    no shares; the special liquidation event has its own transform."""
+    rows = []
+    for r in df.iter_rows(named=True):
+        row = _morpho_head(r, chain=chain) + [
+            str(r["market_id"]) if r.get("market_id") else "",
+            str(r["caller"]) if r.get("caller") else "",
+            str(r["on_behalf"]) if r.get("on_behalf") else "",
+        ]
+        if include_receiver:
+            row.append(str(r["receiver"]) if r.get("receiver") else "")
+        row.append(str(r["token"]) if r.get("token") else "")
+        row.append(float(r["assets"]) if r.get("assets") is not None else 0.0)
+        if include_shares:
+            row.append(float(r["shares"]) if r.get("shares") is not None else 0.0)
+        row.append(_aave_value_usd(r))
+        rows.append(row)
+    return rows
+
+
+def morpho_supplies_df_to_rows(df, *, chain):     return _morpho_lend_df_to_rows(df, chain=chain, include_receiver=False, include_shares=True)
+def morpho_withdrawals_df_to_rows(df, *, chain):  return _morpho_lend_df_to_rows(df, chain=chain, include_receiver=True,  include_shares=True)
+def morpho_borrows_df_to_rows(df, *, chain):      return _morpho_lend_df_to_rows(df, chain=chain, include_receiver=True,  include_shares=True)
+def morpho_repays_df_to_rows(df, *, chain):       return _morpho_lend_df_to_rows(df, chain=chain, include_receiver=False, include_shares=True)
+def morpho_supply_collaterals_df_to_rows(df, *, chain):  return _morpho_lend_df_to_rows(df, chain=chain, include_receiver=False, include_shares=False)
+def morpho_withdraw_collaterals_df_to_rows(df, *, chain): return _morpho_lend_df_to_rows(df, chain=chain, include_receiver=True, include_shares=False)
+
+
+def morpho_liquidations_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_morpho_head(r, chain=chain) + [
+            str(r["market_id"]) if r.get("market_id") else "",
+            str(r["caller"]) if r.get("caller") else "",
+            str(r["borrower"]) if r.get("borrower") else "",
+            str(r["loan_token"]) if r.get("loan_token") else "",
+            str(r["collateral_token"]) if r.get("collateral_token") else "",
+            float(r["repaid_assets"]) if r.get("repaid_assets") is not None else 0.0,
+            float(r["repaid_shares"]) if r.get("repaid_shares") is not None else 0.0,
+            float(r["seized_assets"]) if r.get("seized_assets") is not None else 0.0,
+            float(r["bad_debt_assets"]) if r.get("bad_debt_assets") is not None else 0.0,
+            float(r["bad_debt_shares"]) if r.get("bad_debt_shares") is not None else 0.0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+MORPHO_EVENTS = {
+    "supply":             ("supplies",             "tradernick.morpho_supplies",             MORPHO_SUPPLIES_COLUMNS,             morpho_supplies_df_to_rows),
+    "withdraw":           ("withdrawals",          "tradernick.morpho_withdrawals",          MORPHO_WITHDRAWALS_COLUMNS,          morpho_withdrawals_df_to_rows),
+    "borrow":             ("borrows",              "tradernick.morpho_borrows",              MORPHO_BORROWS_COLUMNS,              morpho_borrows_df_to_rows),
+    "repay":              ("repays",               "tradernick.morpho_repays",               MORPHO_REPAYS_COLUMNS,               morpho_repays_df_to_rows),
+    "supply_collateral":  ("supply_collaterals",   "tradernick.morpho_supply_collaterals",   MORPHO_SUPPLY_COLLATERALS_COLUMNS,   morpho_supply_collaterals_df_to_rows),
+    "withdraw_collateral":("withdraw_collaterals", "tradernick.morpho_withdraw_collaterals", MORPHO_WITHDRAW_COLLATERALS_COLUMNS, morpho_withdraw_collaterals_df_to_rows),
+    "liquidation":        ("liquidations",         "tradernick.morpho_liquidations",         MORPHO_LIQUIDATIONS_COLUMNS,         morpho_liquidations_df_to_rows),
+}
+
+
+# ---------------------------------------------------------------------------
+# Spark events (ETH only)
+# ---------------------------------------------------------------------------
+# Spark is an AAVE V3 fork by Sky/Maker — same 6-event taxonomy and shapes
+# as V3 minus the eth_market axis (single market per chain).
+
+SPARK_DEPOSITS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "user", "token", "amount", "on_behalf_of", "referral_code", "value_usd",
+]
+SPARK_WITHDRAWALS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "user", "token", "amount", "recipient", "value_usd",
+]
+SPARK_BORROWS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "user", "token", "amount", "on_behalf_of",
+    "interest_rate_mode", "borrow_rate", "referral_code", "value_usd",
+]
+SPARK_REPAYS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "user", "token", "amount", "repayer", "use_a_tokens", "value_usd",
+]
+SPARK_FLASHLOANS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "user", "token", "amount", "target",
+    "interest_rate_mode", "premium", "referral_code", "value_usd",
+]
+SPARK_LIQUIDATIONS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "owner", "liquidator",
+    "debt_token", "debt_to_cover",
+    "collateral_token", "liquidated_collateral_amount",
+    "receive_a_token", "value_usd",
+]
+
+
+def _spark_head(r, *, chain):
+    return [
+        chain,
+        _to_naive_utc(r["time"]),
+        int(r["block_number"]),
+        str(r["tx_id"]) if r.get("tx_id") else "",
+        int(r["log_index"]) if r.get("log_index") is not None else 0,
+    ]
+
+
+def spark_deposits_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_spark_head(r, chain=chain) + [
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]) if r.get("amount") is not None else 0.0,
+            str(r["on_behalf_of"]) if r.get("on_behalf_of") else "",
+            int(r["referral_code"]) if r.get("referral_code") is not None else 0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def spark_withdrawals_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_spark_head(r, chain=chain) + [
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]) if r.get("amount") is not None else 0.0,
+            str(r["recipient"]) if r.get("recipient") else "",
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def spark_borrows_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_spark_head(r, chain=chain) + [
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]) if r.get("amount") is not None else 0.0,
+            str(r["on_behalf_of"]) if r.get("on_behalf_of") else "",
+            int(r["interest_rate_mode"]) if r.get("interest_rate_mode") is not None else 0,
+            float(r["borrow_rate"]) if r.get("borrow_rate") is not None else 0.0,
+            int(r["referral_code"]) if r.get("referral_code") is not None else 0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def spark_repays_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_spark_head(r, chain=chain) + [
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]) if r.get("amount") is not None else 0.0,
+            str(r["repayer"]) if r.get("repayer") else "",
+            _aave_bool(r, "use_a_tokens"),
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def spark_flashloans_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_spark_head(r, chain=chain) + [
+            str(r["user"]) if r.get("user") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["amount"]) if r.get("amount") is not None else 0.0,
+            str(r["target"]) if r.get("target") else "",
+            int(r["interest_rate_mode"]) if r.get("interest_rate_mode") is not None else 0,
+            float(r["premium"]) if r.get("premium") is not None else 0.0,
+            int(r["referral_code"]) if r.get("referral_code") is not None else 0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def spark_liquidations_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_spark_head(r, chain=chain) + [
+            str(r["owner"]) if r.get("owner") else "",
+            str(r["liquidator"]) if r.get("liquidator") else "",
+            str(r["debt_token"]) if r.get("debt_token") else "",
+            float(r["debt_to_cover"]) if r.get("debt_to_cover") is not None else 0.0,
+            str(r["collateral_token"]) if r.get("collateral_token") else "",
+            float(r["liquidated_collateral_amount"]) if r.get("liquidated_collateral_amount") is not None else 0.0,
+            _aave_bool(r, "receive_a_token"),
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+SPARK_EVENTS = {
+    "deposit":     ("deposits",     "tradernick.spark_deposits",     SPARK_DEPOSITS_COLUMNS,     spark_deposits_df_to_rows),
+    "withdraw":    ("withdrawals",  "tradernick.spark_withdrawals",  SPARK_WITHDRAWALS_COLUMNS,  spark_withdrawals_df_to_rows),
+    "borrow":      ("borrows",      "tradernick.spark_borrows",      SPARK_BORROWS_COLUMNS,      spark_borrows_df_to_rows),
+    "repay":       ("repays",       "tradernick.spark_repays",       SPARK_REPAYS_COLUMNS,       spark_repays_df_to_rows),
+    "flashloan":   ("flashloans",   "tradernick.spark_flashloans",   SPARK_FLASHLOANS_COLUMNS,   spark_flashloans_df_to_rows),
+    "liquidation": ("liquidations", "tradernick.spark_liquidations", SPARK_LIQUIDATIONS_COLUMNS, spark_liquidations_df_to_rows),
+}

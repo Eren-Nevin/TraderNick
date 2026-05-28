@@ -278,6 +278,24 @@ export type ChartKind =
   | 'aave_v4_repay'
   | 'aave_v4_net_borrow'
   | 'aave_v4_liquidation'
+  | 'morpho_supply'
+  | 'morpho_withdraw'
+  | 'morpho_net_supply'
+  | 'morpho_borrow'
+  | 'morpho_repay'
+  | 'morpho_net_borrow'
+  | 'morpho_supply_collateral'
+  | 'morpho_withdraw_collateral'
+  | 'morpho_net_collateral'
+  | 'morpho_liquidation'
+  | 'spark_deposit'
+  | 'spark_withdraw'
+  | 'spark_net_deposit'
+  | 'spark_borrow'
+  | 'spark_repay'
+  | 'spark_net_borrow'
+  | 'spark_flashloan'
+  | 'spark_liquidation'
   | 'uniswap_v2_swap'
   | 'uniswap_v2_deposit'
   | 'uniswap_v2_withdraw'
@@ -346,6 +364,24 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   aave_v4_repay: 'AAVE V4 Repays',
   aave_v4_net_borrow: 'AAVE V4 Net Borrow',
   aave_v4_liquidation: 'AAVE V4 Liquidations',
+  morpho_supply: 'Morpho Supplies',
+  morpho_withdraw: 'Morpho Withdrawals',
+  morpho_net_supply: 'Morpho Net Supply',
+  morpho_borrow: 'Morpho Borrows',
+  morpho_repay: 'Morpho Repays',
+  morpho_net_borrow: 'Morpho Net Borrow',
+  morpho_supply_collateral: 'Morpho Supply Collateral',
+  morpho_withdraw_collateral: 'Morpho Withdraw Collateral',
+  morpho_net_collateral: 'Morpho Net Collateral',
+  morpho_liquidation: 'Morpho Liquidations',
+  spark_deposit: 'Spark Deposits',
+  spark_withdraw: 'Spark Withdrawals',
+  spark_net_deposit: 'Spark Net Deposit',
+  spark_borrow: 'Spark Borrows',
+  spark_repay: 'Spark Repays',
+  spark_net_borrow: 'Spark Net Borrow',
+  spark_flashloan: 'Spark Flash Loans',
+  spark_liquidation: 'Spark Liquidations',
   uniswap_v2_swap: 'Uniswap V2 Swaps',
   uniswap_v2_deposit: 'Uniswap V2 Deposits',
   uniswap_v2_withdraw: 'Uniswap V2 Withdrawals',
@@ -475,6 +511,69 @@ export const AAVE_V4_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, stri
 };
 export function isAaveV4Kind(kind: ChartKind): boolean {
   return AAVE_V4_KIND_TO_EVENT[kind] !== undefined || AAVE_V4_NET_KIND_TO_EVENTS[kind] !== undefined;
+}
+
+/** Morpho chart kinds. 7 single-event + 3 net = 10 kinds. Morpho Blue's
+ *  isolated-market architecture surfaces separate supply (lending) vs
+ *  supply_collateral (collateral posting) events — the Net Supply chart
+ *  reads supplies vs withdrawals; Net Collateral reads supply_collateral
+ *  vs withdraw_collateral. ETH + BASE only. */
+export const MORPHO_CHART_KINDS: ChartKind[] = [
+  'morpho_supply',
+  'morpho_withdraw',
+  'morpho_net_supply',
+  'morpho_borrow',
+  'morpho_repay',
+  'morpho_net_borrow',
+  'morpho_supply_collateral',
+  'morpho_withdraw_collateral',
+  'morpho_net_collateral',
+  'morpho_liquidation'
+];
+export const MORPHO_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  morpho_supply: 'supply',
+  morpho_withdraw: 'withdraw',
+  morpho_borrow: 'borrow',
+  morpho_repay: 'repay',
+  morpho_supply_collateral: 'supply_collateral',
+  morpho_withdraw_collateral: 'withdraw_collateral',
+  morpho_liquidation: 'liquidation'
+};
+export const MORPHO_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  morpho_net_supply: ['supply', 'withdraw'],
+  morpho_net_borrow: ['borrow', 'repay'],
+  morpho_net_collateral: ['supply_collateral', 'withdraw_collateral']
+};
+export function isMorphoKind(kind: ChartKind): boolean {
+  return MORPHO_KIND_TO_EVENT[kind] !== undefined || MORPHO_NET_KIND_TO_EVENTS[kind] !== undefined;
+}
+
+/** Spark chart kinds (AAVE V3 fork by Sky/Maker, ETH-only).
+ *  Same 6-event + 2-net taxonomy as AAVE V3 minus the eth_market axis. */
+export const SPARK_CHART_KINDS: ChartKind[] = [
+  'spark_deposit',
+  'spark_withdraw',
+  'spark_net_deposit',
+  'spark_borrow',
+  'spark_repay',
+  'spark_net_borrow',
+  'spark_flashloan',
+  'spark_liquidation'
+];
+export const SPARK_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  spark_deposit: 'deposit',
+  spark_withdraw: 'withdraw',
+  spark_borrow: 'borrow',
+  spark_repay: 'repay',
+  spark_flashloan: 'flashloan',
+  spark_liquidation: 'liquidation'
+};
+export const SPARK_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  spark_net_deposit: ['deposit', 'withdraw'],
+  spark_net_borrow: ['borrow', 'repay']
+};
+export function isSparkKind(kind: ChartKind): boolean {
+  return SPARK_KIND_TO_EVENT[kind] !== undefined || SPARK_NET_KIND_TO_EVENTS[kind] !== undefined;
 }
 
 /** Uniswap chart kinds collected for the DeX page (default layout order). */
@@ -644,6 +743,8 @@ export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('aave_v2_')) return 'AAVE V2';
   if (kind.startsWith('aave_v4_')) return 'AAVE V4';
   if (kind.startsWith('aave_')) return 'AAVE V3';
+  if (kind.startsWith('morpho_')) return 'Morpho';
+  if (kind.startsWith('spark_')) return 'Spark';
   if (kind.startsWith('uniswap_v2_')) return 'Uniswap V2';
   if (kind.startsWith('uniswap_v4_')) return 'Uniswap V4';
   if (kind.startsWith('uniswap_')) return 'Uniswap V3';
@@ -674,6 +775,8 @@ const _GROUP_ORDER: Record<string, number> = {
   'AAVE V2':    10,
   'AAVE V3':    11,
   'AAVE V4':    12,
+  'Spark':      13,
+  'Morpho':     14,
   'Lido':       20,
   'Uniswap V2': 30,
   'Uniswap V3': 31,
@@ -951,6 +1054,16 @@ export function newChartInstance(
   }
   if (isAaveV4Kind(kind)) {
     // V4 is mainnet-only for now; default ETH.
+    base.chain = 'ETH';
+    base.valueMode = 'usd';
+  }
+  if (isMorphoKind(kind)) {
+    // Morpho is ETH + BASE.
+    base.chain = defaults.chain ?? 'ETH';
+    base.valueMode = 'usd';
+  }
+  if (isSparkKind(kind)) {
+    // Spark is ETH-only.
     base.chain = 'ETH';
     base.valueMode = 'usd';
   }

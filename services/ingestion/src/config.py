@@ -183,6 +183,14 @@ AAVE_V2_CHAINS = _parse_csv_list(os.environ.get("AAVE_V2_CHAINS", "ETH,POLYGON")
 AAVE_V4_EVENTS_ENABLED = os.environ.get("AAVE_V4_EVENTS_ENABLED", "1") == "1"
 AAVE_V4_CHAINS = _parse_csv_list(os.environ.get("AAVE_V4_CHAINS", "ETH"))
 
+# --- Morpho events (ETH + BASE) -------------------------------------------
+MORPHO_EVENTS_ENABLED = os.environ.get("MORPHO_EVENTS_ENABLED", "1") == "1"
+MORPHO_CHAINS = _parse_csv_list(os.environ.get("MORPHO_CHAINS", "ETH,BASE"))
+
+# --- Spark events (ETH only) ----------------------------------------------
+SPARK_EVENTS_ENABLED = os.environ.get("SPARK_EVENTS_ENABLED", "1") == "1"
+SPARK_CHAINS = _parse_csv_list(os.environ.get("SPARK_CHAINS", "ETH"))
+
 
 # --- Uniswap V2 pools ------------------------------------------------------
 # V2 has no fee tier (fixed 0.30%), so the pool grammar is
