@@ -355,11 +355,11 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   uniswap_v4_withdraw: 'Uniswap V4 Withdrawals',
   uniswap_v4_initialize: 'Uniswap V4 Pool Initializations',
   uniswap_v4_net_liquidity: 'Uniswap V4 Net Liquidity',
-  aero_swap: 'Aerodrome Swaps',
-  aero_deposit: 'Aerodrome Deposits',
-  aero_withdraw: 'Aerodrome Withdrawals',
-  aero_collect: 'Aerodrome Collects',
-  aero_net_liquidity: 'Aerodrome Net Liquidity',
+  aero_swap: 'Aerodrome CL Swaps',
+  aero_deposit: 'Aerodrome CL Deposits',
+  aero_withdraw: 'Aerodrome CL Withdrawals',
+  aero_collect: 'Aerodrome CL Collects',
+  aero_net_liquidity: 'Aerodrome CL Net Liquidity',
   aero_basic_swap: 'Aerodrome Basic Swaps',
   aero_basic_deposit: 'Aerodrome Basic Deposits',
   aero_basic_withdraw: 'Aerodrome Basic Withdrawals',
@@ -649,7 +649,7 @@ export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('uniswap_')) return 'Uniswap V3';
   if (kind.startsWith('lido_')) return 'Lido';
   if (kind.startsWith('aero_basic_')) return 'Aerodrome Basic';
-  if (kind.startsWith('aero_')) return 'Aerodrome';
+  if (kind.startsWith('aero_')) return 'Aerodrome CL';
   return null;
 }
 
@@ -678,7 +678,7 @@ const _GROUP_ORDER: Record<string, number> = {
   'Uniswap V2': 30,
   'Uniswap V3': 31,
   'Uniswap V4': 32,
-  'Aerodrome':  40,
+  'Aerodrome CL':    40,
   'Aerodrome Basic': 41
 };
 export function chartKindGroupOrder(group: string): number {
