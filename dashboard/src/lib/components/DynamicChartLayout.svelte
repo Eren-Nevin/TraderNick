@@ -76,6 +76,11 @@
   // chart is appended to the end. Set by the per-chart "+" hover button so
   // the menu can be reused with the right insertion target.
   let insertIdx = $state<number | null>(null);
+  // When set, the next pick from the insert menu *replaces* the instance at
+  // this index instead of inserting. Set by clicking a chart's title (which
+  // calls openSwapAt). Mutually exclusive with insertIdx — the same menu
+  // serves both modes since the catalog of pickable kinds is identical.
+  let swapIdx = $state<number | null>(null);
   // Viewport coords of the "+" that triggered the menu, used so the menu can
   // appear next to the click instead of always at the bottom pad. null when
   // the menu was triggered from the bottom "+ Insert Chart" pad.
@@ -99,12 +104,14 @@
     if (instances.length >= MAX_CHARTS) return;
     insertOpen = !insertOpen;
     insertIdx = null;
+    swapIdx = null;
     insertMenuPos = null;
     if (!insertOpen) { expandedTemplates = new Set(); expandedGroups = new Set(); }
   }
   function openInsertAt(idx: number, ev: MouseEvent) {
     if (instances.length >= MAX_CHARTS) return;
     insertIdx = idx;
+    swapIdx = null;
     // Anchor the menu to the clicked +. getBoundingClientRect would be more
     // precise; using clientX/Y is fine since the menu uses translate-X to
     // centre itself on the anchor.
@@ -112,9 +119,23 @@
     insertOpen = true;
     expandedTemplates = new Set();
   }
+  /** Open the menu to swap the chart at `idx` with a different kind. The
+      replacement preserves width + height so the layout doesn't reflow; the
+      id is fresh (a different chart = a different cache key). MAX_CHARTS does
+      not gate this because we're replacing, not adding. */
+  function openSwapAt(id: string, ev: MouseEvent) {
+    const idx = instances.findIndex((i) => i.id === id);
+    if (idx < 0) return;
+    swapIdx = idx;
+    insertIdx = null;
+    insertMenuPos = { x: ev.clientX, y: ev.clientY };
+    insertOpen = true;
+    expandedTemplates = new Set();
+  }
   function closeInsert() {
     insertOpen = false;
     insertIdx = null;
+    swapIdx = null;
     insertMenuPos = null;
     expandedTemplates = new Set();
     expandedGroups = new Set();
@@ -125,8 +146,18 @@
     else next.add(id);
     expandedTemplates = next;
   }
-  /** Splice `inst` at insertIdx (or append if null), then close the menu. */
+  /** Splice `inst` at insertIdx (or append if null) — OR — in swap mode,
+      replace the chart at swapIdx, preserving its width + height so the
+      layout grid doesn't reflow. Then close the menu. */
   function placeInstance(inst: ChartInstanceT) {
+    const swap = swapIdx;
+    if (swap !== null && swap >= 0 && swap < instances.length) {
+      const old = instances[swap];
+      const replaced: ChartInstanceT = { ...inst, width: old.width, height: old.height };
+      instances = [...instances.slice(0, swap), replaced, ...instances.slice(swap + 1)];
+      closeInsert();
+      return;
+    }
     const at = insertIdx;
     if (at === null || at < 0 || at >= instances.length) {
       instances = [...instances, inst];
@@ -136,19 +167,21 @@
     closeInsert();
   }
   function addChart(kind: ChartKind) {
-    if (instances.length >= MAX_CHARTS) return;
+    // In swap mode, MAX_CHARTS doesn't apply (we're replacing, not adding).
+    if (swapIdx === null && instances.length >= MAX_CHARTS) return;
     const tk = defaultToken ?? tokens[0] ?? 'BTC';
     placeInstance(newChartInstance(kind, { token: tk, chain: defaultChain }));
   }
   function addTemplate(t: ChartTemplate) {
-    if (instances.length >= MAX_CHARTS || !t.build) return;
+    if (!t.build) return;
+    if (swapIdx === null && instances.length >= MAX_CHARTS) return;
     const tk = defaultToken ?? tokens[0] ?? 'BTC';
     placeInstance(t.build({ token: tk, chain: defaultChain }));
   }
   function addTemplateVariant(
     build: (defaults: { token: string; chain?: string }) => ChartInstanceT
   ) {
-    if (instances.length >= MAX_CHARTS) return;
+    if (swapIdx === null && instances.length >= MAX_CHARTS) return;
     const tk = defaultToken ?? tokens[0] ?? 'BTC';
     placeInstance(build({ token: tk, chain: defaultChain }));
   }
@@ -564,12 +597,18 @@
         {onSharedHover}
         {onTokenChange}
         onRemove={removeChart}
+        onSwap={openSwapAt}
       />
     </div>
   {/each}
 </section>
 
 {#snippet insertMenuBody()}
+  {#if swapIdx !== null}
+    <div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-widest text-amber-300 border-b border-zinc-800">
+      Swap this chart — pick a replacement
+    </div>
+  {/if}
   {#if templates.length > 0}
     <div class="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-widest text-zinc-500">
       Templates

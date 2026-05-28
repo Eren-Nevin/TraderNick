@@ -120,7 +120,8 @@
     onSharedView,
     onSharedHover,
     onTokenChange,
-    onRemove
+    onRemove,
+    onSwap
   }: {
     instance: ChartInstanceT;
     tokens: string[];
@@ -136,6 +137,7 @@
     onSharedHover: (t: number | null) => void;
     onTokenChange: (id: string, token: string) => void;
     onRemove: (id: string) => void;
+    onSwap: (id: string, ev: MouseEvent) => void;
   } = $props();
 
   // ---- uniswap-kind helpers (derived from `uniPools`) ----
@@ -442,7 +444,6 @@
   let currentLoad: AbortController | null = null;
   let localView = $state<View>(null);
   let localHoverTime = $state<number | null>(null);
-  let collapsed = $state(false);
   let error = $state<string | null>(null);
 
   // ---- effective view + hoverTime ----
@@ -2261,17 +2262,16 @@
         : 'flex items-center justify-between gap-3'
     ].join(' ')}
   >
-    <!-- Title block -->
+    <!-- Title block — click to swap this chart for another kind. The same
+         button is also the drag handle (dnd-action distinguishes a click from
+         a drag by the mousedown→move sequence). -->
     <button
       type="button"
-      onclick={() => (collapsed = !collapsed)}
-      title="Drag to reorder · Click to collapse"
+      onclick={(e) => onSwap(instance.id, e)}
+      title="Drag to reorder · Click to swap chart"
       class="cursor-grab active:cursor-grabbing flex items-center gap-2 min-w-0 text-left"
     >
       <span class="text-zinc-500 text-base leading-none select-none">⠿</span>
-      <span class="text-zinc-500 text-[10px] w-3 inline-block text-center leading-none">
-        {collapsed ? '▶' : '▼'}
-      </span>
       <span class="text-zinc-100 text-sm font-semibold tracking-tight truncate">
         {displayTitle}
       </span>
@@ -2669,7 +2669,6 @@
     </div>
   </div>
 
-  {#if !collapsed}
   <div class="flex-1 relative min-h-0" bind:clientHeight={chartAreaHeight}>
 
   {#if settingsOpen}
@@ -3193,7 +3192,6 @@
     {/if}
 
   </div>
-  {/if}
 </div>
 
 <style>
