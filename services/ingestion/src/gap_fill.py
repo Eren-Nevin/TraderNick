@@ -57,7 +57,14 @@ async def latest_time(
     where: str = "",
     parameters: dict | None = None,
 ) -> datetime | None:
-    """SELECT max(time) FROM <table> [WHERE ...]. Returns naive UTC."""
+    """SELECT max(time) FROM <table> [WHERE ...]. Returns naive UTC, or
+    None for an empty selection.
+
+    CH's max() over a non-nullable DateTime returns the column's *default*
+    (1970-01-01 00:00:00) when no rows match — not NULL. We treat any
+    pre-2000 result as "no rows" so the caller falls back to the fresh-
+    install lookback instead of trying to backfill from the Unix epoch
+    (which would mean ~56 years × 24h × chunk_hours of empty API calls)."""
     sql = f"SELECT max(time) FROM {table}"
     if where:
         sql += f" WHERE {where}"
@@ -67,8 +74,12 @@ async def latest_time(
         return None
     v = rows[0][0]
     if isinstance(v, datetime):
-        return v.replace(tzinfo=None) if v.tzinfo else v
-    return datetime.fromisoformat(str(v))
+        v = v.replace(tzinfo=None) if v.tzinfo else v
+    else:
+        v = datetime.fromisoformat(str(v))
+    if v.year < 2000:
+        return None
+    return v
 
 
 def iter_chunks(

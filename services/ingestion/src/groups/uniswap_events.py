@@ -25,6 +25,7 @@ from defistream import AsyncDeFiStream
 
 import config
 from clickhouse import UNISWAP_EVENTS, async_client
+from gap_fill import latest_time, resolve_since, run_chunked
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [uniswap_events] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -106,32 +107,57 @@ async def main():
     calls = _plan_calls(pools)
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     sem = asyncio.Semaphore(TICK_CONCURRENCY)
+    t_start = datetime.now(timezone.utc).replace(tzinfo=None)
     log.info(
-        "polling uniswap_v3 pools=%d -> %d calls/tick (concurrency=%d) every %ss (overlap=%dm)",
+        "polling uniswap_v3 pools=%d -> %d calls/tick (concurrency=%d) every %ss (overlap=%dm) + gap-fill from watermark",
         len(pools), len(calls), TICK_CONCURRENCY, POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES,
     )
 
-    while True:
-        tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
+    async def live_loop():
+        while True:
+            tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
 
+            async def _one(chain, sym0, sym1, fee, event):
+                async with sem:
+                    try:
+                        n = await fetch_and_insert(
+                            ds, chain=chain, symbol0=sym0, symbol1=sym1, fee_tier=fee,
+                            event=event, since=since, until=now,
+                        )
+                        log.info("%s/%s/%s/%d/%s rows=%d", chain, sym0, sym1, fee, event, n)
+                    except Exception as exc:
+                        log.exception(
+                            "%s/%s/%s/%d/%s fetch failed: %s",
+                            chain, sym0, sym1, fee, event, exc,
+                        )
+
+            await asyncio.gather(*(_one(*c) for c in calls))
+            await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
+
+    async def gap_fill_task():
+        ch = await async_client()
         async def _one(chain, sym0, sym1, fee, event):
-            async with sem:
-                try:
-                    n = await fetch_and_insert(
-                        ds, chain=chain, symbol0=sym0, symbol1=sym1, fee_tier=fee,
-                        event=event, since=since, until=now,
-                    )
-                    log.info("%s/%s/%s/%d/%s rows=%d", chain, sym0, sym1, fee, event, n)
-                except Exception as exc:
-                    log.exception(
-                        "%s/%s/%s/%d/%s fetch failed: %s",
-                        chain, sym0, sym1, fee, event, exc,
-                    )
+            _method, table, _cols, _tf = UNISWAP_EVENTS[event]
+            last_seen = await latest_time(
+                ch, table=table,
+                where="chain = {chain:String} AND symbol0 = {s0:String} AND symbol1 = {s1:String} AND fee_tier = {fee:UInt32}",
+                parameters={"chain": chain, "s0": sym0, "s1": sym1, "fee": fee},
+            )
+            since = resolve_since(last_seen, t_start=t_start)
+            if since >= t_start: return
+            label = f"uniswap_events/{chain}/{sym0}-{sym1}/{fee}/{event}"
+            log.info("%s gap-fill since=%s until=%s (last_seen=%s)", label, since, t_start, last_seen)
+            async def call(s, u):
+                async with sem:
+                    return await fetch_and_insert(ds, chain=chain, symbol0=sym0, symbol1=sym1,
+                                                  fee_tier=fee, event=event, since=s, until=u)
+            total = await run_chunked(label=label, since=since, until=t_start, call=call)
+            log.info("%s gap-fill done total_rows=%d", label, total)
+        await asyncio.gather(*(_one(*c) for c in calls), return_exceptions=True)
 
-        await asyncio.gather(*(_one(*c) for c in calls))
-        await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
+    await asyncio.gather(live_loop(), gap_fill_task())
 
 
 if __name__ == "__main__":

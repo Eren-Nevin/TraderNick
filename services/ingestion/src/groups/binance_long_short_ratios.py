@@ -8,6 +8,7 @@ from defistream import AsyncDeFiStream
 
 import config
 from clickhouse import LONG_SHORT_COLUMNS, async_client, long_short_df_to_rows
+from gap_fill import latest_time, resolve_since, run_chunked
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [binance_long_short_ratios] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -45,19 +46,42 @@ async def main():
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     tokens = list(config.INGEST_TOKENS)
-    log.info("polling long_short_ratios tokens=%s every %ss (overlap=%dm)", tokens, POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES)
+    t_start = datetime.now(timezone.utc).replace(tzinfo=None)
+    log.info("polling long_short_ratios tokens=%s every %ss (overlap=%dm) + gap-fill from watermark",
+             tokens, POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES)
 
-    while True:
-        tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
-        for token in tokens:
-            try:
-                n = await fetch_and_insert(ds, token, since, now)
-                log.info("%s rows=%d", token, n)
-            except Exception as exc:
-                log.exception("%s fetch failed: %s", token, exc)
-        await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
+    async def live_loop():
+        while True:
+            tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
+            for token in tokens:
+                try:
+                    n = await fetch_and_insert(ds, token, since, now)
+                    log.info("%s rows=%d", token, n)
+                except Exception as exc:
+                    log.exception("%s fetch failed: %s", token, exc)
+            await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
+
+    async def gap_fill_task():
+        ch = await async_client()
+        async def _one(token):
+            last_seen = await latest_time(
+                ch, table="tradernick.binance_long_short_ratios",
+                where="token = {token:String}",
+                parameters={"token": token},
+            )
+            since = resolve_since(last_seen, t_start=t_start)
+            if since >= t_start: return
+            label = f"binance_long_short_ratios/{token}"
+            log.info("%s gap-fill since=%s until=%s (last_seen=%s)", label, since, t_start, last_seen)
+            async def call(s, u):
+                return await fetch_and_insert(ds, token, s, u)
+            total = await run_chunked(label=label, since=since, until=t_start, call=call)
+            log.info("%s gap-fill done total_rows=%d", label, total)
+        await asyncio.gather(*(_one(t) for t in tokens), return_exceptions=True)
+
+    await asyncio.gather(live_loop(), gap_fill_task())
 
 
 if __name__ == "__main__":

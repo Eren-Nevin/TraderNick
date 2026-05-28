@@ -8,6 +8,7 @@ from defistream import AsyncDeFiStream
 
 import config
 from clickhouse import TRANSFER_COLUMNS, async_client, transfers_df_to_rows
+from gap_fill import latest_time, resolve_since, run_chunked
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [evm_native_transfers] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -61,19 +62,46 @@ async def main():
             await asyncio.sleep(3600)
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
-    log.info("polling evm native chains=%s every %ss (overlap=%dm)", chains, POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES)
+    t_start = datetime.now(timezone.utc).replace(tzinfo=None)
+    log.info("polling evm native chains=%s every %ss (overlap=%dm) + gap-fill from watermark",
+             chains, POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES)
 
-    while True:
-        tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
-        now = datetime.now(timezone.utc).replace(tzinfo=None)
-        since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
-        for chain in chains:
-            try:
-                n = await fetch_and_insert(ds, chain, since, now)
-                log.info("%s rows=%d", chain, n)
-            except Exception as exc:
-                log.exception("%s fetch failed: %s", chain, exc)
-        await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
+    async def live_loop():
+        while True:
+            tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
+            for chain in chains:
+                try:
+                    n = await fetch_and_insert(ds, chain, since, now)
+                    log.info("%s rows=%d", chain, n)
+                except Exception as exc:
+                    log.exception("%s fetch failed: %s", chain, exc)
+            await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
+
+    async def gap_fill_task():
+        ch = await async_client()
+        async def _one(chain):
+            # The native poller writes kind='native'. Token is whatever
+            # NATIVE_TOKEN_BY_CHAIN maps the chain to (defaults to chain
+            # itself if missing). Filter only by (kind, chain) since one
+            # poller covers exactly one token per chain.
+            last_seen = await latest_time(
+                ch, table="tradernick.transfers",
+                where="kind = 'native' AND chain = {chain:String}",
+                parameters={"chain": chain},
+            )
+            since = resolve_since(last_seen, t_start=t_start)
+            if since >= t_start: return
+            label = f"evm_native_transfers/{chain}"
+            log.info("%s gap-fill since=%s until=%s (last_seen=%s)", label, since, t_start, last_seen)
+            async def call(s, u):
+                return await fetch_and_insert(ds, chain, s, u)
+            total = await run_chunked(label=label, since=since, until=t_start, call=call)
+            log.info("%s gap-fill done total_rows=%d", label, total)
+        await asyncio.gather(*(_one(c) for c in chains), return_exceptions=True)
+
+    await asyncio.gather(live_loop(), gap_fill_task())
 
 
 if __name__ == "__main__":
