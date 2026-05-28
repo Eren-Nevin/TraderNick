@@ -932,6 +932,13 @@ export type ChartInstance = {
    *  Helps line up weekly cycles across charts. Off by default. */
   showWeekLines?: boolean;
   mas: MAConfig[]; // length MAX_MAS, each slot independently enabled
+  /** When true, the chart plots a running cumulative sum of the same
+   *  source the MAs operate on, on a secondary axis. Useful for reading
+   *  "total deposits over the visible window" / "TVL increase" off
+   *  event-driven kinds. Off by default. Only honoured on kinds where
+   *  per-bucket values are summable (transfer / AAVE / Morpho / Spark /
+   *  Lido / Uniswap-USD / Aerodrome); ignored elsewhere. */
+  showSum?: boolean;
   // sz only
   under?: number;
   over?: number;

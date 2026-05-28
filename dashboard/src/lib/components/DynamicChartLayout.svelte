@@ -300,6 +300,7 @@
         interval: r.interval as Interval,
         showPoint: r.showPoint !== false,
         showWeekLines: r.showWeekLines === true,
+        showSum: r.showSum === true,
         mas: migrateMAs(r)
       };
       if (inst.kind === 'sz') {

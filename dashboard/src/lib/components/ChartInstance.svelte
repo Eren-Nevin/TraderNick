@@ -1812,9 +1812,30 @@
   const SUB_DASH = ['5,3', '2,2', '6,2,2,2'];
 
   let anyMaEnabled = $derived(instance.mas.some((m) => m.enabled));
+  // Kinds where a running cumulative sum is meaningful: event-driven charts
+  // whose per-bucket value is itself a sum (deposits, transfers, swaps, …).
+  // Ratios (bs / sz / tt / ls) and point-in-time series (ohlcv / oi / fr / pc)
+  // are excluded because summing them produces nonsense.
+  let canSum = $derived(
+    instance.kind === 'transfer'
+      || isAaveKind(instance.kind)
+      || isAaveV2Kind(instance.kind)
+      || isAaveV4Kind(instance.kind)
+      || isMorphoKind(instance.kind)
+      || isSparkKind(instance.kind)
+      || isLidoKind(instance.kind)
+      || isAeroKind(instance.kind)
+      || isAeroBasicKind(instance.kind)
+      // Uniswap: only when plotting a single USD line — amount mode is
+      // dual-axis (token0 + token1) so the secondary axis is already taken
+      // and there's no single "the amount" to sum.
+      || ((isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind) || instance.kind === 'uniswap_v4_swap')
+            && (instance.valueMode ?? 'usd') === 'usd')
+  );
 
   let cumulativeLines = $derived.by(() => {
-    if (data.length === 0 || !anyMaEnabled) return [] as unknown[];
+    if (data.length === 0) return [] as unknown[];
+    if (!anyMaEnabled && !(canSum && instance.showSum)) return [] as unknown[];
     const out: unknown[] = [];
     for (let idx = 0; idx < instance.mas.length; idx++) {
       const ma = instance.mas[idx];
@@ -1972,6 +1993,29 @@
           break;
         }
       }
+    }
+    // Cumulative sum series (single line, secondary axis). Reads from the
+    // same source the main series plots so the user can compare the per-
+    // bucket flow against the running total inside the visible window.
+    // The y-axis label is purposely terse ("Σ") so the legend stays clean.
+    if (canSum && instance.showSum) {
+      const useUsd = (instance.valueMode ?? 'usd') === 'usd';
+      const valLabel = useUsd ? 'USD' : 'Amount';
+      // Source array: every applicable kind exposes the same shape
+      // ({sum_value_usd, sum_amount}) on each row.
+      const src = (data as unknown as Record<string, number>[]).map(
+        (d) => (useUsd ? d.sum_value_usd : d.sum_amount) ?? 0
+      );
+      const running: number[] = new Array(src.length);
+      let acc = 0;
+      for (let i = 0; i < src.length; i++) { acc += src[i] || 0; running[i] = acc; }
+      out.push({
+        key: 'cum_sum',
+        label: `Σ ${valLabel}`,
+        color: '#a78bfa',                 // violet-400 — distinct from MA palette
+        axis: 'secondary' as const,
+        compute: (_d: unknown, i: number) => running[i]
+      });
     }
     return out;
   });
@@ -2779,6 +2823,23 @@
           </select>
         </div>
       {/each}
+      {#if canSum}
+        <!-- Cumulative-sum toggle. Plots the running total of the same field
+             the main series plots, on a secondary y-axis so it doesn't squash
+             the per-bucket curve. Useful for "TVL increase over the window"
+             style reads on AAVE / Morpho / Spark / Lido / transfer / Aero. -->
+        <label class="flex items-center gap-1.5 cursor-pointer" title="Cumulative sum on secondary axis">
+          <input
+            type="checkbox"
+            bind:checked={instance.showSum}
+            class="accent-zinc-400"
+          />
+          <span
+            class="font-medium"
+            style="color: #a78bfa; opacity: {instance.showSum ? 1 : 0.55}"
+          >Sum</span>
+        </label>
+      {/if}
     </div>
 
     {#if instance.kind === 'pc'}
