@@ -105,11 +105,17 @@ def ohlcv_df_to_rows(df):
     return rows
 
 
-def open_interest_df_to_rows(df: pl.DataFrame, token: str):
+# NOTE: defistream 2.22 added multi-token support to the four perp-side
+# binance endpoints (OI / L-S / funding / raw_trades) plus OHLCV. A single
+# .token(*symbols) call now returns rows for every symbol, each carrying
+# its own `token` column. Transforms read `r["token"]` instead of taking
+# the token as a parameter so one DataFrame can produce mixed-token rows.
+
+def open_interest_df_to_rows(df: pl.DataFrame):
     rows = []
     for r in df.iter_rows(named=True):
         rows.append([
-            token,
+            str(r["token"]),
             _to_naive_utc(r["time"]),
             float(r["open_interest"]),
             float(r["open_interest_value"]),
@@ -117,11 +123,11 @@ def open_interest_df_to_rows(df: pl.DataFrame, token: str):
     return rows
 
 
-def long_short_df_to_rows(df: pl.DataFrame, token: str):
+def long_short_df_to_rows(df: pl.DataFrame):
     rows = []
     for r in df.iter_rows(named=True):
         rows.append([
-            token,
+            str(r["token"]),
             _to_naive_utc(r["time"]),
             float(r["top_trader_count_ratio"]),
             float(r["top_trader_vol_ratio"]),
@@ -131,11 +137,11 @@ def long_short_df_to_rows(df: pl.DataFrame, token: str):
     return rows
 
 
-def funding_rate_df_to_rows(df: pl.DataFrame, token: str):
+def funding_rate_df_to_rows(df: pl.DataFrame):
     rows = []
     for r in df.iter_rows(named=True):
         rows.append([
-            token,
+            str(r["token"]),
             _to_naive_utc(r["time"]),
             float(r["rate"]),
         ])
@@ -205,15 +211,17 @@ def transfers_df_for_bulk_insert(df: pl.DataFrame, *, kind: str, chain: str, tok
     return df.select(TRANSFER_COLUMNS).to_pandas()
 
 
-def raw_trades_df_for_insert(df: pl.DataFrame, token: str):
+def raw_trades_df_for_insert(df: pl.DataFrame):
+    # 2.22 multi-token responses already include a `token` column per row,
+    # so we drop the previous pl.lit(token) override and trust the source.
     return (
         df
         .with_columns([
             pl.col("time").dt.convert_time_zone("UTC").dt.replace_time_zone(None).cast(pl.Datetime("ms")),
             pl.col("id").cast(pl.UInt64),
             pl.col("buy").cast(pl.Boolean),
+            pl.col("token").cast(pl.Utf8),
         ])
-        .with_columns(pl.lit(token).alias("token"))
         .select(RAW_TRADE_COLUMNS)
         .to_pandas()
     )

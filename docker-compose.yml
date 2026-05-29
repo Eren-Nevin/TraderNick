@@ -31,7 +31,7 @@ services:
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_USER: tradernick
       CLICKHOUSE_DB: tradernick
-      INGEST_TOKENS: ${INGEST_TOKENS:-BTC,ETH,SOL,ARB,OP}
+      INGEST_TOKENS: ${INGEST_TOKENS:-BTC,ETH,SOL,ARB,LINK,BNB,POL,LTC,TRX,AAVE,AERO,CAKE,COW,ENA,ETHFI,FET,FIL,HYPE,MORPHO,PENDLE,RENDER,SUSHI,UNI,WLD,VIRTUAL,PAXG}
       WALLETS_PARQUET_PATH: ${WALLETS_PARQUET_PATH:-/app/data/wallets.parquet}
     volumes:
       # local copy of the wallets parquet (path overridable via WALLETS_PARQUET_HOST)

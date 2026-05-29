@@ -50,6 +50,43 @@ CHUNK_PACING_S = 1.2
 DEFAULT_CHUNK_HOURS = 6
 
 
+async def min_watermark_per_token(
+    ch,
+    *,
+    table: str,
+    tokens: list[str],
+    time_col: str = "time",
+    token_col: str = "token",
+) -> datetime | None:
+    """For a per-token table, return the MIN across all per-token MAX(time)
+    watermarks — the earliest catch-up boundary we need to reach if we want
+    every token caught up via one multi-token call.
+
+    Tokens with no rows are *excluded* from the min so a fresh-install token
+    doesn't peg us at 1970 forever; their on-server data starts before the
+    earliest existing watermark anyway, so the multi-token call covers them
+    too. If EVERY token is empty (truly fresh install), returns None and the
+    caller falls back to the standard fresh-lookback ceiling."""
+    res = await ch.query(
+        f"SELECT min(mx) FROM ("
+        f"  SELECT max({time_col}) AS mx FROM {table}"
+        f"  WHERE {token_col} IN {{tokens:Array(String)}}"
+        f"  GROUP BY {token_col}"
+        f"  HAVING max({time_col}) > toDateTime('2000-01-01 00:00:00')"
+        f")",
+        parameters={"tokens": tokens},
+    )
+    rows = res.result_rows
+    if not rows or rows[0][0] in (None, "", "1970-01-01 00:00:00"):
+        return None
+    v = rows[0][0]
+    if isinstance(v, datetime):
+        v = v.replace(tzinfo=None) if v.tzinfo else v
+    else:
+        v = datetime.fromisoformat(str(v))
+    return None if v.year < 2000 else v
+
+
 async def latest_time(
     ch,
     *,

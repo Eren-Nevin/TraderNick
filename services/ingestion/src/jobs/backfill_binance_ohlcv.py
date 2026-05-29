@@ -1,3 +1,6 @@
+"""Binance OHLCV backfill. defistream 2.22 multi-token form — one call
+per chunk covers every configured token instead of one call per
+(token, chunk) pair."""
 import asyncio
 import json
 import logging
@@ -75,22 +78,22 @@ async def _write_status(
     )
 
 
-def _planned_chunks(tokens: list[str], since: datetime, until: datetime) -> list[tuple[str, datetime, datetime]]:
-    chunks: list[tuple[str, datetime, datetime]] = []
+def _planned_chunks(since: datetime, until: datetime) -> list[tuple[datetime, datetime]]:
+    """No per-token axis any more — each chunk is one multi-token call."""
+    chunks: list[tuple[datetime, datetime]] = []
     step = timedelta(days=CHUNK_DAYS)
-    for token in tokens:
-        t = since
-        while t < until:
-            t_end = min(t + step, until)
-            chunks.append((token, t, t_end))
-            t = t_end
+    t = since
+    while t < until:
+        t_end = min(t + step, until)
+        chunks.append((t, t_end))
+        t = t_end
     return chunks
 
 
-async def _fetch_chunk(ds: AsyncDeFiStream, token: str, since: datetime, until: datetime) -> int:
+async def _fetch_chunk(ds: AsyncDeFiStream, tokens: list[str], since: datetime, until: datetime) -> int:
     df = await (
         ds.exchange.binance.ohlcv()
-        .token(token)
+        .token(*tokens)
         .window("1m")
         .time_range(_iso_z(since), _iso_z(until))
         .as_df("polars")
@@ -119,22 +122,24 @@ async def main(job_id: str):
     tokens = args["tokens"]
     since = _parse_iso(args["since"])
     until = _parse_iso(args["until"])
-    completed_set = {(t, s) for t, s in args.get("completed_chunks", [])}
+    # 2.22 backfill state is chunk-only (multi-token per chunk). Legacy
+    # (token, chunk_start) entries from older jobs are dropped on resume.
+    completed_set = {s for s in args.get("completed_chunks", []) if isinstance(s, str)}
 
-    chunks = _planned_chunks(tokens, since, until)
+    chunks = _planned_chunks(since, until)
     total = len(chunks)
-    done = sum(1 for token, cs, _ in chunks if (token, cs.isoformat()) in completed_set)
+    done = sum(1 for cs, _ in chunks if cs.isoformat() in completed_set)
 
     await _write_status(
         job_id=job_id, job_type=job_type, args=args, status="running",
         progress=(done / total) if total else 1.0, started_at=started_at,
     )
-    log.info("job %s starting: tokens=%s chunks=%d resumed_at=%d", job_id, tokens, total, done)
+    log.info("job %s starting: tokens=%d chunks=%d resumed_at=%d", job_id, len(tokens), total, done)
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
 
     try:
-        for token, cs, ce in chunks:
+        for cs, ce in chunks:
             if _stop:
                 args["completed_chunks"] = sorted(completed_set)
                 await _write_status(
@@ -144,12 +149,12 @@ async def main(job_id: str):
                 )
                 log.info("job %s cancelled at %d/%d chunks", job_id, done, total)
                 return
-            key = (token, cs.isoformat())
+            key = cs.isoformat()
             if key in completed_set:
                 continue
-            log.info("job %s chunk %s %s..%s", job_id, token, cs, ce)
-            n = await _fetch_chunk(ds, token, cs, ce)
-            log.info("job %s chunk %s rows=%d", job_id, token, n)
+            log.info("job %s chunk %s..%s (tokens=%d)", job_id, cs, ce, len(tokens))
+            n = await _fetch_chunk(ds, tokens, cs, ce)
+            log.info("job %s chunk rows=%d", job_id, n)
             completed_set.add(key)
             done += 1
             args["completed_chunks"] = sorted(completed_set)

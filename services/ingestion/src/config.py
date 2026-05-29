@@ -11,7 +11,12 @@ CLICKHOUSE_USER = os.environ.get("CLICKHOUSE_USER", "tradernick")
 CLICKHOUSE_PASSWORD = os.environ.get("CLICKHOUSE_PASSWORD", "tradernick")
 CLICKHOUSE_DB = os.environ.get("CLICKHOUSE_DB", "tradernick")
 
-INGEST_TOKENS = [t.strip() for t in os.environ.get("INGEST_TOKENS", "BTC,ETH,SOL,ARB,OP").split(",") if t.strip()]
+INGEST_TOKENS = [t.strip() for t in os.environ.get(
+    "INGEST_TOKENS",
+    "BTC,ETH,SOL,ARB,"
+    "LTC,TRX,AAVE,AERO,CAKE,COW,ENA,ETHFI,FET,FIL,HYPE,"
+    "MORPHO,PENDLE,RENDER,SUSHI,UNI,WLD,VIRTUAL,PAXG"
+).split(",") if t.strip()]
 
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "change_me")
