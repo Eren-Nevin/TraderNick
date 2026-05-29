@@ -12,7 +12,15 @@ export type GmxMarketRow = {
 };
 
 export const load: PageServerLoad = async ({ fetch }) => {
-  const res = await fetch(`${INTERNAL_DATA_SERVER_URL}/gmx/streams`);
-  const gmxMarkets: GmxMarketRow[] = res.ok ? (await res.json()).streams : [];
-  return { gmxMarkets };
+  // `tokens` feeds the fallback token <select> on the title bar for kinds
+  // that don't have a dedicated selector branch (OHLCV, the binance-side
+  // kinds OI/FR/BS/SZ/TT/LS, PC). Without it those charts can't be
+  // re-pointed to a different token from the Perp page.
+  const [streamsRes, tokensRes] = await Promise.all([
+    fetch(`${INTERNAL_DATA_SERVER_URL}/gmx/streams`),
+    fetch(`${INTERNAL_DATA_SERVER_URL}/tokens`)
+  ]);
+  const gmxMarkets: GmxMarketRow[] = streamsRes.ok ? (await streamsRes.json()).streams : [];
+  const tokens: string[] = tokensRes.ok ? (await tokensRes.json()).tokens : [];
+  return { gmxMarkets, tokens };
 };

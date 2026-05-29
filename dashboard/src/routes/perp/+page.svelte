@@ -42,7 +42,7 @@
   </div>
 
   <DynamicChartLayout
-    tokens={[]}
+    tokens={data.tokens}
     gmxMarkets={data.gmxMarkets}
     storageKey="tradernick:perp:layout:v1"
     availableKinds={AVAILABLE_KINDS}
