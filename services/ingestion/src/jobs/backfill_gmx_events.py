@@ -76,6 +76,12 @@ async def _fetch_chunk(ds, *, chain, event, since, until):
         try:
             b = getattr(ds.evm.gmx_v2, method_name)()
             b = b.network(chain).time_range(_iso_z(since), _iso_z(until)).verbose().with_value()
+            # Mirror the live group's 2.19 enrichment opt-ins so the
+            # backfill writes the same shape the live poller writes.
+            if event in ("deposit", "withdraw"):
+                b = b.enrich_realized_amounts()
+            if event in ("position_increase", "position_decrease", "liquidation"):
+                b = b.enrich_src_chain()
             df = await b.as_df("polars")
             if df.is_empty(): return 0
             rows = transform(df, chain=chain)

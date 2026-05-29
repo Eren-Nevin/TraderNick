@@ -22,6 +22,18 @@ TICK_CONCURRENCY = 1
 def _iso(dt): return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Per-event opt-in enrichments introduced in defistream 2.19:
+#   enrich_realized_amounts: deposit + withdraw only. Adds the realized
+#     on-chain outflow amounts (and realized_value_usd on withdrawals).
+#     Without this flag, withdrawals' base response no longer carries the
+#     long/short token amounts at all — only the min_* intent fields.
+#   enrich_src_chain: position events + liquidations. Joins by order_key
+#     against a ~14d OrderCreated lookback to populate src_chain_id /
+#     src_chain_name on rows that originated from a cross-chain order.
+_REALIZED_AMOUNTS_EVENTS = {"deposit", "withdraw"}
+_SRC_CHAIN_EVENTS = {"position_increase", "position_decrease", "liquidation"}
+
+
 async def fetch_and_insert(ds, *, chain, event, since, until) -> int:
     method_name, table, columns, transform = GMX_EVENTS[event]
     last_exc: Exception | None = None
@@ -30,6 +42,10 @@ async def fetch_and_insert(ds, *, chain, event, since, until) -> int:
         try:
             b = getattr(ds.evm.gmx_v2, method_name)()
             b = b.network(chain).time_range(_iso(since), _iso(until)).verbose().with_value()
+            if event in _REALIZED_AMOUNTS_EVENTS:
+                b = b.enrich_realized_amounts()
+            if event in _SRC_CHAIN_EVENTS:
+                b = b.enrich_src_chain()
             df = await b.as_df("polars")
             if df.is_empty(): return 0
             rows = transform(df, chain=chain)

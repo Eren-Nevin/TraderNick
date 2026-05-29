@@ -1722,6 +1722,10 @@ SPARK_EVENTS = {
 # own tail of typed fields. We separate the head helper from the per-event
 # transforms so a schema change touches one place.
 
+# Position events + liquidations: src_chain_id/src_chain_name added in
+# 2.19 via .enrich_src_chain() (filled by order_key join). For ARB-native
+# orders src_chain_id=0 and src_chain_name='ARB'. When the join can't find
+# the parent order in the 14-day lookback, both default to 0/''.
 GMX_POSITION_INCREASES_COLUMNS = [
     "chain", "time", "block_number", "tx_id", "log_index",
     "market", "market_name", "account",
@@ -1729,7 +1733,9 @@ GMX_POSITION_INCREASES_COLUMNS = [
     "size_delta_usd", "collateral_delta_amount", "execution_price",
     "is_long", "order_type", "order_type_name",
     "size_in_usd", "price_impact_usd",
-    "order_key", "position_key", "value_usd",
+    "order_key", "position_key",
+    "src_chain_id", "src_chain_name",
+    "value_usd",
 ]
 # position_decreases + liquidations share the same shape since defistream
 # 2.16 — both carry base_pnl_usd (realised PnL on the close).
@@ -1740,7 +1746,9 @@ GMX_POSITION_DECREASES_COLUMNS = [
     "size_delta_usd", "collateral_delta_amount", "execution_price",
     "is_long", "order_type", "order_type_name",
     "size_in_usd", "price_impact_usd", "base_pnl_usd",
-    "order_key", "position_key", "value_usd",
+    "order_key", "position_key",
+    "src_chain_id", "src_chain_name",
+    "value_usd",
 ]
 GMX_LIQUIDATIONS_COLUMNS = GMX_POSITION_DECREASES_COLUMNS
 GMX_SWAPS_COLUMNS = [
@@ -1750,20 +1758,35 @@ GMX_SWAPS_COLUMNS = [
     "token_out", "token_out_symbol", "amount_out",
     "price_impact_usd", "value_usd",
 ]
+# Deposits, 2.19-enriched: gained realized_* fields (additive — base
+# value_usd was never broken here) + deposit_key.
 GMX_DEPOSITS_COLUMNS = [
     "chain", "time", "block_number", "tx_id", "log_index",
     "market", "market_name", "account",
     "long_token_amount", "short_token_amount",
+    "realized_long_token_amount", "realized_short_token_amount",
+    "realized_market_tokens",
     "long_symbol", "short_symbol",
+    "deposit_key",
     "min_market_tokens",
     "src_chain_id", "src_chain_name",
     "value_usd",
 ]
+# Withdrawals, 2.19-enriched: the base response no longer carries
+# realized amounts at all — it only ships the intent (min_*) plus the
+# withdrawal_key. With .enrich_realized_amounts() defistream joins
+# against the execute event to recover the actual outflow + USD.
+# We store the realized values in the existing long_token_amount /
+# short_token_amount / value_usd columns so the dashboard query layer
+# (which sums long + short) doesn't need to change.
 GMX_WITHDRAWALS_COLUMNS = [
     "chain", "time", "block_number", "tx_id", "log_index",
     "market", "market_name", "account",
-    "market_token_amount", "long_token_amount", "short_token_amount",
+    "market_token_amount",
+    "min_long_token_amount", "min_short_token_amount",
+    "long_token_amount", "short_token_amount",  # realized_*, see above
     "long_symbol", "short_symbol",
+    "withdrawal_key",
     "src_chain_id", "src_chain_name",
     "value_usd",
 ]
@@ -1829,9 +1852,18 @@ def _gmx_position_body(r):
 
 
 def _gmx_position_tail(r):
+    # 2.19: src_chain_id/src_chain_name sit between (order_key, position_key)
+    # and value_usd. DefiStream returns src_chain_id=-1 as the sentinel for
+    # "no parent order found in the 14-day OrderCreated lookback"; map to
+    # 0 since our column is UInt32 (and the resolved-but-ARB-native case
+    # is already represented by 0 / "ARB" downstream).
+    raw_id = r.get("src_chain_id")
+    sid = int(raw_id) if (raw_id is not None and int(raw_id) >= 0) else 0
     return [
         str(r["order_key"]) if r.get("order_key") else "",
         str(r["position_key"]) if r.get("position_key") else "",
+        sid,
+        str(r["src_chain_name"]) if r.get("src_chain_name") else "",
         _aave_value_usd(r),
     ]
 
@@ -1884,26 +1916,46 @@ def gmx_swaps_df_to_rows(df, *, chain):
 
 def _gmx_src_chain(r):
     """Pull (src_chain_id, src_chain_name) from a deposit/withdrawal row.
-    Added in defistream 2.16 — empty string + 0 for older payloads that
-    lack the fields (cross-chain LP wasn't a thing pre-2.16)."""
+    Added in defistream 2.16. 2.19's enrich_src_chain join can return -1
+    when no parent order is found in the 14-day lookback — map to 0 so
+    the value fits our UInt32 column."""
+    raw_id = r.get("src_chain_id")
+    sid = int(raw_id) if (raw_id is not None and int(raw_id) >= 0) else 0
     return [
-        int(r["src_chain_id"]) if r.get("src_chain_id") is not None else 0,
+        sid,
         str(r["src_chain_name"]) if r.get("src_chain_name") else "",
     ]
 
 
+def _gmx_f(r, col):
+    """Float cast that tolerates missing/None — 2.19's enrichment fields
+    may be absent on rows where the enriched join didn't fire (e.g. the
+    parent order is older than the 14-day lookback)."""
+    v = r.get(col)
+    return float(v) if v is not None else 0.0
+
+
 def gmx_deposits_df_to_rows(df, *, chain):
+    """Deposits transform. The base response carries the intent amounts
+    (what the user committed from their wallet); .enrich_realized_amounts()
+    additionally returns the on-chain executed amounts + minted GM
+    receipt. Both are kept — the dashboard sums long + short on the
+    intent side since deposits execute as requested."""
     rows = []
     for r in df.iter_rows(named=True):
         rows.append(_gmx_head(r, chain=chain) + [
             str(r["market"]) if r.get("market") else "",
             str(r["market_name"]) if r.get("market_name") else "",
             str(r["account"]) if r.get("account") else "",
-            float(r["long_token_amount"]) if r.get("long_token_amount") is not None else 0.0,
-            float(r["short_token_amount"]) if r.get("short_token_amount") is not None else 0.0,
+            _gmx_f(r, "long_token_amount"),
+            _gmx_f(r, "short_token_amount"),
+            _gmx_f(r, "realized_long_token_amount"),
+            _gmx_f(r, "realized_short_token_amount"),
+            _gmx_f(r, "realized_market_tokens"),
             str(r["long_symbol"]) if r.get("long_symbol") else "",
             str(r["short_symbol"]) if r.get("short_symbol") else "",
-            float(r["min_market_tokens"]) if r.get("min_market_tokens") is not None else 0.0,
+            str(r["deposit_key"]) if r.get("deposit_key") else "",
+            _gmx_f(r, "min_market_tokens"),
         ] + _gmx_src_chain(r) + [
             _aave_value_usd(r),
         ])
@@ -1911,19 +1963,34 @@ def gmx_deposits_df_to_rows(df, *, chain):
 
 
 def gmx_withdrawals_df_to_rows(df, *, chain):
+    """Withdrawals transform. In 2.19 the base response no longer carries
+    realized amounts — only the intent (min_*) + withdrawal_key. We require
+    .enrich_realized_amounts() to recover the actual on-chain outflow
+    (and the realized USD), and we store the realized values in the
+    long_token_amount / short_token_amount / value_usd columns so the
+    dashboard's "sum long + short" query layer doesn't need to change."""
     rows = []
     for r in df.iter_rows(named=True):
         rows.append(_gmx_head(r, chain=chain) + [
             str(r["market"]) if r.get("market") else "",
             str(r["market_name"]) if r.get("market_name") else "",
             str(r["account"]) if r.get("account") else "",
-            float(r["market_token_amount"]) if r.get("market_token_amount") is not None else 0.0,
-            float(r["long_token_amount"]) if r.get("long_token_amount") is not None else 0.0,
-            float(r["short_token_amount"]) if r.get("short_token_amount") is not None else 0.0,
+            _gmx_f(r, "market_token_amount"),
+            _gmx_f(r, "min_long_token_amount"),
+            _gmx_f(r, "min_short_token_amount"),
+            # The two columns the dashboard reads: realized_* preferred
+            # (correctly decimaled by defistream 2.19's enrich), with a
+            # zero fallback for rows where the keeper hasn't yet executed.
+            _gmx_f(r, "realized_long_token_amount"),
+            _gmx_f(r, "realized_short_token_amount"),
             str(r["long_symbol"]) if r.get("long_symbol") else "",
             str(r["short_symbol"]) if r.get("short_symbol") else "",
+            str(r["withdrawal_key"]) if r.get("withdrawal_key") else "",
         ] + _gmx_src_chain(r) + [
-            _aave_value_usd(r),
+            # value_usd in the row carries realized_value_usd (added by
+            # enrich_realized_amounts). _aave_value_usd reads r["value_usd"]
+            # which defistream maps to the realized field name here.
+            float(r["realized_value_usd"]) if r.get("realized_value_usd") is not None else _aave_value_usd(r),
         ])
     return rows
 

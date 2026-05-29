@@ -37,8 +37,11 @@ _EVENT_TABLES = {
     "position_decrease": ("tradernick.gmx_position_decreases", "size_delta_usd",                       True),
     "liquidation":       ("tradernick.gmx_liquidations",       "size_delta_usd",                       True),
     "swap":              ("tradernick.gmx_swaps",              "amount_in",                            True),
+    # Both deposit + withdraw sum long + short token-units so net_lp is
+    # apples-to-apples. For withdrawals the long/short columns hold the
+    # 2.19 realized amounts (decimaled, correct USD).
     "deposit":           ("tradernick.gmx_deposits",            "long_token_amount + short_token_amount", True),
-    "withdraw":          ("tradernick.gmx_withdrawals",         "market_token_amount",                  True),
+    "withdraw":          ("tradernick.gmx_withdrawals",         "long_token_amount + short_token_amount", True),
     "funding":           ("tradernick.gmx_funding",             "delta",                                False),
     "borrowing":         ("tradernick.gmx_borrowing",           "delta",                                False),
     "fees_collected":    ("tradernick.gmx_fees_collected",      "total_cost_amount",                    True),
