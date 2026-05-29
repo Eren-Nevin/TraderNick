@@ -9,6 +9,7 @@
     { href: '/flows', label: 'Flows', short: 'F' },
     { href: '/lending', label: 'Lending', short: 'L' },
     { href: '/dex', label: 'DeX', short: 'D' },
+    { href: '/perp', label: 'Perp', short: 'P' },
     { href: '/staking', label: 'Staking', short: 'S' }
   ];
 

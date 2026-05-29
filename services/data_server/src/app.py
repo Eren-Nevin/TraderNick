@@ -17,6 +17,7 @@ from routes.aero_basic import bp as aero_basic_bp
 from routes.aave_v4 import bp as aave_v4_bp
 from routes.morpho import bp as morpho_bp
 from routes.spark import bp as spark_bp
+from routes.gmx import bp as gmx_bp
 
 app = Sanic("tradernick_data_server")
 app.config.RESPONSE_TIMEOUT = 60
@@ -38,6 +39,7 @@ app.blueprint(aero_basic_bp)
 app.blueprint(aave_v4_bp)
 app.blueprint(morpho_bp)
 app.blueprint(spark_bp)
+app.blueprint(gmx_bp)
 
 
 @app.get("/health")

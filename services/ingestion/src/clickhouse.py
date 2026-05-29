@@ -1712,3 +1712,281 @@ SPARK_EVENTS = {
     "flashloan":   ("flashloans",   "tradernick.spark_flashloans",   SPARK_FLASHLOANS_COLUMNS,   spark_flashloans_df_to_rows),
     "liquidation": ("liquidations", "tradernick.spark_liquidations", SPARK_LIQUIDATIONS_COLUMNS, spark_liquidations_df_to_rows),
 }
+
+
+# ---------------------------------------------------------------------------
+# GMX V2 transforms (defistream 2.14.0)
+# ---------------------------------------------------------------------------
+# GMX V2's per-event responses share a common "head" — (chain, time,
+# block_number, tx_id, log_index, market, market_name). Each event adds its
+# own tail of typed fields. We separate the head helper from the per-event
+# transforms so a schema change touches one place.
+
+GMX_POSITION_INCREASES_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market", "market_name", "account",
+    "collateral_token", "collateral_symbol",
+    "size_delta_usd", "collateral_delta_amount", "execution_price",
+    "is_long", "order_type", "order_type_name",
+    "size_in_usd", "price_impact_usd",
+    "order_key", "position_key", "value_usd",
+]
+# position_decreases + liquidations share the same shape since defistream
+# 2.16 — both carry base_pnl_usd (realised PnL on the close).
+GMX_POSITION_DECREASES_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market", "market_name", "account",
+    "collateral_token", "collateral_symbol",
+    "size_delta_usd", "collateral_delta_amount", "execution_price",
+    "is_long", "order_type", "order_type_name",
+    "size_in_usd", "price_impact_usd", "base_pnl_usd",
+    "order_key", "position_key", "value_usd",
+]
+GMX_LIQUIDATIONS_COLUMNS = GMX_POSITION_DECREASES_COLUMNS
+GMX_SWAPS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market", "market_name", "receiver", "order_key",
+    "token_in", "token_in_symbol", "amount_in",
+    "token_out", "token_out_symbol", "amount_out",
+    "price_impact_usd", "value_usd",
+]
+GMX_DEPOSITS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market", "market_name", "account",
+    "long_token_amount", "short_token_amount",
+    "long_symbol", "short_symbol",
+    "min_market_tokens",
+    "src_chain_id", "src_chain_name",
+    "value_usd",
+]
+GMX_WITHDRAWALS_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market", "market_name", "account",
+    "market_token_amount", "long_token_amount", "short_token_amount",
+    "long_symbol", "short_symbol",
+    "src_chain_id", "src_chain_name",
+    "value_usd",
+]
+GMX_FUNDING_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market", "market_name",
+    "collateral_token", "collateral_symbol", "is_long",
+    "funding_fee_amount_per_size", "delta",
+]
+GMX_BORROWING_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "market", "market_name", "is_long",
+    "cumulative_borrowing_factor", "delta",
+]
+GMX_FEES_COLUMNS = [
+    "chain", "time", "block_number", "tx_id", "log_index",
+    "fee_type", "market", "market_name",
+    "collateral_token", "collateral_symbol", "trader", "order_key",
+    "fee_receiver_amount", "fee_amount_for_pool", "total_cost_amount",
+    "value_usd",
+]
+
+
+def _gmx_head(r, *, chain):
+    """Shared 5-field event head: (chain, time, block_number, tx_id, log_index)."""
+    return [
+        chain,
+        _to_naive_utc(r["time"]),
+        int(r["block_number"]),
+        str(r["tx_id"]) if r.get("tx_id") else "",
+        int(r["log_index"]) if r.get("log_index") is not None else 0,
+    ]
+
+
+def _gmx_bool(r, col):
+    """GMX returns is_long as a real Python bool (polars), not the
+    lowercase-string AAVE shape. Coerce to UInt8 0/1 either way."""
+    v = r.get(col)
+    if isinstance(v, bool): return 1 if v else 0
+    if isinstance(v, str):  return 1 if v.strip().lower() == "true" else 0
+    return 0
+
+
+def _gmx_position_body(r):
+    """The shared tail of fields between position_increases /
+    position_decreases / liquidations (minus base_pnl_usd which liquidations
+    add on top)."""
+    return [
+        str(r["market"]) if r.get("market") else "",
+        str(r["market_name"]) if r.get("market_name") else "",
+        str(r["account"]) if r.get("account") else "",
+        str(r["collateral_token"]) if r.get("collateral_token") else "",
+        str(r["collateral_symbol"]) if r.get("collateral_symbol") else "",
+        float(r["size_delta_usd"]) if r.get("size_delta_usd") is not None else 0.0,
+        float(r["collateral_delta_amount"]) if r.get("collateral_delta_amount") is not None else 0.0,
+        float(r["execution_price"]) if r.get("execution_price") is not None else 0.0,
+        _gmx_bool(r, "is_long"),
+        int(r["order_type"]) if r.get("order_type") is not None else 0,
+        str(r["order_type_name"]) if r.get("order_type_name") else "",
+        float(r["size_in_usd"]) if r.get("size_in_usd") is not None else 0.0,
+        float(r["price_impact_usd"]) if r.get("price_impact_usd") is not None else 0.0,
+    ]
+
+
+def _gmx_position_tail(r):
+    return [
+        str(r["order_key"]) if r.get("order_key") else "",
+        str(r["position_key"]) if r.get("position_key") else "",
+        _aave_value_usd(r),
+    ]
+
+
+def gmx_position_increases_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_gmx_head(r, chain=chain) + _gmx_position_body(r) + _gmx_position_tail(r))
+    return rows
+
+
+def _gmx_position_close_row(r, *, chain):
+    """Shared row builder for position_decreases + liquidations — both now
+    carry base_pnl_usd in defistream 2.16. Falls back to 0.0 if a row is
+    missing the field (older / partial responses)."""
+    return (
+        _gmx_head(r, chain=chain) + _gmx_position_body(r)
+        + [float(r["base_pnl_usd"]) if r.get("base_pnl_usd") is not None else 0.0]
+        + _gmx_position_tail(r)
+    )
+
+
+def gmx_position_decreases_df_to_rows(df, *, chain):
+    return [_gmx_position_close_row(r, chain=chain) for r in df.iter_rows(named=True)]
+
+
+def gmx_liquidations_df_to_rows(df, *, chain):
+    return [_gmx_position_close_row(r, chain=chain) for r in df.iter_rows(named=True)]
+
+
+def gmx_swaps_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_gmx_head(r, chain=chain) + [
+            str(r["market"]) if r.get("market") else "",
+            str(r["market_name"]) if r.get("market_name") else "",
+            str(r["receiver"]) if r.get("receiver") else "",
+            str(r["order_key"]) if r.get("order_key") else "",
+            str(r["token_in"]) if r.get("token_in") else "",
+            str(r["token_in_symbol"]) if r.get("token_in_symbol") else "",
+            float(r["amount_in"]) if r.get("amount_in") is not None else 0.0,
+            str(r["token_out"]) if r.get("token_out") else "",
+            str(r["token_out_symbol"]) if r.get("token_out_symbol") else "",
+            float(r["amount_out"]) if r.get("amount_out") is not None else 0.0,
+            float(r["price_impact_usd"]) if r.get("price_impact_usd") is not None else 0.0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def _gmx_src_chain(r):
+    """Pull (src_chain_id, src_chain_name) from a deposit/withdrawal row.
+    Added in defistream 2.16 — empty string + 0 for older payloads that
+    lack the fields (cross-chain LP wasn't a thing pre-2.16)."""
+    return [
+        int(r["src_chain_id"]) if r.get("src_chain_id") is not None else 0,
+        str(r["src_chain_name"]) if r.get("src_chain_name") else "",
+    ]
+
+
+def gmx_deposits_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_gmx_head(r, chain=chain) + [
+            str(r["market"]) if r.get("market") else "",
+            str(r["market_name"]) if r.get("market_name") else "",
+            str(r["account"]) if r.get("account") else "",
+            float(r["long_token_amount"]) if r.get("long_token_amount") is not None else 0.0,
+            float(r["short_token_amount"]) if r.get("short_token_amount") is not None else 0.0,
+            str(r["long_symbol"]) if r.get("long_symbol") else "",
+            str(r["short_symbol"]) if r.get("short_symbol") else "",
+            float(r["min_market_tokens"]) if r.get("min_market_tokens") is not None else 0.0,
+        ] + _gmx_src_chain(r) + [
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def gmx_withdrawals_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_gmx_head(r, chain=chain) + [
+            str(r["market"]) if r.get("market") else "",
+            str(r["market_name"]) if r.get("market_name") else "",
+            str(r["account"]) if r.get("account") else "",
+            float(r["market_token_amount"]) if r.get("market_token_amount") is not None else 0.0,
+            float(r["long_token_amount"]) if r.get("long_token_amount") is not None else 0.0,
+            float(r["short_token_amount"]) if r.get("short_token_amount") is not None else 0.0,
+            str(r["long_symbol"]) if r.get("long_symbol") else "",
+            str(r["short_symbol"]) if r.get("short_symbol") else "",
+        ] + _gmx_src_chain(r) + [
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+def gmx_funding_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_gmx_head(r, chain=chain) + [
+            str(r["market"]) if r.get("market") else "",
+            str(r["market_name"]) if r.get("market_name") else "",
+            str(r["collateral_token"]) if r.get("collateral_token") else "",
+            str(r["collateral_symbol"]) if r.get("collateral_symbol") else "",
+            _gmx_bool(r, "is_long"),
+            float(r["funding_fee_amount_per_size"]) if r.get("funding_fee_amount_per_size") is not None else 0.0,
+            float(r["delta"]) if r.get("delta") is not None else 0.0,
+        ])
+    return rows
+
+
+def gmx_borrowing_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_gmx_head(r, chain=chain) + [
+            str(r["market"]) if r.get("market") else "",
+            str(r["market_name"]) if r.get("market_name") else "",
+            _gmx_bool(r, "is_long"),
+            float(r["cumulative_borrowing_factor"]) if r.get("cumulative_borrowing_factor") is not None else 0.0,
+            float(r["delta"]) if r.get("delta") is not None else 0.0,
+        ])
+    return rows
+
+
+def gmx_fees_collected_df_to_rows(df, *, chain):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append(_gmx_head(r, chain=chain) + [
+            str(r["fee_type"]) if r.get("fee_type") else "",
+            str(r["market"]) if r.get("market") else "",
+            str(r["market_name"]) if r.get("market_name") else "",
+            str(r["collateral_token"]) if r.get("collateral_token") else "",
+            str(r["collateral_symbol"]) if r.get("collateral_symbol") else "",
+            str(r["trader"]) if r.get("trader") else "",
+            str(r["order_key"]) if r.get("order_key") else "",
+            float(r["fee_receiver_amount"]) if r.get("fee_receiver_amount") is not None else 0.0,
+            float(r["fee_amount_for_pool"]) if r.get("fee_amount_for_pool") is not None else 0.0,
+            float(r["total_cost_amount"]) if r.get("total_cost_amount") is not None else 0.0,
+            _aave_value_usd(r),
+        ])
+    return rows
+
+
+# Dispatch dict matching the (method_name, table, columns, transform) shape
+# the other protocols use. method_name is the builder accessor on
+# ds.evm.gmx_v2 — DeFiStream uses plurals for everything except funding /
+# borrowing / fees_collected (which are emitted-as-batch events).
+GMX_EVENTS = {
+    "position_increase": ("position_increases", "tradernick.gmx_position_increases", GMX_POSITION_INCREASES_COLUMNS, gmx_position_increases_df_to_rows),
+    "position_decrease": ("position_decreases", "tradernick.gmx_position_decreases", GMX_POSITION_DECREASES_COLUMNS, gmx_position_decreases_df_to_rows),
+    "liquidation":       ("liquidations",       "tradernick.gmx_liquidations",       GMX_LIQUIDATIONS_COLUMNS,       gmx_liquidations_df_to_rows),
+    "swap":              ("swaps",              "tradernick.gmx_swaps",              GMX_SWAPS_COLUMNS,        gmx_swaps_df_to_rows),
+    "deposit":           ("deposits",           "tradernick.gmx_deposits",           GMX_DEPOSITS_COLUMNS,     gmx_deposits_df_to_rows),
+    "withdraw":          ("withdrawals",        "tradernick.gmx_withdrawals",        GMX_WITHDRAWALS_COLUMNS,  gmx_withdrawals_df_to_rows),
+    "funding":           ("funding",            "tradernick.gmx_funding",            GMX_FUNDING_COLUMNS,      gmx_funding_df_to_rows),
+    "borrowing":         ("borrowing",          "tradernick.gmx_borrowing",          GMX_BORROWING_COLUMNS,    gmx_borrowing_df_to_rows),
+    "fees_collected":    ("fees_collected",     "tradernick.gmx_fees_collected",     GMX_FEES_COLUMNS,         gmx_fees_collected_df_to_rows),
+}

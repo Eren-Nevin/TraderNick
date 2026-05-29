@@ -53,6 +53,10 @@
     SPARK_KIND_TO_EVENT,
     SPARK_NET_KIND_TO_EVENTS,
     isSparkKind,
+    GMX_KIND_TO_EVENT,
+    GMX_NET_KIND_TO_EVENTS,
+    GMX_PRIMARY_FIELD,
+    isGmxKind,
     UNISWAP_KIND_TO_EVENT,
     UNISWAP_NET_KIND_TO_EVENTS,
     isUniswapKind,
@@ -112,6 +116,7 @@
     streams = [],
     uniPools = [],
     lidoChains = [],
+    gmxMarkets = [],
     tokenGroups = [],
     chainGroups = [],
     syncZoom,
@@ -128,6 +133,7 @@
     streams?: TransferStream[];
     uniPools?: UniswapStream[];
     lidoChains?: { event: string; chain: string; rows: number }[];
+    gmxMarkets?: { event: string; chain: string; market: string; rows: number }[];
     tokenGroups?: import('$lib/api').TokenGroup[];
     chainGroups?: import('$lib/api').ChainGroup[];
     syncZoom: boolean;
@@ -243,6 +249,35 @@
     if (!instance.chain || !list.includes(instance.chain)) {
       instance.chain = list[0];
     }
+  });
+
+  // ---- GMX-kind helpers (derived from `gmxMarkets`) ----
+  // `gmxMarkets` is the response from /gmx/streams: one row per (event,
+  // chain, market_name). For the selector we collapse to unique markets
+  // ranked by total rows so the most-active perp floats to the top.
+  let gmxMarketsForKind = $derived.by<{ market: string; rows: number }[]>(() => {
+    if (!isGmxKind(instance.kind)) return [];
+    // Identify which underlying events the kind reads from.
+    const evs: string[] = (() => {
+      const single = GMX_KIND_TO_EVENT[instance.kind];
+      if (single) return [single];
+      const net = GMX_NET_KIND_TO_EVENTS[instance.kind];
+      return net ? [net[0], net[1]] : [];
+    })();
+    const chain = instance.chain ?? 'ARB';
+    // Sum rows across all relevant events per market, then drop any unresolved
+    // `?/USD` markets (server-side index-token resolution failures — not
+    // useful to chart on).
+    const totals = new Map<string, number>();
+    for (const r of gmxMarkets) {
+      if (r.chain !== chain) continue;
+      if (!evs.includes(r.event)) continue;
+      if (!r.market || r.market.startsWith('?')) continue;
+      totals.set(r.market, (totals.get(r.market) ?? 0) + r.rows);
+    }
+    return Array.from(totals.entries())
+      .map(([market, rows]) => ({ market, rows }))
+      .sort((a, b) => b.rows - a.rows);
   });
 
   // ---- transfer-kind helpers (derived from `streams`) ----
@@ -523,6 +558,14 @@
       const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
       return `${instance.kind}|${cPart}|${tPart}|${instance.interval}`;
     }
+    if (isGmxKind(instance.kind)) {
+      // GMX charts depend on chain (ARB-only for now) + market_name selector.
+      // Empty market = "all markets summed" — folded into the key so toggling
+      // busts the cache.
+      const cPart = instance.chain ?? 'ARB';
+      const mPart = instance.gmxMarket ? `m:${instance.gmxMarket}` : 'all';
+      return `${instance.kind}|${cPart}|${mPart}|${instance.interval}`;
+    }
     if (isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind)) {
       // Uniswap V2/V3 charts: pool keyed by (sym0, sym1, fee) — fee=0 marks V2.
       const cPart = instance.chain ?? '';
@@ -697,6 +740,7 @@
         isAaveV4Kind(instance.kind) ||
         isMorphoKind(instance.kind) ||
         isSparkKind(instance.kind) ||
+        isGmxKind(instance.kind) ||
         isUniswapKind(instance.kind) ||
         isUniswapV2Kind(instance.kind) ||
         isUniswapV4Kind(instance.kind) ||
@@ -857,6 +901,90 @@
           if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
           const body = await res.json();
           data = (body.series ?? []) as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+      }
+      // GMX V2 chart kinds — ARB-only, per-market selector (market_name).
+      // Per-kind we pick which response field is the primary metric via
+      // GMX_PRIMARY_FIELD — needed because upstream `swap.amount_in` and
+      // `withdraw.value_usd` ship in inconsistent units (decimals bug in
+      // defistream's GMX decoder), so we deliberately read sum_value_usd
+      // for swaps and sum_amount (long+short token-units) for LP events.
+      // The chart layer treats the chosen field as both `sum_amount` and
+      // `sum_value_usd` on the rendered datum so the LineChart's USD/Amount
+      // formatter falls back to USD-style labels by default.
+      if (isGmxKind(instance.kind)) {
+        const buildGmxQs = (event: string) => {
+          const qs = new URLSearchParams({
+            event,
+            chain: instance.chain ?? 'ARB',
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '5000'
+          });
+          if (instance.gmxMarket && instance.gmxMarket.length > 0) {
+            qs.set('market', instance.gmxMarket);
+          }
+          if (forceFresh) qs.set('fresh', '1');
+          return qs;
+        };
+        const primary = GMX_PRIMARY_FIELD[instance.kind] ?? 'sum_value_usd';
+        // Normalise a server bucket onto a single value picked by primary.
+        // Returned datum mirrors both fields so downstream code can keep
+        // reading sum_amount / sum_value_usd uniformly.
+        const pick = (r: Record<string, number>): number => Number(r[primary] ?? 0);
+
+        const netEvs = GMX_NET_KIND_TO_EVENTS[instance.kind];
+        if (netEvs) {
+          const [posEvent, negEvent] = netEvs;
+          const [posRes, negRes] = await Promise.all([
+            queuedFetch(`/api/gmx/aggregate?${buildGmxQs(posEvent)}`, { signal }),
+            queuedFetch(`/api/gmx/aggregate?${buildGmxQs(negEvent)}`, { signal })
+          ]);
+          if (!posRes.ok) throw new Error(`${instance.kind} ${posRes.status}`);
+          if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
+          const posBody = await posRes.json();
+          const negBody = await negRes.json();
+          const negByTime = new Map<number, { val: number; count: number }>();
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            negByTime.set(r.time, { val: pick(r), count: r.count });
+          }
+          const out: Record<string, number>[] = [];
+          const seen = new Set<number>();
+          for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
+            const n = negByTime.get(r.time) ?? { val: 0, count: 0 };
+            const diff = pick(r) - n.val;
+            out.push({ time: r.time, sum_amount: diff, sum_value_usd: diff, count: r.count + n.count });
+            seen.add(r.time);
+          }
+          for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
+            if (seen.has(r.time)) continue;
+            out.push({ time: r.time, sum_amount: -pick(r), sum_value_usd: -pick(r), count: r.count });
+          }
+          out.sort((a, b) => a.time - b.time);
+          data = out as unknown as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+        const gmxEvent = GMX_KIND_TO_EVENT[instance.kind];
+        if (gmxEvent) {
+          const res = await queuedFetch(`/api/gmx/aggregate?${buildGmxQs(gmxEvent)}`, { signal });
+          if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+          const body = await res.json();
+          const out: Record<string, number>[] = [];
+          for (const r of (body.series ?? []) as Array<Record<string, number>>) {
+            const v = pick(r);
+            out.push({ time: r.time, sum_amount: v, sum_value_usd: v, count: r.count });
+          }
+          data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
@@ -1826,6 +1954,11 @@
       || isLidoKind(instance.kind)
       || isAeroKind(instance.kind)
       || isAeroBasicKind(instance.kind)
+      // GMX charts already pick a single value field per kind (via
+      // GMX_PRIMARY_FIELD); the running sum of that field is meaningful
+      // — total position-open USD over the visible window, total swap USD,
+      // etc.
+      || isGmxKind(instance.kind)
       // Uniswap: only when plotting a single USD line — amount mode is
       // dual-axis (token0 + token1) so the secondary axis is already taken
       // and there's no single "the amount" to sum.
@@ -2449,6 +2582,28 @@
               {/each}
             </optgroup>
           {/if}
+        </select>
+      {:else if isGmxKind(instance.kind)}
+        <!-- GMX V2: ARB-only (server-side AVAX is "not configured" in 2.18).
+             Static chain chip + market dropdown populated from /gmx/streams,
+             sorted by row count so the busiest perp floats to the top.
+             First option = "All markets" (empty string), meaning the
+             aggregate endpoint sums across every market. -->
+        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">ARB</span>
+        <select
+          value={instance.gmxMarket ?? ''}
+          onchange={(e) => (instance.gmxMarket = e.currentTarget.value)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 min-w-[10rem]"
+        >
+          <option value="">Σ All markets</option>
+          {#if gmxMarketsForKind.length === 0 && instance.gmxMarket}
+            <!-- Fallback: keep the stored market visible even before the
+                 streams list loads (or if it's empty for this kind). -->
+            <option value={instance.gmxMarket}>{instance.gmxMarket}</option>
+          {/if}
+          {#each gmxMarketsForKind as m (m.market)}
+            <option value={m.market}>{m.market}</option>
+          {/each}
         </select>
       {:else if isAaveV4Kind(instance.kind)}
         <!-- AAVE V4: ETH-only (V4 is mainnet-only currently). Static
@@ -3206,7 +3361,7 @@
         formatY={transferUseUsd ? fmtUsdAxis : fmtAmountAxis}
         formatTooltip={transferUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
       />
-    {:else if isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind)}
+    {:else if isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={aaveLinesD}

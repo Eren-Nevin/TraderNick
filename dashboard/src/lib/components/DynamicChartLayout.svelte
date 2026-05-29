@@ -25,6 +25,7 @@
     streams = [],
     uniPools = [],
     lidoChains = [],
+    gmxMarkets = [],
     tokenGroups = [],
     chainGroups = [],
     storageKey,
@@ -38,6 +39,7 @@
     streams?: TransferStream[];
     uniPools?: import('$lib/api').UniswapStream[];
     lidoChains?: { event: string; chain: string; rows: number }[];
+    gmxMarkets?: { event: string; chain: string; market: string; rows: number }[];
     tokenGroups?: TokenGroup[];
     chainGroups?: ChainGroup[];
     storageKey: string;
@@ -336,6 +338,13 @@
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
       }
+      // GMX — chain (ARB-only for now), valueMode, and gmxMarket selector.
+      // Empty market string = "all markets summed".
+      if (inst.kind.startsWith('gmx_')) {
+        inst.chain = typeof r.chain === 'string' ? r.chain : 'ARB';
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
+        inst.gmxMarket = typeof r.gmxMarket === 'string' ? r.gmxMarket : 'BTC/USD [WBTC-USDC]';
+      }
       // Lido chart kinds need a `chain` but no token / pool. L1 kinds are
       // ETH-pinned; L2 kinds default to ARB (highest wstETH bridge volume).
       if (inst.kind.startsWith('lido_')) {
@@ -589,6 +598,7 @@
         {streams}
         {uniPools}
         {lidoChains}
+        {gmxMarkets}
         {tokenGroups}
         {chainGroups}
         {syncZoom}

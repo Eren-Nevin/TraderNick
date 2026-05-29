@@ -296,6 +296,14 @@ export type ChartKind =
   | 'spark_net_borrow'
   | 'spark_flashloan'
   | 'spark_liquidation'
+  | 'gmx_position_increase'
+  | 'gmx_position_decrease'
+  | 'gmx_net_position'
+  | 'gmx_liquidation'
+  | 'gmx_swap'
+  | 'gmx_deposit'
+  | 'gmx_withdraw'
+  | 'gmx_net_lp'
   | 'uniswap_v2_swap'
   | 'uniswap_v2_deposit'
   | 'uniswap_v2_withdraw'
@@ -381,6 +389,14 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   spark_repay: 'Spark Repays',
   spark_net_borrow: 'Spark Net Borrow',
   spark_flashloan: 'Spark Flash Loans',
+  gmx_position_increase: 'GMX Position Open',
+  gmx_position_decrease: 'GMX Position Close',
+  gmx_net_position: 'GMX Net Position Flow',
+  gmx_liquidation: 'GMX Liquidations',
+  gmx_swap: 'GMX Swaps',
+  gmx_deposit: 'GMX LP Deposits',
+  gmx_withdraw: 'GMX LP Withdrawals',
+  gmx_net_lp: 'GMX Net LP Flow',
   spark_liquidation: 'Spark Liquidations',
   uniswap_v2_swap: 'Uniswap V2 Swaps',
   uniswap_v2_deposit: 'Uniswap V2 Deposits',
@@ -576,6 +592,57 @@ export function isSparkKind(kind: ChartKind): boolean {
   return SPARK_KIND_TO_EVENT[kind] !== undefined || SPARK_NET_KIND_TO_EVENTS[kind] !== undefined;
 }
 
+/** GMX V2 chart kinds (perp DEX, ARB-only). Filter dimension is per-market
+ *  (`market_name` like "BTC/USD [WBTC-USDC]") — same selector model as
+ *  Uniswap pools. Per-event value field is picked deliberately because the
+ *  server returns `swap.amount_in` and `withdrawals.value_usd` in raw
+ *  uint256 units (decoder bug, similar to the Morpho case before its fix). */
+export const GMX_CHART_KINDS: ChartKind[] = [
+  'gmx_position_increase',
+  'gmx_position_decrease',
+  'gmx_net_position',
+  'gmx_liquidation',
+  'gmx_swap',
+  'gmx_deposit',
+  'gmx_withdraw',
+  'gmx_net_lp'
+];
+export const GMX_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  gmx_position_increase: 'position_increase',
+  gmx_position_decrease: 'position_decrease',
+  gmx_liquidation: 'liquidation',
+  gmx_swap: 'swap',
+  gmx_deposit: 'deposit',
+  gmx_withdraw: 'withdraw'
+};
+export const GMX_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  gmx_net_position: ['position_increase', 'position_decrease'],
+  gmx_net_lp: ['deposit', 'withdraw']
+};
+export function isGmxKind(kind: ChartKind): boolean {
+  return GMX_KIND_TO_EVENT[kind] !== undefined || GMX_NET_KIND_TO_EVENTS[kind] !== undefined;
+}
+/** Per-kind value-field picker. Each GMX kind defaults to either sum_amount
+ *  (size_delta_usd / token-units) or sum_value_usd — chosen for whichever is
+ *  the cleanest unit for that event class on the V1 dashboard. The choice
+ *  takes precedence over the instance.valueMode toggle. */
+export const GMX_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_value_usd'>> = {
+  // size_delta_usd (USD notional) — the real "position size" number
+  gmx_position_increase: 'sum_amount',
+  gmx_position_decrease: 'sum_amount',
+  gmx_net_position: 'sum_amount',
+  gmx_liquidation: 'sum_amount',
+  // value_usd is correct here; amount_in is broken upstream
+  gmx_swap: 'sum_value_usd',
+  // long+short token-units — symmetric across deposit/withdraw so net_lp
+  // subtracts apples-to-apples (deposit.value_usd is fine but
+  // withdraw.value_usd is broken upstream, so we use token-units everywhere
+  // in this family)
+  gmx_deposit: 'sum_amount',
+  gmx_withdraw: 'sum_amount',
+  gmx_net_lp: 'sum_amount'
+};
+
 /** Uniswap chart kinds collected for the DeX page (default layout order). */
 export const UNISWAP_CHART_KINDS: ChartKind[] = [
   'uniswap_swap',
@@ -751,6 +818,7 @@ export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('lido_')) return 'Lido';
   if (kind.startsWith('aero_basic_')) return 'Aerodrome Basic';
   if (kind.startsWith('aero_')) return 'Aerodrome CL';
+  if (kind.startsWith('gmx_')) return 'GMX V2';
   return null;
 }
 
@@ -782,7 +850,8 @@ const _GROUP_ORDER: Record<string, number> = {
   'Uniswap V3': 31,
   'Uniswap V4': 32,
   'Aerodrome CL':    40,
-  'Aerodrome Basic': 41
+  'Aerodrome Basic': 41,
+  'GMX V2':          50
 };
 export function chartKindGroupOrder(group: string): number {
   return _GROUP_ORDER[group] ?? 99;
@@ -966,6 +1035,10 @@ export type ChartInstance = {
   aeroPool?: AeroPool;
   // aero_basic_* only: Aerodrome basic-pool tuple — (sym0, sym1, stable)
   aeroBasicPool?: AeroBasicPool;
+  /** gmx_* only: human-readable market_name (e.g. "BTC/USD [WBTC-USDC]").
+   *  Empty string = "all markets summed". The dashboard populates the
+   *  per-chart selector from /api/gmx/streams. */
+  gmxMarket?: string;
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -1072,6 +1145,16 @@ export function newChartInstance(
   if (isSparkKind(kind)) {
     // Spark is ETH-only.
     base.chain = 'ETH';
+    base.valueMode = 'usd';
+  }
+  if (isGmxKind(kind)) {
+    // GMX V2 is ARB-only (server-side AVAX is "not configured" in 2.14).
+    // Default market = canonical BTC/USD pool; the chart's selector lists
+    // every market /api/gmx/streams returns. valueMode is overridden per
+    // chart kind via GMX_PRIMARY_FIELD — the Sum-/MA-style fetch picks
+    // sum_amount or sum_value_usd directly off the response shape.
+    base.chain = 'ARB';
+    base.gmxMarket = 'BTC/USD [WBTC-USDC]';
     base.valueMode = 'usd';
   }
   if (kind === 'transfer') {

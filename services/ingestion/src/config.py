@@ -192,6 +192,15 @@ SPARK_EVENTS_ENABLED = os.environ.get("SPARK_EVENTS_ENABLED", "1") == "1"
 SPARK_CHAINS = _parse_csv_list(os.environ.get("SPARK_CHAINS", "ETH"))
 
 
+# --- GMX V2 events (perp DEX, ARB-only in defistream 2.14) ----------------
+# GMX V2 returns ALL markets in a single network() call — no per-market
+# filter on the builder. So live polling is just 9 calls/tick (one per
+# event on ARB).  Per-market filtering happens at chart time via the
+# market_name column.
+GMX_EVENTS_ENABLED = os.environ.get("GMX_EVENTS_ENABLED", "1") == "1"
+GMX_CHAINS = _parse_csv_list(os.environ.get("GMX_CHAINS", "ARB"))
+
+
 # --- Uniswap V2 pools ------------------------------------------------------
 # V2 has no fee tier (fixed 0.30%), so the pool grammar is
 # `<chain>:<sym0/sym1>,<sym0/sym1>;<chain2>:...`. _parse_uniswap_pools is

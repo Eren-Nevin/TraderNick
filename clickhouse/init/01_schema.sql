@@ -1425,3 +1425,254 @@ CREATE TABLE IF NOT EXISTS tradernick.spark_liquidations
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (chain, debt_token, time, tx_id, log_index);
+
+-- ---------------------------------------------------------------------------
+-- GMX V2 events (defistream 2.14.0)
+-- ---------------------------------------------------------------------------
+-- GMX V2 is a perp DEX whose markets are identified by a contract address
+-- plus a human-readable name (e.g. "BTC/USD [WBTC-USDC]"). The name format
+-- is `<INDEX>/USD [<LONG-COLLATERAL>-<SHORT-COLLATERAL>]`; single-token
+-- variants ("BTC/USD [WBTC]") use only the long-collateral as both sides.
+-- ORDER BY uses market_name (LowCardinality) because per-market chart
+-- queries are the primary access pattern. Currently ARB-only — AVAX is
+-- flagged in the defistream client but server-side returns
+-- "Network 'AVAX' not configured".
+--
+-- 9 events ingested (Tier 1+2): position_increases, position_decreases,
+-- liquidations, swaps, deposits, withdrawals, funding, borrowing,
+-- fees_collected. The 3 orders_* events are skipped — they're high-volume
+-- mid-flow internals that don't translate to charts.
+
+CREATE TABLE IF NOT EXISTS tradernick.gmx_position_increases
+(
+    chain                    LowCardinality(String),
+    time                     DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number             UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id                    String             CODEC(ZSTD(3)),
+    log_index                UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market                   String             CODEC(ZSTD(3)),
+    market_name              LowCardinality(String),
+    account                  String             CODEC(ZSTD(3)),
+    collateral_token         String             CODEC(ZSTD(3)),
+    collateral_symbol        LowCardinality(String),
+    size_delta_usd           Float64            CODEC(Gorilla, ZSTD(3)),
+    collateral_delta_amount  Float64            CODEC(Gorilla, ZSTD(3)),
+    execution_price          Float64            CODEC(Gorilla, ZSTD(3)),
+    is_long                  UInt8              CODEC(T64, ZSTD(3)),
+    order_type               Int8               CODEC(T64, ZSTD(3)),
+    order_type_name          LowCardinality(String),
+    size_in_usd              Float64            CODEC(Gorilla, ZSTD(3)),
+    price_impact_usd         Float64            CODEC(Gorilla, ZSTD(3)),
+    order_key                String             CODEC(ZSTD(3)),
+    position_key             String             CODEC(ZSTD(3)),
+    value_usd                Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at              DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, market_name, time, tx_id, log_index);
+
+-- position_decreases gained base_pnl_usd in defistream 2.16 (previously
+-- only liquidations had it). Storing here too so realised PnL is queryable
+-- on every position close.
+CREATE TABLE IF NOT EXISTS tradernick.gmx_position_decreases
+(
+    chain                    LowCardinality(String),
+    time                     DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number             UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id                    String             CODEC(ZSTD(3)),
+    log_index                UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market                   String             CODEC(ZSTD(3)),
+    market_name              LowCardinality(String),
+    account                  String             CODEC(ZSTD(3)),
+    collateral_token         String             CODEC(ZSTD(3)),
+    collateral_symbol        LowCardinality(String),
+    size_delta_usd           Float64            CODEC(Gorilla, ZSTD(3)),
+    collateral_delta_amount  Float64            CODEC(Gorilla, ZSTD(3)),
+    execution_price          Float64            CODEC(Gorilla, ZSTD(3)),
+    is_long                  UInt8              CODEC(T64, ZSTD(3)),
+    order_type               Int8               CODEC(T64, ZSTD(3)),
+    order_type_name          LowCardinality(String),
+    size_in_usd              Float64            CODEC(Gorilla, ZSTD(3)),
+    price_impact_usd         Float64            CODEC(Gorilla, ZSTD(3)),
+    base_pnl_usd             Float64            CODEC(Gorilla, ZSTD(3)),
+    order_key                String             CODEC(ZSTD(3)),
+    position_key             String             CODEC(ZSTD(3)),
+    value_usd                Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at              DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, market_name, time, tx_id, log_index);
+
+-- Liquidations carry one extra field — base_pnl_usd — and otherwise
+-- match the position_decreases shape. Kept in their own table so queries
+-- on "what was liquidated today" don't have to filter by event type.
+CREATE TABLE IF NOT EXISTS tradernick.gmx_liquidations
+(
+    chain                    LowCardinality(String),
+    time                     DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number             UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id                    String             CODEC(ZSTD(3)),
+    log_index                UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market                   String             CODEC(ZSTD(3)),
+    market_name              LowCardinality(String),
+    account                  String             CODEC(ZSTD(3)),
+    collateral_token         String             CODEC(ZSTD(3)),
+    collateral_symbol        LowCardinality(String),
+    size_delta_usd           Float64            CODEC(Gorilla, ZSTD(3)),
+    collateral_delta_amount  Float64            CODEC(Gorilla, ZSTD(3)),
+    execution_price          Float64            CODEC(Gorilla, ZSTD(3)),
+    is_long                  UInt8              CODEC(T64, ZSTD(3)),
+    order_type               Int8               CODEC(T64, ZSTD(3)),
+    order_type_name          LowCardinality(String),
+    size_in_usd              Float64            CODEC(Gorilla, ZSTD(3)),
+    price_impact_usd         Float64            CODEC(Gorilla, ZSTD(3)),
+    base_pnl_usd             Float64            CODEC(Gorilla, ZSTD(3)),
+    order_key                String             CODEC(ZSTD(3)),
+    position_key             String             CODEC(ZSTD(3)),
+    value_usd                Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at              DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, market_name, time, tx_id, log_index);
+
+-- Swaps go through a GM pool too; `market` identifies which pool.
+-- `order_key` was added in defistream 2.18 — links a swap to the parent
+-- order if the trade was routed through GMX's order system (limit / stop /
+-- TWAP). Empty string for spot swaps that don't reference an order.
+CREATE TABLE IF NOT EXISTS tradernick.gmx_swaps
+(
+    chain              LowCardinality(String),
+    time               DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number       UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id              String             CODEC(ZSTD(3)),
+    log_index          UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market             String             CODEC(ZSTD(3)),
+    market_name        LowCardinality(String),
+    receiver           String             CODEC(ZSTD(3)),
+    order_key          String             CODEC(ZSTD(3)),
+    token_in           String             CODEC(ZSTD(3)),
+    token_in_symbol    LowCardinality(String),
+    amount_in          Float64            CODEC(Gorilla, ZSTD(3)),
+    token_out          String             CODEC(ZSTD(3)),
+    token_out_symbol   LowCardinality(String),
+    amount_out         Float64            CODEC(Gorilla, ZSTD(3)),
+    price_impact_usd   Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd          Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at        DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, market_name, time, tx_id, log_index);
+
+-- Deposits / withdrawals gained src_chain_id + src_chain_name in
+-- defistream 2.16 — GMX V2 now supports cross-chain LP, where a user on
+-- a non-ARB chain can deposit/withdraw into an ARB market. src_chain_id
+-- = 0 means the event originated on ARB itself (the common case).
+CREATE TABLE IF NOT EXISTS tradernick.gmx_deposits
+(
+    chain                LowCardinality(String),
+    time                 DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number         UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id                String             CODEC(ZSTD(3)),
+    log_index            UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market               String             CODEC(ZSTD(3)),
+    market_name          LowCardinality(String),
+    account              String             CODEC(ZSTD(3)),
+    long_token_amount    Float64            CODEC(Gorilla, ZSTD(3)),
+    short_token_amount   Float64            CODEC(Gorilla, ZSTD(3)),
+    long_symbol          LowCardinality(String),
+    short_symbol         LowCardinality(String),
+    min_market_tokens    Float64            CODEC(Gorilla, ZSTD(3)),
+    src_chain_id         UInt32             CODEC(T64, ZSTD(3)),
+    src_chain_name       LowCardinality(String),
+    value_usd            Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at          DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, market_name, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.gmx_withdrawals
+(
+    chain                 LowCardinality(String),
+    time                  DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number          UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id                 String             CODEC(ZSTD(3)),
+    log_index             UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market                String             CODEC(ZSTD(3)),
+    market_name           LowCardinality(String),
+    account               String             CODEC(ZSTD(3)),
+    market_token_amount   Float64            CODEC(Gorilla, ZSTD(3)),
+    long_token_amount     Float64            CODEC(Gorilla, ZSTD(3)),
+    short_token_amount    Float64            CODEC(Gorilla, ZSTD(3)),
+    long_symbol           LowCardinality(String),
+    short_symbol          LowCardinality(String),
+    src_chain_id          UInt32             CODEC(T64, ZSTD(3)),
+    src_chain_name        LowCardinality(String),
+    value_usd             Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at           DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, market_name, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.gmx_funding
+(
+    chain                          LowCardinality(String),
+    time                           DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number                   UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id                          String             CODEC(ZSTD(3)),
+    log_index                      UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market                         String             CODEC(ZSTD(3)),
+    market_name                    LowCardinality(String),
+    collateral_token               String             CODEC(ZSTD(3)),
+    collateral_symbol              LowCardinality(String),
+    is_long                        UInt8              CODEC(T64, ZSTD(3)),
+    funding_fee_amount_per_size    Float64            CODEC(Gorilla, ZSTD(3)),
+    delta                          Float64            CODEC(Gorilla, ZSTD(3)),
+    ingested_at                    DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, market_name, time, tx_id, log_index);
+
+CREATE TABLE IF NOT EXISTS tradernick.gmx_borrowing
+(
+    chain                         LowCardinality(String),
+    time                          DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number                  UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id                         String             CODEC(ZSTD(3)),
+    log_index                     UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    market                        String             CODEC(ZSTD(3)),
+    market_name                   LowCardinality(String),
+    is_long                       UInt8              CODEC(T64, ZSTD(3)),
+    cumulative_borrowing_factor   Float64            CODEC(Gorilla, ZSTD(3)),
+    delta                         Float64            CODEC(Gorilla, ZSTD(3)),
+    ingested_at                   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, market_name, time, tx_id, log_index);
+
+-- Fees collected — fee_type distinguishes the source ('position', 'swap',
+-- 'deposit', 'withdraw'). The protocol receives `fee_amount_for_pool` and
+-- the keeper receives `fee_receiver_amount`; `total_cost_amount` includes
+-- both plus any rounding remainder. `order_key` (added in 2.18) ties the
+-- fee back to the originating order so you can sum keeper fees per order.
+CREATE TABLE IF NOT EXISTS tradernick.gmx_fees_collected
+(
+    chain                  LowCardinality(String),
+    time                   DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    block_number           UInt64             CODEC(DoubleDelta, ZSTD(3)),
+    tx_id                  String             CODEC(ZSTD(3)),
+    log_index              UInt32             CODEC(DoubleDelta, ZSTD(3)),
+    fee_type               LowCardinality(String),
+    market                 String             CODEC(ZSTD(3)),
+    market_name            LowCardinality(String),
+    collateral_token       String             CODEC(ZSTD(3)),
+    collateral_symbol      LowCardinality(String),
+    trader                 String             CODEC(ZSTD(3)),
+    order_key              String             CODEC(ZSTD(3)),
+    fee_receiver_amount    Float64            CODEC(Gorilla, ZSTD(3)),
+    fee_amount_for_pool    Float64            CODEC(Gorilla, ZSTD(3)),
+    total_cost_amount      Float64            CODEC(Gorilla, ZSTD(3)),
+    value_usd              Nullable(Float64)  CODEC(Gorilla, ZSTD(3)),
+    ingested_at            DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (chain, market_name, time, tx_id, log_index);
