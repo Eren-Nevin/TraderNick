@@ -316,8 +316,6 @@ export type ChartKind =
   | 'gmx_deposit'
   | 'gmx_withdraw'
   | 'gmx_net_lp'
-  | 'hl_trade_volume'
-  | 'hl_taker_volume'
   | 'hl_pnl'
   | 'hl_transfers'
   | 'hl_vault_net'
@@ -407,8 +405,6 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   spark_repay: 'Spark Repays',
   spark_net_borrow: 'Spark Net Borrow',
   spark_flashloan: 'Spark Flash Loans',
-  hl_trade_volume: 'HL Trade Volume',
-  hl_taker_volume: 'HL Taker Volume',
   hl_pnl: 'HL Realized PnL',
   hl_transfers: 'HL Bridge Flows',
   hl_vault_net: 'HL Vault Net Flow',
@@ -677,8 +673,6 @@ export const HL_CHART_KINDS: ChartKind[] = [
   // exchange='hl'. Same goes for hl_funding_paid → `fr` + exchange='hl'.
   // hl_position_long_size / short_size / net_size removed — the
   // position_history endpoint is deferred (see HL_EVENTS comment).
-  'hl_trade_volume',
-  'hl_taker_volume',
   'hl_pnl',
   'hl_transfers',
   'hl_vault_net',
@@ -689,8 +683,6 @@ export const HL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
   // hl_ohlcv intentionally absent — handled via the generic `ohlcv` kind.
   // hl_funding_paid intentionally absent — handled via `fr` + exchange='hl'.
   // hl_position_* intentionally absent — position_history endpoint deferred.
-  hl_trade_volume: 'trades',
-  hl_taker_volume: 'fills',
   hl_pnl: 'trade_history',
   hl_transfers: 'transfers',
   hl_vault_net: 'vaults'
@@ -702,8 +694,6 @@ export function isHlKind(kind: ChartKind): boolean {
 /** Per-kind value-field picker. value_usd for events where the server
  *  computes one; sum_amount otherwise. */
 export const HL_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_value_usd'>> = {
-  hl_trade_volume: 'sum_value_usd', // USD trade volume
-  hl_taker_volume: 'sum_value_usd', // USD taker flow
   hl_pnl: 'sum_value_usd',          // realized PnL in USD
   hl_transfers: 'sum_amount',       // USDC amount
   hl_vault_net: 'sum_amount'        // amount
@@ -1203,6 +1193,10 @@ export function newChartInstance(
     base.over = 100000;
     base.underInput = '10000';
     base.overInput = '100000';
+    base.exchange = 'binance';
+  }
+  if (kind === 'bs') {
+    base.exchange = 'binance';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

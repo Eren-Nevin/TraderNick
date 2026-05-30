@@ -610,7 +610,7 @@
         : (instance.chain ?? '');
       return `${instance.kind}|${cPart}|${instance.interval}`;
     }
-    if (instance.kind === 'ohlcv' || instance.kind === 'fr') {
+    if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz') {
       // Exchange selector busts the cache so flipping Binance ↔ HL re-fetches.
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
@@ -1946,6 +1946,7 @@
         case 'bs':
           url = `/api/trade_volume?${new URLSearchParams({
             ...baseQS,
+            exchange: instance.exchange ?? 'binance',
             under: '10000',
             over: '100000'
           })}`;
@@ -1954,6 +1955,7 @@
         case 'sz':
           url = `/api/trade_volume?${new URLSearchParams({
             ...baseQS,
+            exchange: instance.exchange ?? 'binance',
             under: String(instance.under ?? 10000),
             over: String(instance.over ?? 100000)
           })}`;
@@ -2992,11 +2994,10 @@
           {/if}
         </select>
       {:else}
-        {#if instance.kind === 'ohlcv' || instance.kind === 'fr'}
-          <!-- Exchange selector picks the data source. For ohlcv: Binance
-               binance_ohlcv_1m vs HL hl_ohlcv_1m. For fr: binance_funding_rate
-               (argMax(rate) per bucket) vs hl_funding (avg(rate)). Same
-               render path either way. -->
+        {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz'}
+          <!-- Exchange selector picks the data source. ohlcv → *_ohlcv_1m,
+               fr → binance_funding_rate / hl_funding, bs/sz → *_raw_trades /
+               hl_trades. Same render path either way. -->
           <select
             value={instance.exchange ?? 'binance'}
             onchange={(e) => (instance.exchange = e.currentTarget.value as 'binance' | 'hl')}

@@ -310,6 +310,11 @@
         inst.over = typeof r.over === 'number' ? r.over : 100000;
         inst.underInput = typeof r.underInput === 'string' ? r.underInput : String(inst.under);
         inst.overInput = typeof r.overInput === 'string' ? r.overInput : String(inst.over);
+        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
+      }
+      if (inst.kind === 'bs') {
+        // bs reads /trade_volume with exchange = binance | hl, same shape both ways.
+        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
       }
       if (inst.kind === 'ohlcv') {
         inst.pin = r.pin === true;

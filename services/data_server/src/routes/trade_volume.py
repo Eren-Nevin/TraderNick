@@ -7,6 +7,15 @@ from routes.ohlcv import INTERVAL_SECONDS
 
 bp = Blueprint("trade_volume")
 
+# Both tables have the same (time DateTime64(3), token, price Float64,
+# amount Float64, buy Bool) shape, so the same buyer/seller + size-bucket
+# SQL works for either source. Selector lets the bs/sz charts mirror the
+# ohlcv pattern of one chart kind per exchange.
+_TRADES_TABLE = {
+    "binance": "tradernick.binance_raw_trades",
+    "hl":      "tradernick.hl_trades",
+}
+
 
 def _parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
@@ -15,10 +24,13 @@ def _parse_iso(s: str) -> datetime:
 @bp.get("/trade_volume")
 async def trade_volume(request):
     token = request.args.get("token")
+    exchange = request.args.get("exchange", "binance")
     interval = request.args.get("interval", "1h")
     since = request.args.get("since")
     until = request.args.get("until")
     limit = int(request.args.get("limit", "5000"))
+    if exchange not in _TRADES_TABLE:
+        return response.json({"error": f"exchange must be one of {list(_TRADES_TABLE)}"}, status=400)
     try:
         under = float(request.args.get("under", "10000"))
         over = float(request.args.get("over", "100000"))
@@ -37,31 +49,32 @@ async def trade_volume(request):
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since)
     until_dt = _parse_iso(until)
+    table = _TRADES_TABLE[exchange]
 
     ch = await client()
     rows = await ch.query(
-        """
+        f"""
         SELECT
-            toUnixTimestamp(toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND))           AS bucket,
-            sumIf(amount * price, buy)                                                            AS buyer_taker_usd,
-            sumIf(amount * price, NOT buy)                                                        AS seller_taker_usd,
-            sumIf(amount * price, amount * price <  {under:Float64})                              AS small_usd,
-            sumIf(amount * price, amount * price >= {under:Float64}
-                                  AND amount * price <= {over:Float64})                          AS mid_usd,
-            sumIf(amount * price, amount * price >  {over:Float64})                               AS large_usd,
-            countIf(amount * price <  {under:Float64})                                            AS small_count,
-            countIf(amount * price >= {under:Float64}
-                    AND amount * price <= {over:Float64})                                         AS mid_count,
-            countIf(amount * price >  {over:Float64})                                             AS large_count,
-            countIf(buy)                                                                          AS buyer_count,
-            countIf(NOT buy)                                                                      AS seller_count
-        FROM tradernick.binance_raw_trades FINAL
-        WHERE token = {token:String}
-          AND time >= {since:DateTime64(3)}
-          AND time <  {until:DateTime64(3)}
+            toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND))           AS bucket,
+            sumIf(amount * price, buy)                                                              AS buyer_taker_usd,
+            sumIf(amount * price, NOT buy)                                                          AS seller_taker_usd,
+            sumIf(amount * price, amount * price <  {{under:Float64}})                              AS small_usd,
+            sumIf(amount * price, amount * price >= {{under:Float64}}
+                                  AND amount * price <= {{over:Float64}})                          AS mid_usd,
+            sumIf(amount * price, amount * price >  {{over:Float64}})                               AS large_usd,
+            countIf(amount * price <  {{under:Float64}})                                            AS small_count,
+            countIf(amount * price >= {{under:Float64}}
+                    AND amount * price <= {{over:Float64}})                                         AS mid_count,
+            countIf(amount * price >  {{over:Float64}})                                             AS large_count,
+            countIf(buy)                                                                            AS buyer_count,
+            countIf(NOT buy)                                                                        AS seller_count
+        FROM {table} FINAL
+        WHERE token = {{token:String}}
+          AND time >= {{since:DateTime64(3)}}
+          AND time <  {{until:DateTime64(3)}}
         GROUP BY bucket
         ORDER BY bucket
-        LIMIT {limit:UInt32}
+        LIMIT {{limit:UInt32}}
         """,
         parameters={
             "seconds": seconds,
@@ -92,6 +105,7 @@ async def trade_volume(request):
     ]
     return response.json({
         "token": token,
+        "exchange": exchange,
         "interval": interval,
         "under": under,
         "over": over,

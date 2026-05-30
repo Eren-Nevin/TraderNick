@@ -10,16 +10,16 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', ...HL_CHART_KINDS];
+  // bs (Buyer vs Seller) and sz (Size buckets) now support both exchanges
+  // via the exchange selector — hl_trade_volume / hl_taker_volume were
+  // ditched because their data lives in OHLCV's buyer/seller_taker_volume.
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'bs', 'sz', ...HL_CHART_KINDS];
 
-  // Default-layout kinds, in the order they appear on the page. Eight
-  // charts chosen so they tile cleanly at 2×1 on a wide layout (4 across,
-  // 2 rows).
   const DEFAULT_KINDS: ChartKind[] = [
-    'ohlcv',              // BTC candles (exchange=hl is set below)
-    'hl_trade_volume',    // BTC trade volume
-    'hl_taker_volume',    // BTC taker flow (in place of net-OI until position_history is re-enabled)
-    'fr',                 // BTC funding rate (exchange=hl set below)
+    'ohlcv',              // BTC candles
+    'bs',                 // BTC buyer vs seller taker volume
+    'sz',                 // BTC trade size distribution
+    'fr',                 // BTC funding rate
     'hl_pnl',             // BTC realized PnL (no wallet filter)
     'hl_top_traders',     // BTC top traders leaderboard
     'hl_transfers',       // bridge in/out (no token)
@@ -30,8 +30,8 @@
     return DEFAULT_KINDS.map((kind) => {
       const inst = newChartInstance(kind, { token: 'BTC', chain: 'HL' });
       inst.interval = '4h';
-      // OHLCV + funding-rate charts on /hyperliquid read the HL source.
-      if (kind === 'ohlcv' || kind === 'fr') inst.exchange = 'hl';
+      // Exchange-selectable charts default to HL on this page.
+      if (kind === 'ohlcv' || kind === 'fr' || kind === 'bs' || kind === 'sz') inst.exchange = 'hl';
       return inst;
     });
   }
