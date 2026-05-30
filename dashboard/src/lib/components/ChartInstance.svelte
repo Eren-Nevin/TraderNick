@@ -539,7 +539,8 @@
 
   function loadKey(): string {
     if (instance.kind === 'sz') {
-      return `${instance.kind}|${instance.token}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}`;
+      const ex = instance.exchange ?? 'binance';
+      return `${instance.kind}|${instance.token}|${ex}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}`;
     }
     if (instance.kind === 'transfer') {
       // Key encodes whether each axis is singleton or group so cache busts
