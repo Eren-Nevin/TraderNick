@@ -36,17 +36,28 @@ def _sql_dt(dt): return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
 # Per-endpoint backfill chunk size in hours. Same shape as the live
-# group's gap-fill cadence.
+# group's gap-fill cadence with one carve-out: position_history and
+# trade_history are per-(wallet × token × time) snapshots with enormous
+# fan-out (millions of rows per 24h chunk for our 26-token roster).
+# A naive 24h × 26-token call hangs the HTTP client mid-stream because
+# the response body is too large. For those two events we both:
+#   (a) shrink the chunk window (6h)
+#   (b) split per-token (one call per token, not 26 per call)
+# Per-token chunks are tracked separately by adding the token to the
+# resume key — `<event>|<token>|<chunk_start>` instead of `<event>|<chunk_start>`.
 _CHUNK_HOURS = {
     "ohlcv":            6,
     "trades":           6,
     "fills":            6,
-    "position_history": 24,
-    "trade_history":    24,
+    "position_history": 6,
+    "trade_history":    6,
     "transfers":        24,
     "funding":          24,
     "vaults":           24,
 }
+
+# Events that get one chunk PER TOKEN (instead of one multi-token chunk).
+_PER_TOKEN_CHUNKED = {"position_history", "trade_history"}
 
 _TOKEN_REQUIRED = {"ohlcv", "position_history", "trade_history"}
 _PER_TOKEN_TABLE = {"ohlcv", "trades", "fills", "funding", "position_history", "trade_history"}
@@ -74,21 +85,34 @@ def _is_rate_limit(exc):
     return "too many requests" in m or "429" in m or "rate limit" in m
 
 
-def _planned_chunks(events, since, until):
-    """Returns list of (event, chunk_start, chunk_end). Each event walks
-    its own chunk-size step independently — sleep in between."""
+def _planned_chunks(events, tokens, since, until):
+    """Returns list of (event, token_or_None, chunk_start, chunk_end).
+    Events in _PER_TOKEN_CHUNKED get one chunk per (token, time-window)
+    so each fetch carries only one token's data — keeps the response
+    payload bounded for high-cardinality endpoints like position_history
+    where one 24h × 26-token call hangs the HTTP client."""
     out = []
     for ev in events:
         step = timedelta(hours=_CHUNK_HOURS[ev])
-        t = since
-        while t < until:
-            t_end = min(t + step, until)
-            out.append((ev, t, t_end))
-            t = t_end
+        if ev in _PER_TOKEN_CHUNKED:
+            for tok in tokens:
+                t = since
+                while t < until:
+                    t_end = min(t + step, until)
+                    out.append((ev, tok, t, t_end))
+                    t = t_end
+        else:
+            t = since
+            while t < until:
+                t_end = min(t + step, until)
+                out.append((ev, None, t, t_end))
+                t = t_end
     return out
 
 
 async def _fetch_chunk(ds, *, event, tokens, since, until):
+    """tokens is either the full roster (multi-token chunks) or a
+    single-element list (per-token chunks for high-cardinality events)."""
     method, table, columns, transform = HL_EVENTS[event]
     last_exc = None
     for attempt, delay in enumerate((0.0, *RETRY_DELAYS_S)):
@@ -126,9 +150,11 @@ async def main(job_id):
     if unknown: log.error("unknown events: %s", unknown); sys.exit(2)
     since = _parse_iso(args["since"]); until = _parse_iso(args["until"])
     completed_set = {tuple(k) if isinstance(k, list) else k for k in args.get("completed_chunks", [])}
-    chunks = _planned_chunks(events, since, until)
+    chunks = _planned_chunks(events, tokens, since, until)
     total = len(chunks)
-    done = sum(1 for (ev, cs, _) in chunks if f"{ev}|{cs.isoformat()}" in completed_set)
+    def _chunk_key(ev: str, tok, cs):
+        return f"{ev}|{tok}|{cs.isoformat()}" if tok else f"{ev}|{cs.isoformat()}"
+    done = sum(1 for (ev, tok, cs, _) in chunks if _chunk_key(ev, tok, cs) in completed_set)
     await _write_status(job_id=job_id, job_type=job_type, args=args, status="running",
                         progress=(done/total) if total else 1.0, started_at=started_at)
     log.info("job %s starting: tokens=%d events=%s chunks=%d resumed_at=%d",
@@ -144,18 +170,22 @@ async def main(job_id):
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     try:
-        for (ev, cs, ce) in chunks:
+        for (ev, tok, cs, ce) in chunks:
             if _stop:
                 args["completed_chunks"] = sorted(completed_set)
                 await _write_status(job_id=job_id, job_type=job_type, args=args, status="cancelled",
                                     progress=(done/total) if total else 1.0,
                                     started_at=started_at, finished_at=_utcnow())
                 return
-            key = f"{ev}|{cs.isoformat()}"
+            key = _chunk_key(ev, tok, cs)
             if key in completed_set: continue
-            log.info("chunk %s %s..%s", ev, cs, ce)
-            n = await _fetch_chunk(ds, event=ev, tokens=tokens, since=cs, until=ce)
-            log.info("chunk %s rows=%d", ev, n)
+            # For per-token-chunked events we pass [tok] so the fetch is
+            # restricted to a single token; multi-token events pass the
+            # full roster.
+            call_tokens = [tok] if tok else tokens
+            log.info("chunk %s%s %s..%s", ev, f"/{tok}" if tok else "", cs, ce)
+            n = await _fetch_chunk(ds, event=ev, tokens=call_tokens, since=cs, until=ce)
+            log.info("chunk %s%s rows=%d", ev, f"/{tok}" if tok else "", n)
             completed_set.add(key); done += 1
             args["completed_chunks"] = sorted(completed_set)
             await _write_status(job_id=job_id, job_type=job_type, args=args, status="running",
