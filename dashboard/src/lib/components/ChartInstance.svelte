@@ -609,7 +609,7 @@
         : (instance.chain ?? '');
       return `${instance.kind}|${cPart}|${instance.interval}`;
     }
-    if (instance.kind === 'ohlcv') {
+    if (instance.kind === 'ohlcv' || instance.kind === 'fr') {
       // Exchange selector busts the cache so flipping Binance ↔ HL re-fetches.
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
@@ -1929,10 +1929,14 @@
           url = `/api/open_interest?${new URLSearchParams(baseQS)}`;
           pickArr = (b) => (b.series ?? []) as AnyDatum[];
           break;
-        case 'fr':
-          url = `/api/funding_rate?${new URLSearchParams(baseQS)}`;
+        case 'fr': {
+          // Same Binance / HL exchange selector pattern as the ohlcv kind.
+          const frQs = new URLSearchParams(baseQS);
+          frQs.set('exchange', instance.exchange ?? 'binance');
+          url = `/api/funding_rate?${frQs}`;
           pickArr = (b) => (b.series ?? []) as AnyDatum[];
           break;
+        }
         case 'tt':
         case 'ls':
           url = `/api/long_short_ratios?${new URLSearchParams(baseQS)}`;
@@ -2954,9 +2958,11 @@
           {/if}
         </select>
       {:else}
-        {#if instance.kind === 'ohlcv'}
-          <!-- OHLCV: exchange selector picks the candle source. Binance =
-               binance_ohlcv_1m, HL = hl_ohlcv_1m. Same render either way. -->
+        {#if instance.kind === 'ohlcv' || instance.kind === 'fr'}
+          <!-- Exchange selector picks the data source. For ohlcv: Binance
+               binance_ohlcv_1m vs HL hl_ohlcv_1m. For fr: binance_funding_rate
+               (argMax(rate) per bucket) vs hl_funding (avg(rate)). Same
+               render path either way. -->
           <select
             value={instance.exchange ?? 'binance'}
             onchange={(e) => (instance.exchange = e.currentTarget.value as 'binance' | 'hl')}

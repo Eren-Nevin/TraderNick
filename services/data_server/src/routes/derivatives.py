@@ -100,26 +100,46 @@ async def long_short_ratios(request):
     return response.json({"token": args["token"], "interval": args["interval"], "series": series})
 
 
+# Per-exchange funding-rate source. Same response shape for both:
+# {time, rate}. Aggregation differs because the row shapes do — binance
+# has one (token, time) row at the funding-event boundary, so argMax
+# picks the latest rate in the bucket; HL has per-wallet rows where
+# every wallet at the same event-time carries the same rate, so avg()
+# is equivalent to picking any one (and averages cleanly across
+# multiple event-times in a longer bucket).
+_FR_SOURCE = {
+    "binance": ("tradernick.binance_funding_rate", "argMax(rate, time)"),
+    "hl":      ("tradernick.hl_funding",           "avg(rate)"),
+}
+
+
 @bp.get("/funding_rate")
 async def funding_rate(request):
     args, err = _validate(request)
     if err is not None:
         return err
+    exchange = request.args.get("exchange", "binance")
+    if exchange not in _FR_SOURCE:
+        return response.json({"error": f"exchange must be one of {list(_FR_SOURCE)}"}, status=400)
+    table, rate_expr = _FR_SOURCE[exchange]
     ch = await client()
     rows = await ch.query(
-        """
+        f"""
         SELECT
-            toUnixTimestamp(toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND)) AS bucket,
-            argMax(rate, time) AS rate
-        FROM tradernick.binance_funding_rate
-        WHERE token = {token:String}
-          AND time >= {since:DateTime}
-          AND time <  {until:DateTime}
+            toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
+            {rate_expr} AS rate
+        FROM {table}
+        WHERE token = {{token:String}}
+          AND time >= {{since:DateTime}}
+          AND time <  {{until:DateTime}}
         GROUP BY bucket
         ORDER BY bucket
-        LIMIT {limit:UInt32}
+        LIMIT {{limit:UInt32}}
         """,
         parameters=args,
     )
     series = [{"time": int(r[0]), "rate": float(r[1])} for r in rows.result_rows]
-    return response.json({"token": args["token"], "interval": args["interval"], "series": series})
+    return response.json({
+        "token": args["token"], "exchange": exchange,
+        "interval": args["interval"], "series": series,
+    })

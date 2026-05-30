@@ -315,6 +315,11 @@
         inst.pin = r.pin === true;
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
       }
+      if (inst.kind === 'fr') {
+        // Same exchange selector as ohlcv — defaults to Binance for
+        // existing saved layouts.
+        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
+      }
       if (inst.kind === 'pc') {
         // Price Comparison chart — the overlay token list is the *whole*
         // configuration alongside instance.token.

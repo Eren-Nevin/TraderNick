@@ -19,7 +19,7 @@
     'ohlcv',              // BTC candles (exchange=hl is set below)
     'hl_trade_volume',    // BTC trade volume
     'hl_taker_volume',    // BTC taker flow (in place of net-OI until position_history is re-enabled)
-    'hl_funding_paid',    // BTC funding paid
+    'fr',                 // BTC funding rate (exchange=hl set below)
     'hl_pnl',             // BTC realized PnL (no wallet filter)
     'hl_top_traders',     // BTC top traders leaderboard
     'hl_transfers',       // bridge in/out (no token)
@@ -30,8 +30,8 @@
     return DEFAULT_KINDS.map((kind) => {
       const inst = newChartInstance(kind, { token: 'BTC', chain: 'HL' });
       inst.interval = '4h';
-      // OHLCV chart on the Hyperliquid page reads HL candles, not Binance.
-      if (kind === 'ohlcv') inst.exchange = 'hl';
+      // OHLCV + funding-rate charts on /hyperliquid read the HL source.
+      if (kind === 'ohlcv' || kind === 'fr') inst.exchange = 'hl';
       return inst;
     });
   }
