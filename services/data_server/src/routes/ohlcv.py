@@ -21,8 +21,20 @@ def _parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
 
 
+# Per-exchange source table. The columns are identical (we modelled
+# hl_ohlcv_1m on the binance shape) so the same aggregation SQL works
+# for both — we just swap the table name.
+_OHLCV_TABLE = {
+    "binance": "tradernick.binance_ohlcv_1m",
+    "hl":      "tradernick.hl_ohlcv_1m",
+}
+
+
 @bp.get("/tokens")
 async def tokens(_request):
+    """Distinct tokens that have binance OHLCV — the canonical source for
+    the dashboard's token dropdowns. HL has the same roster (driven from
+    INGEST_TOKENS) so a single tokens list serves both exchanges."""
     ch = await client()
     rows = await ch.query(
         "SELECT DISTINCT token FROM tradernick.binance_ohlcv_1m ORDER BY token"
@@ -33,6 +45,7 @@ async def tokens(_request):
 @bp.get("/ohlcv")
 async def ohlcv(request):
     token = request.args.get("token")
+    exchange = request.args.get("exchange", "binance")
     interval = request.args.get("interval", "1h")
     since = request.args.get("since")
     until = request.args.get("until")
@@ -40,6 +53,8 @@ async def ohlcv(request):
 
     if not token:
         return response.json({"error": "missing token"}, status=400)
+    if exchange not in _OHLCV_TABLE:
+        return response.json({"error": f"exchange must be one of {list(_OHLCV_TABLE)}"}, status=400)
     if interval not in INTERVAL_SECONDS:
         return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
     if not since or not until:
@@ -48,12 +63,13 @@ async def ohlcv(request):
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since)
     until_dt = _parse_iso(until)
+    table = _OHLCV_TABLE[exchange]
 
     ch = await client()
     rows = await ch.query(
-        """
+        f"""
         SELECT
-            toUnixTimestamp(toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND)) AS bucket,
+            toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
             argMin(open,  time)       AS open,
             max(high)                 AS high,
             min(low)                  AS low,
@@ -62,13 +78,13 @@ async def ohlcv(request):
             sum(buyer_taker_volume)   AS buyer_taker_volume,
             sum(seller_taker_volume)  AS seller_taker_volume,
             sum(trade_count)          AS trade_count
-        FROM tradernick.binance_ohlcv_1m
-        WHERE token = {token:String}
-          AND time >= {since:DateTime}
-          AND time <  {until:DateTime}
+        FROM {table}
+        WHERE token = {{token:String}}
+          AND time >= {{since:DateTime}}
+          AND time <  {{until:DateTime}}
         GROUP BY bucket
         ORDER BY bucket
-        LIMIT {limit:UInt32}
+        LIMIT {{limit:UInt32}}
         """,
         parameters={
             "seconds": seconds,
@@ -93,4 +109,4 @@ async def ohlcv(request):
         }
         for r in rows.result_rows
     ]
-    return response.json({"token": token, "interval": interval, "candles": candles})
+    return response.json({"token": token, "exchange": exchange, "interval": interval, "candles": candles})

@@ -313,6 +313,7 @@
       }
       if (inst.kind === 'ohlcv') {
         inst.pin = r.pin === true;
+        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
       }
       if (inst.kind === 'pc') {
         // Price Comparison chart — the overlay token list is the *whole*

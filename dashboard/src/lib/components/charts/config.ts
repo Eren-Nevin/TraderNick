@@ -304,7 +304,6 @@ export type ChartKind =
   | 'gmx_deposit'
   | 'gmx_withdraw'
   | 'gmx_net_lp'
-  | 'hl_ohlcv'
   | 'hl_trade_volume'
   | 'hl_taker_volume'
   | 'hl_funding_paid'
@@ -400,7 +399,6 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   spark_repay: 'Spark Repays',
   spark_net_borrow: 'Spark Net Borrow',
   spark_flashloan: 'Spark Flash Loans',
-  hl_ohlcv: 'HL Spot Volume',
   hl_trade_volume: 'HL Trade Volume',
   hl_taker_volume: 'HL Taker Volume',
   hl_funding_paid: 'HL Funding Paid',
@@ -671,7 +669,8 @@ export const GMX_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_va
  *  filter exposed on every kind via a wallet input + a category dropdown
  *  sourced from the tradernick.wallet_labels CH dictionary. */
 export const HL_CHART_KINDS: ChartKind[] = [
-  'hl_ohlcv',
+  // hl_ohlcv removed — superseded by the generic `ohlcv` kind with
+  // exchange='hl'. The unified chart renders candles either way.
   'hl_trade_volume',
   'hl_taker_volume',
   'hl_funding_paid',
@@ -685,7 +684,7 @@ export const HL_CHART_KINDS: ChartKind[] = [
 ];
 /** Single-event HL kinds → server-side event slug. */
 export const HL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
-  hl_ohlcv: 'ohlcv',
+  // hl_ohlcv intentionally absent — handled via the generic `ohlcv` kind.
   hl_trade_volume: 'trades',
   hl_taker_volume: 'fills',
   hl_funding_paid: 'funding',
@@ -703,7 +702,6 @@ export function isHlKind(kind: ChartKind): boolean {
 /** Per-kind value-field picker. value_usd for events where the server
  *  computes one; sum_amount otherwise. */
 export const HL_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_value_usd'>> = {
-  hl_ohlcv: 'sum_amount',          // sum(volume) per bucket — line chart
   hl_trade_volume: 'sum_value_usd', // USD trade volume
   hl_taker_volume: 'sum_value_usd', // USD taker flow
   hl_funding_paid: 'sum_amount',    // funding in USDC (sum)
@@ -1089,6 +1087,10 @@ export type ChartInstance = {
   overInput?: string;
   // ohlcv only
   pin?: boolean;
+  /** ohlcv only: which exchange's candle table to read. Defaults to
+   *  'binance'. 'hl' routes to tradernick.hl_ohlcv_1m so the same chart
+   *  kind serves both data sources. */
+  exchange?: 'binance' | 'hl';
   /** For event-driven chart kinds (AAVE / Lido) that emit both a USD value
    *  AND a raw token amount per row: which one to plot. Default 'usd'. The
    *  toggle is hidden for Uniswap kinds because the amount field mixes

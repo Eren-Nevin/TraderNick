@@ -609,6 +609,11 @@
         : (instance.chain ?? '');
       return `${instance.kind}|${cPart}|${instance.interval}`;
     }
+    if (instance.kind === 'ohlcv') {
+      // Exchange selector busts the cache so flipping Binance ↔ HL re-fetches.
+      const ex = instance.exchange ?? 'binance';
+      return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
+    }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
 
@@ -1875,10 +1880,16 @@
         return;
       }
       switch (instance.kind) {
-        case 'ohlcv':
-          url = `/api/ohlcv?${new URLSearchParams(baseQS)}`;
+        case 'ohlcv': {
+          // OHLCV chart routes its read to whichever exchange the
+          // instance is pinned to. Default 'binance' for back-compat;
+          // 'hl' reads from tradernick.hl_ohlcv_1m server-side.
+          const ohlcvQs = new URLSearchParams(baseQS);
+          ohlcvQs.set('exchange', instance.exchange ?? 'binance');
+          url = `/api/ohlcv?${ohlcvQs}`;
           pickArr = (b) => (b.candles ?? []) as AnyDatum[];
           break;
+        }
         case 'pc': {
           // Price Comparison — main token + each instance.overlayTokens
           // fetched in parallel from /api/ohlcv, then rebased to % from
@@ -2943,6 +2954,18 @@
           {/if}
         </select>
       {:else}
+        {#if instance.kind === 'ohlcv'}
+          <!-- OHLCV: exchange selector picks the candle source. Binance =
+               binance_ohlcv_1m, HL = hl_ohlcv_1m. Same render either way. -->
+          <select
+            value={instance.exchange ?? 'binance'}
+            onchange={(e) => (instance.exchange = e.currentTarget.value as 'binance' | 'hl')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          >
+            <option value="binance">Binance</option>
+            <option value="hl">HL</option>
+          </select>
+        {/if}
         <select
           value={instance.token}
           onchange={(e) => onTokenChange(instance.id, e.currentTarget.value)}

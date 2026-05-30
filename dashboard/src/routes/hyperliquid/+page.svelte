@@ -16,7 +16,7 @@
   // charts chosen so they tile cleanly at 2×1 on a wide layout (4 across,
   // 2 rows).
   const DEFAULT_KINDS: ChartKind[] = [
-    'hl_ohlcv',           // BTC spot volume
+    'ohlcv',              // BTC candles (exchange=hl is set below)
     'hl_trade_volume',    // BTC trade volume
     'hl_position_net_size', // BTC net OI
     'hl_funding_paid',    // BTC funding paid
@@ -30,6 +30,8 @@
     return DEFAULT_KINDS.map((kind) => {
       const inst = newChartInstance(kind, { token: 'BTC', chain: 'HL' });
       inst.interval = '4h';
+      // OHLCV chart on the Hyperliquid page reads HL candles, not Binance.
+      if (kind === 'ohlcv') inst.exchange = 'hl';
       return inst;
     });
   }
