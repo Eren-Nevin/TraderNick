@@ -32,23 +32,29 @@ bp = Blueprint("hyperliquid")
 # sum of per-wallet amount is mathematically always ~0 (zero-sum transfer
 # between longs and shorts), so it makes a useless chart. The avg(rate)
 # gives the canonical funding-rate metric.
+# 6-tuple per event: (table, amount_expr, value_expr, wallet_col, agg_func, extra_where).
+# extra_where is appended to the WHERE clause for this event only — used by
+# `fills` to filter to taker-side rows only (one trade emits two fill rows
+# on HL: one for the taker with crossed=1 and one for the maker; summing
+# all fills double-counts volume).
 _EVENT_TABLES = {
     # OHLCV is special-cased — has window-bucketed shape, no aggregation.
-    "ohlcv":            ("tradernick.hl_ohlcv_1m",        "volume",            "volume",          None,    "sum"),
+    "ohlcv":            ("tradernick.hl_ohlcv_1m",        "volume",            "volume",          None,    "sum",  ""),
     # Trades: amount = total volume per bucket (sum), value = sum(price*amount)
-    "trades":           ("tradernick.hl_trades",          "amount",            "price*amount",    None,    "sum"),
-    # Fills: amount = sum(size), value = sum(price*size) — also expose
-    # closed_pnl via the leaderboard route. Wallet column: 'wallet'.
-    "fills":            ("tradernick.hl_fills",           "size",              "price*size",      "wallet","sum"),
+    "trades":           ("tradernick.hl_trades",          "amount",            "price*amount",    None,    "sum",  ""),
+    # Fills: amount = sum(size), value = sum(price*size). Filter to crossed=1
+    # so we only count the taker side of each match (the maker side is the
+    # mirror image and would double the volume).
+    "fills":            ("tradernick.hl_fills",           "size",              "price*size",      "wallet","sum",  "crossed = 1"),
     # Funding: chart plots the funding RATE (avg per bucket). Positive rate
     # = longs paying shorts; negative = shorts paying longs. HL fires
     # funding hourly so `rate` is the hourly funding rate at that event.
-    "funding":          ("tradernick.hl_funding",         "rate",              "rate",            "wallet","avg"),
+    "funding":          ("tradernick.hl_funding",         "rate",              "rate",            "wallet","avg",  ""),
     # position_history deferred — see note in clickhouse.py HL_EVENTS.
     # Trade history: already pre-aggregated. amount = sum(volume), value = sum(net_pnl).
-    "trade_history":    ("tradernick.hl_trade_history",   "volume",            "net_pnl",         "wallet","sum"),
-    "transfers":        ("tradernick.hl_transfers",       "amount",            "amount",          "wallet","sum"),
-    "vaults":           ("tradernick.hl_vaults",          "amount",            "amount",          "wallet","sum"),
+    "trade_history":    ("tradernick.hl_trade_history",   "volume",            "net_pnl",         "wallet","sum",  ""),
+    "transfers":        ("tradernick.hl_transfers",       "amount",            "amount",          "wallet","sum",  ""),
+    "vaults":           ("tradernick.hl_vaults",          "amount",            "amount",          "wallet","sum",  ""),
 }
 _EVENT_KEYS = tuple(_EVENT_TABLES.keys())
 
@@ -65,7 +71,7 @@ async def aggregate(request):
     event = request.args.get("event")
     if event not in _EVENT_TABLES:
         return response.json({"error": f"event must be one of {list(_EVENT_KEYS)}"}, status=400)
-    table, amount_expr, value_expr, wallet_col, agg_func = _EVENT_TABLES[event]
+    table, amount_expr, value_expr, wallet_col, agg_func, extra_where = _EVENT_TABLES[event]
 
     token = request.args.get("token")            # optional; if absent, sums across tokens
     interval = request.args.get("interval", "1h")
@@ -86,6 +92,8 @@ async def aggregate(request):
     since_dt = _parse_iso(since); until_dt = _parse_iso(until)
 
     where_parts = ["time >= {since:DateTime}", "time <  {until:DateTime}"]
+    if extra_where:
+        where_parts.append(extra_where)
     params: dict = {"seconds": seconds, "since": since_dt, "until": until_dt, "limit": limit}
 
     if token:
@@ -149,7 +157,7 @@ async def streams(_request):
         return response.json({"streams": _STREAMS_CACHE["value"]})
     ch = await client()
     out: list[dict] = []
-    for ev, (table, _a, _v, _w) in _EVENT_TABLES.items():
+    for ev, (table, _a, _v, _w, _af, _ew) in _EVENT_TABLES.items():
         # transfers + vaults have no token dimension — skip them in streams.
         if ev in ("transfers", "vaults"):
             continue
