@@ -35,21 +35,23 @@ def _iso_z(dt): return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 def _sql_dt(dt): return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
-# Per-endpoint backfill chunk size in hours. Same shape as the live
-# group's gap-fill cadence with one carve-out: position_history and
-# trade_history are per-(wallet × token × time) snapshots with enormous
-# fan-out (millions of rows per 24h chunk for our 26-token roster).
-# A naive 24h × 26-token call hangs the HTTP client mid-stream because
-# the response body is too large. For those two events we both:
-#   (a) shrink the chunk window (6h)
-#   (b) split per-token (one call per token, not 26 per call)
-# Per-token chunks are tracked separately by adding the token to the
-# resume key — `<event>|<token>|<chunk_start>` instead of `<event>|<chunk_start>`.
+# Per-endpoint backfill chunk size in hours. All events use multi-token
+# chunks (one call covers all 26 tokens) so each chunk contains 26x the
+# payload of a single-token call — chunk sizes here are tuned per-event
+# so the response stays small enough to stream cleanly.
+#
+# trade_history is pre-aggregated server-side (rows are per-(wallet,
+# token, bucket) summaries, not per-event), so 6h × 26 tokens is small
+# (~200K rows) and well within HTTP-stream limits.
+#
+# position_history is currently DEFERRED (see HL_EVENTS in clickhouse.py)
+# — its per-(wallet × token × snapshot-tick) fan-out is too large for any
+# reasonable multi-token chunk to complete. If/when re-enabled it'll need
+# a different approach (server-side aggregate / as_link streaming).
 _CHUNK_HOURS = {
     "ohlcv":            6,
     "trades":           6,
     "fills":            6,
-    "position_history": 6,
     "trade_history":    6,
     "transfers":        24,
     "funding":          24,
@@ -57,10 +59,12 @@ _CHUNK_HOURS = {
 }
 
 # Events that get one chunk PER TOKEN (instead of one multi-token chunk).
-_PER_TOKEN_CHUNKED = {"position_history", "trade_history"}
+# Empty for now — position_history was the only candidate and it's
+# deferred. If a future event needs per-token chunking, add it here.
+_PER_TOKEN_CHUNKED: set[str] = set()
 
-_TOKEN_REQUIRED = {"ohlcv", "position_history", "trade_history"}
-_PER_TOKEN_TABLE = {"ohlcv", "trades", "fills", "funding", "position_history", "trade_history"}
+_TOKEN_REQUIRED = {"ohlcv", "trade_history"}
+_PER_TOKEN_TABLE = {"ohlcv", "trades", "fills", "funding", "trade_history"}
 
 
 async def _load_job(job_id):
