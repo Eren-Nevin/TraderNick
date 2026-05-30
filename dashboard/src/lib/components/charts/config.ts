@@ -304,6 +304,17 @@ export type ChartKind =
   | 'gmx_deposit'
   | 'gmx_withdraw'
   | 'gmx_net_lp'
+  | 'hl_ohlcv'
+  | 'hl_trade_volume'
+  | 'hl_taker_volume'
+  | 'hl_funding_paid'
+  | 'hl_position_long_size'
+  | 'hl_position_short_size'
+  | 'hl_position_net_size'
+  | 'hl_pnl'
+  | 'hl_transfers'
+  | 'hl_vault_net'
+  | 'hl_top_traders'
   | 'uniswap_v2_swap'
   | 'uniswap_v2_deposit'
   | 'uniswap_v2_withdraw'
@@ -389,6 +400,17 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   spark_repay: 'Spark Repays',
   spark_net_borrow: 'Spark Net Borrow',
   spark_flashloan: 'Spark Flash Loans',
+  hl_ohlcv: 'HL Spot Volume',
+  hl_trade_volume: 'HL Trade Volume',
+  hl_taker_volume: 'HL Taker Volume',
+  hl_funding_paid: 'HL Funding Paid',
+  hl_position_long_size: 'HL Long OI',
+  hl_position_short_size: 'HL Short OI',
+  hl_position_net_size: 'HL Net OI',
+  hl_pnl: 'HL Realized PnL',
+  hl_transfers: 'HL Bridge Flows',
+  hl_vault_net: 'HL Vault Net Flow',
+  hl_top_traders: 'HL Top Traders',
   gmx_position_increase: 'GMX Position Open',
   gmx_position_decrease: 'GMX Position Close',
   gmx_net_position: 'GMX Net Position Flow',
@@ -643,6 +665,56 @@ export const GMX_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_va
   gmx_net_lp: 'sum_amount'
 };
 
+/** Hyperliquid chart kinds (perp DEX, on-chain — every event carries a
+ *  wallet identity, enabling per-trader and whale-tracking analyses).
+ *  Per-token filter via the same token selector as binance. Per-wallet
+ *  filter exposed on every kind via a wallet input + a category dropdown
+ *  sourced from the tradernick.wallet_labels CH dictionary. */
+export const HL_CHART_KINDS: ChartKind[] = [
+  'hl_ohlcv',
+  'hl_trade_volume',
+  'hl_taker_volume',
+  'hl_funding_paid',
+  'hl_position_long_size',
+  'hl_position_short_size',
+  'hl_position_net_size',
+  'hl_pnl',
+  'hl_transfers',
+  'hl_vault_net',
+  'hl_top_traders'
+];
+/** Single-event HL kinds → server-side event slug. */
+export const HL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  hl_ohlcv: 'ohlcv',
+  hl_trade_volume: 'trades',
+  hl_taker_volume: 'fills',
+  hl_funding_paid: 'funding',
+  hl_position_long_size: 'position_history',
+  hl_position_short_size: 'position_history',
+  hl_position_net_size: 'position_history',
+  hl_pnl: 'trade_history',
+  hl_transfers: 'transfers',
+  hl_vault_net: 'vaults'
+  // hl_top_traders has no single event — uses the leaderboard endpoint
+};
+export function isHlKind(kind: ChartKind): boolean {
+  return kind.startsWith('hl_');
+}
+/** Per-kind value-field picker. value_usd for events where the server
+ *  computes one; sum_amount otherwise. */
+export const HL_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_value_usd'>> = {
+  hl_ohlcv: 'sum_amount',          // sum(volume) per bucket — line chart
+  hl_trade_volume: 'sum_value_usd', // USD trade volume
+  hl_taker_volume: 'sum_value_usd', // USD taker flow
+  hl_funding_paid: 'sum_amount',    // funding in USDC (sum)
+  hl_position_long_size: 'sum_value_usd',  // USD notional OI
+  hl_position_short_size: 'sum_value_usd',
+  hl_position_net_size: 'sum_value_usd',
+  hl_pnl: 'sum_value_usd',          // realized PnL in USD
+  hl_transfers: 'sum_amount',       // USDC amount
+  hl_vault_net: 'sum_amount'        // amount
+};
+
 /** Uniswap chart kinds collected for the DeX page (default layout order). */
 export const UNISWAP_CHART_KINDS: ChartKind[] = [
   'uniswap_swap',
@@ -819,6 +891,7 @@ export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('aero_basic_')) return 'Aerodrome Basic';
   if (kind.startsWith('aero_')) return 'Aerodrome CL';
   if (kind.startsWith('gmx_')) return 'GMX V2';
+  if (kind.startsWith('hl_')) return 'Hyperliquid';
   return null;
 }
 
@@ -851,7 +924,8 @@ const _GROUP_ORDER: Record<string, number> = {
   'Uniswap V4': 32,
   'Aerodrome CL':    40,
   'Aerodrome Basic': 41,
-  'GMX V2':          50
+  'GMX V2':          50,
+  'Hyperliquid':     60
 };
 export function chartKindGroupOrder(group: string): number {
   return _GROUP_ORDER[group] ?? 99;
@@ -1039,6 +1113,16 @@ export type ChartInstance = {
    *  Empty string = "all markets summed". The dashboard populates the
    *  per-chart selector from /api/gmx/streams. */
   gmxMarket?: string;
+  /** hl_* only: optional EVM wallet address filter. Lowercased before the
+   *  server-side dictionary lookup. Empty = no wallet filter (sum across
+   *  every trader). */
+  hlWallet?: string;
+  /** hl_* only: optional wallet-label filter (e.g. 'CEX', 'Smart-Money',
+   *  'Bridge'). When set, only rows whose wallet is tagged with that
+   *  category in the tradernick.wallet_labels dictionary are aggregated.
+   *  Mutually exclusive with hlWallet (the wallet filter takes precedence
+   *  on the server). */
+  hlWalletCategory?: string;
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -1145,6 +1229,17 @@ export function newChartInstance(
   if (isSparkKind(kind)) {
     // Spark is ETH-only.
     base.chain = 'ETH';
+    base.valueMode = 'usd';
+  }
+  if (isHlKind(kind)) {
+    // Hyperliquid: token roster matches binance INGEST_TOKENS. Static "HL"
+    // chip in the selector (no chain dimension). Default to BTC; empty
+    // wallet filter ("All wallets"). valueMode is overridden per-kind via
+    // HL_PRIMARY_FIELD on the read side.
+    base.chain = 'HL';
+    base.token = defaults.token === 'USDC' ? 'BTC' : defaults.token;
+    base.hlWallet = '';
+    base.hlWalletCategory = '';
     base.valueMode = 'usd';
   }
   if (isGmxKind(kind)) {

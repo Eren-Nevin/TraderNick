@@ -34,6 +34,7 @@ from jobs.manager import (
     JOB_TYPE_BACKFILL_MORPHO_EVENTS,
     JOB_TYPE_BACKFILL_SPARK_EVENTS,
     JOB_TYPE_BACKFILL_GMX_EVENTS,
+    JOB_TYPE_BACKFILL_HYPERLIQUID_EVENTS,
     JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS,
     JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS,
     JobManager,
@@ -104,6 +105,7 @@ async def startup(app_, _loop):
         "morpho_events",
         "spark_events",
         "gmx_events",
+        "hyperliquid_events",
     ])
     app_.ctx.jobs = JobManager()
     try:
@@ -581,6 +583,35 @@ def _extract_gmx_events(body):
 @app.post("/jobs/backfill/gmx_events")
 async def backfill_gmx_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_GMX_EVENTS, _extract_gmx_events)
+
+
+_HL_VALID_EVENTS = (
+    "ohlcv", "trades", "fills", "funding",
+    "position_history", "trade_history", "transfers", "vaults",
+)
+
+
+def _extract_hyperliquid_events(body):
+    tokens = body.get("tokens")
+    if tokens is not None and not isinstance(tokens, list):
+        return "tokens must be a list", None
+    events = body.get("events") or list(_HL_VALID_EVENTS)
+    if not isinstance(events, list):
+        return "events must be a list", None
+    unknown = [e for e in events if e not in _HL_VALID_EVENTS]
+    if unknown:
+        return f"unknown events: {unknown}", None
+    out = {"events": list(events)}
+    if tokens is not None:
+        out["tokens"] = [str(t).upper() for t in tokens]
+    return None, out
+
+
+@app.post("/jobs/backfill/hyperliquid_events")
+async def backfill_hyperliquid_events(request):
+    return await _create_transfer_backfill(
+        request, JOB_TYPE_BACKFILL_HYPERLIQUID_EVENTS, _extract_hyperliquid_events,
+    )
 
 
 @app.post("/admin/wallets")

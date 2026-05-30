@@ -1700,3 +1700,181 @@ CREATE TABLE IF NOT EXISTS tradernick.gmx_fees_collected
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (chain, market_name, time, tx_id, log_index);
+
+-- ---------------------------------------------------------------------------
+-- Hyperliquid (defistream ds.exchange.hyperliquid.*)
+-- ---------------------------------------------------------------------------
+-- HL is a perp DEX whose unique value-add over GMX/AAVE is that EVERY event
+-- carries the wallet identity — enabling per-trader and whale-tracking
+-- analyses without a closed-source dataset. 8 of 10 endpoints ingested here
+-- (skipping `sends` + `spot_transfers` as Tier 3).
+--
+-- ORDER BY tuples optimise for (token + time) chart slicing on the high-
+-- volume tables and (wallet + token + time) on the per-trader tables.
+-- TTL = 30 days on the high-volume tables (mirrors binance_raw_trades),
+-- no TTL on transfers + vaults since they're sparse + historically useful.
+
+-- 1m candles — identical shape to binance_ohlcv_1m. Same TTL.
+CREATE TABLE IF NOT EXISTS tradernick.hl_ohlcv_1m
+(
+    token                LowCardinality(String),
+    time                 DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    open                 Float64            CODEC(Gorilla, ZSTD(3)),
+    close                Float64            CODEC(Gorilla, ZSTD(3)),
+    high                 Float64            CODEC(Gorilla, ZSTD(3)),
+    low                  Float64            CODEC(Gorilla, ZSTD(3)),
+    volume               Float64            CODEC(Gorilla, ZSTD(3)),
+    buyer_taker_volume   Float64            CODEC(Gorilla, ZSTD(3)),
+    seller_taker_volume  Float64            CODEC(Gorilla, ZSTD(3)),
+    trade_count          UInt32             CODEC(T64, ZSTD(3)),
+    ingested_at          DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (token, time)
+TTL time + INTERVAL 30 DAY;
+
+-- Public trade flow (one row per matched trade). buyer_wallet + seller_wallet
+-- visible because HL is fully on-chain.
+CREATE TABLE IF NOT EXISTS tradernick.hl_trades
+(
+    token         LowCardinality(String),
+    time          DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    price         Float64        CODEC(Gorilla, ZSTD(3)),
+    amount        Float64        CODEC(Gorilla, ZSTD(3)),
+    buy           Bool           CODEC(ZSTD(3)),
+    id            UInt64         CODEC(DoubleDelta, ZSTD(3)),
+    buyer_wallet  String         CODEC(ZSTD(3)),
+    seller_wallet String         CODEC(ZSTD(3)),
+    block_number  UInt64         CODEC(DoubleDelta, ZSTD(3)),
+    ingested_at   DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (token, time, id)
+TTL toDateTime(time) + INTERVAL 30 DAY;
+
+-- Individual fill records (one per wallet per side). Highest-volume HL table
+-- — same TTL as binance_raw_trades. `dir` distinguishes Open Long / Close
+-- Long / Open Short / Close Short. `side` is 'A' (ask=sell) or 'B' (bid=buy).
+-- `crossed` = was this fill a taker (true) or maker (false).
+CREATE TABLE IF NOT EXISTS tradernick.hl_fills
+(
+    token           LowCardinality(String),
+    time            DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    block_time      DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    block_number    UInt64         CODEC(DoubleDelta, ZSTD(3)),
+    wallet          String         CODEC(ZSTD(3)),
+    price           Float64        CODEC(Gorilla, ZSTD(3)),
+    size            Float64        CODEC(Gorilla, ZSTD(3)),
+    side            LowCardinality(String),
+    dir             LowCardinality(String),
+    start_position  Float64        CODEC(Gorilla, ZSTD(3)),
+    closed_pnl      Float64        CODEC(Gorilla, ZSTD(3)),
+    fee             Float64        CODEC(Gorilla, ZSTD(3)),
+    fee_token       LowCardinality(String),
+    builder_fee     Float64        CODEC(Gorilla, ZSTD(3)),
+    crossed         UInt8          CODEC(T64, ZSTD(3)),
+    tid             UInt64         CODEC(DoubleDelta, ZSTD(3)),
+    oid             UInt64         CODEC(DoubleDelta, ZSTD(3)),
+    hash            String         CODEC(ZSTD(3)),
+    ingested_at     DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (token, time, tid, wallet)
+TTL toDateTime(time) + INTERVAL 30 DAY;
+
+-- Per-wallet funding events. amount is the funding paid by this wallet for
+-- its position_amount in this token at this rate. Sign convention: positive
+-- amount = wallet PAID funding (long pays in normal contango), negative =
+-- wallet RECEIVED funding.
+CREATE TABLE IF NOT EXISTS tradernick.hl_funding
+(
+    token            LowCardinality(String),
+    time             DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    wallet           String         CODEC(ZSTD(3)),
+    rate             Float64        CODEC(Gorilla, ZSTD(3)),
+    amount           Float64        CODEC(Gorilla, ZSTD(3)),
+    position_amount  Float64        CODEC(Gorilla, ZSTD(3)),
+    block_number     UInt64         CODEC(DoubleDelta, ZSTD(3)),
+    ingested_at      DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (token, time, wallet)
+TTL toDateTime(time) + INTERVAL 30 DAY;
+
+-- Position snapshots — one row per (wallet, token) at each sampling tick.
+-- `side` is 'long' / 'short'. unrealized_pnl is mark-to-market at the
+-- snapshot time. ORDER BY puts (wallet, token) first since the
+-- per-wallet leaderboard scans are the dominant pattern.
+CREATE TABLE IF NOT EXISTS tradernick.hl_position_history
+(
+    time             DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    wallet           String         CODEC(ZSTD(3)),
+    token            LowCardinality(String),
+    side             LowCardinality(String),
+    amount           Float64        CODEC(Gorilla, ZSTD(3)),
+    avg_entry        Float64        CODEC(Gorilla, ZSTD(3)),
+    opened_at        DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    mark_price       Float64        CODEC(Gorilla, ZSTD(3)),
+    size             Float64        CODEC(Gorilla, ZSTD(3)),
+    unrealized_pnl   Float64        CODEC(Gorilla, ZSTD(3)),
+    funding          Float64        CODEC(Gorilla, ZSTD(3)),
+    fee              Float64        CODEC(Gorilla, ZSTD(3)),
+    exact_avg_price  UInt8          CODEC(T64, ZSTD(3)),
+    ingested_at      DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (wallet, token, time)
+TTL toDateTime(time) + INTERVAL 30 DAY;
+
+-- Pre-aggregated per-(wallet, token, bucket) trader performance. The right
+-- table for leaderboard queries — small + already summed. net_pnl = pnl - fees.
+CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history
+(
+    time          DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    wallet        String         CODEC(ZSTD(3)),
+    token         LowCardinality(String),
+    pnl           Float64        CODEC(Gorilla, ZSTD(3)),
+    fees          Float64        CODEC(Gorilla, ZSTD(3)),
+    net_pnl       Float64        CODEC(Gorilla, ZSTD(3)),
+    volume        Float64        CODEC(Gorilla, ZSTD(3)),
+    buy_volume    Float64        CODEC(Gorilla, ZSTD(3)),
+    sell_volume   Float64        CODEC(Gorilla, ZSTD(3)),
+    trade_count   UInt32         CODEC(T64, ZSTD(3)),
+    ingested_at   DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (wallet, token, time)
+TTL toDateTime(time) + INTERVAL 30 DAY;
+
+-- Bridge in/out (USDC on Arbitrum ↔ HL). No TTL — historical capital
+-- migration is a useful reference. direction = 'deposit' (Arb→HL) or
+-- 'withdrawal' (HL→Arb).
+CREATE TABLE IF NOT EXISTS tradernick.hl_transfers
+(
+    time          DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    direction     LowCardinality(String),
+    wallet        String         CODEC(ZSTD(3)),
+    amount        Float64        CODEC(Gorilla, ZSTD(3)),
+    is_finalized  UInt8          CODEC(T64, ZSTD(3)),
+    block_number  UInt64         CODEC(DoubleDelta, ZSTD(3)),
+    ingested_at   DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (direction, time, wallet);
+
+-- Vault subscriptions. action = 'deposit' / 'withdraw' / 'leader_*'.
+-- No TTL — vault subscription history is reference data.
+CREATE TABLE IF NOT EXISTS tradernick.hl_vaults
+(
+    time          DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    vault         String         CODEC(ZSTD(3)),
+    wallet        String         CODEC(ZSTD(3)),
+    action        LowCardinality(String),
+    amount        Float64        CODEC(Gorilla, ZSTD(3)),
+    commission    Float64        CODEC(Gorilla, ZSTD(3)),
+    fee           Float64        CODEC(Gorilla, ZSTD(3)),
+    block_number  UInt64         CODEC(DoubleDelta, ZSTD(3)),
+    ingested_at   DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (vault, time, wallet);

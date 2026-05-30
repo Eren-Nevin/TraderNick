@@ -2065,3 +2065,206 @@ GMX_EVENTS = {
     "borrowing":         ("borrowing",          "tradernick.gmx_borrowing",          GMX_BORROWING_COLUMNS,    gmx_borrowing_df_to_rows),
     "fees_collected":    ("fees_collected",     "tradernick.gmx_fees_collected",     GMX_FEES_COLUMNS,         gmx_fees_collected_df_to_rows),
 }
+
+
+# ---------------------------------------------------------------------------
+# Hyperliquid transforms (defistream ds.exchange.hyperliquid.*)
+# ---------------------------------------------------------------------------
+# 8 endpoints ingested (Tier 1+2). Every transform reads `token`/`wallet`
+# directly from each row since the multi-token API form gives mixed-token
+# DataFrames. Most fields map 1:1 from the polars response; the only
+# coercions are bool→UInt8 (CH likes int flags) and ensuring strings/floats
+# tolerate missing values.
+
+def _hl_bool(v) -> int:
+    if isinstance(v, bool): return 1 if v else 0
+    if isinstance(v, str):  return 1 if v.strip().lower() == "true" else 0
+    return 0
+
+
+# OHLCV — identical shape to binance_ohlcv_1m. Reuses ohlcv_df_to_rows.
+HL_OHLCV_COLUMNS = OHLCV_COLUMNS
+hl_ohlcv_df_to_rows = ohlcv_df_to_rows
+
+
+HL_TRADES_COLUMNS = [
+    "token", "time", "price", "amount", "buy", "id",
+    "buyer_wallet", "seller_wallet", "block_number",
+]
+
+
+def hl_trades_df_to_rows(df: pl.DataFrame):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            str(r["token"]),
+            _to_naive_utc(r["time"]),
+            float(r["price"]),
+            float(r["amount"]),
+            _hl_bool(r.get("buy")),
+            int(r["id"]) if r.get("id") is not None else 0,
+            str(r["buyer_wallet"]) if r.get("buyer_wallet") else "",
+            str(r["seller_wallet"]) if r.get("seller_wallet") else "",
+            int(r["block_number"]) if r.get("block_number") is not None else 0,
+        ])
+    return rows
+
+
+HL_FILLS_COLUMNS = [
+    "token", "time", "block_time", "block_number", "wallet",
+    "price", "size", "side", "dir",
+    "start_position", "closed_pnl", "fee", "fee_token", "builder_fee",
+    "crossed", "tid", "oid", "hash",
+]
+
+
+def hl_fills_df_to_rows(df: pl.DataFrame):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            str(r["token"]),
+            _to_naive_utc(r["time"]),
+            _to_naive_utc(r["block_time"]),
+            int(r["block_number"]) if r.get("block_number") is not None else 0,
+            str(r["wallet"]) if r.get("wallet") else "",
+            float(r["price"]) if r.get("price") is not None else 0.0,
+            float(r["size"]) if r.get("size") is not None else 0.0,
+            str(r["side"]) if r.get("side") else "",
+            str(r["dir"]) if r.get("dir") else "",
+            float(r["start_position"]) if r.get("start_position") is not None else 0.0,
+            float(r["closed_pnl"]) if r.get("closed_pnl") is not None else 0.0,
+            float(r["fee"]) if r.get("fee") is not None else 0.0,
+            str(r["fee_token"]) if r.get("fee_token") else "",
+            float(r["builder_fee"]) if r.get("builder_fee") is not None else 0.0,
+            _hl_bool(r.get("crossed")),
+            int(r["tid"]) if r.get("tid") is not None else 0,
+            int(r["oid"]) if r.get("oid") is not None else 0,
+            str(r["hash"]) if r.get("hash") else "",
+        ])
+    return rows
+
+
+HL_FUNDING_COLUMNS = [
+    "token", "time", "wallet", "rate", "amount", "position_amount", "block_number",
+]
+
+
+def hl_funding_df_to_rows(df: pl.DataFrame):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            str(r["token"]),
+            _to_naive_utc(r["time"]),
+            str(r["wallet"]) if r.get("wallet") else "",
+            float(r["rate"]) if r.get("rate") is not None else 0.0,
+            float(r["amount"]) if r.get("amount") is not None else 0.0,
+            float(r["position_amount"]) if r.get("position_amount") is not None else 0.0,
+            int(r["block_number"]) if r.get("block_number") is not None else 0,
+        ])
+    return rows
+
+
+HL_POSITION_HISTORY_COLUMNS = [
+    "time", "wallet", "token", "side", "amount", "avg_entry", "opened_at",
+    "mark_price", "size", "unrealized_pnl", "funding", "fee", "exact_avg_price",
+]
+
+
+def hl_position_history_df_to_rows(df: pl.DataFrame):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            _to_naive_utc(r["time"]),
+            str(r["wallet"]) if r.get("wallet") else "",
+            str(r["token"]) if r.get("token") else "",
+            str(r["side"]) if r.get("side") else "",
+            float(r["amount"]) if r.get("amount") is not None else 0.0,
+            float(r["avg_entry"]) if r.get("avg_entry") is not None else 0.0,
+            _to_naive_utc(r["opened_at"]) if r.get("opened_at") is not None else _to_naive_utc(r["time"]),
+            float(r["mark_price"]) if r.get("mark_price") is not None else 0.0,
+            float(r["size"]) if r.get("size") is not None else 0.0,
+            float(r["unrealized_pnl"]) if r.get("unrealized_pnl") is not None else 0.0,
+            float(r["funding"]) if r.get("funding") is not None else 0.0,
+            float(r["fee"]) if r.get("fee") is not None else 0.0,
+            _hl_bool(r.get("exact_avg_price")),
+        ])
+    return rows
+
+
+HL_TRADE_HISTORY_COLUMNS = [
+    "time", "wallet", "token",
+    "pnl", "fees", "net_pnl",
+    "volume", "buy_volume", "sell_volume", "trade_count",
+]
+
+
+def hl_trade_history_df_to_rows(df: pl.DataFrame):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            _to_naive_utc(r["time"]),
+            str(r["wallet"]) if r.get("wallet") else "",
+            str(r["token"]) if r.get("token") else "",
+            float(r["pnl"]) if r.get("pnl") is not None else 0.0,
+            float(r["fees"]) if r.get("fees") is not None else 0.0,
+            float(r["net_pnl"]) if r.get("net_pnl") is not None else 0.0,
+            float(r["volume"]) if r.get("volume") is not None else 0.0,
+            float(r["buy_volume"]) if r.get("buy_volume") is not None else 0.0,
+            float(r["sell_volume"]) if r.get("sell_volume") is not None else 0.0,
+            int(r["trade_count"]) if r.get("trade_count") is not None else 0,
+        ])
+    return rows
+
+
+HL_TRANSFERS_COLUMNS = [
+    "time", "direction", "wallet", "amount", "is_finalized", "block_number",
+]
+
+
+def hl_transfers_df_to_rows(df: pl.DataFrame):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            _to_naive_utc(r["time"]),
+            str(r["direction"]) if r.get("direction") else "",
+            str(r["wallet"]) if r.get("wallet") else "",
+            float(r["amount"]) if r.get("amount") is not None else 0.0,
+            _hl_bool(r.get("is_finalized")),
+            int(r["block_number"]) if r.get("block_number") is not None else 0,
+        ])
+    return rows
+
+
+HL_VAULTS_COLUMNS = [
+    "time", "vault", "wallet", "action", "amount", "commission", "fee", "block_number",
+]
+
+
+def hl_vaults_df_to_rows(df: pl.DataFrame):
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            _to_naive_utc(r["time"]),
+            str(r["vault"]) if r.get("vault") else "",
+            str(r["wallet"]) if r.get("wallet") else "",
+            str(r["action"]) if r.get("action") else "",
+            float(r["amount"]) if r.get("amount") is not None else 0.0,
+            float(r["commission"]) if r.get("commission") is not None else 0.0,
+            float(r["fee"]) if r.get("fee") is not None else 0.0,
+            int(r["block_number"]) if r.get("block_number") is not None else 0,
+        ])
+    return rows
+
+
+# Dispatch dict: event-key -> (builder_method_name, table, columns, transform).
+# builder_method_name is the accessor on ds.exchange.hyperliquid.
+HL_EVENTS = {
+    "ohlcv":            ("ohlcv",            "tradernick.hl_ohlcv_1m",        HL_OHLCV_COLUMNS,            hl_ohlcv_df_to_rows),
+    "trades":           ("trades",           "tradernick.hl_trades",          HL_TRADES_COLUMNS,           hl_trades_df_to_rows),
+    "fills":            ("fills",            "tradernick.hl_fills",           HL_FILLS_COLUMNS,            hl_fills_df_to_rows),
+    "funding":          ("funding",          "tradernick.hl_funding",         HL_FUNDING_COLUMNS,          hl_funding_df_to_rows),
+    "position_history": ("position_history", "tradernick.hl_position_history", HL_POSITION_HISTORY_COLUMNS, hl_position_history_df_to_rows),
+    "trade_history":    ("trade_history",    "tradernick.hl_trade_history",   HL_TRADE_HISTORY_COLUMNS,    hl_trade_history_df_to_rows),
+    "transfers":        ("transfers",        "tradernick.hl_transfers",       HL_TRANSFERS_COLUMNS,        hl_transfers_df_to_rows),
+    "vaults":           ("vaults",           "tradernick.hl_vaults",          HL_VAULTS_COLUMNS,           hl_vaults_df_to_rows),
+}

@@ -29,6 +29,7 @@ GROUP_MODULES = {
     "morpho_events": "groups.morpho_events",
     "spark_events": "groups.spark_events",
     "gmx_events": "groups.gmx_events",
+    "hyperliquid_events": "groups.hyperliquid_events",
 }
 
 

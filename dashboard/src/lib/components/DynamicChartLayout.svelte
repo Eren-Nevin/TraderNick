@@ -345,6 +345,14 @@
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         inst.gmxMarket = typeof r.gmxMarket === 'string' ? r.gmxMarket : 'BTC/USD [WBTC-USDC]';
       }
+      // Hyperliquid — static chain='HL' chip, token from the binance roster,
+      // optional wallet + wallet_category whale-tracking filters.
+      if (inst.kind.startsWith('hl_')) {
+        inst.chain = 'HL';
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
+        inst.hlWallet = typeof r.hlWallet === 'string' ? r.hlWallet : '';
+        inst.hlWalletCategory = typeof r.hlWalletCategory === 'string' ? r.hlWalletCategory : '';
+      }
       // Lido chart kinds need a `chain` but no token / pool. L1 kinds are
       // ETH-pinned; L2 kinds default to ARB (highest wstETH bridge volume).
       if (inst.kind.startsWith('lido_')) {

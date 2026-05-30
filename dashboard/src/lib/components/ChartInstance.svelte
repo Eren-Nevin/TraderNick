@@ -2,6 +2,7 @@
   import CandlestickChart from '$lib/components/CandlestickChart.svelte';
   import StackedBarChart from '$lib/components/StackedBarChart.svelte';
   import LineChart from '$lib/components/LineChart.svelte';
+  import TableChart from '$lib/components/TableChart.svelte';
   import SignedBarChart from '$lib/components/SignedBarChart.svelte';
   import { onMount } from 'svelte';
   import {
@@ -57,6 +58,9 @@
     GMX_NET_KIND_TO_EVENTS,
     GMX_PRIMARY_FIELD,
     isGmxKind,
+    HL_KIND_TO_EVENT,
+    HL_PRIMARY_FIELD,
+    isHlKind,
     UNISWAP_KIND_TO_EVENT,
     UNISWAP_NET_KIND_TO_EVENTS,
     isUniswapKind,
@@ -566,6 +570,14 @@
       const mPart = instance.gmxMarket ? `m:${instance.gmxMarket}` : 'all';
       return `${instance.kind}|${cPart}|${mPart}|${instance.interval}`;
     }
+    if (isHlKind(instance.kind)) {
+      // HL: per-token + optional wallet OR wallet_category filter (mutually
+      // exclusive). Empty wallet filter = aggregate across all traders.
+      const wPart = instance.hlWallet
+        ? `w:${instance.hlWallet.toLowerCase()}`
+        : (instance.hlWalletCategory ? `wc:${instance.hlWalletCategory}` : 'all');
+      return `${instance.kind}|${instance.token}|${wPart}|${instance.interval}`;
+    }
     if (isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind)) {
       // Uniswap V2/V3 charts: pool keyed by (sym0, sym1, fee) — fee=0 marks V2.
       const cPart = instance.chain ?? '';
@@ -741,6 +753,7 @@
         isMorphoKind(instance.kind) ||
         isSparkKind(instance.kind) ||
         isGmxKind(instance.kind) ||
+        isHlKind(instance.kind) ||
         isUniswapKind(instance.kind) ||
         isUniswapV2Kind(instance.kind) ||
         isUniswapV4Kind(instance.kind) ||
@@ -991,6 +1004,69 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
+      }
+      // Hyperliquid: per-token + optional wallet/wallet_category filters.
+      // The hl_top_traders kind takes a different path (leaderboard endpoint
+      // → TableChart render) and is handled in the render branch — its
+      // fetch happens here via the same code path with a stub data array.
+      // For the position_*_size kinds we read sum_amount/sum_value_usd
+      // from the same hl/aggregate response.
+      if (isHlKind(instance.kind) && instance.kind !== 'hl_top_traders') {
+        const event = HL_KIND_TO_EVENT[instance.kind];
+        if (event) {
+          const qs = new URLSearchParams({
+            event,
+            token: instance.token,
+            interval: instance.interval,
+            since: sinceIso,
+            until: untilIso,
+            limit: '5000'
+          });
+          if (instance.hlWallet && instance.hlWallet.length > 0) {
+            qs.set('wallet', instance.hlWallet);
+          } else if (instance.hlWalletCategory && instance.hlWalletCategory.length > 0) {
+            qs.set('wallet_category', instance.hlWalletCategory);
+          }
+          if (forceFresh) qs.set('fresh', '1');
+          const res = await queuedFetch(`/api/hyperliquid/aggregate?${qs}`, { signal });
+          if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+          const body = await res.json();
+          const primary = HL_PRIMARY_FIELD[instance.kind] ?? 'sum_value_usd';
+          const out: Record<string, number>[] = [];
+          for (const r of (body.series ?? []) as Array<Record<string, number>>) {
+            const v = Number(r[primary] ?? 0);
+            out.push({ time: r.time, sum_amount: v, sum_value_usd: v, count: r.count });
+          }
+          data = out as unknown as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
+      }
+      // Hyperliquid top-traders: leaderboard endpoint returns ranked rows
+      // (wallet, net_pnl, volume, …, categories). We stash the full response
+      // on a side-channel and render via TableChart instead of LineChart.
+      if (instance.kind === 'hl_top_traders') {
+        const qs = new URLSearchParams({
+          token: instance.token,
+          since: sinceIso,
+          until: untilIso,
+          order_by: 'net_pnl',
+          limit: '50'
+        });
+        const res = await queuedFetch(`/api/hyperliquid/wallets/leaderboard?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        // Carry the leader rows as a single datum payload — the render
+        // branch reads `data[0].leaders` instead of iterating time buckets.
+        data = [{ leaders: body.leaders ?? [] } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
       }
       // AAVE V4 chart kinds — ETH-only, 5 events (no flashloan). Same
       // (chain, token) fetch shape as V2/V3 minus eth_market.
@@ -2605,6 +2681,58 @@
             <option value={m.market}>{m.market}</option>
           {/each}
         </select>
+      {:else if isHlKind(instance.kind)}
+        <!-- Hyperliquid: static HL chip + token dropdown from the binance
+             roster + optional wallet filter (free-text EVM address OR
+             wallet-label category dropdown — mutually exclusive). The
+             top_traders kind hides the wallet filter since it ranks ALL
+             wallets by definition. -->
+        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL</span>
+        <select
+          value={instance.token}
+          onchange={(e) => (instance.token = e.currentTarget.value)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          {#each tokens as t (t)}
+            <option value={t}>{t}</option>
+          {/each}
+          {#if instance.token && !tokens.includes(instance.token)}
+            <option value={instance.token}>{instance.token}</option>
+          {/if}
+        </select>
+        {#if instance.kind !== 'hl_top_traders'}
+          <input
+            type="text"
+            placeholder="0x… wallet"
+            value={instance.hlWallet ?? ''}
+            oninput={(e) => {
+              instance.hlWallet = e.currentTarget.value.trim();
+              if (instance.hlWallet) instance.hlWalletCategory = '';
+            }}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-mono text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 w-32"
+            title="EVM address — case-insensitive. Setting this clears the category filter."
+          />
+          <select
+            value={instance.hlWalletCategory ?? ''}
+            onchange={(e) => {
+              instance.hlWalletCategory = e.currentTarget.value;
+              if (instance.hlWalletCategory) instance.hlWallet = '';
+            }}
+            disabled={!!instance.hlWallet}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-50"
+            title="Wallet category from the smart-money labels dictionary."
+          >
+            <option value="">All wallets</option>
+            <option value="CEX">CEX</option>
+            <option value="Smart-Money">Smart Money</option>
+            <option value="Whale">Whale</option>
+            <option value="Bridge">Bridge</option>
+            <option value="MEV-bot">MEV-bot</option>
+            <option value="Deposit">Deposit</option>
+            <option value="Hot-Wallet">Hot Wallet</option>
+            <option value="Cold-Wallet">Cold Wallet</option>
+          </select>
+        {/if}
       {:else if isAaveV4Kind(instance.kind)}
         <!-- AAVE V4: ETH-only (V4 is mainnet-only currently). Static
              chain chip + the same token selector as V2/V3. -->
@@ -3361,7 +3489,9 @@
         formatY={transferUseUsd ? fmtUsdAxis : fmtAmountAxis}
         formatTooltip={transferUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
       />
-    {:else if isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxKind(instance.kind)}
+    {:else if instance.kind === 'hl_top_traders'}
+      <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />
+    {:else if isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxKind(instance.kind) || isHlKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={aaveLinesD}
