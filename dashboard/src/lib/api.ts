@@ -8,6 +8,12 @@ export type Candle = {
   buyer_taker_volume: number;
   seller_taker_volume: number;
   trade_count: number;
+  // USD-denominated counterparts. Server computes them as
+  // sum(volume_per_1m * close_per_1m) per bucket, so each 1m bar's volume
+  // is priced at its own close — a faithful USD volume for any bucket size.
+  volume_usd?: number;
+  buyer_taker_volume_usd?: number;
+  seller_taker_volume_usd?: number;
 };
 
 export type OhlcvResponse = {

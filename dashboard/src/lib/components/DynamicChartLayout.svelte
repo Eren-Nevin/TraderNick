@@ -314,6 +314,7 @@
       if (inst.kind === 'ohlcv') {
         inst.pin = r.pin === true;
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
+        inst.volumeUnit = r.volumeUnit === 'usd' ? 'usd' : 'token';
       }
       if (inst.kind === 'fr') {
         // Same exchange selector as ohlcv — defaults to Binance for

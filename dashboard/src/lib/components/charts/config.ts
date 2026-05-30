@@ -1075,6 +1075,11 @@ export type ChartInstance = {
    *  'binance'. 'hl' routes to tradernick.hl_ohlcv_1m so the same chart
    *  kind serves both data sources. */
   exchange?: 'binance' | 'hl';
+  /** ohlcv only: how the volume sub-pane is denominated. 'token' (default)
+   *  plots raw asset units; 'usd' plots sum(per-1m volume × per-1m close),
+   *  which is comparable across assets and matches what most traders mean
+   *  by "volume". The toggle re-skins the existing volume bars — no refetch. */
+  volumeUnit?: 'token' | 'usd';
   /** fr only: how to display the funding rate. 'rate8h' (default) normalizes
    *  HL's per-hour rate × 8 so both exchanges show comparable per-8h bps —
    *  matches the Coinglass convention. 'apr' annualizes to percent-per-year. */
@@ -1189,6 +1194,7 @@ export function newChartInstance(
   }
   if (kind === 'ohlcv') {
     base.pin = false;
+    base.volumeUnit = 'token';
   }
   if (kind === 'fr') {
     base.frDisplay = 'rate8h';

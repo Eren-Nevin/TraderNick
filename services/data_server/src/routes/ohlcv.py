@@ -66,22 +66,37 @@ async def ohlcv(request):
     table = _OHLCV_TABLE[exchange]
 
     ch = await client()
+    # Subquery computes per-row USD products before the outer aggregates
+    # alias columns to their own column names — ClickHouse otherwise
+    # binds `volume` / `close` inside `sum(volume * close)` to the outer
+    # aliases and raises ILLEGAL_AGGREGATION.
     rows = await ch.query(
         f"""
         SELECT
             toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
-            argMin(open,  time)       AS open,
-            max(high)                 AS high,
-            min(low)                  AS low,
-            argMax(close, time)       AS close,
-            sum(volume)               AS volume,
-            sum(buyer_taker_volume)   AS buyer_taker_volume,
-            sum(seller_taker_volume)  AS seller_taker_volume,
-            sum(trade_count)          AS trade_count
-        FROM {table}
-        WHERE token = {{token:String}}
-          AND time >= {{since:DateTime}}
-          AND time <  {{until:DateTime}}
+            argMin(open,  time)         AS open,
+            max(high)                   AS high,
+            min(low)                    AS low,
+            argMax(close, time)         AS close,
+            sum(volume)                 AS volume,
+            sum(volume_usd_row)         AS volume_usd,
+            sum(buyer_taker_volume)     AS buyer_taker_volume,
+            sum(buyer_taker_usd_row)    AS buyer_taker_volume_usd,
+            sum(seller_taker_volume)    AS seller_taker_volume,
+            sum(seller_taker_usd_row)   AS seller_taker_volume_usd,
+            sum(trade_count)            AS trade_count
+        FROM (
+            SELECT
+                time, open, high, low, close, volume,
+                buyer_taker_volume, seller_taker_volume, trade_count,
+                volume * close              AS volume_usd_row,
+                buyer_taker_volume * close  AS buyer_taker_usd_row,
+                seller_taker_volume * close AS seller_taker_usd_row
+            FROM {table}
+            WHERE token = {{token:String}}
+              AND time >= {{since:DateTime}}
+              AND time <  {{until:DateTime}}
+        )
         GROUP BY bucket
         ORDER BY bucket
         LIMIT {{limit:UInt32}}
@@ -103,9 +118,12 @@ async def ohlcv(request):
             "low": float(r[3]),
             "close": float(r[4]),
             "volume": float(r[5]),
-            "buyer_taker_volume": float(r[6]),
-            "seller_taker_volume": float(r[7]),
-            "trade_count": int(r[8]),
+            "volume_usd": float(r[6]),
+            "buyer_taker_volume": float(r[7]),
+            "buyer_taker_volume_usd": float(r[8]),
+            "seller_taker_volume": float(r[9]),
+            "seller_taker_volume_usd": float(r[10]),
+            "trade_count": int(r[11]),
         }
         for r in rows.result_rows
     ]

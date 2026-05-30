@@ -2043,6 +2043,23 @@
       : []
   );
 
+  // Swap the candle's `volume` / `*_taker_volume` fields to USD when the
+  // user picks the 'usd' toggle, so CandlestickChart renders the right
+  // sub-pane without needing any chart-component changes. Falls back to
+  // the raw token volume if the server didn't supply the USD field (older
+  // payloads or stale caches).
+  let ohlcvCandles = $derived.by(() => {
+    if (instance.kind !== 'ohlcv') return [] as Candle[];
+    const src = data as Candle[];
+    if ((instance.volumeUnit ?? 'token') !== 'usd') return src;
+    return src.map((c) => ({
+      ...c,
+      volume: c.volume_usd ?? c.volume,
+      buyer_taker_volume: c.buyer_taker_volume_usd ?? c.buyer_taker_volume,
+      seller_taker_volume: c.seller_taker_volume_usd ?? c.seller_taker_volume
+    }));
+  });
+
   // Per-MA sub-line dash patterns (for kinds where one MA config emits multiple lines).
   const SUB_DASH = ['5,3', '2,2', '6,2,2,2'];
 
@@ -3052,6 +3069,30 @@
           Pin
         </label>
         <span class="w-px h-4 bg-zinc-800"></span>
+        <!-- Volume denomination toggle. 'token' shows raw asset units (BTC,
+             ETH, …); 'usd' shows sum(per-1m volume × per-1m close) so the
+             volume sub-pane is comparable across assets. Switching is
+             instant — the candle data is remapped client-side. -->
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Volume</span>
+        <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
+          <button
+            type="button"
+            onclick={() => (instance.volumeUnit = 'token')}
+            class={'px-2 py-0.5 text-[11px] ' + ((instance.volumeUnit ?? 'token') === 'token'
+              ? 'bg-zinc-800 text-zinc-100'
+              : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="Plot volume in token units (e.g. BTC, ETH)"
+          >Token</button>
+          <button
+            type="button"
+            onclick={() => (instance.volumeUnit = 'usd')}
+            class={'px-2 py-0.5 text-[11px] border-l border-zinc-700 ' + (instance.volumeUnit === 'usd'
+              ? 'bg-zinc-800 text-zinc-100'
+              : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="Plot sum(per-1m volume × per-1m close) — comparable across assets"
+          >USD</button>
+        </div>
+        <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
       {#if instance.kind === 'fr'}
         <!-- Display mode for funding rate. 'rate8h' (default) shows bps over
@@ -3434,9 +3475,10 @@
       <div class="p-4 text-sm text-zinc-400">No data for {kindLabel}.</div>
     {:else if instance.kind === 'ohlcv'}
       <CandlestickChart
-        candles={data as Candle[]}
+        candles={ohlcvCandles}
         lines={ohlcvLinesD}
         showCandles={instance.showPoint}
+        volumeLabel={(instance.volumeUnit ?? 'token') === 'usd' ? '$' : 'V'}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
