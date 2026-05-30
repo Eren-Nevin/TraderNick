@@ -2963,7 +2963,7 @@
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
           >
             <option value="binance">Binance</option>
-            <option value="hl">HL</option>
+            <option value="hl">Hyperliquid</option>
           </select>
         {/if}
         <select
