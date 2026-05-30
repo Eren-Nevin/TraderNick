@@ -22,7 +22,7 @@
     lines = [] as Line[],
     vRefLines = [] as VRefLine[],
     showCandles = true,
-    volumeLabel = 'V',
+    formatVolume = (v: number) => v.toFixed(2),
     height = 540,
     xExtent,
     view = null as View,
@@ -34,10 +34,10 @@
     lines?: Line[];
     vRefLines?: VRefLine[];
     showCandles?: boolean;
-    /** Prefix for the volume row in the hover tooltip. ChartInstance passes
-     *  '$' when the candle's `volume` field has been remapped to USD so the
-     *  tooltip stays readable. */
-    volumeLabel?: string;
+    /** Formatter for the volume value in the hover tooltip. Defaults to
+     *  `.toFixed(2)` (token units); ChartInstance passes a compact USD
+     *  formatter (e.g. `$42.3M`) when volumeUnit is 'usd'. */
+    formatVolume?: (v: number) => string;
     height?: number;
     xExtent?: [number, number];
     view?: View;
@@ -443,7 +443,7 @@
         <span class="text-zinc-400 ml-2">C</span>
         {hoverCandle.close.toFixed(4)}
       </div>
-      <div><span class="text-zinc-400">{volumeLabel}</span> {hoverCandle.volume.toFixed(2)}</div>
+      <div><span class="text-zinc-400">V</span> {formatVolume(hoverCandle.volume)}</div>
       {#if lines.length && hoverIdx !== null}
         <div class="mt-1 pt-1 border-t border-zinc-800"></div>
         {#each lines as ln (ln.key)}

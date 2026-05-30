@@ -33,6 +33,7 @@
     fmtAmountTooltip,
     fmtUsdAxis,
     fmtUsdTooltip,
+    fmtUsdCompact,
     lookbackWindow,
     maArray,
     sizeLines,
@@ -3478,7 +3479,9 @@
         candles={ohlcvCandles}
         lines={ohlcvLinesD}
         showCandles={instance.showPoint}
-        volumeLabel={(instance.volumeUnit ?? 'token') === 'usd' ? '$' : 'V'}
+        formatVolume={(instance.volumeUnit ?? 'token') === 'usd'
+          ? fmtUsdCompact
+          : (v: number) => v.toFixed(2)}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}

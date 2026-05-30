@@ -105,6 +105,18 @@ export function fmtUsdTooltip(v: number) {
   return `${sign}$${abs.toFixed(2)}`;
 }
 
+// Compact USD formatter capped at 3 significant figures — gives readable
+// scaling for high-magnitude numbers (e.g. $42.3M, $2.55B, $942K) without
+// the trailing-decimal noise of fmtUsdTooltip. Used by the OHLCV chart's
+// USD volume tooltip.
+const _usdCompactFmt = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumSignificantDigits: 3,
+});
+export function fmtUsdCompact(v: number) {
+  return `${v < 0 ? '-' : ''}$${_usdCompactFmt.format(Math.abs(v))}`;
+}
+
 /** Token-amount formatters — same K/M/B abbreviation as the USD ones but
  *  without the $ prefix. Used when an event-driven chart is toggled to
  *  amount mode (sum of raw token amount instead of USD value). */
