@@ -21,24 +21,34 @@ from routes.ohlcv import INTERVAL_SECONDS
 
 bp = Blueprint("hyperliquid")
 
-# Event → (table, amount-expression, value-expression, optional wallet_col).
+# Event → (table, amount-expression, value-expression, optional wallet_col,
+#          optional agg_func — defaults to "sum").
+#
 # wallet_col is the column on which to apply the wallet filter; some events
 # (trades, vaults) have a different column name than "wallet".
+#
+# agg_func overrides the default sum() aggregation. Used by `funding` to
+# average the rate column instead of summing the per-wallet amount — the
+# sum of per-wallet amount is mathematically always ~0 (zero-sum transfer
+# between longs and shorts), so it makes a useless chart. The avg(rate)
+# gives the canonical funding-rate metric.
 _EVENT_TABLES = {
     # OHLCV is special-cased — has window-bucketed shape, no aggregation.
-    "ohlcv":            ("tradernick.hl_ohlcv_1m",        "volume",            "volume",          None),
+    "ohlcv":            ("tradernick.hl_ohlcv_1m",        "volume",            "volume",          None,    "sum"),
     # Trades: amount = total volume per bucket (sum), value = sum(price*amount)
-    "trades":           ("tradernick.hl_trades",          "amount",            "price*amount",    None),
+    "trades":           ("tradernick.hl_trades",          "amount",            "price*amount",    None,    "sum"),
     # Fills: amount = sum(size), value = sum(price*size) — also expose
     # closed_pnl via the leaderboard route. Wallet column: 'wallet'.
-    "fills":            ("tradernick.hl_fills",           "size",              "price*size",      "wallet"),
-    # Funding amount sign convention: positive = wallet PAID, negative = received.
-    "funding":          ("tradernick.hl_funding",         "amount",            "amount",          "wallet"),
+    "fills":            ("tradernick.hl_fills",           "size",              "price*size",      "wallet","sum"),
+    # Funding: chart plots the funding RATE (avg per bucket). Positive rate
+    # = longs paying shorts; negative = shorts paying longs. HL fires
+    # funding hourly so `rate` is the hourly funding rate at that event.
+    "funding":          ("tradernick.hl_funding",         "rate",              "rate",            "wallet","avg"),
     # position_history deferred — see note in clickhouse.py HL_EVENTS.
     # Trade history: already pre-aggregated. amount = sum(volume), value = sum(net_pnl).
-    "trade_history":    ("tradernick.hl_trade_history",   "volume",            "net_pnl",         "wallet"),
-    "transfers":        ("tradernick.hl_transfers",       "amount",            "amount",          "wallet"),
-    "vaults":           ("tradernick.hl_vaults",          "amount",            "amount",          "wallet"),
+    "trade_history":    ("tradernick.hl_trade_history",   "volume",            "net_pnl",         "wallet","sum"),
+    "transfers":        ("tradernick.hl_transfers",       "amount",            "amount",          "wallet","sum"),
+    "vaults":           ("tradernick.hl_vaults",          "amount",            "amount",          "wallet","sum"),
 }
 _EVENT_KEYS = tuple(_EVENT_TABLES.keys())
 
@@ -55,7 +65,7 @@ async def aggregate(request):
     event = request.args.get("event")
     if event not in _EVENT_TABLES:
         return response.json({"error": f"event must be one of {list(_EVENT_KEYS)}"}, status=400)
-    table, amount_expr, value_expr, wallet_col = _EVENT_TABLES[event]
+    table, amount_expr, value_expr, wallet_col, agg_func = _EVENT_TABLES[event]
 
     token = request.args.get("token")            # optional; if absent, sums across tokens
     interval = request.args.get("interval", "1h")
@@ -103,9 +113,9 @@ async def aggregate(request):
     sql = f"""
         SELECT
             toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
-            sum({amount_expr})  AS sum_amount,
-            sum({value_expr})   AS sum_value_usd,
-            count()             AS count
+            {agg_func}({amount_expr}) AS sum_amount,
+            {agg_func}({value_expr})  AS sum_value_usd,
+            count()                   AS count
         FROM {table}
         WHERE {where_sql}
         GROUP BY bucket

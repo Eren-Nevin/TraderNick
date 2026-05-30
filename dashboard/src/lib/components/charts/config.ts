@@ -398,7 +398,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   spark_flashloan: 'Spark Flash Loans',
   hl_trade_volume: 'HL Trade Volume',
   hl_taker_volume: 'HL Taker Volume',
-  hl_funding_paid: 'HL Funding Paid',
+  hl_funding_paid: 'HL Funding Rate',
   hl_pnl: 'HL Realized PnL',
   hl_transfers: 'HL Bridge Flows',
   hl_vault_net: 'HL Vault Net Flow',
