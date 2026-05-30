@@ -2258,13 +2258,19 @@ def hl_vaults_df_to_rows(df: pl.DataFrame):
 
 # Dispatch dict: event-key -> (builder_method_name, table, columns, transform).
 # builder_method_name is the accessor on ds.exchange.hyperliquid.
+#
+# NOTE: position_history is DEFERRED for now. The endpoint returns per-
+# (wallet × token × snapshot-tick) rows — fan-out is so large that even a
+# single-token × 6h backfill chunk doesn't finish streaming over HTTP
+# within reasonable timeouts. The table + transforms + schema remain in
+# place so we can re-enable later by adding the entry back and probing
+# the right chunk shape (likely needs server-side aggregate or as_link).
 HL_EVENTS = {
-    "ohlcv":            ("ohlcv",            "tradernick.hl_ohlcv_1m",        HL_OHLCV_COLUMNS,            hl_ohlcv_df_to_rows),
-    "trades":           ("trades",           "tradernick.hl_trades",          HL_TRADES_COLUMNS,           hl_trades_df_to_rows),
-    "fills":            ("fills",            "tradernick.hl_fills",           HL_FILLS_COLUMNS,            hl_fills_df_to_rows),
-    "funding":          ("funding",          "tradernick.hl_funding",         HL_FUNDING_COLUMNS,          hl_funding_df_to_rows),
-    "position_history": ("position_history", "tradernick.hl_position_history", HL_POSITION_HISTORY_COLUMNS, hl_position_history_df_to_rows),
-    "trade_history":    ("trade_history",    "tradernick.hl_trade_history",   HL_TRADE_HISTORY_COLUMNS,    hl_trade_history_df_to_rows),
-    "transfers":        ("transfers",        "tradernick.hl_transfers",       HL_TRANSFERS_COLUMNS,        hl_transfers_df_to_rows),
-    "vaults":           ("vaults",           "tradernick.hl_vaults",          HL_VAULTS_COLUMNS,           hl_vaults_df_to_rows),
+    "ohlcv":            ("ohlcv",            "tradernick.hl_ohlcv_1m",      HL_OHLCV_COLUMNS,         hl_ohlcv_df_to_rows),
+    "trades":           ("trades",           "tradernick.hl_trades",        HL_TRADES_COLUMNS,        hl_trades_df_to_rows),
+    "fills":            ("fills",            "tradernick.hl_fills",         HL_FILLS_COLUMNS,         hl_fills_df_to_rows),
+    "funding":          ("funding",          "tradernick.hl_funding",       HL_FUNDING_COLUMNS,       hl_funding_df_to_rows),
+    "trade_history":    ("trade_history",    "tradernick.hl_trade_history", HL_TRADE_HISTORY_COLUMNS, hl_trade_history_df_to_rows),
+    "transfers":        ("transfers",        "tradernick.hl_transfers",     HL_TRANSFERS_COLUMNS,     hl_transfers_df_to_rows),
+    "vaults":           ("vaults",           "tradernick.hl_vaults",        HL_VAULTS_COLUMNS,        hl_vaults_df_to_rows),
 }

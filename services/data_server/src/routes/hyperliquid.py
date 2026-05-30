@@ -34,9 +34,7 @@ _EVENT_TABLES = {
     "fills":            ("tradernick.hl_fills",           "size",              "price*size",      "wallet"),
     # Funding amount sign convention: positive = wallet PAID, negative = received.
     "funding":          ("tradernick.hl_funding",         "amount",            "amount",          "wallet"),
-    # Position history: snapshot-style. amount = sum(size) per bucket, value
-    # = sum(size * mark_price) for USD notional.
-    "position_history": ("tradernick.hl_position_history", "size",             "size*mark_price", "wallet"),
+    # position_history deferred — see note in clickhouse.py HL_EVENTS.
     # Trade history: already pre-aggregated. amount = sum(volume), value = sum(net_pnl).
     "trade_history":    ("tradernick.hl_trade_history",   "volume",            "net_pnl",         "wallet"),
     "transfers":        ("tradernick.hl_transfers",       "amount",            "amount",          "wallet"),

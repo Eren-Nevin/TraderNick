@@ -307,9 +307,6 @@ export type ChartKind =
   | 'hl_trade_volume'
   | 'hl_taker_volume'
   | 'hl_funding_paid'
-  | 'hl_position_long_size'
-  | 'hl_position_short_size'
-  | 'hl_position_net_size'
   | 'hl_pnl'
   | 'hl_transfers'
   | 'hl_vault_net'
@@ -402,9 +399,6 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   hl_trade_volume: 'HL Trade Volume',
   hl_taker_volume: 'HL Taker Volume',
   hl_funding_paid: 'HL Funding Paid',
-  hl_position_long_size: 'HL Long OI',
-  hl_position_short_size: 'HL Short OI',
-  hl_position_net_size: 'HL Net OI',
   hl_pnl: 'HL Realized PnL',
   hl_transfers: 'HL Bridge Flows',
   hl_vault_net: 'HL Vault Net Flow',
@@ -671,12 +665,11 @@ export const GMX_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_va
 export const HL_CHART_KINDS: ChartKind[] = [
   // hl_ohlcv removed — superseded by the generic `ohlcv` kind with
   // exchange='hl'. The unified chart renders candles either way.
+  // hl_position_long_size / short_size / net_size removed — the
+  // position_history endpoint is deferred (see HL_EVENTS comment).
   'hl_trade_volume',
   'hl_taker_volume',
   'hl_funding_paid',
-  'hl_position_long_size',
-  'hl_position_short_size',
-  'hl_position_net_size',
   'hl_pnl',
   'hl_transfers',
   'hl_vault_net',
@@ -685,12 +678,10 @@ export const HL_CHART_KINDS: ChartKind[] = [
 /** Single-event HL kinds → server-side event slug. */
 export const HL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
   // hl_ohlcv intentionally absent — handled via the generic `ohlcv` kind.
+  // hl_position_* intentionally absent — position_history endpoint deferred.
   hl_trade_volume: 'trades',
   hl_taker_volume: 'fills',
   hl_funding_paid: 'funding',
-  hl_position_long_size: 'position_history',
-  hl_position_short_size: 'position_history',
-  hl_position_net_size: 'position_history',
   hl_pnl: 'trade_history',
   hl_transfers: 'transfers',
   hl_vault_net: 'vaults'
@@ -705,9 +696,6 @@ export const HL_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_val
   hl_trade_volume: 'sum_value_usd', // USD trade volume
   hl_taker_volume: 'sum_value_usd', // USD taker flow
   hl_funding_paid: 'sum_amount',    // funding in USDC (sum)
-  hl_position_long_size: 'sum_value_usd',  // USD notional OI
-  hl_position_short_size: 'sum_value_usd',
-  hl_position_net_size: 'sum_value_usd',
   hl_pnl: 'sum_value_usd',          // realized PnL in USD
   hl_transfers: 'sum_amount',       // USDC amount
   hl_vault_net: 'sum_amount'        // amount

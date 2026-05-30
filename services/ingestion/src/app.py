@@ -586,8 +586,9 @@ async def backfill_gmx_events(request):
 
 
 _HL_VALID_EVENTS = (
+    # position_history deferred — see note in clickhouse.py HL_EVENTS.
     "ohlcv", "trades", "fills", "funding",
-    "position_history", "trade_history", "transfers", "vaults",
+    "trade_history", "transfers", "vaults",
 )
 
 

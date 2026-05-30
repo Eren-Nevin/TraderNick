@@ -18,7 +18,7 @@
   const DEFAULT_KINDS: ChartKind[] = [
     'ohlcv',              // BTC candles (exchange=hl is set below)
     'hl_trade_volume',    // BTC trade volume
-    'hl_position_net_size', // BTC net OI
+    'hl_taker_volume',    // BTC taker flow (in place of net-OI until position_history is re-enabled)
     'hl_funding_paid',    // BTC funding paid
     'hl_pnl',             // BTC realized PnL (no wallet filter)
     'hl_top_traders',     // BTC top traders leaderboard
