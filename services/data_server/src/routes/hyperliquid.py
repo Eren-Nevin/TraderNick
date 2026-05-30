@@ -110,13 +110,17 @@ async def aggregate(request):
 
     where_sql = " AND ".join(where_parts)
 
+    # FINAL forces the ReplacingMergeTree merge at query time, so
+    # un-merged duplicate rows from force=false backfills don't double the
+    # aggregates. ~10-30% query overhead on un-merged ranges, near-zero
+    # once background merges have run.
     sql = f"""
         SELECT
             toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
             {agg_func}({amount_expr}) AS sum_amount,
             {agg_func}({value_expr})  AS sum_value_usd,
             count()                   AS count
-        FROM {table}
+        FROM {table} FINAL
         WHERE {where_sql}
         GROUP BY bucket
         ORDER BY bucket

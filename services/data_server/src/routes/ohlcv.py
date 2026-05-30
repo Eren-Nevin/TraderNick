@@ -92,7 +92,7 @@ async def ohlcv(request):
                 volume * close              AS volume_usd_row,
                 buyer_taker_volume * close  AS buyer_taker_usd_row,
                 seller_taker_volume * close AS seller_taker_usd_row
-            FROM {table}
+            FROM {table} FINAL
             WHERE token = {{token:String}}
               AND time >= {{since:DateTime}}
               AND time <  {{until:DateTime}}
