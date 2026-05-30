@@ -113,7 +113,7 @@ async def aggregate(request):
             sum({amount_expr})  AS sum_amount,
             {value_sum_expr}    AS sum_value_usd,
             count()             AS count
-        FROM {table}
+        FROM {table} FINAL
         WHERE {where_chain}
           {where_market}
           AND time >= {{since:DateTime}}
@@ -156,7 +156,7 @@ async def streams(_request):
     for ev, (table, _a, _v) in _EVENT_TABLES.items():
         rows = await ch.query(f"""
             SELECT chain, market_name, count() AS rows
-            FROM {table}
+            FROM {table} FINAL
             WHERE market_name != ''
             GROUP BY chain, market_name
             ORDER BY chain, rows DESC

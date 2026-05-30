@@ -84,7 +84,7 @@ async def aggregate(request):
             {amount1_expr}               AS sum_amount1,
             sum(coalesce(value_usd, 0))  AS sum_value_usd,
             count()                      AS count
-        FROM {table}
+        FROM {table} FINAL
         WHERE chain    = {{chain:String}}
           AND symbol0  = {{symbol0:String}}
           AND symbol1  = {{symbol1:String}}
@@ -132,7 +132,7 @@ async def streams(_request):
     for ev, (table, _) in _EVENT_TABLES.items():
         rows = await ch.query(f"""
             SELECT chain, symbol0, symbol1, tick_spacing, count() AS rows
-            FROM {table}
+            FROM {table} FINAL
             GROUP BY chain, symbol0, symbol1, tick_spacing
             ORDER BY chain, symbol0, symbol1, tick_spacing
         """)

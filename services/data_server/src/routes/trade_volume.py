@@ -55,7 +55,7 @@ async def trade_volume(request):
             countIf(amount * price >  {over:Float64})                                             AS large_count,
             countIf(buy)                                                                          AS buyer_count,
             countIf(NOT buy)                                                                      AS seller_count
-        FROM tradernick.binance_raw_trades
+        FROM tradernick.binance_raw_trades FINAL
         WHERE token = {token:String}
           AND time >= {since:DateTime64(3)}
           AND time <  {until:DateTime64(3)}

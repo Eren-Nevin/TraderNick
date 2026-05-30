@@ -601,7 +601,7 @@ async def aggregate(request):
                 chain, kind, token, time, amount,
                 sender_categories, receiver_categories,
                 sender_entity, receiver_entity
-            FROM tradernick.transfers
+            FROM tradernick.transfers FINAL
             WHERE {ckt_where}
               AND time >= {{since:DateTime}}
               AND time <  {{until:DateTime}}

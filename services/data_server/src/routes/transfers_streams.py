@@ -31,7 +31,7 @@ async def _fetch() -> list[dict]:
     rows = await ch.query(
         """
         SELECT DISTINCT chain, token, kind
-        FROM tradernick.transfers
+        FROM tradernick.transfers FINAL
         ORDER BY chain, token
         """
     )

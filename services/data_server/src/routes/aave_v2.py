@@ -99,7 +99,7 @@ async def aggregate(request):
             sum({amount_col})           AS sum_amount,
             sum(coalesce(value_usd, 0)) AS sum_value_usd,
             count()                     AS count
-        FROM {table}
+        FROM {table} FINAL
         WHERE {ckt_where}
           AND time >= {{since:DateTime}}
           AND time <  {{until:DateTime}}
@@ -142,7 +142,7 @@ async def streams(_request):
         token_col = token_col_override or "token"
         rows = await ch.query(f"""
             SELECT chain, {token_col} AS token, count() AS rows
-            FROM {table}
+            FROM {table} FINAL
             GROUP BY chain, {token_col}
             ORDER BY chain, {token_col}
         """)

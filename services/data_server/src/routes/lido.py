@@ -96,7 +96,7 @@ async def aggregate(request):
             sum({amount_col})                          AS sum_amount,
             sum(coalesce(value_usd, 0))                AS sum_value_usd,
             count()                                    AS count
-        FROM {table}
+        FROM {table} FINAL
         WHERE {chain_where}
           AND time >= {{since:DateTime}}
           AND time <  {{until:DateTime}}
@@ -144,7 +144,7 @@ async def streams(_request):
     for event_key, (table, _amount_col) in _EVENT_TABLES.items():
         rows = await ch.query(f"""
             SELECT chain, count() AS rows
-            FROM {table}
+            FROM {table} FINAL
             GROUP BY chain
             ORDER BY chain
         """)

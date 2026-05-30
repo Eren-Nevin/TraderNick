@@ -155,7 +155,7 @@ async def streams(_request):
             continue
         rows = await ch.query(f"""
             SELECT token, count() AS rows
-            FROM {table}
+            FROM {table} FINAL
             WHERE token != ''
             GROUP BY token
             ORDER BY rows DESC
@@ -204,7 +204,7 @@ async def leaderboard(request):
             -- Surface wallet labels (Array(String)) for the badge on the
             -- table chart; empty array for unlabelled wallets.
             dictGet('tradernick.wallet_labels', 'categories', lower(wallet)) AS categories
-        FROM tradernick.hl_trade_history
+        FROM tradernick.hl_trade_history FINAL
         WHERE {where_sql}
         GROUP BY wallet
         ORDER BY {order_by} DESC
