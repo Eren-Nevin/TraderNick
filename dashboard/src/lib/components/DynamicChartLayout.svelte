@@ -317,8 +317,10 @@
       }
       if (inst.kind === 'fr') {
         // Same exchange selector as ohlcv — defaults to Binance for
-        // existing saved layouts.
+        // existing saved layouts. frDisplay toggles the y-axis between
+        // 'rate8h' (Coinglass-style bps/8h, default) and 'apr' (annualized %).
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
+        inst.frDisplay = r.frDisplay === 'apr' ? 'apr' : 'rate8h';
       }
       if (inst.kind === 'pc') {
         // Price Comparison chart — the overlay token list is the *whole*

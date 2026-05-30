@@ -1075,6 +1075,10 @@ export type ChartInstance = {
    *  'binance'. 'hl' routes to tradernick.hl_ohlcv_1m so the same chart
    *  kind serves both data sources. */
   exchange?: 'binance' | 'hl';
+  /** fr only: how to display the funding rate. 'rate8h' (default) normalizes
+   *  HL's per-hour rate × 8 so both exchanges show comparable per-8h bps —
+   *  matches the Coinglass convention. 'apr' annualizes to percent-per-year. */
+  frDisplay?: 'rate8h' | 'apr';
   /** For event-driven chart kinds (AAVE / Lido) that emit both a USD value
    *  AND a raw token amount per row: which one to plot. Default 'usd'. The
    *  toggle is hidden for Uniswap kinds because the amount field mixes
@@ -1185,6 +1189,9 @@ export function newChartInstance(
   }
   if (kind === 'ohlcv') {
     base.pin = false;
+  }
+  if (kind === 'fr') {
+    base.frDisplay = 'rate8h';
   }
   if (kind === 'pc') {
     base.overlayTokens = [];

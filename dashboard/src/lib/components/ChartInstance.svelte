@@ -2021,9 +2021,25 @@
   }
 
   // ---- derived series / lines / extra computed data ----
+  // Funding-rate normalization. Server returns the raw per-event rate; each
+  // exchange's per-event cadence differs (Binance = per-8h, HL = per-1h), so
+  // we normalize on the client based on the display-mode toggle:
+  //   'rate8h' → bps over an 8-hour window (Coinglass convention; HL × 8).
+  //   'apr'    → annualized percent (rate × events/year × 100).
+  // Switching is instant (no refetch) because both modes derive from the same
+  // raw rate.
+  let frHoursPerEvent = $derived(
+    (instance.exchange ?? 'binance') === 'hl' ? 1 : 8
+  );
+  let frIsApr = $derived((instance.frDisplay ?? 'rate8h') === 'apr');
   let frBpsData = $derived(
     instance.kind === 'fr'
-      ? (data as FundingRateRow[]).map((d) => ({ ...d, rate_bps: d.rate * 10000 }))
+      ? (data as FundingRateRow[]).map((d) => ({
+          ...d,
+          rate_bps: frIsApr
+            ? d.rate * (24 / frHoursPerEvent) * 365 * 100
+            : d.rate * (8 / frHoursPerEvent) * 10000
+        }))
       : []
   );
 
@@ -3037,6 +3053,33 @@
         </label>
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
+      {#if instance.kind === 'fr'}
+        <!-- Display mode for funding rate. 'rate8h' (default) shows bps over
+             a 8-hour window — Binance shown as-is, HL × 8 — so cross-exchange
+             magnitudes line up (Coinglass convention). 'apr' annualizes to
+             percent-per-year, useful for comparing funding cost against yield
+             / borrow rates. Switching is instant (no refetch). -->
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Y axis</span>
+        <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
+          <button
+            type="button"
+            onclick={() => (instance.frDisplay = 'rate8h')}
+            class={'px-2 py-0.5 text-[11px] ' + ((instance.frDisplay ?? 'rate8h') === 'rate8h'
+              ? 'bg-zinc-800 text-zinc-100'
+              : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="bps over an 8-hour window (Binance native; HL × 8)"
+          >bps / 8h</button>
+          <button
+            type="button"
+            onclick={() => (instance.frDisplay = 'apr')}
+            class={'px-2 py-0.5 text-[11px] border-l border-zinc-700 ' + ((instance.frDisplay) === 'apr'
+              ? 'bg-zinc-800 text-zinc-100'
+              : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="Annualized percent (rate × events-per-year × 100)"
+          >APR %</button>
+        </div>
+        <span class="w-px h-4 bg-zinc-800"></span>
+      {/if}
       {#if instance.kind === 'sz'}
         <span class="text-zinc-500">Under</span>
         <input
@@ -3436,7 +3479,7 @@
         valueKey="rate_bps"
         lines={frLinesD}
         showBars={instance.showPoint}
-        valueLabel="Rate"
+        valueLabel={frIsApr ? 'APR' : 'Rate'}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -3445,7 +3488,7 @@
         onHover={handleHover}
         vRefLines={weekVRefLines}
         formatY={(v) => v.toFixed(2)}
-        formatTooltip={(v) => `${v.toFixed(2)} bps`}
+        formatTooltip={(v) => `${v.toFixed(2)} ${frIsApr ? '%' : 'bps/8h'}`}
         minBarWidthPx={3}
       />
     {:else if instance.kind === 'bs'}
