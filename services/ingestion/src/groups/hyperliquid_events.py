@@ -56,10 +56,17 @@ _CADENCE: dict[str, tuple[int, int]] = {
 
 # Live overlap window = a small multiple of the tick so transient gaps
 # self-heal on the next tick without needing the gap-fill task.
+#
+# Funding (1800s tick) gets a 24h lookback to match the binance_funding_rate
+# group — its server-side response is sparse (one event/hour × ~26 tokens ×
+# wallet fan-out, well under the 2.23 per-call caps), and short ingestion
+# outages would otherwise leave permanent mid-range holes because the
+# high-watermark gap-fill can't detect them. 24h means any sub-day outage
+# self-heals on the next live tick.
 _OVERLAP_MINUTES = {
     60:    3,
     300:   15,
-    1800:  60,
+    1800:  1440,
 }
 
 

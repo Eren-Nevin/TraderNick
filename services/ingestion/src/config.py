@@ -377,3 +377,10 @@ AERO_BASIC_LIVE_POOLS_DEFAULT = "BASE:USDC/WETH/v"
 AERO_BASIC_LIVE_POOLS = _parse_aero_basic_pools(
     os.environ.get("AERO_BASIC_LIVE_POOLS", AERO_BASIC_LIVE_POOLS_DEFAULT)
 )
+
+# Pace every DeFiStream HTTP call through a per-process token bucket +
+# concurrency semaphore. Imported here so any group/backfill that does
+# `import config` (which is all of them) picks up the patch before its
+# first AsyncDeFiStream() instantiation.
+from ds_throttle import install as _install_ds_throttle
+_install_ds_throttle()

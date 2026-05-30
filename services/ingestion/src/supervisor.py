@@ -1,10 +1,18 @@
 import asyncio
 import logging
+import os
+import random
 import sys
 import time
 from typing import Dict
 
 log = logging.getLogger("supervisor")
+
+# Random delay before each group's FIRST spawn, in seconds. Spreads the
+# cold-start burst across ~N seconds so 24 subprocesses don't all hit
+# DeFiStream simultaneously. Per-subprocess throttling (ds_throttle.install)
+# handles within-process bursts; this handles cross-process.
+_STARTUP_JITTER_S = float(os.environ.get("GROUP_STARTUP_JITTER_S", "20.0"))
 
 GROUP_MODULES = {
     "binance_ohlcv": "groups.binance_ohlcv",
@@ -61,7 +69,13 @@ class Supervisor:
     async def _supervise(self, name: str):
         status = self.groups[name]
         backoff = 1
+        first = True
         while True:
+            if first and _STARTUP_JITTER_S > 0:
+                delay = random.uniform(0.0, _STARTUP_JITTER_S)
+                log.info("group %s: jittered startup in %.1fs", name, delay)
+                await asyncio.sleep(delay)
+            first = False
             log.info("starting group %s (module=%s)", name, status.module)
             proc = await asyncio.create_subprocess_exec(
                 sys.executable, "-m", status.module,
