@@ -18,9 +18,11 @@ from clickhouse import client
 
 bp = Blueprint("transfers_streams")
 
-# Distinct (chain, token, kind) tuples take ~2-5s to compute over the full
-# transfers table once it has 100M+ rows. The list changes only when admin
-# reconfigures ingestion, so cache aggressively with a TTL.
+# Distinct (chain, token, kind) tuples scan the whole transfers table —
+# ~3s on 1B rows with the index-friendly DISTINCT below, much slower
+# with FINAL (which forces a merge-scan that doesn't change the unique
+# tuple set anyway since dedup runs on a different ORDER BY tuple).
+# Cache for a minute regardless — admin reconfigures ingestion rarely.
 _CACHE: dict = {"at": 0.0, "value": None}
 _TTL_SECONDS = 60.0
 _lock = asyncio.Lock()
@@ -28,10 +30,15 @@ _lock = asyncio.Lock()
 
 async def _fetch() -> list[dict]:
     ch = await client()
+    # No FINAL: ReplacingMergeTree dedup on transfers is keyed on the
+    # full (chain, token, time, sender, receiver, amount, tx_id,
+    # log_index) tuple. Duplicate rows would still share the same
+    # (chain, token, kind) DISTINCT key, so dropping FINAL gives the
+    # identical result set in a fraction of the time.
     rows = await ch.query(
         """
         SELECT DISTINCT chain, token, kind
-        FROM tradernick.transfers FINAL
+        FROM tradernick.transfers
         ORDER BY chain, token
         """
     )
