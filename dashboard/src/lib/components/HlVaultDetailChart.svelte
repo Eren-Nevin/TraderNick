@@ -71,6 +71,9 @@
       setTimeout(() => (copied = false), 1200);
     } catch { /* no-op */ }
   }
+  async function copyAddr(addr: string) {
+    try { await navigator.clipboard.writeText(addr); } catch { /* no-op */ }
+  }
 </script>
 
 <div class="h-full flex flex-col text-xs">
@@ -157,7 +160,13 @@
                       class:border-zinc-700={e.action === 'create'}
                 >{e.action}</span>
               </td>
-              <td class="px-3 py-1 font-mono text-zinc-300" title={e.wallet}>{truncate(e.wallet)}</td>
+              <td class="px-3 py-1">
+                <button type="button" onclick={() => copyAddr(e.wallet)}
+                        title={e.wallet + ' — click to copy'}
+                        class="font-mono text-zinc-300 hover:text-blue-400">
+                  {truncate(e.wallet)}
+                </button>
+              </td>
               <td class="px-3 py-1 text-right font-mono text-zinc-200">{fmtUsd(e.amount)}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-400">{e.commission > 0 ? fmtUsd(e.commission) : '—'}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-500">{e.fee > 0 ? fmtUsd(e.fee) : '—'}</td>
