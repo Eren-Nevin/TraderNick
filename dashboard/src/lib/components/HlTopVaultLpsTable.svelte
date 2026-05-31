@@ -32,12 +32,18 @@
     if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
     return n.toFixed(0);
   }
+  let copiedAddr = $state('');
   async function copyAddr(addr: string) {
-    try { await navigator.clipboard.writeText(addr); } catch { /* no-op */ }
+    try {
+      await navigator.clipboard.writeText(addr);
+      copiedAddr = addr;
+      setTimeout(() => { if (copiedAddr === addr) copiedAddr = ''; }, 1200);
+    } catch { /* no-op */ }
   }
 </script>
 
-<div class="h-full overflow-auto text-xs">
+<!-- stopPropagation so drag-to-reorder only fires from the title bar. -->
+<div class="h-full overflow-auto text-xs" onpointerdown={(e) => e.stopPropagation()}>
   {#if lps.length === 0}
     <div class="h-full flex items-center justify-center text-zinc-500">No vault LPs in this window</div>
   {:else}
@@ -62,7 +68,7 @@
               <button type="button" onclick={() => copyAddr(l.wallet)}
                       title={l.wallet + ' — click to copy'}
                       class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer">
-                {truncate(l.wallet)}
+                {copiedAddr === l.wallet ? '✓ copied' : truncate(l.wallet)}
               </button>
             </td>
             <td class="px-3 py-1 text-right font-mono text-emerald-400">{fmtUsd(l.deposits)}</td>

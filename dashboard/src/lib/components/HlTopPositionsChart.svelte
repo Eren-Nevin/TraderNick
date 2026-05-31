@@ -165,7 +165,8 @@
   }
 </script>
 
-<div class="h-full flex flex-col text-xs">
+<!-- stopPropagation so drag-to-reorder only fires from the title bar. -->
+<div class="h-full flex flex-col text-xs" onpointerdown={(e) => e.stopPropagation()}>
   <!-- Top bar: wallet picker + copy + tags -->
   <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
     <span class="text-zinc-500">Wallet:</span>

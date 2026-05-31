@@ -1,8 +1,10 @@
 <script lang="ts">
-  // Top Vaults leaderboard. Sort selector at the top picks the ranking
-  // metric — by net inflow, raw deposits, raw withdrawals, or commission
-  // earned by the vault leader. Switching the sort triggers a re-fetch
-  // server-side; the table itself is static once the data lands.
+  // Top Vaults leaderboard. The sort selector at the top picks the
+  // SERVER-SIDE ranking metric (so the top-20 set itself changes when
+  // you flip it: top by Net vs top by Commission ranks different
+  // vaults). Header clicks then re-sort the returned 20 rows CLIENT-
+  // side on any column — handy for cutting the same set by LP count
+  // or distributions without a re-fetch.
 
   type Vault = {
     rank: number;
@@ -45,14 +47,41 @@
     if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
     return n.toFixed(0);
   }
+  // Click-to-copy + transient "✓ copied" feedback
+  let copiedAddr = $state('');
   async function copyAddr(addr: string) {
-    try { await navigator.clipboard.writeText(addr); } catch { /* no-op */ }
+    try {
+      await navigator.clipboard.writeText(addr);
+      copiedAddr = addr;
+      setTimeout(() => { if (copiedAddr === addr) copiedAddr = ''; }, 1200);
+    } catch { /* no-op */ }
   }
+
+  // Client-side column sort. '' = preserve server order (which already
+  // reflects the title-bar orderBy selection).
+  type SortKey = '' | 'deposits' | 'withdrawals' | 'net' | 'commission' | 'distributions' | 'lp_count' | 'event_count';
+  let sortKey = $state<SortKey>('');
+  let sortDir = $state<1 | -1>(-1);
+  function onSort(k: SortKey) {
+    if (sortKey === k) sortDir = (sortDir === 1 ? -1 : 1);
+    else { sortKey = k; sortDir = -1; }
+  }
+  function sortArrow(k: SortKey): string {
+    if (sortKey !== k) return '';
+    return sortDir === 1 ? ' ↑' : ' ↓';
+  }
+  let sortedVaults = $derived.by(() => {
+    if (!sortKey) return vaults;
+    const dir = sortDir;
+    return [...vaults].sort((a, b) => ((a[sortKey] as number) - (b[sortKey] as number)) * dir);
+  });
 </script>
 
-<div class="h-full flex flex-col text-xs">
+<!-- stopPropagation so drag-to-reorder only fires from the chart's
+     title bar above this body, not from clicks/scrolls inside it. -->
+<div class="h-full flex flex-col text-xs" onpointerdown={(e) => e.stopPropagation()}>
   <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
-    <span class="text-zinc-500">Sort by:</span>
+    <span class="text-zinc-500">Top by:</span>
     <select
       value={orderBy}
       onchange={(e) => onChangeOrderBy(e.currentTarget.value as OrderBy)}
@@ -63,6 +92,7 @@
       <option value="withdrawals">Withdrawals</option>
       <option value="commission">Commission Earned</option>
     </select>
+    <span class="text-[10px] text-zinc-600 ml-auto">Click any column header to re-sort the returned set</span>
   </div>
   <div class="flex-1 overflow-auto">
     {#if vaults.length === 0}
@@ -73,24 +103,24 @@
           <tr>
             <th class="text-left  px-3 py-1.5 font-normal">#</th>
             <th class="text-left  px-3 py-1.5 font-normal">Vault</th>
-            <th class="text-right px-3 py-1.5 font-normal">Deposits</th>
-            <th class="text-right px-3 py-1.5 font-normal">Withdrawals</th>
-            <th class="text-right px-3 py-1.5 font-normal">Net</th>
-            <th class="text-right px-3 py-1.5 font-normal">Commission</th>
-            <th class="text-right px-3 py-1.5 font-normal">Distributions</th>
-            <th class="text-right px-3 py-1.5 font-normal">LPs</th>
-            <th class="text-right px-3 py-1.5 font-normal">Events</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('deposits')}>Deposits{sortArrow('deposits')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('withdrawals')}>Withdrawals{sortArrow('withdrawals')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('net')}>Net{sortArrow('net')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('commission')}>Commission{sortArrow('commission')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('distributions')}>Distributions{sortArrow('distributions')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('lp_count')}>LPs{sortArrow('lp_count')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('event_count')}>Events{sortArrow('event_count')}</th>
           </tr>
         </thead>
         <tbody>
-          {#each vaults as v (v.vault)}
+          {#each sortedVaults as v, idx (v.vault)}
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
-              <td class="px-3 py-1 text-zinc-500">{v.rank}</td>
+              <td class="px-3 py-1 text-zinc-500">{sortKey ? idx + 1 : v.rank}</td>
               <td class="px-3 py-1">
                 <button type="button" onclick={() => copyAddr(v.vault)}
                         title={v.vault + ' — click to copy'}
                         class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer">
-                  {truncate(v.vault)}
+                  {copiedAddr === v.vault ? '✓ copied' : truncate(v.vault)}
                 </button>
               </td>
               <td class="px-3 py-1 text-right font-mono text-emerald-400">{fmtUsd(v.deposits)}</td>

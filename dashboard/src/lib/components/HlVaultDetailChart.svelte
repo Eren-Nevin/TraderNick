@@ -71,12 +71,18 @@
       setTimeout(() => (copied = false), 1200);
     } catch { /* no-op */ }
   }
+  let copiedLp = $state('');
   async function copyAddr(addr: string) {
-    try { await navigator.clipboard.writeText(addr); } catch { /* no-op */ }
+    try {
+      await navigator.clipboard.writeText(addr);
+      copiedLp = addr;
+      setTimeout(() => { if (copiedLp === addr) copiedLp = ''; }, 1200);
+    } catch { /* no-op */ }
   }
 </script>
 
-<div class="h-full flex flex-col text-xs">
+<!-- stopPropagation so drag-to-reorder only fires from the title bar. -->
+<div class="h-full flex flex-col text-xs" onpointerdown={(e) => e.stopPropagation()}>
   <!-- Vault picker -->
   <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
     <span class="text-zinc-500">Vault:</span>
@@ -164,7 +170,7 @@
                 <button type="button" onclick={() => copyAddr(e.wallet)}
                         title={e.wallet + ' — click to copy'}
                         class="font-mono text-zinc-300 hover:text-blue-400 cursor-pointer">
-                  {truncate(e.wallet)}
+                  {copiedLp === e.wallet ? '✓ copied' : truncate(e.wallet)}
                 </button>
               </td>
               <td class="px-3 py-1 text-right font-mono text-zinc-200">{fmtUsd(e.amount)}</td>
