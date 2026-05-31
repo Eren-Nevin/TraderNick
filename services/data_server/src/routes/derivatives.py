@@ -71,28 +71,94 @@ async def open_interest(request):
 
 @bp.get("/long_short_ratios")
 async def long_short_ratios(request):
+    """Long/short ratios for the ls + tt chart kinds.
+
+    `exchange=binance` (default): pre-aggregated server-side from Binance
+    Futures' top-trader & long/short endpoints — all four ratios are
+    real.
+
+    `exchange=hl`: only the two `ls`-chart ratios are computed (count
+    from hl_position_history, taker volume from hl_fills); the two
+    `top_trader_*` fields are returned as 0. The `tt` chart kind is
+    intentionally NOT extended to HL — Binance's "top trader" is a
+    product concept (top 20% of accounts by collateral) with no
+    equivalent in HL's permissionless wallet-transparent design.
+    """
     args, err = _validate(request)
     if err is not None:
         return err
+    exchange = request.args.get("exchange", "binance")
+    if exchange not in ("binance", "hl"):
+        return response.json({"error": "exchange must be binance|hl"}, status=400)
+
     ch = await client()
-    rows = await ch.query(
+    if exchange == "hl":
+        # long_short_count_ratio: at the last snapshot in each bucket,
+        # ratio of wallets currently long vs currently short. position_
+        # history is state, so we collapse to per-snap counts first then
+        # argMax to the latest snap within each bucket.
+        # taker_long_short_vol_ratio: flow event — taker buys ($) /
+        # taker sells ($) per bucket from hl_fills (crossed=1 marks
+        # the taker side; side='B' = buy, side='A' = sell).
+        sql = """
+            WITH
+              positions AS (
+                SELECT
+                  bucket,
+                  argMax(longs,  snap) AS long_count,
+                  argMax(shorts, snap) AS short_count
+                FROM (
+                  SELECT time AS snap,
+                         toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND) AS bucket,
+                         countIf(side='long')  AS longs,
+                         countIf(side='short') AS shorts
+                  FROM tradernick.hl_position_history FINAL
+                  WHERE token = {token:String}
+                    AND time >= {since:DateTime}
+                    AND time <  {until:DateTime}
+                  GROUP BY time
+                )
+                GROUP BY bucket
+              ),
+              takers AS (
+                SELECT
+                  toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND) AS bucket,
+                  sumIf(size*price, crossed=1 AND side='B') AS taker_buy_vol,
+                  sumIf(size*price, crossed=1 AND side='A') AS taker_sell_vol
+                FROM tradernick.hl_fills FINAL
+                WHERE token = {token:String}
+                  AND time >= {since:DateTime}
+                  AND time <  {until:DateTime}
+                GROUP BY bucket
+              )
+            SELECT
+              toUnixTimestamp(p.bucket) AS bucket,
+              0.0 AS top_trader_count_ratio,
+              0.0 AS top_trader_vol_ratio,
+              if(p.short_count > 0,  p.long_count / p.short_count,        0) AS long_short_count_ratio,
+              if(t.taker_sell_vol > 0, t.taker_buy_vol / t.taker_sell_vol, 0) AS taker_long_short_vol_ratio
+            FROM positions p
+            LEFT JOIN takers t ON p.bucket = t.bucket
+            ORDER BY p.bucket
+            LIMIT {limit:UInt32}
         """
-        SELECT
-            toUnixTimestamp(toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND)) AS bucket,
-            argMax(top_trader_count_ratio,     time) AS top_trader_count_ratio,
-            argMax(top_trader_vol_ratio,       time) AS top_trader_vol_ratio,
-            argMax(long_short_count_ratio,     time) AS long_short_count_ratio,
-            argMax(taker_long_short_vol_ratio, time) AS taker_long_short_vol_ratio
-        FROM tradernick.binance_long_short_ratios
-        WHERE token = {token:String}
-          AND time >= {since:DateTime}
-          AND time <  {until:DateTime}
-        GROUP BY bucket
-        ORDER BY bucket
-        LIMIT {limit:UInt32}
-        """,
-        parameters=args,
-    )
+    else:
+        sql = """
+            SELECT
+                toUnixTimestamp(toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND)) AS bucket,
+                argMax(top_trader_count_ratio,     time) AS top_trader_count_ratio,
+                argMax(top_trader_vol_ratio,       time) AS top_trader_vol_ratio,
+                argMax(long_short_count_ratio,     time) AS long_short_count_ratio,
+                argMax(taker_long_short_vol_ratio, time) AS taker_long_short_vol_ratio
+            FROM tradernick.binance_long_short_ratios
+            WHERE token = {token:String}
+              AND time >= {since:DateTime}
+              AND time <  {until:DateTime}
+            GROUP BY bucket
+            ORDER BY bucket
+            LIMIT {limit:UInt32}
+        """
+    rows = await ch.query(sql, parameters=args)
     series = [
         {
             "time": int(r[0]),
@@ -103,7 +169,10 @@ async def long_short_ratios(request):
         }
         for r in rows.result_rows
     ]
-    return response.json({"token": args["token"], "interval": args["interval"], "series": series})
+    return response.json({
+        "token": args["token"], "exchange": exchange,
+        "interval": args["interval"], "series": series,
+    })
 
 
 # Per-exchange funding-rate source. Same response shape for both:

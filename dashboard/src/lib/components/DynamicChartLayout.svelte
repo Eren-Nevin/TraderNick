@@ -334,8 +334,13 @@
         // display selector picks which side(s) to render — defaults to
         // 'total' so existing saved layouts (no field) keep their look.
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
-        inst.oiHlDisplay = (r.oiHlDisplay === 'long' || r.oiHlDisplay === 'short' || r.oiHlDisplay === 'long_short' || r.oiHlDisplay === 'all')
+        inst.oiHlDisplay = (r.oiHlDisplay === 'long' || r.oiHlDisplay === 'short' || r.oiHlDisplay === 'long_short')
           ? r.oiHlDisplay : 'total';
+      }
+      if (inst.kind === 'ls') {
+        // L/S: Binance is the pre-aggregated source; HL is computed live
+        // from hl_position_history + hl_fills.
+        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
       }
       if (inst.kind === 'pc') {
         // Price Comparison chart — the overlay token list is the *whole*

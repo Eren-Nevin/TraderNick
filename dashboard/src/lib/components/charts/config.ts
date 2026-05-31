@@ -1133,9 +1133,9 @@ export type ChartInstance = {
   hlSelectedWallet?: string;
   /** oi chart only, HL exchange only: which side(s) of OI to render —
    *  'total' (default, matches the Binance behavior), 'long', 'short',
-   *  'long_short' (two lines, no total), or 'all' (three lines). Ignored
-   *  when exchange='binance'. */
-  oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short' | 'all';
+   *  or 'long_short' (two lines: long + short, no total). Ignored when
+   *  exchange='binance'. */
+  oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short';
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -1217,6 +1217,9 @@ export function newChartInstance(
   if (kind === 'oi') {
     base.exchange = 'binance';
     base.oiHlDisplay = 'total';
+  }
+  if (kind === 'ls') {
+    base.exchange = 'binance';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

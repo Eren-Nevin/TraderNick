@@ -615,7 +615,7 @@
         : (instance.chain ?? '');
       return `${instance.kind}|${cPart}|${instance.interval}`;
     }
-    if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi') {
+    if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'ls') {
       // Exchange selector busts the cache so flipping Binance ↔ HL re-fetches.
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
@@ -2032,8 +2032,19 @@
           break;
         }
         case 'tt':
-        case 'ls':
+          // Top-trader L/S is Binance-only — the "top trader" tier is a
+          // Binance Futures product concept with no clean HL analog.
           url = `/api/long_short_ratios?${new URLSearchParams(baseQS)}`;
+          pickArr = (b) => (b.series ?? []) as AnyDatum[];
+          break;
+        case 'ls':
+          // L/S supports the exchange selector. HL backend computes the
+          // count ratio from hl_position_history and the taker volume
+          // ratio from hl_fills; top_trader_* fields are returned as 0.
+          url = `/api/long_short_ratios?${new URLSearchParams({
+            ...baseQS,
+            exchange: instance.exchange ?? 'binance'
+          })}`;
           pickArr = (b) => (b.series ?? []) as AnyDatum[];
           break;
         case 'bs':
@@ -2207,18 +2218,17 @@
           break;
         }
         case 'oi': {
-          // For HL multi-line modes ('all', 'long_short'), MA tracks the
-          // total — a single MA line over two/three plot lines would be
-          // arbitrary, total is the universally meaningful aggregate.
-          // For single-line modes (long/short/total — plus Binance, which
-          // always uses open_interest_value=total), MA tracks the
-          // displayed line by reading the same field.
+          // For HL long_short mode, MA tracks the total — a single MA
+          // line over two plotted lines would be arbitrary, total is
+          // the universally meaningful aggregate. For single-line modes
+          // (long/short/total — plus Binance, which always uses
+          // open_interest_value=total), MA tracks the displayed line by
+          // reading the same field.
           const hlMode = (instance.exchange ?? 'binance') === 'hl'
             ? (instance.oiHlDisplay ?? 'total') : null;
           const pickField: (d: Record<string, number>) => number =
             hlMode === 'long'       ? (d) => d.long_oi_value  ?? 0 :
             hlMode === 'short'      ? (d) => d.short_oi_value ?? 0 :
-            hlMode === 'all'        ? (d) => d.total_oi_value ?? 0 :
             hlMode === 'long_short' ? (d) => d.total_oi_value ?? 0 :
                                       (d) => d.open_interest_value ?? 0;
           const arr = maArray(
@@ -2589,24 +2599,13 @@
     const mode = instance.oiHlDisplay ?? 'total';
     if (mode === 'long')  return { color: '#22c55e', field: 'long_oi_value',  label: 'Long OI' };
     if (mode === 'short') return { color: '#ef4444', field: 'short_oi_value', label: 'Short OI' };
-    if (mode === 'long_short' || mode === 'all') return null; // multi-line modes take a different render path
+    if (mode === 'long_short') return null; // multi-line — different render path below
     return { color: '#06b6d4', field: 'total_oi_value', label: 'OI (USD)' };
   });
   let oiLinesD = $derived.by(() => {
     if (!instance.showPoint) return [...cumulativeLines];
     const ex = instance.exchange ?? 'binance';
     const mode = instance.oiHlDisplay ?? 'total';
-    if (ex === 'hl' && mode === 'all') {
-      return [
-        { key: 'oi_long',  label: 'Long OI',  color: '#22c55e',
-          compute: (d: Record<string, number>) => d.long_oi_value ?? 0 },
-        { key: 'oi_short', label: 'Short OI', color: '#ef4444',
-          compute: (d: Record<string, number>) => d.short_oi_value ?? 0 },
-        { key: 'oi_total', label: 'Total OI', color: '#06b6d4',
-          compute: (d: Record<string, number>) => d.total_oi_value ?? 0 },
-        ...cumulativeLines
-      ];
-    }
     if (ex === 'hl' && mode === 'long_short') {
       // Two-line mode — useful for spotting long/short imbalance without
       // the total line dominating the y-axis when totals dwarf each side.
@@ -3188,10 +3187,12 @@
           {/if}
         </select>
       {:else}
-        {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'pc'}
+        {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'pc' || instance.kind === 'ls'}
           <!-- Exchange selector picks the data source. ohlcv → *_ohlcv_1m,
                fr → binance_funding_rate / hl_funding, bs/sz → *_raw_trades /
-               hl_trades, pc → *_ohlcv_1m close. Same render path either way. -->
+               hl_trades, pc → *_ohlcv_1m close, ls → binance_long_short_ratios /
+               (hl_position_history + hl_fills). Same render path either way.
+               tt (top-trader L/S) stays Binance-only — see derivatives.py. -->
           <select
             value={instance.exchange ?? 'binance'}
             onchange={(e) => (instance.exchange = e.currentTarget.value as 'binance' | 'hl')}
@@ -3208,7 +3209,7 @@
                single line summing every position). -->
           <select
             value={instance.oiHlDisplay ?? 'total'}
-            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short' | 'all')}
+            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="Which side(s) of HL OI to plot"
           >
@@ -3216,7 +3217,6 @@
             <option value="long">Long</option>
             <option value="short">Short</option>
             <option value="long_short">Long + Short</option>
-            <option value="all">All (L/S/T)</option>
           </select>
         {/if}
         <select
