@@ -361,7 +361,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ohlcv: 'OHLCV',
   oi: 'Open Interest',
   fr: 'Funding Rate',
-  bs: 'Buyer vs Seller',
+  bs: 'Taker Buyer vs Seller',
   sz: 'Volume by Size',
   tt: 'Top Traders L/S',
   ls: 'Long/Short',
