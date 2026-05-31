@@ -81,8 +81,11 @@
   }
 </script>
 
-<!-- stopPropagation so drag-to-reorder only fires from the title bar. -->
-<div class="h-full flex flex-col text-xs" onpointerdown={(e) => e.stopPropagation()}>
+<!-- mousedown/touchstart — svelte-dnd-action listens to these, not
+     pointerdown. Stopping them keeps drag confined to the title bar. -->
+<div class="h-full flex flex-col text-xs"
+     onmousedown={(e) => e.stopPropagation()}
+     ontouchstart={(e) => e.stopPropagation()}>
   <!-- Vault picker -->
   <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
     <span class="text-zinc-500">Vault:</span>

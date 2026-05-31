@@ -77,9 +77,12 @@
   });
 </script>
 
-<!-- stopPropagation so drag-to-reorder only fires from the chart's
-     title bar above this body, not from clicks/scrolls inside it. -->
-<div class="h-full flex flex-col text-xs" onpointerdown={(e) => e.stopPropagation()}>
+<!-- mousedown/touchstart — that's what svelte-dnd-action listens to,
+     not pointerdown. Stopping these keeps drag confined to the
+     chart's title bar above. -->
+<div class="h-full flex flex-col text-xs"
+     onmousedown={(e) => e.stopPropagation()}
+     ontouchstart={(e) => e.stopPropagation()}>
   <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
     <span class="text-zinc-500">Top by:</span>
     <select

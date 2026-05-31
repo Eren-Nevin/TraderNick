@@ -42,8 +42,11 @@
   }
 </script>
 
-<!-- stopPropagation so drag-to-reorder only fires from the title bar. -->
-<div class="h-full overflow-auto text-xs" onpointerdown={(e) => e.stopPropagation()}>
+<!-- mousedown/touchstart — svelte-dnd-action listens to these, not
+     pointerdown. Stopping them keeps drag confined to the title bar. -->
+<div class="h-full overflow-auto text-xs"
+     onmousedown={(e) => e.stopPropagation()}
+     ontouchstart={(e) => e.stopPropagation()}>
   {#if lps.length === 0}
     <div class="h-full flex items-center justify-center text-zinc-500">No vault LPs in this window</div>
   {:else}

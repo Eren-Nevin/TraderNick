@@ -72,10 +72,13 @@
   });
 </script>
 
-<!-- stopPropagation on pointerdown so svelte-dnd-action only initiates
-     drag from the chart's title bar above this body, not from inside
-     the table — clicks, selects and scrolls work normally. -->
-<div class="h-full overflow-auto text-xs" onpointerdown={(e) => e.stopPropagation()}>
+<!-- svelte-dnd-action attaches mousedown/touchstart listeners directly
+     on the dndzone item. Stopping those events here keeps drag-to-
+     reorder confined to the title bar above; pointerdown is a separate
+     event stream and doesn't intercept the drag. -->
+<div class="h-full overflow-auto text-xs"
+     onmousedown={(e) => e.stopPropagation()}
+     ontouchstart={(e) => e.stopPropagation()}>
   {#if (leaders as Leader[]).length === 0}
     <div class="h-full flex items-center justify-center text-zinc-500">
       No traders in the visible window
