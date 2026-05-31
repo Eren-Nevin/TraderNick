@@ -330,18 +330,24 @@
       }
       if (inst.kind === 'oi') {
         // OI: Binance reads from binance_open_interest; HL sums per-wallet
-        // size across long+short from hl_position_history.
+        // size across long+short from hl_position_history. The hl-only
+        // display selector picks which side(s) to render — defaults to
+        // 'total' so existing saved layouts (no field) keep their look.
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
+        inst.oiHlDisplay = (r.oiHlDisplay === 'long' || r.oiHlDisplay === 'short' || r.oiHlDisplay === 'all')
+          ? r.oiHlDisplay : 'total';
       }
       if (inst.kind === 'pc') {
         // Price Comparison chart — the overlay token list is the *whole*
-        // configuration alongside instance.token.
+        // configuration alongside instance.token. Exchange selector
+        // picks the close-price source (binance_ohlcv_1m vs hl_ohlcv_1m).
         inst.overlayTokens = Array.isArray(r.overlayTokens)
           ? r.overlayTokens
               .map((t) => (typeof t === 'string' ? t : ''))
               .filter((t) => t.length > 0)
               .slice(0, 5)
           : [];
+        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
       }
       // AAVE chart kinds (single-event + net) need a `chain` just like the
       // transfer kind. Default to the page's preferred chain. valueMode

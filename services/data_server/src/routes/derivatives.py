@@ -36,64 +36,35 @@ def _validate(request):
 
 @bp.get("/open_interest")
 async def open_interest(request):
+    """Binance-only OI endpoint. HL OI is served by /hyperliquid/oi_split
+    (which also carries long/short totals); the dashboard's OI chart
+    routes HL fetches there directly."""
     args, err = _validate(request)
     if err is not None:
         return err
-    exchange = request.args.get("exchange", "binance")
-    if exchange not in ("binance", "hl"):
-        return response.json({"error": "exchange must be binance|hl"}, status=400)
-
     ch = await client()
-    if exchange == "hl":
-        # HL OI = sum of every wallet's open position notional (long + short)
-        # at the latest snapshot in each bucket. position_history is STATE
-        # not flow, so per-wallet argMax(*, time) collapses to one row per
-        # (bucket, wallet, side) before summing — same correctness pattern
-        # as /hyperliquid/unrealized_pnl.
-        # open_interest       = sum(amount) — total token units held
-        # open_interest_value = sum(size)   — total USD notional
-        sql = """
-            SELECT
-                toUnixTimestamp(bucket)   AS bucket,
-                sum(latest_amount)        AS open_interest,
-                sum(latest_size)          AS open_interest_value
-            FROM (
-                SELECT
-                    toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND) AS bucket,
-                    wallet, side,
-                    argMax(amount, time) AS latest_amount,
-                    argMax(size,   time) AS latest_size
-                FROM tradernick.hl_position_history FINAL
-                WHERE token = {token:String}
-                  AND time >= {since:DateTime}
-                  AND time <  {until:DateTime}
-                GROUP BY bucket, wallet, side
-            )
-            GROUP BY bucket
-            ORDER BY bucket
-            LIMIT {limit:UInt32}
+    rows = await ch.query(
         """
-    else:
-        sql = """
-            SELECT
-                toUnixTimestamp(toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND)) AS bucket,
-                argMax(open_interest,       time) AS open_interest,
-                argMax(open_interest_value, time) AS open_interest_value
-            FROM tradernick.binance_open_interest
-            WHERE token = {token:String}
-              AND time >= {since:DateTime}
-              AND time <  {until:DateTime}
-            GROUP BY bucket
-            ORDER BY bucket
-            LIMIT {limit:UInt32}
-        """
-    rows = await ch.query(sql, parameters=args)
+        SELECT
+            toUnixTimestamp(toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND)) AS bucket,
+            argMax(open_interest,       time) AS open_interest,
+            argMax(open_interest_value, time) AS open_interest_value
+        FROM tradernick.binance_open_interest
+        WHERE token = {token:String}
+          AND time >= {since:DateTime}
+          AND time <  {until:DateTime}
+        GROUP BY bucket
+        ORDER BY bucket
+        LIMIT {limit:UInt32}
+        """,
+        parameters=args,
+    )
     series = [
         {"time": int(r[0]), "open_interest": float(r[1]), "open_interest_value": float(r[2])}
         for r in rows.result_rows
     ]
     return response.json({
-        "token": args["token"], "exchange": exchange,
+        "token": args["token"], "exchange": "binance",
         "interval": args["interval"], "series": series,
     })
 

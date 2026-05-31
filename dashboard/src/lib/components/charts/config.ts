@@ -318,7 +318,6 @@ export type ChartKind =
   | 'gmx_net_lp'
   | 'hl_pnl'
   | 'hl_unrealized_pnl'
-  | 'hl_oi_split'
   | 'hl_transfers'
   | 'hl_vault_net'
   | 'hl_top_traders'
@@ -410,7 +409,6 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   spark_flashloan: 'Spark Flash Loans',
   hl_pnl: 'HL Realized PnL',
   hl_unrealized_pnl: 'HL Unrealized PnL',
-  hl_oi_split: 'HL OI (Long/Short/Total)',
   hl_transfers: 'HL Bridge Flows',
   hl_vault_net: 'HL Vault Net Flow',
   hl_top_traders: 'HL Top Traders',
@@ -679,7 +677,6 @@ export const HL_CHART_KINDS: ChartKind[] = [
   // exchange='hl'. Same goes for hl_funding_paid → `fr` + exchange='hl'.
   'hl_pnl',
   'hl_unrealized_pnl',
-  'hl_oi_split',
   'hl_transfers',
   'hl_vault_net',
   'hl_top_traders',
@@ -1134,6 +1131,10 @@ export type ChartInstance = {
    *  being viewed. Empty = default to the rank-1 wallet. Persists across
    *  page reloads via the layout sanitize step. */
   hlSelectedWallet?: string;
+  /** oi chart only, HL exchange only: which side(s) of OI to render —
+   *  'total' (default, matches the Binance behavior), 'long', 'short',
+   *  or 'all' (three lines). Ignored when exchange='binance'. */
+  oiHlDisplay?: 'total' | 'long' | 'short' | 'all';
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -1214,6 +1215,7 @@ export function newChartInstance(
   }
   if (kind === 'oi') {
     base.exchange = 'binance';
+    base.oiHlDisplay = 'total';
   }
   if (kind === 'ohlcv') {
     base.pin = false;
@@ -1224,6 +1226,7 @@ export function newChartInstance(
   }
   if (kind === 'pc') {
     base.overlayTokens = [];
+    base.exchange = 'binance';
   }
   if (isAaveKind(kind)) {
     // AAVE charts (single-event + net) behave like transfer charts —

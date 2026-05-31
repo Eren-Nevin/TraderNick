@@ -552,9 +552,12 @@
     }
     if (instance.kind === 'pc') {
       // Overlay tokens influence the rendered chart, so they belong in the
-      // cache key. Sorted so order-of-add doesn't bust the key.
+      // cache key. Sorted so order-of-add doesn't bust the key. Exchange
+      // included since switching Binance ↔ HL pulls from a different
+      // ohlcv table.
       const ov = [...(instance.overlayTokens ?? [])].sort().join(',');
-      return `${instance.kind}|${instance.token}|${instance.interval}|ov:${ov}`;
+      const ex = instance.exchange ?? 'binance';
+      return `${instance.kind}|${instance.token}|${ex}|${instance.interval}|ov:${ov}`;
     }
     if (isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind)) {
       // AAVE charts (single-event + net) depend on chain + token (event_type
@@ -1032,28 +1035,6 @@
           limit: '5000'
         });
         const res = await queuedFetch(`/api/hyperliquid/bridge_flows?${qs}`, { signal });
-        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
-        const body = await res.json();
-        data = (body.series ?? []) as unknown as AnyDatum[];
-        since = sinceIso; until = untilIso;
-        loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
-        return;
-      }
-      // Hyperliquid OI split: long / short / total open interest per
-      // token over time. Same state-aware aggregation as unrealized_pnl
-      // (argMax per wallet then sum across wallets). USD notional is the
-      // primary view; token-unit fields are also returned for future use.
-      if (instance.kind === 'hl_oi_split') {
-        const qs = new URLSearchParams({
-          token: instance.token,
-          interval: instance.interval,
-          since: sinceIso,
-          until: untilIso,
-          limit: '5000'
-        });
-        const res = await queuedFetch(`/api/hyperliquid/oi_split?${qs}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
         const body = await res.json();
         data = (body.series ?? []) as unknown as AnyDatum[];
@@ -1988,7 +1969,11 @@
             (t) => t && t !== instance.token
           );
           const buildOhlcvQs = (tok: string) => {
-            const q = new URLSearchParams({ ...baseQS, token: tok });
+            const q = new URLSearchParams({
+              ...baseQS,
+              token: tok,
+              exchange: instance.exchange ?? 'binance'
+            });
             if (forceFresh) q.set('fresh', '1');
             return q;
           };
@@ -2016,11 +2001,27 @@
           return;
         }
         case 'oi':
-          url = `/api/open_interest?${new URLSearchParams({
-            ...baseQS,
-            exchange: instance.exchange ?? 'binance'
-          })}`;
-          pickArr = (b) => (b.series ?? []) as AnyDatum[];
+          // HL OI rides on /hyperliquid/oi_split which carries long/short/
+          // total in one payload; the long/short/total/all selector picks
+          // which line(s) to render without re-fetching. Binance OI keeps
+          // its dedicated endpoint.
+          if ((instance.exchange ?? 'binance') === 'hl') {
+            url = `/api/hyperliquid/oi_split?${new URLSearchParams(baseQS)}`;
+            pickArr = (b) => {
+              // Keep open_interest_value populated (= total) so the
+              // cumulative MA branch — which always reads that field —
+              // continues to work without HL-specific branching.
+              const rows = (b.series ?? []) as Array<Record<string, number>>;
+              return rows.map((r) => ({
+                ...r,
+                open_interest: r.total_oi ?? 0,
+                open_interest_value: r.total_oi_value ?? 0
+              })) as unknown as AnyDatum[];
+            };
+          } else {
+            url = `/api/open_interest?${new URLSearchParams(baseQS)}`;
+            pickArr = (b) => (b.series ?? []) as AnyDatum[];
+          }
           break;
         case 'fr': {
           // Same Binance / HL exchange selector pattern as the ohlcv kind.
@@ -2206,8 +2207,19 @@
           break;
         }
         case 'oi': {
+          // For HL with 'all' mode, MA on the total (the only universally
+          // meaningful aggregate). For 'long'/'short'/'total' (and Binance,
+          // which always uses open_interest_value = total), MA tracks the
+          // displayed line by reading the same field.
+          const hlMode = (instance.exchange ?? 'binance') === 'hl'
+            ? (instance.oiHlDisplay ?? 'total') : null;
+          const pickField: (d: Record<string, number>) => number =
+            hlMode === 'long'  ? (d) => d.long_oi_value  ?? 0 :
+            hlMode === 'short' ? (d) => d.short_oi_value ?? 0 :
+            hlMode === 'all'   ? (d) => d.total_oi_value ?? 0 :
+                                 (d) => d.open_interest_value ?? 0;
           const arr = maArray(
-            (data as OpenInterestRow[]).map((d) => d.open_interest_value),
+            (data as Array<Record<string, number>>).map(pickField),
             ma.length,
             ma.type
           );
@@ -2453,24 +2465,6 @@
       : []
   );
 
-  // HL OI split: long / short / total open interest from
-  // /hyperliquid/oi_split. Plots USD notional by default (the *_value
-  // fields); the token-unit fields are present on the row for future
-  // toggles. Same color convention as the unrealized chart: long green,
-  // short red, net/total cyan.
-  let hlOiSplitLinesD = $derived(
-    instance.showPoint
-      ? [
-          { key: 'long',  label: 'Long OI',  color: '#22c55e',
-            compute: (d: Record<string, number>) => d.long_oi_value ?? 0 },
-          { key: 'short', label: 'Short OI', color: '#ef4444',
-            compute: (d: Record<string, number>) => d.short_oi_value ?? 0 },
-          { key: 'total', label: 'Total OI', color: '#06b6d4',
-            compute: (d: Record<string, number>) => d.total_oi_value ?? 0 }
-        ]
-      : []
-  );
-
   // HL Bridge Flows: directional USDC bridge view. Deposit (capital in)
   // and withdrawal (capital out) are both rendered as POSITIVE magnitudes
   // so the operator can compare absolute flow sizes side-by-side. Net is
@@ -2584,10 +2578,40 @@
       ? [...sizeLines(instance.under ?? 10000, instance.over ?? 100000), ...cumulativeLines]
       : []
   );
-  let oiLinesD = $derived([
-    ...(instance.showPoint ? OI_LINES : []),
-    ...cumulativeLines
-  ]);
+  // OI lines: Binance is always the single total line. HL switches by
+  // the oiHlDisplay selector — 'total' matches Binance shape exactly,
+  // 'long'/'short' shows just that side, 'all' shows three lines.
+  let oiHlPrimary = $derived.by(() => {
+    if ((instance.exchange ?? 'binance') !== 'hl') return null;
+    const mode = instance.oiHlDisplay ?? 'total';
+    if (mode === 'long')  return { color: '#22c55e', field: 'long_oi_value',  label: 'Long OI' };
+    if (mode === 'short') return { color: '#ef4444', field: 'short_oi_value', label: 'Short OI' };
+    if (mode === 'all')   return null; // 'all' takes a different render path
+    return { color: '#06b6d4', field: 'total_oi_value', label: 'OI (USD)' };
+  });
+  let oiLinesD = $derived.by(() => {
+    if (!instance.showPoint) return [...cumulativeLines];
+    const ex = instance.exchange ?? 'binance';
+    if (ex === 'hl' && (instance.oiHlDisplay ?? 'total') === 'all') {
+      return [
+        { key: 'oi_long',  label: 'Long OI',  color: '#22c55e',
+          compute: (d: Record<string, number>) => d.long_oi_value ?? 0 },
+        { key: 'oi_short', label: 'Short OI', color: '#ef4444',
+          compute: (d: Record<string, number>) => d.short_oi_value ?? 0 },
+        { key: 'oi_total', label: 'Total OI', color: '#06b6d4',
+          compute: (d: Record<string, number>) => d.total_oi_value ?? 0 },
+        ...cumulativeLines
+      ];
+    }
+    if (oiHlPrimary) {
+      return [
+        { key: 'oi_usd', label: oiHlPrimary.label, color: oiHlPrimary.color,
+          compute: (d: Record<string, number>) => (d[oiHlPrimary.field] ?? 0) },
+        ...cumulativeLines
+      ];
+    }
+    return [...OI_LINES, ...cumulativeLines];
+  });
   let ttLinesD = $derived([
     ...(instance.showPoint ? TOP_TRADERS_LINES : []),
     ...cumulativeLines
@@ -3149,10 +3173,10 @@
           {/if}
         </select>
       {:else}
-        {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi'}
+        {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'pc'}
           <!-- Exchange selector picks the data source. ohlcv → *_ohlcv_1m,
                fr → binance_funding_rate / hl_funding, bs/sz → *_raw_trades /
-               hl_trades. Same render path either way. -->
+               hl_trades, pc → *_ohlcv_1m close. Same render path either way. -->
           <select
             value={instance.exchange ?? 'binance'}
             onchange={(e) => (instance.exchange = e.currentTarget.value as 'binance' | 'hl')}
@@ -3160,6 +3184,23 @@
           >
             <option value="binance">Binance</option>
             <option value="hl">Hyperliquid</option>
+          </select>
+        {/if}
+        {#if instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl'}
+          <!-- HL-only display selector. position_history carries per-wallet
+               sides so we can split OI into long/short or show all three on
+               one chart. Default 'total' matches the Binance shape (a
+               single line summing every position). -->
+          <select
+            value={instance.oiHlDisplay ?? 'total'}
+            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'all')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Which side(s) of HL OI to plot"
+          >
+            <option value="total">Total</option>
+            <option value="long">Long</option>
+            <option value="short">Short</option>
+            <option value="all">All (L/S/T)</option>
           </select>
         {/if}
         <select
@@ -3775,20 +3816,6 @@
         data={data as Array<Record<string, number>>}
         lines={hlUnrealizedLinesD}
         refLines={NEUTRAL_REF}
-        height={chartCanvasHeight}
-        {xExtent}
-        view={effectiveView}
-        onView={handleView}
-        hoverTime={effectiveHoverTime}
-        onHover={handleHover}
-        vRefLines={weekVRefLines}
-        formatY={fmtUsdAxis}
-        formatTooltip={fmtUsdTooltip}
-      />
-    {:else if instance.kind === 'hl_oi_split'}
-      <LineChart
-        data={data as Array<Record<string, number>>}
-        lines={hlOiSplitLinesD}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
