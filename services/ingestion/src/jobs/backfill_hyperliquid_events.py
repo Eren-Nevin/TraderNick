@@ -44,14 +44,15 @@ def _sql_dt(dt): return dt.strftime("%Y-%m-%d %H:%M:%S")
 # token, bucket) summaries, not per-event), so 6h × 26 tokens is small
 # (~200K rows) and well within HTTP-stream limits.
 #
-# position_history is currently DEFERRED (see HL_EVENTS in clickhouse.py)
-# — its per-(wallet × token × snapshot-tick) fan-out is too large for any
-# reasonable multi-token chunk to complete. If/when re-enabled it'll need
-# a different approach (server-side aggregate / as_link streaming).
+# position_history is heavy (~147K rows per 5m snapshot across 26 tokens)
+# — 1h chunks give ~1.76M rows per fetch (~100–200 MB JSON), safely
+# within DS HTTP timeouts and Polars memory. If DS chokes on these in
+# practice, drop to 30-min chunks (1,440 total for 30d, ~1h wallclock).
 _CHUNK_HOURS = {
     "ohlcv":            6,
     "trades":           6,
     "fills":            6,
+    "position_history": 1,
     "trade_history":    6,
     "transfers":        24,
     "funding":          24,
@@ -59,12 +60,12 @@ _CHUNK_HOURS = {
 }
 
 # Events that get one chunk PER TOKEN (instead of one multi-token chunk).
-# Empty for now — position_history was the only candidate and it's
-# deferred. If a future event needs per-token chunking, add it here.
+# Empty — every HL event including position_history uses multi-token
+# chunks; chunk *time-window* sizes (above) keep response payloads bounded.
 _PER_TOKEN_CHUNKED: set[str] = set()
 
-_TOKEN_REQUIRED = {"ohlcv", "trade_history"}
-_PER_TOKEN_TABLE = {"ohlcv", "trades", "fills", "funding", "trade_history"}
+_TOKEN_REQUIRED = {"ohlcv", "position_history", "trade_history"}
+_PER_TOKEN_TABLE = {"ohlcv", "trades", "fills", "funding", "position_history", "trade_history"}
 
 
 async def _load_job(job_id):
@@ -130,6 +131,8 @@ async def _fetch_chunk(ds, *, event, tokens, since, until):
             b = b.date_range(_iso_z(since), _iso_z(until))
             if event == "ohlcv":
                 b = b.window("1m")
+            elif event == "position_history":
+                b = b.window("5m")
             df = await b.as_df("polars")
             if df.is_empty(): return 0
             rows = transform(df)

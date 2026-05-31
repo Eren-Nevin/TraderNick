@@ -170,6 +170,18 @@ async def streams(_request):
         """)
         for tok, n in rows.result_rows:
             out.append({"event": ev, "token": tok, "rows": int(n)})
+    # position_history is intentionally not in _EVENT_TABLES (state, not
+    # flow — see /hyperliquid/unrealized_pnl), but the chart picker still
+    # needs to know which tokens have snapshots available.
+    rows = await ch.query("""
+        SELECT token, count() AS rows
+        FROM tradernick.hl_position_history FINAL
+        WHERE token != ''
+        GROUP BY token
+        ORDER BY rows DESC
+    """)
+    for tok, n in rows.result_rows:
+        out.append({"event": "position_history", "token": tok, "rows": int(n)})
     _STREAMS_CACHE["value"] = out
     _STREAMS_CACHE["at"] = now
     return response.json({"streams": out})
@@ -239,3 +251,86 @@ async def leaderboard(request):
         "token": token, "since": since, "until": until,
         "leaders": leaders,
     })
+
+
+@bp.get("/hyperliquid/unrealized_pnl")
+async def unrealized_pnl(request):
+    """Per-bucket unrealized PnL totals for a token (long + short + net).
+
+    position_history rows are STATE (mark-to-market at each 5m snapshot),
+    not flow events — so summing raw rows across multiple snapshots in a
+    bucket double-counts. The inner sub-query collapses to one row per
+    (bucket, wallet, side) by taking argMax(unrealized_pnl, time), then
+    the outer aggregate sums across wallets.
+
+    Returns long_pnl / short_pnl / net_pnl plus wallet counts so the
+    chart can show 'how many longs are underwater' tooltips later.
+    """
+    token = request.args.get("token")
+    interval = request.args.get("interval", "1h")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    limit = int(request.args.get("limit", "10000"))
+    wallet = request.args.get("wallet")
+
+    if not token:
+        return response.json({"error": "missing token"}, status=400)
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+
+    seconds = INTERVAL_SECONDS[interval]
+    since_dt = _parse_iso(since); until_dt = _parse_iso(until)
+    params: dict = {
+        "seconds": seconds, "token": token,
+        "since": since_dt, "until": until_dt, "limit": limit,
+    }
+    inner_where = [
+        "token = {token:String}",
+        "time >= {since:DateTime}",
+        "time <  {until:DateTime}",
+    ]
+    if wallet:
+        inner_where.append("lower(wallet) = {wallet:String}")
+        params["wallet"] = wallet.lower()
+    inner_where_sql = " AND ".join(inner_where)
+
+    sql = f"""
+        SELECT
+            toUnixTimestamp(bucket)         AS bucket,
+            sumIf(latest_pnl, side='long')  AS long_pnl,
+            sumIf(latest_pnl, side='short') AS short_pnl,
+            sum(latest_pnl)                 AS net_pnl,
+            countIf(side='long')            AS long_wallets,
+            countIf(side='short')           AS short_wallets
+        FROM (
+            SELECT
+                toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND) AS bucket,
+                wallet, side,
+                argMax(unrealized_pnl, time) AS latest_pnl
+            FROM tradernick.hl_position_history FINAL
+            WHERE {inner_where_sql}
+            GROUP BY bucket, wallet, side
+        )
+        GROUP BY bucket
+        ORDER BY bucket
+        LIMIT {{limit:UInt32}}
+    """
+
+    ch = await client()
+    rows = await ch.query(sql, parameters=params)
+    series = [
+        {
+            "time": int(r[0]),
+            "long_pnl": float(r[1]),
+            "short_pnl": float(r[2]),
+            "net_pnl": float(r[3]),
+            "long_wallets": int(r[4]),
+            "short_wallets": int(r[5]),
+        }
+        for r in rows.result_rows
+    ]
+    body = {"token": token, "interval": interval, "series": series}
+    if wallet: body["wallet"] = wallet
+    return response.json(body)

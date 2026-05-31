@@ -1018,6 +1018,32 @@
       // fetch happens here via the same code path with a stub data array.
       // For the position_*_size kinds we read sum_amount/sum_value_usd
       // from the same hl/aggregate response.
+      // Hyperliquid unrealized PnL: its own state-aware endpoint that
+      // collapses per-wallet snapshots to last-in-bucket before summing.
+      // Response carries (long_pnl, short_pnl, net_pnl) — three series
+      // rendered as three lines instead of the single sum_value_usd line
+      // every other HL kind uses.
+      if (instance.kind === 'hl_unrealized_pnl') {
+        const qs = new URLSearchParams({
+          token: instance.token,
+          interval: instance.interval,
+          since: sinceIso,
+          until: untilIso,
+          limit: '5000'
+        });
+        if (instance.hlWallet && instance.hlWallet.length > 0) {
+          qs.set('wallet', instance.hlWallet);
+        }
+        const res = await queuedFetch(`/api/hyperliquid/unrealized_pnl?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = (body.series ?? []) as unknown as AnyDatum[];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
       if (isHlKind(instance.kind) && instance.kind !== 'hl_top_traders') {
         const event = HL_KIND_TO_EVENT[instance.kind];
         if (event) {
@@ -2345,6 +2371,23 @@
     ...cumulativeLines
   ]);
 
+  // HL Unrealized PnL: three lines from the {long_pnl, short_pnl, net_pnl}
+  // row shape the /hyperliquid/unrealized_pnl endpoint returns. Colors
+  // mirror the buyer/seller convention used elsewhere on /hyperliquid:
+  // long = green (positive direction), short = red, net = cyan accent.
+  let hlUnrealizedLinesD = $derived(
+    instance.showPoint
+      ? [
+          { key: 'long',  label: 'Long',  color: '#22c55e',
+            compute: (d: Record<string, number>) => d.long_pnl ?? 0 },
+          { key: 'short', label: 'Short', color: '#ef4444',
+            compute: (d: Record<string, number>) => d.short_pnl ?? 0 },
+          { key: 'net',   label: 'Net',   color: '#06b6d4',
+            compute: (d: Record<string, number>) => d.net_pnl ?? 0 }
+        ]
+      : []
+  );
+
   // Uniswap chart lines. USD mode (default): one cyan sum_value_usd line.
   // Amount mode: two lines (token0 on primary axis, token1 on secondary
   // axis) — each token has its own scale because t0/t1 magnitudes can be
@@ -3610,6 +3653,21 @@
       />
     {:else if instance.kind === 'hl_top_traders'}
       <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />
+    {:else if instance.kind === 'hl_unrealized_pnl'}
+      <LineChart
+        data={data as Array<Record<string, number>>}
+        lines={hlUnrealizedLinesD}
+        refLines={NEUTRAL_REF}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
+      />
     {:else if isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxKind(instance.kind) || isHlKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}

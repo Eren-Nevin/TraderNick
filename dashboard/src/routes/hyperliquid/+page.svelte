@@ -21,6 +21,7 @@
     'sz',                 // BTC trade size distribution
     'fr',                 // BTC funding rate
     'hl_pnl',             // BTC realized PnL (no wallet filter)
+    'hl_unrealized_pnl',  // BTC unrealized PnL — long / short / net (no wallet filter)
     'hl_top_traders',     // BTC top traders leaderboard
     'hl_transfers',       // bridge in/out (no token)
     'hl_vault_net'        // vault net flow (no token)

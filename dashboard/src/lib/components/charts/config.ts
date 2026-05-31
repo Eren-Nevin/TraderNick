@@ -317,6 +317,7 @@ export type ChartKind =
   | 'gmx_withdraw'
   | 'gmx_net_lp'
   | 'hl_pnl'
+  | 'hl_unrealized_pnl'
   | 'hl_transfers'
   | 'hl_vault_net'
   | 'hl_top_traders'
@@ -406,6 +407,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   spark_net_borrow: 'Spark Net Borrow',
   spark_flashloan: 'Spark Flash Loans',
   hl_pnl: 'HL Realized PnL',
+  hl_unrealized_pnl: 'HL Unrealized PnL',
   hl_transfers: 'HL Bridge Flows',
   hl_vault_net: 'HL Vault Net Flow',
   hl_top_traders: 'HL Top Traders',
@@ -671,9 +673,8 @@ export const GMX_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_va
 export const HL_CHART_KINDS: ChartKind[] = [
   // hl_ohlcv removed — superseded by the generic `ohlcv` kind with
   // exchange='hl'. Same goes for hl_funding_paid → `fr` + exchange='hl'.
-  // hl_position_long_size / short_size / net_size removed — the
-  // position_history endpoint is deferred (see HL_EVENTS comment).
   'hl_pnl',
+  'hl_unrealized_pnl',
   'hl_transfers',
   'hl_vault_net',
   'hl_top_traders'
@@ -682,8 +683,8 @@ export const HL_CHART_KINDS: ChartKind[] = [
 export const HL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
   // hl_ohlcv intentionally absent — handled via the generic `ohlcv` kind.
   // hl_funding_paid intentionally absent — handled via `fr` + exchange='hl'.
-  // hl_position_* intentionally absent — position_history endpoint deferred.
   hl_pnl: 'trade_history',
+  hl_unrealized_pnl: 'position_history',
   hl_transfers: 'transfers',
   hl_vault_net: 'vaults'
   // hl_top_traders has no single event — uses the leaderboard endpoint
@@ -692,7 +693,8 @@ export function isHlKind(kind: ChartKind): boolean {
   return kind.startsWith('hl_');
 }
 /** Per-kind value-field picker. value_usd for events where the server
- *  computes one; sum_amount otherwise. */
+ *  computes one; sum_amount otherwise. hl_unrealized_pnl is absent — it
+ *  uses its own endpoint and row shape (long_pnl/short_pnl/net_pnl). */
 export const HL_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_value_usd'>> = {
   hl_pnl: 'sum_value_usd',          // realized PnL in USD
   hl_transfers: 'sum_amount',       // USDC amount

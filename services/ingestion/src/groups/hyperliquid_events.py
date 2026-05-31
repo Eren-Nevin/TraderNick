@@ -47,7 +47,10 @@ _CADENCE: dict[str, tuple[int, int]] = {
     "ohlcv":            (60,    6),
     "trades":           (60,    6),
     "fills":            (60,    6),
-    "position_history": (300,  24),
+    # position_history: 5m tick matches the snapshot window. Gap-fill chunks
+    # are kept at 1h because each fetch returns ~1.76M rows (147K wallets/
+    # snap × 12 snaps); larger chunks risk HTTP timeouts.
+    "position_history": (300,   1),
     "trade_history":    (300,  24),
     "transfers":        (300,  24),
     "funding":          (1800, 24),
@@ -88,6 +91,8 @@ async def _fetch_and_insert(ds, *, event, tokens, since, until) -> int:
             b = b.date_range(_iso(since), _iso(until))
             if event == "ohlcv":
                 b = b.window("1m")
+            elif event == "position_history":
+                b = b.window("5m")
             df = await b.as_df("polars")
             if df.is_empty():
                 return 0

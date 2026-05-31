@@ -1801,10 +1801,13 @@ PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, wallet)
 TTL toDateTime(time) + INTERVAL 30 DAY;
 
--- Position snapshots — one row per (wallet, token) at each sampling tick.
+-- Position snapshots — one row per (wallet, token) at each 5m tick (carry-
+-- forward: every currently-open position emits a row every snapshot).
 -- `side` is 'long' / 'short'. unrealized_pnl is mark-to-market at the
--- snapshot time. ORDER BY puts (wallet, token) first since the
--- per-wallet leaderboard scans are the dominant pattern.
+-- snapshot time. ORDER BY favors the dominant chart query (sum across
+-- wallets per (token, time-bucket)): token first (cardinality 26), time
+-- second (range scan), side third (skip-scan for sumIf(side='long')),
+-- wallet last (high cardinality, only the final tiebreaker for dedup).
 CREATE TABLE IF NOT EXISTS tradernick.hl_position_history
 (
     time             DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
@@ -1823,7 +1826,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history
     ingested_at      DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (wallet, token, time)
+ORDER BY (token, time, side, wallet)
 TTL toDateTime(time) + INTERVAL 30 DAY;
 
 -- Pre-aggregated per-(wallet, token, bucket) trader performance. The right
