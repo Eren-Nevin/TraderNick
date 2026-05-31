@@ -3,6 +3,7 @@
   import StackedBarChart from '$lib/components/StackedBarChart.svelte';
   import LineChart from '$lib/components/LineChart.svelte';
   import TableChart from '$lib/components/TableChart.svelte';
+  import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
   import SignedBarChart from '$lib/components/SignedBarChart.svelte';
   import { onMount } from 'svelte';
   import {
@@ -1095,6 +1096,23 @@
         // Carry the leader rows as a single datum payload — the render
         // branch reads `data[0].leaders` instead of iterating time buckets.
         data = [{ leaders: body.leaders ?? [] } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Hyperliquid top-positions: one fetch returns top-10 wallets AND
+      // every wallet's full position breakdown. Switching the wallet in
+      // the dropdown is instant — no re-fetch. since/until are ignored
+      // (the endpoint always returns the latest snapshot).
+      if (instance.kind === 'hl_top_positions') {
+        const qs = new URLSearchParams({ limit: '10' });
+        if (instance.token && instance.token.length > 0) qs.set('token', instance.token);
+        const res = await queuedFetch(`/api/hyperliquid/top_positions?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = [{ wallets: body.wallets ?? [], as_of: body.as_of } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
@@ -2781,13 +2799,18 @@
              roster + optional wallet filter (free-text EVM address OR
              wallet-label category dropdown — mutually exclusive). The
              top_traders kind hides the wallet filter since it ranks ALL
-             wallets by definition. -->
+             wallets by definition. The top_positions kind adds an
+             "All tokens" option (empty string) since its leaderboard
+             can rank wallets either per-token or by aggregate exposure. -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL</span>
         <select
           value={instance.token}
           onchange={(e) => (instance.token = e.currentTarget.value)}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
         >
+          {#if instance.kind === 'hl_top_positions'}
+            <option value="">All tokens</option>
+          {/if}
           {#each tokens as t (t)}
             <option value={t}>{t}</option>
           {/each}
@@ -2795,7 +2818,7 @@
             <option value={instance.token}>{instance.token}</option>
           {/if}
         </select>
-        {#if instance.kind !== 'hl_top_traders'}
+        {#if instance.kind !== 'hl_top_traders' && instance.kind !== 'hl_top_positions'}
           <input
             type="text"
             placeholder="0x… wallet"
@@ -3653,6 +3676,12 @@
       />
     {:else if instance.kind === 'hl_top_traders'}
       <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />
+    {:else if instance.kind === 'hl_top_positions'}
+      <HlTopPositionsChart
+        wallets={data.length > 0 ? ((data[0] as unknown as {wallets?: unknown[]}).wallets ?? []) : []}
+        selectedWallet={instance.hlSelectedWallet ?? ''}
+        onSelectWallet={(w) => (instance.hlSelectedWallet = w)}
+      />
     {:else if instance.kind === 'hl_unrealized_pnl'}
       <LineChart
         data={data as Array<Record<string, number>>}

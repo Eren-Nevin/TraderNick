@@ -366,6 +366,9 @@
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         inst.hlWallet = typeof r.hlWallet === 'string' ? r.hlWallet : '';
         inst.hlWalletCategory = typeof r.hlWalletCategory === 'string' ? r.hlWalletCategory : '';
+        if (inst.kind === 'hl_top_positions') {
+          inst.hlSelectedWallet = typeof r.hlSelectedWallet === 'string' ? r.hlSelectedWallet : '';
+        }
       }
       // Lido chart kinds need a `chain` but no token / pool. L1 kinds are
       // ETH-pinned; L2 kinds default to ARB (highest wstETH bridge volume).

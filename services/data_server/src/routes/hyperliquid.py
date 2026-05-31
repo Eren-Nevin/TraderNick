@@ -253,6 +253,147 @@ async def leaderboard(request):
     })
 
 
+@bp.get("/hyperliquid/top_positions")
+async def top_positions(request):
+    """Top 10 wallets by current unrealized PnL, plus each wallet's full
+    position breakdown (all tokens, both sides).
+
+    `token` is optional:
+      - specified: rank wallets by their unrealized_pnl in that token
+        (sum over sides)
+      - omitted:  rank wallets by sum(unrealized_pnl) across ALL tokens
+
+    Either way, the per-wallet `positions` list contains every open
+    position the wallet currently holds — not just the ranked-on token.
+    That lets the dashboard show the full portfolio of a top trader
+    even when filtered to a single token's leaderboard.
+
+    'Current' = the most recent snapshot in the table (capped at the
+    last 2h). Within a 1h lookback window we argMax to the latest row
+    per (wallet, token, side) — handles wallets whose latest tick is
+    a minute or two stale without missing them.
+    """
+    token = request.args.get("token") or None
+    limit = int(request.args.get("limit", "10"))
+
+    # The latest_t lookup is intentionally scoped to the last 2h so a
+    # stale table (e.g. fresh restart, gap-fill behind) doesn't claim
+    # 'current' from days ago.
+    latest_where = ["time >= now() - INTERVAL 2 HOUR"]
+    latest_params: dict = {}
+    if token:
+        latest_where.append("token = {token:String}")
+        latest_params["token"] = token
+
+    ch = await client()
+    latest_rows = await ch.query(
+        f"""
+        SELECT toUnixTimestamp(max(time)) AS t
+        FROM tradernick.hl_position_history FINAL
+        WHERE {' AND '.join(latest_where)}
+        """,
+        parameters=latest_params,
+    )
+    if not latest_rows.result_rows or not latest_rows.result_rows[0][0]:
+        return response.json({
+            "token": token, "as_of": None, "wallets": [],
+            "note": "no recent position_history data — backfill or live tick not caught up yet",
+        })
+    as_of = int(latest_rows.result_rows[0][0])
+
+    # Combined query — top-N + their full positions in one pass via JOIN
+    # against the same per-(wallet,token,side) latest set.
+    where_p = [
+        "time >= toDateTime({as_of:UInt32}) - INTERVAL 1 HOUR",
+        "time <= toDateTime({as_of:UInt32})",
+    ]
+    params: dict = {"as_of": as_of, "limit": limit}
+    rank_filter = ""
+    if token:
+        rank_filter = "WHERE token = {token:String}"
+        params["token"] = token
+
+    sql = f"""
+        WITH positions AS (
+            SELECT wallet, token, side,
+                   argMax(unrealized_pnl, time) AS unrealized_pnl,
+                   argMax(size, time)           AS size,
+                   argMax(amount, time)         AS amount,
+                   argMax(avg_entry, time)      AS avg_entry,
+                   argMax(mark_price, time)     AS mark_price,
+                   argMax(funding, time)        AS funding,
+                   argMax(fee, time)            AS fee,
+                   toUnixTimestamp(argMax(opened_at, time)) AS opened_at,
+                   toUnixTimestamp(max(time))               AS row_as_of
+            FROM tradernick.hl_position_history FINAL
+            WHERE {' AND '.join(where_p)}
+            GROUP BY wallet, token, side
+        ),
+        ranked AS (
+            SELECT wallet, sum(unrealized_pnl) AS score
+            FROM positions
+            {rank_filter}
+            GROUP BY wallet
+            ORDER BY score DESC
+            LIMIT {{limit:UInt32}}
+        )
+        SELECT
+            r.wallet,
+            r.score,
+            dictGet('tradernick.wallet_labels', 'categories', lower(r.wallet)) AS categories,
+            p.token, p.side, p.unrealized_pnl, p.size, p.amount,
+            p.avg_entry, p.mark_price, p.funding, p.fee, p.opened_at, p.row_as_of
+        FROM ranked r
+        LEFT JOIN positions p ON p.wallet = r.wallet
+        ORDER BY r.score DESC, abs(p.unrealized_pnl) DESC
+    """
+
+    rows = await ch.query(sql, parameters=params)
+
+    # Group rows by wallet preserving the score-DESC order
+    by_wallet: dict = {}
+    order: list[str] = []
+    for r in rows.result_rows:
+        w = r[0]
+        if w not in by_wallet:
+            by_wallet[w] = {
+                "wallet": w,
+                "score_unrealized_pnl": float(r[1]),
+                "categories": list(r[2]) if r[2] else [],
+                "positions": [],
+            }
+            order.append(w)
+        # r[3..] = per-position fields; some wallets may have empty positions
+        # if the LEFT JOIN landed a NULL row (no positions in window) — skip.
+        if r[3] is None:
+            continue
+        by_wallet[w]["positions"].append({
+            "token": r[3],
+            "side": r[4],
+            "unrealized_pnl": float(r[5]),
+            "size": float(r[6]),
+            "amount": float(r[7]),
+            "avg_entry": float(r[8]),
+            "mark_price": float(r[9]),
+            "funding": float(r[10]),
+            "fee": float(r[11]),
+            "opened_at": int(r[12]) if r[12] is not None else None,
+            "as_of": int(r[13]) if r[13] is not None else as_of,
+        })
+
+    wallets = []
+    for rank, w in enumerate(order, start=1):
+        entry = by_wallet[w]
+        entry["rank"] = rank
+        wallets.append(entry)
+
+    return response.json({
+        "token": token,
+        "as_of": as_of,
+        "wallets": wallets,
+    })
+
+
 @bp.get("/hyperliquid/unrealized_pnl")
 async def unrealized_pnl(request):
     """Per-bucket unrealized PnL totals for a token (long + short + net).

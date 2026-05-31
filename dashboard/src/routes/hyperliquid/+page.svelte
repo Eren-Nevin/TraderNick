@@ -23,6 +23,7 @@
     'hl_pnl',             // BTC realized PnL (no wallet filter)
     'hl_unrealized_pnl',  // BTC unrealized PnL — long / short / net (no wallet filter)
     'hl_top_traders',     // BTC top traders leaderboard
+    'hl_top_positions',   // top wallets by current unrealized PnL + their position breakdown
     'hl_transfers',       // bridge in/out (no token)
     'hl_vault_net'        // vault net flow (no token)
   ];

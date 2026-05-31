@@ -321,6 +321,7 @@ export type ChartKind =
   | 'hl_transfers'
   | 'hl_vault_net'
   | 'hl_top_traders'
+  | 'hl_top_positions'
   | 'uniswap_v2_swap'
   | 'uniswap_v2_deposit'
   | 'uniswap_v2_withdraw'
@@ -411,6 +412,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   hl_transfers: 'HL Bridge Flows',
   hl_vault_net: 'HL Vault Net Flow',
   hl_top_traders: 'HL Top Traders',
+  hl_top_positions: 'HL Top Positions',
   gmx_position_increase: 'GMX Position Open',
   gmx_position_decrease: 'GMX Position Close',
   gmx_net_position: 'GMX Net Position Flow',
@@ -677,7 +679,8 @@ export const HL_CHART_KINDS: ChartKind[] = [
   'hl_unrealized_pnl',
   'hl_transfers',
   'hl_vault_net',
-  'hl_top_traders'
+  'hl_top_traders',
+  'hl_top_positions'
 ];
 /** Single-event HL kinds → server-side event slug. */
 export const HL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
@@ -1122,6 +1125,10 @@ export type ChartInstance = {
    *  Mutually exclusive with hlWallet (the wallet filter takes precedence
    *  on the server). */
   hlWalletCategory?: string;
+  /** hl_top_positions only: which wallet from the top-N list is currently
+   *  being viewed. Empty = default to the rank-1 wallet. Persists across
+   *  page reloads via the layout sanitize step. */
+  hlSelectedWallet?: string;
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -1248,6 +1255,12 @@ export function newChartInstance(
     base.hlWallet = '';
     base.hlWalletCategory = '';
     base.valueMode = 'usd';
+    if (kind === 'hl_top_positions') {
+      // Default to "All tokens" — the chart's title-bar token select for
+      // this kind has an "All" option mapped to empty string.
+      base.token = '';
+      base.hlSelectedWallet = '';
+    }
   }
   if (isGmxKind(kind)) {
     // GMX V2 is ARB-only (server-side AVAX is "not configured" in 2.14).
