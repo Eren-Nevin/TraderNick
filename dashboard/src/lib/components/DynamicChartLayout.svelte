@@ -328,6 +328,11 @@
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
         inst.frDisplay = r.frDisplay === 'apr' ? 'apr' : 'rate8h';
       }
+      if (inst.kind === 'oi') {
+        // OI: Binance reads from binance_open_interest; HL sums per-wallet
+        // size across long+short from hl_position_history.
+        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
+      }
       if (inst.kind === 'pc') {
         // Price Comparison chart — the overlay token list is the *whole*
         // configuration alongside instance.token.

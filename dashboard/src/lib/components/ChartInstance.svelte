@@ -612,7 +612,7 @@
         : (instance.chain ?? '');
       return `${instance.kind}|${cPart}|${instance.interval}`;
     }
-    if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz') {
+    if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi') {
       // Exchange selector busts the cache so flipping Binance ↔ HL re-fetches.
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
@@ -1994,7 +1994,10 @@
           return;
         }
         case 'oi':
-          url = `/api/open_interest?${new URLSearchParams(baseQS)}`;
+          url = `/api/open_interest?${new URLSearchParams({
+            ...baseQS,
+            exchange: instance.exchange ?? 'binance'
+          })}`;
           pickArr = (b) => (b.series ?? []) as AnyDatum[];
           break;
         case 'fr': {
@@ -3106,7 +3109,7 @@
           {/if}
         </select>
       {:else}
-        {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz'}
+        {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi'}
           <!-- Exchange selector picks the data source. ohlcv → *_ohlcv_1m,
                fr → binance_funding_rate / hl_funding, bs/sz → *_raw_trades /
                hl_trades. Same render path either way. -->

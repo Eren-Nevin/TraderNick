@@ -1209,6 +1209,9 @@ export function newChartInstance(
   if (kind === 'bs') {
     base.exchange = 'binance';
   }
+  if (kind === 'oi') {
+    base.exchange = 'binance';
+  }
   if (kind === 'ohlcv') {
     base.pin = false;
     base.volumeUnit = 'token';
