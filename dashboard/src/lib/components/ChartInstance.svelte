@@ -1019,6 +1019,28 @@
       // fetch happens here via the same code path with a stub data array.
       // For the position_*_size kinds we read sum_amount/sum_value_usd
       // from the same hl/aggregate response.
+      // Hyperliquid bridge flows: directional view of HL's Arbitrum
+      // bridge. Three series — deposit (positive), withdrawal (negated,
+      // shown below zero), and net = deposit + withdrawal — so the lines
+      // visually add up. Replaces the single-sum_amount view the generic
+      // hl_transfers fetch used to produce.
+      if (instance.kind === 'hl_transfers') {
+        const qs = new URLSearchParams({
+          interval: instance.interval,
+          since: sinceIso,
+          until: untilIso,
+          limit: '5000'
+        });
+        const res = await queuedFetch(`/api/hyperliquid/bridge_flows?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = (body.series ?? []) as unknown as AnyDatum[];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
       // Hyperliquid unrealized PnL: its own state-aware endpoint that
       // collapses per-wallet snapshots to last-in-bucket before summing.
       // Response carries (long_pnl, short_pnl, net_pnl) — three series
@@ -2406,6 +2428,23 @@
       : []
   );
 
+  // HL Bridge Flows: directional USDC bridge view. Deposit (capital in)
+  // is positive green; withdrawal (capital out) is server-side negated so
+  // it sits below zero in rose; net floats through zero. The three lines
+  // visually add up: deposit + withdrawal = net.
+  let hlBridgeFlowsLinesD = $derived(
+    instance.showPoint
+      ? [
+          { key: 'deposit',    label: 'Deposit',    color: '#22c55e',
+            compute: (d: Record<string, number>) => d.deposit ?? 0 },
+          { key: 'withdrawal', label: 'Withdrawal', color: '#ef4444',
+            compute: (d: Record<string, number>) => d.withdrawal ?? 0 },
+          { key: 'net',        label: 'Net',        color: '#06b6d4',
+            compute: (d: Record<string, number>) => d.net ?? 0 }
+        ]
+      : []
+  );
+
   // Uniswap chart lines. USD mode (default): one cyan sum_value_usd line.
   // Amount mode: two lines (token0 on primary axis, token1 on secondary
   // axis) — each token has its own scale because t0/t1 magnitudes can be
@@ -3686,6 +3725,21 @@
       <LineChart
         data={data as Array<Record<string, number>>}
         lines={hlUnrealizedLinesD}
+        refLines={NEUTRAL_REF}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
+      />
+    {:else if instance.kind === 'hl_transfers'}
+      <LineChart
+        data={data as Array<Record<string, number>>}
+        lines={hlBridgeFlowsLinesD}
         refLines={NEUTRAL_REF}
         height={chartCanvasHeight}
         {xExtent}

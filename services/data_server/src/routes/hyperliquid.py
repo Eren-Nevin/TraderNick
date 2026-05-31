@@ -253,6 +253,63 @@ async def leaderboard(request):
     })
 
 
+@bp.get("/hyperliquid/bridge_flows")
+async def bridge_flows(request):
+    """Per-bucket USDC flow across the HL Arbitrum bridge: deposit (in),
+    withdrawal (out, sign-flipped), and net = deposit + withdrawal.
+
+    Withdrawal is returned as a NEGATIVE number so the three lines visually
+    add up on the chart — Coinglass / CryptoQuant convention. Deposit
+    sits above zero, withdrawal below, net floats through zero showing
+    the directional bias.
+    """
+    interval = request.args.get("interval", "1h")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    limit = int(request.args.get("limit", "10000"))
+
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+
+    seconds = INTERVAL_SECONDS[interval]
+    since_dt = _parse_iso(since); until_dt = _parse_iso(until)
+
+    sql = """
+        SELECT
+            toUnixTimestamp(toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND)) AS bucket,
+            sumIf(amount, direction='deposit')     AS deposit,
+            -sumIf(amount, direction='withdrawal') AS withdrawal,
+            sumIf(amount, direction='deposit')
+              - sumIf(amount, direction='withdrawal') AS net,
+            countIf(direction='deposit')           AS deposit_count,
+            countIf(direction='withdrawal')        AS withdrawal_count
+        FROM tradernick.hl_transfers FINAL
+        WHERE time >= {since:DateTime}
+          AND time <  {until:DateTime}
+        GROUP BY bucket
+        ORDER BY bucket
+        LIMIT {limit:UInt32}
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters={
+        "seconds": seconds, "since": since_dt, "until": until_dt, "limit": limit,
+    })
+    series = [
+        {
+            "time": int(r[0]),
+            "deposit": float(r[1]),
+            "withdrawal": float(r[2]),
+            "net": float(r[3]),
+            "deposit_count": int(r[4]),
+            "withdrawal_count": int(r[5]),
+        }
+        for r in rows.result_rows
+    ]
+    return response.json({"interval": interval, "series": series})
+
+
 @bp.get("/hyperliquid/top_positions")
 async def top_positions(request):
     """Top 10 wallets by current unrealized PnL, plus each wallet's full

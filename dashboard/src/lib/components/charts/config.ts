@@ -688,7 +688,9 @@ export const HL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
   // hl_funding_paid intentionally absent — handled via `fr` + exchange='hl'.
   hl_pnl: 'trade_history',
   hl_unrealized_pnl: 'position_history',
-  hl_transfers: 'transfers',
+  // hl_transfers intentionally absent — uses /hyperliquid/bridge_flows for
+  // a directional deposit/withdrawal/net three-line view instead of the
+  // generic aggregate's single sum_amount line.
   hl_vault_net: 'vaults'
   // hl_top_traders has no single event — uses the leaderboard endpoint
 };
@@ -700,7 +702,7 @@ export function isHlKind(kind: ChartKind): boolean {
  *  uses its own endpoint and row shape (long_pnl/short_pnl/net_pnl). */
 export const HL_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_value_usd'>> = {
   hl_pnl: 'sum_value_usd',          // realized PnL in USD
-  hl_transfers: 'sum_amount',       // USDC amount
+  // hl_transfers: uses /bridge_flows directly, not the generic aggregate.
   hl_vault_net: 'sum_amount'        // amount
 };
 
