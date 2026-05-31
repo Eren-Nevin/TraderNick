@@ -2429,9 +2429,10 @@
   );
 
   // HL Bridge Flows: directional USDC bridge view. Deposit (capital in)
-  // is positive green; withdrawal (capital out) is server-side negated so
-  // it sits below zero in rose; net floats through zero. The three lines
-  // visually add up: deposit + withdrawal = net.
+  // and withdrawal (capital out) are both rendered as POSITIVE magnitudes
+  // so the operator can compare absolute flow sizes side-by-side. Net is
+  // signed (deposit - withdrawal) and floats through zero to show the
+  // directional bias.
   let hlBridgeFlowsLinesD = $derived(
     instance.showPoint
       ? [
@@ -2840,24 +2841,29 @@
              top_traders kind hides the wallet filter since it ranks ALL
              wallets by definition. The top_positions kind adds an
              "All tokens" option (empty string) since its leaderboard
-             can rank wallets either per-token or by aggregate exposure. -->
+             can rank wallets either per-token or by aggregate exposure.
+             hl_transfers (bridge flows) is USDC-only — no token select. -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL</span>
-        <select
-          value={instance.token}
-          onchange={(e) => (instance.token = e.currentTarget.value)}
-          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        >
-          {#if instance.kind === 'hl_top_positions'}
-            <option value="">All tokens</option>
-          {/if}
-          {#each tokens as t (t)}
-            <option value={t}>{t}</option>
-          {/each}
-          {#if instance.token && !tokens.includes(instance.token)}
-            <option value={instance.token}>{instance.token}</option>
-          {/if}
-        </select>
-        {#if instance.kind !== 'hl_top_traders' && instance.kind !== 'hl_top_positions'}
+        {#if instance.kind !== 'hl_transfers'}
+          <select
+            value={instance.token}
+            onchange={(e) => (instance.token = e.currentTarget.value)}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          >
+            {#if instance.kind === 'hl_top_positions'}
+              <option value="">All tokens</option>
+            {/if}
+            {#each tokens as t (t)}
+              <option value={t}>{t}</option>
+            {/each}
+            {#if instance.token && !tokens.includes(instance.token)}
+              <option value={instance.token}>{instance.token}</option>
+            {/if}
+          </select>
+        {:else}
+          <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">USDC</span>
+        {/if}
+        {#if instance.kind !== 'hl_top_traders' && instance.kind !== 'hl_top_positions' && instance.kind !== 'hl_transfers'}
           <input
             type="text"
             placeholder="0x… wallet"

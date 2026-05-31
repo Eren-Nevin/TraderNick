@@ -256,12 +256,11 @@ async def leaderboard(request):
 @bp.get("/hyperliquid/bridge_flows")
 async def bridge_flows(request):
     """Per-bucket USDC flow across the HL Arbitrum bridge: deposit (in),
-    withdrawal (out, sign-flipped), and net = deposit + withdrawal.
+    withdrawal (out), and net = deposit - withdrawal.
 
-    Withdrawal is returned as a NEGATIVE number so the three lines visually
-    add up on the chart — Coinglass / CryptoQuant convention. Deposit
-    sits above zero, withdrawal below, net floats through zero showing
-    the directional bias.
+    Both deposit and withdrawal are returned as POSITIVE magnitudes so
+    the operator can compare the two side-by-side. Net is the signed
+    difference and floats through zero showing the directional bias.
     """
     interval = request.args.get("interval", "1h")
     since = request.args.get("since")
@@ -280,7 +279,7 @@ async def bridge_flows(request):
         SELECT
             toUnixTimestamp(toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND)) AS bucket,
             sumIf(amount, direction='deposit')     AS deposit,
-            -sumIf(amount, direction='withdrawal') AS withdrawal,
+            sumIf(amount, direction='withdrawal')  AS withdrawal,
             sumIf(amount, direction='deposit')
               - sumIf(amount, direction='withdrawal') AS net,
             countIf(direction='deposit')           AS deposit_count,
