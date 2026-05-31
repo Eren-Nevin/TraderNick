@@ -32,6 +32,8 @@
     if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
     return n.toFixed(0);
   }
+  import { stopDragEvents } from '$lib/actions/stopDragEvents';
+
   let copiedAddr = $state('');
   async function copyAddr(addr: string) {
     try {
@@ -42,11 +44,8 @@
   }
 </script>
 
-<!-- mousedown/touchstart — svelte-dnd-action listens to these, not
-     pointerdown. Stopping them keeps drag confined to the title bar. -->
-<div class="h-full overflow-auto text-xs"
-     onmousedown={(e) => e.stopPropagation()}
-     ontouchstart={(e) => e.stopPropagation()}>
+<!-- use:stopDragEvents — see actions/stopDragEvents.ts. -->
+<div class="h-full overflow-auto text-xs" use:stopDragEvents>
   {#if lps.length === 0}
     <div class="h-full flex items-center justify-center text-zinc-500">No vault LPs in this window</div>
   {:else}

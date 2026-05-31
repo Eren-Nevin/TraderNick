@@ -52,6 +52,8 @@
     }
   }
 
+  import { stopDragEvents } from '$lib/actions/stopDragEvents';
+
   // Sortable columns. Default '' = server order (net_pnl DESC).
   type SortKey = '' | 'net_pnl' | 'volume' | 'trade_count';
   let sortKey = $state<SortKey>('');
@@ -72,13 +74,11 @@
   });
 </script>
 
-<!-- svelte-dnd-action attaches mousedown/touchstart listeners directly
-     on the dndzone item. Stopping those events here keeps drag-to-
-     reorder confined to the title bar above; pointerdown is a separate
-     event stream and doesn't intercept the drag. -->
-<div class="h-full overflow-auto text-xs"
-     onmousedown={(e) => e.stopPropagation()}
-     ontouchstart={(e) => e.stopPropagation()}>
+<!-- use:stopDragEvents (action) attaches real DOM listeners that fire
+     in bubble phase before the chart-card-level dnd-action listener;
+     Svelte 5's delegated onmousedown handlers run too late (at the
+     document level) to intercept the drag. -->
+<div class="h-full overflow-auto text-xs" use:stopDragEvents>
   {#if (leaders as Leader[]).length === 0}
     <div class="h-full flex items-center justify-center text-zinc-500">
       No traders in the visible window

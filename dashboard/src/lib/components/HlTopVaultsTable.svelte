@@ -47,6 +47,8 @@
     if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
     return n.toFixed(0);
   }
+  import { stopDragEvents } from '$lib/actions/stopDragEvents';
+
   // Click-to-copy + transient "✓ copied" feedback
   let copiedAddr = $state('');
   async function copyAddr(addr: string) {
@@ -77,12 +79,10 @@
   });
 </script>
 
-<!-- mousedown/touchstart — that's what svelte-dnd-action listens to,
-     not pointerdown. Stopping these keeps drag confined to the
-     chart's title bar above. -->
-<div class="h-full flex flex-col text-xs"
-     onmousedown={(e) => e.stopPropagation()}
-     ontouchstart={(e) => e.stopPropagation()}>
+<!-- use:stopDragEvents — see actions/stopDragEvents.ts. Svelte 5
+     delegates onmousedown to document, which runs after the dnd-
+     action listener; a Svelte action bypasses the delegation. -->
+<div class="h-full flex flex-col text-xs" use:stopDragEvents>
   <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
     <span class="text-zinc-500">Top by:</span>
     <select

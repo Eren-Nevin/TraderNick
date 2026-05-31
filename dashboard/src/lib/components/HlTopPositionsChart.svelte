@@ -96,6 +96,8 @@
     return `${h}h ${m}m`;
   }
 
+  import { stopDragEvents } from '$lib/actions/stopDragEvents';
+
   let copied = $state(false);
   async function copyAddr() {
     if (!effectiveSelected) return;
@@ -165,11 +167,8 @@
   }
 </script>
 
-<!-- mousedown/touchstart — svelte-dnd-action listens to these, not
-     pointerdown. Stopping them keeps drag confined to the title bar. -->
-<div class="h-full flex flex-col text-xs"
-     onmousedown={(e) => e.stopPropagation()}
-     ontouchstart={(e) => e.stopPropagation()}>
+<!-- use:stopDragEvents — see actions/stopDragEvents.ts. -->
+<div class="h-full flex flex-col text-xs" use:stopDragEvents>
   <!-- Top bar: wallet picker + copy + tags -->
   <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
     <span class="text-zinc-500">Wallet:</span>
