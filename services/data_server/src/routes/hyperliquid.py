@@ -253,6 +253,80 @@ async def leaderboard(request):
     })
 
 
+@bp.get("/hyperliquid/oi_split")
+async def oi_split(request):
+    """Per-bucket Open Interest on HL, split into long / short / total.
+
+    Same state-aware aggregation pattern as /hyperliquid/unrealized_pnl:
+    per-wallet argMax(*, time) per (bucket, wallet, side) collapses to
+    one row per snapshot before summing across wallets — avoids
+    double-counting carry-forward position rows.
+
+    Returns BOTH token-unit totals (long_oi/short_oi/total_oi) and USD
+    notional totals (*_value), so the chart can plot either dimension
+    without a second request.
+    """
+    token = request.args.get("token")
+    interval = request.args.get("interval", "1h")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    limit = int(request.args.get("limit", "10000"))
+
+    if not token:
+        return response.json({"error": "missing token"}, status=400)
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+
+    seconds = INTERVAL_SECONDS[interval]
+    since_dt = _parse_iso(since); until_dt = _parse_iso(until)
+
+    sql = """
+        SELECT
+            toUnixTimestamp(bucket)                AS bucket,
+            sumIf(latest_amount, side='long')      AS long_oi,
+            sumIf(latest_amount, side='short')     AS short_oi,
+            sum(latest_amount)                     AS total_oi,
+            sumIf(latest_size,   side='long')      AS long_oi_value,
+            sumIf(latest_size,   side='short')     AS short_oi_value,
+            sum(latest_size)                       AS total_oi_value
+        FROM (
+            SELECT
+                toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND) AS bucket,
+                wallet, side,
+                argMax(amount, time) AS latest_amount,
+                argMax(size,   time) AS latest_size
+            FROM tradernick.hl_position_history FINAL
+            WHERE token = {token:String}
+              AND time >= {since:DateTime}
+              AND time <  {until:DateTime}
+            GROUP BY bucket, wallet, side
+        )
+        GROUP BY bucket
+        ORDER BY bucket
+        LIMIT {limit:UInt32}
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters={
+        "seconds": seconds, "token": token,
+        "since": since_dt, "until": until_dt, "limit": limit,
+    })
+    series = [
+        {
+            "time": int(r[0]),
+            "long_oi": float(r[1]),
+            "short_oi": float(r[2]),
+            "total_oi": float(r[3]),
+            "long_oi_value": float(r[4]),
+            "short_oi_value": float(r[5]),
+            "total_oi_value": float(r[6]),
+        }
+        for r in rows.result_rows
+    ]
+    return response.json({"token": token, "interval": interval, "series": series})
+
+
 @bp.get("/hyperliquid/bridge_flows")
 async def bridge_flows(request):
     """Per-bucket USDC flow across the HL Arbitrum bridge: deposit (in),

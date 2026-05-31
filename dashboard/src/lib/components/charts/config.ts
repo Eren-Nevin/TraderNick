@@ -318,6 +318,7 @@ export type ChartKind =
   | 'gmx_net_lp'
   | 'hl_pnl'
   | 'hl_unrealized_pnl'
+  | 'hl_oi_split'
   | 'hl_transfers'
   | 'hl_vault_net'
   | 'hl_top_traders'
@@ -409,6 +410,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   spark_flashloan: 'Spark Flash Loans',
   hl_pnl: 'HL Realized PnL',
   hl_unrealized_pnl: 'HL Unrealized PnL',
+  hl_oi_split: 'HL OI (Long/Short/Total)',
   hl_transfers: 'HL Bridge Flows',
   hl_vault_net: 'HL Vault Net Flow',
   hl_top_traders: 'HL Top Traders',
@@ -677,6 +679,7 @@ export const HL_CHART_KINDS: ChartKind[] = [
   // exchange='hl'. Same goes for hl_funding_paid → `fr` + exchange='hl'.
   'hl_pnl',
   'hl_unrealized_pnl',
+  'hl_oi_split',
   'hl_transfers',
   'hl_vault_net',
   'hl_top_traders',

@@ -1041,6 +1041,28 @@
         loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
         return;
       }
+      // Hyperliquid OI split: long / short / total open interest per
+      // token over time. Same state-aware aggregation as unrealized_pnl
+      // (argMax per wallet then sum across wallets). USD notional is the
+      // primary view; token-unit fields are also returned for future use.
+      if (instance.kind === 'hl_oi_split') {
+        const qs = new URLSearchParams({
+          token: instance.token,
+          interval: instance.interval,
+          since: sinceIso,
+          until: untilIso,
+          limit: '5000'
+        });
+        const res = await queuedFetch(`/api/hyperliquid/oi_split?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = (body.series ?? []) as unknown as AnyDatum[];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
       // Hyperliquid unrealized PnL: its own state-aware endpoint that
       // collapses per-wallet snapshots to last-in-bucket before summing.
       // Response carries (long_pnl, short_pnl, net_pnl) — three series
@@ -2431,6 +2453,24 @@
       : []
   );
 
+  // HL OI split: long / short / total open interest from
+  // /hyperliquid/oi_split. Plots USD notional by default (the *_value
+  // fields); the token-unit fields are present on the row for future
+  // toggles. Same color convention as the unrealized chart: long green,
+  // short red, net/total cyan.
+  let hlOiSplitLinesD = $derived(
+    instance.showPoint
+      ? [
+          { key: 'long',  label: 'Long OI',  color: '#22c55e',
+            compute: (d: Record<string, number>) => d.long_oi_value ?? 0 },
+          { key: 'short', label: 'Short OI', color: '#ef4444',
+            compute: (d: Record<string, number>) => d.short_oi_value ?? 0 },
+          { key: 'total', label: 'Total OI', color: '#06b6d4',
+            compute: (d: Record<string, number>) => d.total_oi_value ?? 0 }
+        ]
+      : []
+  );
+
   // HL Bridge Flows: directional USDC bridge view. Deposit (capital in)
   // and withdrawal (capital out) are both rendered as POSITIVE magnitudes
   // so the operator can compare absolute flow sizes side-by-side. Net is
@@ -3735,6 +3775,20 @@
         data={data as Array<Record<string, number>>}
         lines={hlUnrealizedLinesD}
         refLines={NEUTRAL_REF}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
+      />
+    {:else if instance.kind === 'hl_oi_split'}
+      <LineChart
+        data={data as Array<Record<string, number>>}
+        lines={hlOiSplitLinesD}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
