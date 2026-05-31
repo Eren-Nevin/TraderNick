@@ -107,6 +107,62 @@
       // older browsers / non-secure context — silently no-op
     }
   }
+
+  // Sortable columns. Empty sortKey = use server order (already sorted by
+  // abs(unrealized_pnl) DESC, which is the most informative default for
+  // "biggest moves in this wallet's book"). Clicking a column header sets
+  // the key + starts DESC (the more useful direction for first click on
+  // signed columns); clicking again flips ASC↔DESC.
+  type SortKey = '' | 'token' | 'side' | 'value' | 'roe' | 'upnl' | 'funding' | 'age';
+  let sortKey = $state<SortKey>('');
+  let sortDir = $state<1 | -1>(-1);
+
+  function roeOf(p: Position): number {
+    if (!p.avg_entry || !p.mark_price) return 0;
+    const raw = (p.mark_price - p.avg_entry) / p.avg_entry;
+    return p.side === 'short' ? -raw : raw;
+  }
+  function ageOf(p: Position): number {
+    if (!p.opened_at) return 0;
+    return Math.max(0, p.as_of - p.opened_at);
+  }
+  function keyValue(p: Position, k: SortKey): number | string {
+    switch (k) {
+      case 'token':   return p.token;
+      case 'side':    return p.side;
+      case 'value':   return p.amount;
+      case 'roe':     return roeOf(p);
+      case 'upnl':    return p.unrealized_pnl;
+      case 'funding': return p.funding;
+      case 'age':     return ageOf(p);
+      default:        return 0;
+    }
+  }
+  let sortedPositions = $derived.by(() => {
+    const arr = selectedEntry?.positions ?? [];
+    if (!sortKey) return arr;
+    const dir = sortDir;
+    return [...arr].sort((a, b) => {
+      const av = keyValue(a, sortKey);
+      const bv = keyValue(b, sortKey);
+      if (typeof av === 'string' && typeof bv === 'string') {
+        return av < bv ? -dir : av > bv ? dir : 0;
+      }
+      return ((av as number) - (bv as number)) * dir;
+    });
+  });
+  function onSort(k: SortKey) {
+    if (sortKey === k) {
+      sortDir = (sortDir === 1 ? -1 : 1);
+    } else {
+      sortKey = k;
+      sortDir = -1;
+    }
+  }
+  function sortArrow(k: SortKey): string {
+    if (sortKey !== k) return '';
+    return sortDir === 1 ? ' ↑' : ' ↓';
+  }
 </script>
 
 <div class="h-full flex flex-col text-xs">
@@ -154,20 +210,20 @@
       <table class="w-full">
         <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
           <tr>
-            <th class="text-left  px-3 py-1.5 font-normal">Token</th>
-            <th class="text-left  px-3 py-1.5 font-normal">Side</th>
+            <th class="text-left  px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('token')}>Token{sortArrow('token')}</th>
+            <th class="text-left  px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('side')}>Side{sortArrow('side')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('value')}>Value{sortArrow('value')}</th>
             <th class="text-right px-3 py-1.5 font-normal">Size</th>
-            <th class="text-right px-3 py-1.5 font-normal">Notional</th>
             <th class="text-right px-3 py-1.5 font-normal">Entry</th>
             <th class="text-right px-3 py-1.5 font-normal">Mark</th>
-            <th class="text-right px-3 py-1.5 font-normal">ROE</th>
-            <th class="text-right px-3 py-1.5 font-normal">Unrealized PnL</th>
-            <th class="text-right px-3 py-1.5 font-normal">Funding</th>
-            <th class="text-right px-3 py-1.5 font-normal">Age</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('roe')}>ROE{sortArrow('roe')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('upnl')}>Unrealized PnL{sortArrow('upnl')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('funding')}>Funding{sortArrow('funding')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('age')}>Age{sortArrow('age')}</th>
           </tr>
         </thead>
         <tbody>
-          {#each selectedEntry.positions as p (p.token + '|' + p.side)}
+          {#each sortedPositions as p (p.token + '|' + p.side)}
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
               <td class="px-3 py-1 font-mono text-zinc-100">{p.token}</td>
               <td class="px-3 py-1">
@@ -179,8 +235,8 @@
                   class:border-rose-900={p.side === 'short'}
                 >{p.side}</span>
               </td>
-              <td class="px-3 py-1 text-right font-mono text-zinc-300">{fmtSize(p.size, p.token)}</td>
-              <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtUsd(p.amount)}</td>
+              <td class="px-3 py-1 text-right font-mono text-zinc-200">{fmtUsd(p.amount)}</td>
+              <td class="px-3 py-1 text-right font-mono text-zinc-500">{fmtSize(p.size, p.token)}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtPrice(p.avg_entry)}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-200">{fmtPrice(p.mark_price)}</td>
               <td class="px-3 py-1 text-right font-mono"
