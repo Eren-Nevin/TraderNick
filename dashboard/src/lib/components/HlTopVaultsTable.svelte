@@ -89,7 +89,7 @@
               <td class="px-3 py-1">
                 <button type="button" onclick={() => copyAddr(v.vault)}
                         title={v.vault + ' — click to copy'}
-                        class="font-mono text-zinc-200 hover:text-blue-400">
+                        class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer">
                   {truncate(v.vault)}
                 </button>
               </td>

@@ -61,7 +61,7 @@
             <td class="px-3 py-1">
               <button type="button" onclick={() => copyAddr(l.wallet)}
                       title={l.wallet + ' — click to copy'}
-                      class="font-mono text-zinc-200 hover:text-blue-400">
+                      class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer">
                 {truncate(l.wallet)}
               </button>
             </td>
