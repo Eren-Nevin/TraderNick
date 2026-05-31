@@ -4,6 +4,9 @@
   import LineChart from '$lib/components/LineChart.svelte';
   import TableChart from '$lib/components/TableChart.svelte';
   import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
+  import HlTopVaultsTable from '$lib/components/HlTopVaultsTable.svelte';
+  import HlTopVaultLpsTable from '$lib/components/HlTopVaultLpsTable.svelte';
+  import HlVaultDetailChart from '$lib/components/HlVaultDetailChart.svelte';
   import SignedBarChart from '$lib/components/SignedBarChart.svelte';
   import { onMount } from 'svelte';
   import {
@@ -579,10 +582,14 @@
     if (isHlKind(instance.kind)) {
       // HL: per-token + optional wallet OR wallet_category filter (mutually
       // exclusive). Empty wallet filter = aggregate across all traders.
+      // hl_top_vaults adds its sort selector to the key so flipping the
+      // sort triggers a re-fetch.
       const wPart = instance.hlWallet
         ? `w:${instance.hlWallet.toLowerCase()}`
         : (instance.hlWalletCategory ? `wc:${instance.hlWalletCategory}` : 'all');
-      return `${instance.kind}|${instance.token}|${wPart}|${instance.interval}`;
+      const sortPart = instance.kind === 'hl_top_vaults'
+        ? `|sort:${instance.hlVaultSortBy ?? 'net'}` : '';
+      return `${instance.kind}|${instance.token}|${wPart}|${instance.interval}${sortPart}`;
     }
     if (isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind)) {
       // Uniswap V2/V3 charts: pool keyed by (sym0, sym1, fee) — fee=0 marks V2.
@@ -1022,6 +1029,82 @@
       // fetch happens here via the same code path with a stub data array.
       // For the position_*_size kinds we read sum_amount/sum_value_usd
       // from the same hl/aggregate response.
+      // Hyperliquid vault flow: 3-line deposit/withdraw/net per bucket
+      // over hl_vaults. Same render shape as bridge_flows. Replaces the
+      // old single-sum hl_vault_net path (which was misleadingly summing
+      // every action type together regardless of direction).
+      if (instance.kind === 'hl_vault_net') {
+        const qs = new URLSearchParams({
+          interval: instance.interval,
+          since: sinceIso,
+          until: untilIso,
+          limit: '5000'
+        });
+        const res = await queuedFetch(`/api/hyperliquid/vault_flow?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = (body.series ?? []) as unknown as AnyDatum[];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Hyperliquid top vaults: leaderboard with sort selector. Switching
+      // the sort triggers a re-fetch (loadKey includes hlVaultSortBy).
+      if (instance.kind === 'hl_top_vaults') {
+        const qs = new URLSearchParams({
+          since: sinceIso,
+          until: untilIso,
+          limit: '20',
+          order_by: instance.hlVaultSortBy ?? 'net'
+        });
+        const res = await queuedFetch(`/api/hyperliquid/top_vaults?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = [{ vaults: body.vaults ?? [] } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Hyperliquid top vault LPs.
+      if (instance.kind === 'hl_top_vault_lps') {
+        const qs = new URLSearchParams({
+          since: sinceIso,
+          until: untilIso,
+          limit: '20'
+        });
+        const res = await queuedFetch(`/api/hyperliquid/top_vault_lps?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = [{ lps: body.lps ?? [] } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Hyperliquid vault detail: top-N vaults + each vault's recent
+      // activity log. One fetch — vault dropdown switches instantly.
+      if (instance.kind === 'hl_vault_detail') {
+        const qs = new URLSearchParams({
+          since: sinceIso,
+          until: untilIso,
+          limit: '10',
+          recent_n: '50'
+        });
+        const res = await queuedFetch(`/api/hyperliquid/vault_detail?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = [{ vaults: body.vaults ?? [] } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
       // Hyperliquid bridge flows: directional view of HL's Arbitrum
       // bridge. Three series — deposit (positive), withdrawal (negated,
       // shown below zero), and net = deposit + withdrawal — so the lines
@@ -2478,6 +2561,21 @@
       : []
   );
 
+  // HL Vault Flow: same 3-line shape as Bridge Flows but over hl_vaults.
+  // deposit / withdraw are positive magnitudes; net = deposit - withdraw.
+  let hlVaultFlowLinesD = $derived(
+    instance.showPoint
+      ? [
+          { key: 'deposit',  label: 'Deposit',  color: '#22c55e',
+            compute: (d: Record<string, number>) => d.deposit ?? 0 },
+          { key: 'withdraw', label: 'Withdraw', color: '#ef4444',
+            compute: (d: Record<string, number>) => d.withdraw ?? 0 },
+          { key: 'net',      label: 'Net',      color: '#06b6d4',
+            compute: (d: Record<string, number>) => d.net ?? 0 }
+        ]
+      : []
+  );
+
   // HL Bridge Flows: directional USDC bridge view. Deposit (capital in)
   // and withdrawal (capital out) are both rendered as POSITIVE magnitudes
   // so the operator can compare absolute flow sizes side-by-side. Net is
@@ -2925,7 +3023,10 @@
              can rank wallets either per-token or by aggregate exposure.
              hl_transfers (bridge flows) is USDC-only — no token select. -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL</span>
-        {#if instance.kind !== 'hl_transfers'}
+        {#if instance.kind === 'hl_transfers' || instance.kind === 'hl_vault_net' || instance.kind === 'hl_top_vaults' || instance.kind === 'hl_top_vault_lps' || instance.kind === 'hl_vault_detail'}
+          <!-- These kinds have no token dimension — show a static USDC chip. -->
+          <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">USDC</span>
+        {:else}
           <select
             value={instance.token}
             onchange={(e) => (instance.token = e.currentTarget.value)}
@@ -2941,10 +3042,8 @@
               <option value={instance.token}>{instance.token}</option>
             {/if}
           </select>
-        {:else}
-          <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">USDC</span>
         {/if}
-        {#if instance.kind !== 'hl_top_traders' && instance.kind !== 'hl_top_positions' && instance.kind !== 'hl_transfers'}
+        {#if instance.kind !== 'hl_top_traders' && instance.kind !== 'hl_top_positions' && instance.kind !== 'hl_transfers' && instance.kind !== 'hl_vault_net' && instance.kind !== 'hl_top_vaults' && instance.kind !== 'hl_top_vault_lps' && instance.kind !== 'hl_vault_detail'}
           <input
             type="text"
             placeholder="0x… wallet"
@@ -3841,6 +3940,37 @@
         vRefLines={weekVRefLines}
         formatY={fmtUsdAxis}
         formatTooltip={fmtUsdTooltip}
+      />
+    {:else if instance.kind === 'hl_vault_net'}
+      <LineChart
+        data={data as Array<Record<string, number>>}
+        lines={hlVaultFlowLinesD}
+        refLines={NEUTRAL_REF}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
+      />
+    {:else if instance.kind === 'hl_top_vaults'}
+      <HlTopVaultsTable
+        vaults={data.length > 0 ? ((data[0] as unknown as {vaults?: unknown[]}).vaults ?? []) : []}
+        orderBy={instance.hlVaultSortBy ?? 'net'}
+        onChangeOrderBy={(v) => (instance.hlVaultSortBy = v)}
+      />
+    {:else if instance.kind === 'hl_top_vault_lps'}
+      <HlTopVaultLpsTable
+        lps={data.length > 0 ? ((data[0] as unknown as {lps?: unknown[]}).lps ?? []) : []}
+      />
+    {:else if instance.kind === 'hl_vault_detail'}
+      <HlVaultDetailChart
+        vaults={data.length > 0 ? ((data[0] as unknown as {vaults?: unknown[]}).vaults ?? []) : []}
+        selectedVault={instance.hlSelectedVault ?? ''}
+        onSelectVault={(v) => (instance.hlSelectedVault = v)}
       />
     {:else if instance.kind === 'hl_transfers'}
       <LineChart

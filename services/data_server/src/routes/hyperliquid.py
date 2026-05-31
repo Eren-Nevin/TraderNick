@@ -383,6 +383,304 @@ async def bridge_flows(request):
     return response.json({"interval": interval, "series": series})
 
 
+@bp.get("/hyperliquid/vault_flow")
+async def vault_flow(request):
+    """Per-bucket vault deposit / withdraw / net flow (USDC).
+
+    Mirrors the bridge_flows shape — deposit and withdraw are both
+    positive magnitudes for easy side-by-side comparison; net is the
+    signed difference (deposit - withdraw). distribution is included
+    as a fourth field but the chart only plots the three core lines.
+    """
+    interval = request.args.get("interval", "1h")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    limit = int(request.args.get("limit", "10000"))
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    seconds = INTERVAL_SECONDS[interval]
+    since_dt = _parse_iso(since); until_dt = _parse_iso(until)
+
+    sql = """
+        SELECT
+            toUnixTimestamp(toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND)) AS bucket,
+            sumIf(amount, action='deposit')      AS deposit,
+            sumIf(amount, action='withdraw')     AS withdraw,
+            sumIf(amount, action='deposit')
+              - sumIf(amount, action='withdraw') AS net,
+            sumIf(amount, action='distribution') AS distribution,
+            countIf(action='deposit')            AS deposit_count,
+            countIf(action='withdraw')           AS withdraw_count
+        FROM tradernick.hl_vaults FINAL
+        WHERE time >= {since:DateTime}
+          AND time <  {until:DateTime}
+        GROUP BY bucket
+        ORDER BY bucket
+        LIMIT {limit:UInt32}
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters={
+        "seconds": seconds, "since": since_dt, "until": until_dt, "limit": limit,
+    })
+    series = [
+        {
+            "time": int(r[0]),
+            "deposit": float(r[1]),
+            "withdraw": float(r[2]),
+            "net": float(r[3]),
+            "distribution": float(r[4]),
+            "deposit_count": int(r[5]),
+            "withdraw_count": int(r[6]),
+        }
+        for r in rows.result_rows
+    ]
+    return response.json({"interval": interval, "series": series})
+
+
+_VAULT_SORT_KEYS = {
+    "net":         "net DESC",
+    "deposits":    "deposits DESC",
+    "withdrawals": "withdrawals DESC",
+    "commission":  "commission DESC",
+}
+
+
+@bp.get("/hyperliquid/top_vaults")
+async def top_vaults(request):
+    """Leaderboard of vaults over a [since, until] window. Sort key
+    selects which metric ranks the table.
+
+    Returns per-vault aggregates: deposits / withdrawals / net /
+    commission earned by leader / distributions paid to LPs /
+    distinct LP count / event count / age (first event in window).
+    """
+    since = request.args.get("since")
+    until = request.args.get("until")
+    limit = int(request.args.get("limit", "20"))
+    order_by = request.args.get("order_by", "net")
+    if order_by not in _VAULT_SORT_KEYS:
+        return response.json({"error": f"order_by must be one of {list(_VAULT_SORT_KEYS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    since_dt = _parse_iso(since); until_dt = _parse_iso(until)
+
+    sql = f"""
+        SELECT
+            vault,
+            sumIf(amount, action='deposit')      AS deposits,
+            sumIf(amount, action='withdraw')     AS withdrawals,
+            sumIf(amount, action='deposit')
+              - sumIf(amount, action='withdraw') AS net,
+            sumIf(commission, action='withdraw') AS commission,
+            sumIf(amount, action='distribution') AS distributions,
+            uniqExact(wallet)                    AS lp_count,
+            count()                              AS event_count
+        FROM tradernick.hl_vaults FINAL
+        WHERE time >= {{since:DateTime}}
+          AND time <  {{until:DateTime}}
+        GROUP BY vault
+        ORDER BY {_VAULT_SORT_KEYS[order_by]}
+        LIMIT {{limit:UInt32}}
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters={
+        "since": since_dt, "until": until_dt, "limit": limit,
+    })
+    vaults = [
+        {
+            "rank": idx + 1,
+            "vault": r[0],
+            "deposits": float(r[1]),
+            "withdrawals": float(r[2]),
+            "net": float(r[3]),
+            "commission": float(r[4]),
+            "distributions": float(r[5]),
+            "lp_count": int(r[6]),
+            "event_count": int(r[7]),
+        }
+        for idx, r in enumerate(rows.result_rows)
+    ]
+    return response.json({
+        "order_by": order_by, "since": since, "until": until,
+        "vaults": vaults,
+    })
+
+
+@bp.get("/hyperliquid/top_vault_lps")
+async def top_vault_lps(request):
+    """Top LPs by net USDC deposited into HL vaults over [since, until].
+
+    Action filter to deposit + withdraw (distribution is the vault paying
+    its LPs and 'create' is the vault leader's own initial seed, neither
+    is an LP action). Categories surfaces wallet labels for whale tagging.
+    """
+    since = request.args.get("since")
+    until = request.args.get("until")
+    limit = int(request.args.get("limit", "20"))
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    since_dt = _parse_iso(since); until_dt = _parse_iso(until)
+
+    sql = """
+        SELECT
+            wallet,
+            sumIf(amount, action='deposit')      AS deposits,
+            sumIf(amount, action='withdraw')     AS withdrawals,
+            sumIf(amount, action='deposit')
+              - sumIf(amount, action='withdraw') AS net,
+            uniqExact(vault)                     AS vaults_used,
+            count()                              AS event_count,
+            dictGet('tradernick.wallet_labels', 'categories', lower(wallet)) AS categories
+        FROM tradernick.hl_vaults FINAL
+        WHERE time >= {since:DateTime}
+          AND time <  {until:DateTime}
+          AND action IN ('deposit', 'withdraw')
+        GROUP BY wallet
+        ORDER BY net DESC
+        LIMIT {limit:UInt32}
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters={
+        "since": since_dt, "until": until_dt, "limit": limit,
+    })
+    lps = [
+        {
+            "rank": idx + 1,
+            "wallet": r[0],
+            "deposits": float(r[1]),
+            "withdrawals": float(r[2]),
+            "net": float(r[3]),
+            "vaults_used": int(r[4]),
+            "event_count": int(r[5]),
+            "categories": list(r[6]) if r[6] else [],
+        }
+        for idx, r in enumerate(rows.result_rows)
+    ]
+    return response.json({
+        "since": since, "until": until,
+        "lps": lps,
+    })
+
+
+@bp.get("/hyperliquid/vault_detail")
+async def vault_detail(request):
+    """Top-N vaults by gross flow + each vault's most-recent activity
+    log in a single response. Mirrors the top_positions UX so flipping
+    the vault selector on the dashboard is instant (no re-fetch).
+
+    Per-event row includes time / action / wallet (LP) / amount /
+    commission / fee — the full event detail. Activity list is capped
+    at recent_n per vault (default 50) so the response stays bounded
+    even with very active vaults.
+    """
+    since = request.args.get("since")
+    until = request.args.get("until")
+    limit = int(request.args.get("limit", "10"))
+    recent_n = int(request.args.get("recent_n", "50"))
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    since_dt = _parse_iso(since); until_dt = _parse_iso(until)
+
+    ch = await client()
+
+    # Step 1 — pick top-N vaults by gross flow (deposit + withdraw, sums
+    # of magnitudes, so the leaderboard surfaces 'most active' regardless
+    # of net direction).
+    top_rows = await ch.query(
+        """
+        SELECT
+            vault,
+            sumIf(amount, action='deposit')      AS deposits,
+            sumIf(amount, action='withdraw')     AS withdrawals,
+            sumIf(amount, action='deposit')
+              - sumIf(amount, action='withdraw') AS net,
+            sumIf(commission, action='withdraw') AS commission,
+            sumIf(amount, action='distribution') AS distributions,
+            uniqExact(wallet)                    AS lp_count,
+            count()                              AS event_count,
+            toUnixTimestamp(min(time))           AS first_event_at,
+            toUnixTimestamp(max(time))           AS last_event_at
+        FROM tradernick.hl_vaults FINAL
+        WHERE time >= {since:DateTime}
+          AND time <  {until:DateTime}
+        GROUP BY vault
+        ORDER BY (sumIf(amount, action='deposit') + sumIf(amount, action='withdraw')) DESC
+        LIMIT {limit:UInt32}
+        """,
+        parameters={"since": since_dt, "until": until_dt, "limit": limit},
+    )
+    if not top_rows.result_rows:
+        return response.json({"since": since, "until": until, "vaults": []})
+
+    vault_list = [r[0] for r in top_rows.result_rows]
+    vault_meta: dict = {
+        r[0]: {
+            "vault": r[0],
+            "deposits": float(r[1]),
+            "withdrawals": float(r[2]),
+            "net": float(r[3]),
+            "commission": float(r[4]),
+            "distributions": float(r[5]),
+            "lp_count": int(r[6]),
+            "event_count": int(r[7]),
+            "first_event_at": int(r[8]),
+            "last_event_at": int(r[9]),
+            "events": [],
+        }
+        for r in top_rows.result_rows
+    }
+
+    # Step 2 — pull the last recent_n events per top vault. Using
+    # row_number() partitioned by vault gives a bounded per-vault tail
+    # without a separate query per vault.
+    event_rows = await ch.query(
+        """
+        SELECT vault, ts, wallet, action, amount, commission, fee FROM (
+            SELECT
+                vault,
+                toUnixTimestamp(time) AS ts,
+                wallet, action, amount, commission, fee,
+                row_number() OVER (PARTITION BY vault ORDER BY time DESC) AS rn
+            FROM tradernick.hl_vaults FINAL
+            WHERE vault IN {vaults:Array(String)}
+              AND time >= {since:DateTime}
+              AND time <  {until:DateTime}
+        )
+        WHERE rn <= {recent_n:UInt32}
+        ORDER BY vault, ts DESC
+        """,
+        parameters={
+            "vaults": vault_list, "since": since_dt, "until": until_dt,
+            "recent_n": recent_n,
+        },
+    )
+    for r in event_rows.result_rows:
+        v = r[0]
+        if v not in vault_meta:
+            continue
+        vault_meta[v]["events"].append({
+            "time": int(r[1]),
+            "wallet": r[2],
+            "action": r[3],
+            "amount": float(r[4]),
+            "commission": float(r[5]),
+            "fee": float(r[6]),
+        })
+
+    vaults_out = []
+    for rank, v in enumerate(vault_list, start=1):
+        entry = vault_meta[v]
+        entry["rank"] = rank
+        vaults_out.append(entry)
+
+    return response.json({
+        "since": since, "until": until,
+        "vaults": vaults_out,
+    })
+
+
 @bp.get("/hyperliquid/top_positions")
 async def top_positions(request):
     """Top 10 wallets by current unrealized PnL, plus each wallet's full

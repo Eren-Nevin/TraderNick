@@ -320,6 +320,9 @@ export type ChartKind =
   | 'hl_unrealized_pnl'
   | 'hl_transfers'
   | 'hl_vault_net'
+  | 'hl_top_vaults'
+  | 'hl_top_vault_lps'
+  | 'hl_vault_detail'
   | 'hl_top_traders'
   | 'hl_top_positions'
   | 'uniswap_v2_swap'
@@ -410,7 +413,10 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   hl_pnl: 'HL Realized PnL',
   hl_unrealized_pnl: 'HL Unrealized PnL',
   hl_transfers: 'HL Bridge Flows',
-  hl_vault_net: 'HL Vault Net Flow',
+  hl_vault_net: 'HL Vault Flow',
+  hl_top_vaults: 'HL Top Vaults',
+  hl_top_vault_lps: 'HL Top Vault LPs',
+  hl_vault_detail: 'HL Vault Detail',
   hl_top_traders: 'HL Top Traders',
   hl_top_positions: 'HL Top Positions',
   gmx_position_increase: 'GMX Position Open',
@@ -679,6 +685,9 @@ export const HL_CHART_KINDS: ChartKind[] = [
   'hl_unrealized_pnl',
   'hl_transfers',
   'hl_vault_net',
+  'hl_top_vaults',
+  'hl_top_vault_lps',
+  'hl_vault_detail',
   'hl_top_traders',
   'hl_top_positions'
 ];
@@ -689,9 +698,11 @@ export const HL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
   hl_pnl: 'trade_history',
   hl_unrealized_pnl: 'position_history',
   // hl_transfers intentionally absent — uses /hyperliquid/bridge_flows for
-  // a directional deposit/withdrawal/net three-line view instead of the
-  // generic aggregate's single sum_amount line.
-  hl_vault_net: 'vaults'
+  // a directional deposit/withdrawal/net three-line view.
+  // hl_vault_net intentionally absent — uses /hyperliquid/vault_flow for
+  // the same 3-line shape (deposit/withdraw/net) over vault data.
+  // hl_top_vaults / hl_top_vault_lps / hl_vault_detail intentionally
+  // absent — each uses its own dedicated endpoint.
   // hl_top_traders has no single event — uses the leaderboard endpoint
 };
 export function isHlKind(kind: ChartKind): boolean {
@@ -701,9 +712,10 @@ export function isHlKind(kind: ChartKind): boolean {
  *  computes one; sum_amount otherwise. hl_unrealized_pnl is absent — it
  *  uses its own endpoint and row shape (long_pnl/short_pnl/net_pnl). */
 export const HL_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_value_usd'>> = {
-  hl_pnl: 'sum_value_usd',          // realized PnL in USD
-  // hl_transfers: uses /bridge_flows directly, not the generic aggregate.
-  hl_vault_net: 'sum_amount'        // amount
+  hl_pnl: 'sum_value_usd'          // realized PnL in USD
+  // hl_transfers / hl_vault_net / hl_top_vaults / hl_top_vault_lps /
+  // hl_vault_detail: each uses its own dedicated endpoint, not the
+  // generic /hyperliquid/aggregate one.
 };
 
 /** Uniswap chart kinds collected for the DeX page (default layout order). */
@@ -1131,6 +1143,11 @@ export type ChartInstance = {
    *  being viewed. Empty = default to the rank-1 wallet. Persists across
    *  page reloads via the layout sanitize step. */
   hlSelectedWallet?: string;
+  /** hl_top_vaults only: ranking metric for the leaderboard. */
+  hlVaultSortBy?: 'net' | 'deposits' | 'withdrawals' | 'commission';
+  /** hl_vault_detail only: which vault from the top-N list is currently
+   *  being viewed. Empty = default to the rank-1 vault. */
+  hlSelectedVault?: string;
   /** oi chart only, HL exchange only: which side(s) of OI to render —
    *  'total' (default, matches the Binance behavior), 'long', 'short',
    *  or 'long_short' (two lines: long + short, no total). Ignored when
@@ -1275,6 +1292,12 @@ export function newChartInstance(
       // this kind has an "All" option mapped to empty string.
       base.token = '';
       base.hlSelectedWallet = '';
+    }
+    if (kind === 'hl_top_vaults') {
+      base.hlVaultSortBy = 'net';
+    }
+    if (kind === 'hl_vault_detail') {
+      base.hlSelectedVault = '';
     }
   }
   if (isGmxKind(kind)) {
