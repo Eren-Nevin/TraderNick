@@ -4,8 +4,6 @@
     AAVE_CHART_KINDS,
     AAVE_V2_CHART_KINDS,
     AAVE_V4_CHART_KINDS,
-    MORPHO_CHART_KINDS,
-    SPARK_CHART_KINDS,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind
@@ -16,20 +14,11 @@
 
   const AVAILABLE_KINDS: ChartKind[] = [
     'ohlcv',
-    ...AAVE_CHART_KINDS, ...AAVE_V2_CHART_KINDS, ...AAVE_V4_CHART_KINDS,
-    ...SPARK_CHART_KINDS, ...MORPHO_CHART_KINDS
+    ...AAVE_CHART_KINDS, ...AAVE_V2_CHART_KINDS, ...AAVE_V4_CHART_KINDS
   ];
-
-  // Default to the USDC+USDT compound token group on every lending chart —
-  // matches how stablecoin TVL is usually read (combined, not single-asset).
-  // The group resolves server-side via token_group=USDC+USDT on the AAVE /
-  // Morpho / Spark aggregate endpoints.
   const LENDING_DEFAULT_TOKEN = 'USDC+USDT';
 
   function defaultLayout(): ChartInstanceT[] {
-    // One chart per AAVE event type, all on ETH and the USDC+USDT group by
-    // default — the row layout means 4 charts fit on row 1 (3 in row 2) at
-    // 4×4. The user can swap token/chain per chart.
     return AAVE_CHART_KINDS.map((kind) => {
       const inst = newChartInstance(kind, { token: LENDING_DEFAULT_TOKEN, chain: 'ETH' });
       inst.interval = '4h';
@@ -41,9 +30,9 @@
 <div class="px-12 py-6 space-y-10">
   <div class="flex items-end justify-between gap-4 flex-wrap">
     <div>
-      <h1 class="text-xl font-semibold">Lending</h1>
+      <h1 class="text-xl font-semibold">AAVE</h1>
       <div class="text-xs text-zinc-500">
-        AAVE v3 events (deposits / withdrawals / borrows / repays / flash loans / liquidations)
+        AAVE V2 / V3 / V4 events (deposits / withdrawals / borrows / repays / flash loans / liquidations)
       </div>
     </div>
   </div>
@@ -52,7 +41,7 @@
     tokens={data.tokens}
     tokenGroups={data.tokenGroups}
     chainGroups={data.chainGroups}
-    storageKey="tradernick:lending:layout:v1"
+    storageKey="tradernick:lending-aave:layout:v1"
     availableKinds={AVAILABLE_KINDS}
     defaultChain="ETH"
     defaultToken={LENDING_DEFAULT_TOKEN}

@@ -14,9 +14,6 @@
   const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', ...LIDO_CHART_KINDS];
 
   function defaultLayout(): ChartInstanceT[] {
-    // 7 Lido charts in flow order: 3 mainnet events + Net Stake, then 2
-    // L2 events + Net L2. L1 kinds pin to ETH; L2 kinds default to ARB
-    // (highest wstETH bridge volume).
     return LIDO_CHART_KINDS.map((kind) => {
       const inst = newChartInstance(kind, {
         token: 'STETH',
@@ -31,7 +28,7 @@
 <div class="px-12 py-6 space-y-10">
   <div class="flex items-end justify-between gap-4 flex-wrap">
     <div>
-      <h1 class="text-xl font-semibold">Staking</h1>
+      <h1 class="text-xl font-semibold">Lido</h1>
       <div class="text-xs text-zinc-500">
         Lido liquid-staking flows — mainnet stake / unstake queue and L2 wstETH bridge
       </div>
@@ -42,7 +39,7 @@
     tokens={data.tokens}
     lidoChains={data.lidoChains}
     chainGroups={data.chainGroups}
-    storageKey="tradernick:staking:layout:v1"
+    storageKey="tradernick:staking-lido:layout:v1"
     availableKinds={AVAILABLE_KINDS}
     defaultChain="ARB"
     {defaultLayout}

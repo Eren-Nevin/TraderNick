@@ -2,9 +2,6 @@ import { INTERNAL_DATA_SERVER_URL } from '$lib/server/env';
 import type { ChainGroup } from '$lib/api';
 import type { PageServerLoad } from './$types';
 
-/** One row per (event, chain) that has Lido data, with row counts. Drives
- *  the per-chart chain selector on the Staking page so the dropdown only
- *  surfaces L2s that DeFiStream is actually delivering for. */
 export type LidoStream = {
   event: string;
   chain: string;
