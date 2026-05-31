@@ -440,11 +440,53 @@ async def vault_flow(request):
 
 
 _VAULT_SORT_KEYS = {
-    "net":         "net DESC",
-    "deposits":    "deposits DESC",
-    "withdrawals": "withdrawals DESC",
-    "commission":  "commission DESC",
+    "net":          "net DESC",
+    "deposits":     "deposits DESC",
+    "withdrawals":  "withdrawals DESC",
+    "commission":   "commission DESC",
+    "total_pnl":    "total_pnl DESC",
+    "realized_pnl": "realized_pnl DESC",
+    "roe":          "roe DESC",
 }
+
+
+# Shared SQL fragments — vault performance JOINs against position_history
+# (open notional + unrealized PnL at the latest snapshot) and trade_history
+# (realized PnL + trade volume over the window). Both wrapped in CTEs
+# so the main top_vaults / vault_detail queries can LEFT JOIN without
+# duplicating the aggregation logic.
+#
+# `vault_positions` uses a recent 30-min window to identify "currently
+# open" positions — position_history is carry-forward so any open
+# position appears in every snapshot. argMax-per-(wallet,token,side)
+# then collapses to one row per slot (latest values), and the outer
+# sum aggregates per wallet across all tokens / both sides.
+_VAULT_PERF_CTE = """
+  vault_positions AS (
+    SELECT wallet AS vault,
+      sum(latest_size) AS open_notional,
+      sum(latest_upnl) AS unrealized_pnl
+    FROM (
+      SELECT wallet, token, side,
+        argMax(size, time)            AS latest_size,
+        argMax(unrealized_pnl, time)  AS latest_upnl
+      FROM tradernick.hl_position_history FINAL
+      WHERE time >= now() - INTERVAL 30 MINUTE
+      GROUP BY wallet, token, side
+    )
+    GROUP BY wallet
+  ),
+  vault_realized AS (
+    SELECT wallet AS vault,
+      sum(net_pnl)     AS realized_pnl,
+      sum(volume)      AS trade_volume,
+      sum(trade_count) AS trade_count_total
+    FROM tradernick.hl_trade_history FINAL
+    WHERE time >= {since:DateTime}
+      AND time <  {until:DateTime}
+    GROUP BY wallet
+  )
+"""
 
 
 @bp.get("/hyperliquid/top_vaults")
@@ -467,20 +509,43 @@ async def top_vaults(request):
     since_dt = _parse_iso(since); until_dt = _parse_iso(until)
 
     sql = f"""
+        WITH
+          vault_stats AS (
+            SELECT
+              vault,
+              sumIf(amount, action='deposit')      AS deposits,
+              sumIf(amount, action='withdraw')     AS withdrawals,
+              sumIf(amount, action='deposit')
+                - sumIf(amount, action='withdraw') AS net,
+              sumIf(commission, action='withdraw') AS commission,
+              sumIf(amount, action='distribution') AS distributions,
+              uniqExact(wallet)                    AS lp_count,
+              count()                              AS event_count
+            FROM tradernick.hl_vaults FINAL
+            WHERE time >= {{since:DateTime}}
+              AND time <  {{until:DateTime}}
+            GROUP BY vault
+          ),
+          {_VAULT_PERF_CTE}
         SELECT
-            vault,
-            sumIf(amount, action='deposit')      AS deposits,
-            sumIf(amount, action='withdraw')     AS withdrawals,
-            sumIf(amount, action='deposit')
-              - sumIf(amount, action='withdraw') AS net,
-            sumIf(commission, action='withdraw') AS commission,
-            sumIf(amount, action='distribution') AS distributions,
-            uniqExact(wallet)                    AS lp_count,
-            count()                              AS event_count
-        FROM tradernick.hl_vaults FINAL
-        WHERE time >= {{since:DateTime}}
-          AND time <  {{until:DateTime}}
-        GROUP BY vault
+          s.vault, s.deposits, s.withdrawals, s.net,
+          s.commission, s.distributions, s.lp_count, s.event_count,
+          COALESCE(p.open_notional, 0)                                 AS open_notional,
+          COALESCE(p.unrealized_pnl, 0)                                AS unrealized_pnl,
+          COALESCE(r.realized_pnl, 0)                                  AS realized_pnl,
+          COALESCE(r.realized_pnl, 0) + COALESCE(p.unrealized_pnl, 0)  AS total_pnl,
+          COALESCE(r.trade_volume, 0)                                  AS trade_volume,
+          COALESCE(r.trade_count_total, 0)                             AS trade_count_total,
+          -- RoE = total PnL / open notional × 100. Open notional is the
+          -- proxy for "capital deployed right now". Returns 0 when no
+          -- positions are open (commonly: vaults that only have deposit/
+          -- withdraw activity, no actual trading).
+          if(p.open_notional > 0,
+             (COALESCE(r.realized_pnl, 0) + COALESCE(p.unrealized_pnl, 0)) / p.open_notional * 100,
+             0)                                                        AS roe
+        FROM vault_stats s
+        LEFT JOIN vault_positions p ON p.vault = s.vault
+        LEFT JOIN vault_realized  r ON r.vault = s.vault
         ORDER BY {_VAULT_SORT_KEYS[order_by]}
         LIMIT {{limit:UInt32}}
     """
@@ -499,6 +564,13 @@ async def top_vaults(request):
             "distributions": float(r[5]),
             "lp_count": int(r[6]),
             "event_count": int(r[7]),
+            "open_notional": float(r[8]),
+            "unrealized_pnl": float(r[9]),
+            "realized_pnl": float(r[10]),
+            "total_pnl": float(r[11]),
+            "trade_volume": float(r[12]),
+            "trade_count_total": int(r[13]),
+            "roe": float(r[14]),
         }
         for idx, r in enumerate(rows.result_rows)
     ]
@@ -585,29 +657,49 @@ async def vault_detail(request):
 
     ch = await client()
 
-    # Step 1 — pick top-N vaults by gross flow (deposit + withdraw, sums
-    # of magnitudes, so the leaderboard surfaces 'most active' regardless
-    # of net direction).
+    # Step 1 — top-N vaults by gross flow, plus perf metrics from the
+    # shared CTEs (open notional / UPnL / realized PnL / trade volume).
     top_rows = await ch.query(
-        """
+        f"""
+        WITH
+          vault_stats AS (
+            SELECT
+                vault,
+                sumIf(amount, action='deposit')      AS deposits,
+                sumIf(amount, action='withdraw')     AS withdrawals,
+                sumIf(amount, action='deposit')
+                  - sumIf(amount, action='withdraw') AS net,
+                sumIf(commission, action='withdraw') AS commission,
+                sumIf(amount, action='distribution') AS distributions,
+                uniqExact(wallet)                    AS lp_count,
+                count()                              AS event_count,
+                toUnixTimestamp(min(time))           AS first_event_at,
+                toUnixTimestamp(max(time))           AS last_event_at
+            FROM tradernick.hl_vaults FINAL
+            WHERE time >= {{since:DateTime}}
+              AND time <  {{until:DateTime}}
+            GROUP BY vault
+            ORDER BY (sumIf(amount, action='deposit') + sumIf(amount, action='withdraw')) DESC
+            LIMIT {{limit:UInt32}}
+          ),
+          {_VAULT_PERF_CTE}
         SELECT
-            vault,
-            sumIf(amount, action='deposit')      AS deposits,
-            sumIf(amount, action='withdraw')     AS withdrawals,
-            sumIf(amount, action='deposit')
-              - sumIf(amount, action='withdraw') AS net,
-            sumIf(commission, action='withdraw') AS commission,
-            sumIf(amount, action='distribution') AS distributions,
-            uniqExact(wallet)                    AS lp_count,
-            count()                              AS event_count,
-            toUnixTimestamp(min(time))           AS first_event_at,
-            toUnixTimestamp(max(time))           AS last_event_at
-        FROM tradernick.hl_vaults FINAL
-        WHERE time >= {since:DateTime}
-          AND time <  {until:DateTime}
-        GROUP BY vault
-        ORDER BY (sumIf(amount, action='deposit') + sumIf(amount, action='withdraw')) DESC
-        LIMIT {limit:UInt32}
+          s.vault, s.deposits, s.withdrawals, s.net,
+          s.commission, s.distributions, s.lp_count, s.event_count,
+          s.first_event_at, s.last_event_at,
+          COALESCE(p.open_notional, 0)                                AS open_notional,
+          COALESCE(p.unrealized_pnl, 0)                               AS unrealized_pnl,
+          COALESCE(r.realized_pnl, 0)                                 AS realized_pnl,
+          COALESCE(r.realized_pnl, 0) + COALESCE(p.unrealized_pnl, 0) AS total_pnl,
+          COALESCE(r.trade_volume, 0)                                 AS trade_volume,
+          COALESCE(r.trade_count_total, 0)                            AS trade_count_total,
+          if(p.open_notional > 0,
+             (COALESCE(r.realized_pnl, 0) + COALESCE(p.unrealized_pnl, 0)) / p.open_notional * 100,
+             0)                                                       AS roe
+        FROM vault_stats s
+        LEFT JOIN vault_positions p ON p.vault = s.vault
+        LEFT JOIN vault_realized  r ON r.vault = s.vault
+        ORDER BY (s.deposits + s.withdrawals) DESC
         """,
         parameters={"since": since_dt, "until": until_dt, "limit": limit},
     )
@@ -627,6 +719,13 @@ async def vault_detail(request):
             "event_count": int(r[7]),
             "first_event_at": int(r[8]),
             "last_event_at": int(r[9]),
+            "open_notional": float(r[10]),
+            "unrealized_pnl": float(r[11]),
+            "realized_pnl": float(r[12]),
+            "total_pnl": float(r[13]),
+            "trade_volume": float(r[14]),
+            "trade_count_total": int(r[15]),
+            "roe": float(r[16]),
             "events": [],
         }
         for r in top_rows.result_rows

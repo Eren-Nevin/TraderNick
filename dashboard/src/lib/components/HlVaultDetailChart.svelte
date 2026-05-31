@@ -23,6 +23,13 @@
     event_count: number;
     first_event_at: number;
     last_event_at: number;
+    open_notional: number;
+    unrealized_pnl: number;
+    realized_pnl: number;
+    total_pnl: number;
+    trade_volume: number;
+    trade_count_total: number;
+    roe: number;
     events: Event[];
   };
 
@@ -55,6 +62,10 @@
     if (abs >= 1e6) return sign + '$' + (abs / 1e6).toFixed(2) + 'M';
     if (abs >= 1e3) return sign + '$' + (abs / 1e3).toFixed(1) + 'K';
     return sign + '$' + abs.toFixed(0);
+  }
+  function fmtPct(n: number): string {
+    if (!isFinite(n) || n === 0) return '—';
+    return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
   }
   function fmtTime(t: number): string {
     if (!t) return '—';
@@ -106,32 +117,65 @@
     >{copied ? '✓ copied' : 'Copy'}</button>
   </div>
 
-  <!-- Summary stats strip -->
+  <!-- Stats strip — two rows: Flow (deposit/withdraw/net/commission/
+       distributions/LPs) then Performance (PnL & RoE from positions +
+       realized trades). Performance row shows '—' for vaults that only
+       have deposit/withdraw activity and no actual trading. -->
   {#if entry}
-    <div class="grid grid-cols-6 gap-px bg-zinc-800 border-b border-zinc-800 text-[11px]">
-      <div class="bg-zinc-950 px-3 py-1.5">
-        <div class="text-zinc-500">Deposits</div>
-        <div class="font-mono text-emerald-400">{fmtUsd(entry.deposits)}</div>
+    <div class="border-b border-zinc-800 text-[11px]">
+      <div class="px-3 pt-1.5 pb-0.5 text-[9px] uppercase tracking-widest text-zinc-600 bg-zinc-950">Flow</div>
+      <div class="grid grid-cols-6 gap-px bg-zinc-800">
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">Deposits</div>
+          <div class="font-mono text-emerald-400">{fmtUsd(entry.deposits)}</div>
+        </div>
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">Withdrawals</div>
+          <div class="font-mono text-rose-400">{fmtUsd(entry.withdrawals)}</div>
+        </div>
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">Net</div>
+          <div class="font-mono" class:text-emerald-400={entry.net > 0} class:text-rose-400={entry.net < 0}>{fmtUsd(entry.net)}</div>
+        </div>
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">Commission</div>
+          <div class="font-mono text-zinc-200">{fmtUsd(entry.commission)}</div>
+        </div>
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">Distributions</div>
+          <div class="font-mono text-zinc-200">{fmtUsd(entry.distributions)}</div>
+        </div>
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">LPs · Events</div>
+          <div class="font-mono text-zinc-300">{entry.lp_count} · {entry.event_count}</div>
+        </div>
       </div>
-      <div class="bg-zinc-950 px-3 py-1.5">
-        <div class="text-zinc-500">Withdrawals</div>
-        <div class="font-mono text-rose-400">{fmtUsd(entry.withdrawals)}</div>
-      </div>
-      <div class="bg-zinc-950 px-3 py-1.5">
-        <div class="text-zinc-500">Net</div>
-        <div class="font-mono" class:text-emerald-400={entry.net > 0} class:text-rose-400={entry.net < 0}>{fmtUsd(entry.net)}</div>
-      </div>
-      <div class="bg-zinc-950 px-3 py-1.5">
-        <div class="text-zinc-500">Commission</div>
-        <div class="font-mono text-zinc-200">{fmtUsd(entry.commission)}</div>
-      </div>
-      <div class="bg-zinc-950 px-3 py-1.5">
-        <div class="text-zinc-500">Distributions</div>
-        <div class="font-mono text-zinc-200">{fmtUsd(entry.distributions)}</div>
-      </div>
-      <div class="bg-zinc-950 px-3 py-1.5">
-        <div class="text-zinc-500">LPs · Events</div>
-        <div class="font-mono text-zinc-300">{entry.lp_count} · {entry.event_count}</div>
+      <div class="px-3 pt-1.5 pb-0.5 text-[9px] uppercase tracking-widest text-zinc-600 bg-zinc-950 border-t border-zinc-900">Performance</div>
+      <div class="grid grid-cols-6 gap-px bg-zinc-800">
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">Open Notional</div>
+          <div class="font-mono text-zinc-200">{entry.open_notional > 0 ? fmtUsd(entry.open_notional) : '—'}</div>
+        </div>
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">Realized PnL</div>
+          <div class="font-mono" class:text-emerald-400={entry.realized_pnl > 0} class:text-rose-400={entry.realized_pnl < 0} class:text-zinc-500={entry.realized_pnl === 0}>{entry.realized_pnl !== 0 ? fmtUsd(entry.realized_pnl) : '—'}</div>
+        </div>
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">Unrealized PnL</div>
+          <div class="font-mono" class:text-emerald-400={entry.unrealized_pnl > 0} class:text-rose-400={entry.unrealized_pnl < 0} class:text-zinc-500={entry.unrealized_pnl === 0}>{entry.unrealized_pnl !== 0 ? fmtUsd(entry.unrealized_pnl) : '—'}</div>
+        </div>
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">Total PnL</div>
+          <div class="font-mono" class:text-emerald-400={entry.total_pnl > 0} class:text-rose-400={entry.total_pnl < 0} class:text-zinc-500={entry.total_pnl === 0}>{entry.total_pnl !== 0 ? fmtUsd(entry.total_pnl) : '—'}</div>
+        </div>
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">RoE</div>
+          <div class="font-mono" class:text-emerald-400={entry.roe > 0} class:text-rose-400={entry.roe < 0} class:text-zinc-500={entry.roe === 0}>{fmtPct(entry.roe)}</div>
+        </div>
+        <div class="bg-zinc-950 px-3 py-1.5">
+          <div class="text-zinc-500">Volume · Trades</div>
+          <div class="font-mono text-zinc-300">{entry.trade_volume > 0 ? fmtUsd(entry.trade_volume) : '—'} · {entry.trade_count_total}</div>
+        </div>
       </div>
     </div>
   {/if}

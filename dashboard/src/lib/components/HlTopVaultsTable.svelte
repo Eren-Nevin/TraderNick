@@ -16,8 +16,15 @@
     distributions: number;
     lp_count: number;
     event_count: number;
+    open_notional: number;
+    unrealized_pnl: number;
+    realized_pnl: number;
+    total_pnl: number;
+    trade_volume: number;
+    trade_count_total: number;
+    roe: number;
   };
-  type OrderBy = 'net' | 'deposits' | 'withdrawals' | 'commission';
+  type OrderBy = 'net' | 'deposits' | 'withdrawals' | 'commission' | 'total_pnl' | 'realized_pnl' | 'roe';
 
   let {
     vaults = [],
@@ -59,9 +66,15 @@
     } catch { /* no-op */ }
   }
 
+  function fmtPct(n: number): string {
+    if (!isFinite(n) || n === 0) return '—';
+    return (n >= 0 ? '+' : '') + n.toFixed(1) + '%';
+  }
   // Client-side column sort. '' = preserve server order (which already
   // reflects the title-bar orderBy selection).
-  type SortKey = '' | 'deposits' | 'withdrawals' | 'net' | 'commission' | 'distributions' | 'lp_count' | 'event_count';
+  type SortKey = '' | 'deposits' | 'withdrawals' | 'net' | 'commission' | 'distributions'
+               | 'lp_count' | 'event_count' | 'open_notional' | 'realized_pnl'
+               | 'unrealized_pnl' | 'total_pnl' | 'roe';
   let sortKey = $state<SortKey>('');
   let sortDir = $state<1 | -1>(-1);
   function onSort(k: SortKey) {
@@ -94,6 +107,9 @@
       <option value="deposits">Deposits</option>
       <option value="withdrawals">Withdrawals</option>
       <option value="commission">Commission Earned</option>
+      <option value="total_pnl">Total PnL</option>
+      <option value="realized_pnl">Realized PnL</option>
+      <option value="roe">RoE</option>
     </select>
     <span class="text-[10px] text-zinc-600 ml-auto">Click any column header to re-sort the returned set</span>
   </div>
@@ -113,6 +129,11 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('distributions')}>Distributions{sortArrow('distributions')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('lp_count')}>LPs{sortArrow('lp_count')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('event_count')}>Events{sortArrow('event_count')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none border-l border-zinc-800" onclick={() => onSort('open_notional')}>Open Notional{sortArrow('open_notional')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('realized_pnl')}>Realized PnL{sortArrow('realized_pnl')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('unrealized_pnl')}>Unrealized PnL{sortArrow('unrealized_pnl')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('total_pnl')}>Total PnL{sortArrow('total_pnl')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('roe')}>RoE{sortArrow('roe')}</th>
           </tr>
         </thead>
         <tbody>
@@ -137,6 +158,27 @@
               <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtUsd(v.distributions)}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtNum(v.lp_count)}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-500">{fmtNum(v.event_count)}</td>
+              <td class="px-3 py-1 text-right font-mono text-zinc-300 border-l border-zinc-800">{v.open_notional > 0 ? fmtUsd(v.open_notional) : '—'}</td>
+              <td class="px-3 py-1 text-right font-mono"
+                  class:text-emerald-400={v.realized_pnl > 0}
+                  class:text-rose-400={v.realized_pnl < 0}
+                  class:text-zinc-500={v.realized_pnl === 0}
+              >{v.realized_pnl !== 0 ? fmtUsd(v.realized_pnl) : '—'}</td>
+              <td class="px-3 py-1 text-right font-mono"
+                  class:text-emerald-400={v.unrealized_pnl > 0}
+                  class:text-rose-400={v.unrealized_pnl < 0}
+                  class:text-zinc-500={v.unrealized_pnl === 0}
+              >{v.unrealized_pnl !== 0 ? fmtUsd(v.unrealized_pnl) : '—'}</td>
+              <td class="px-3 py-1 text-right font-mono"
+                  class:text-emerald-400={v.total_pnl > 0}
+                  class:text-rose-400={v.total_pnl < 0}
+                  class:text-zinc-500={v.total_pnl === 0}
+              >{v.total_pnl !== 0 ? fmtUsd(v.total_pnl) : '—'}</td>
+              <td class="px-3 py-1 text-right font-mono"
+                  class:text-emerald-400={v.roe > 0}
+                  class:text-rose-400={v.roe < 0}
+                  class:text-zinc-500={v.roe === 0}
+              >{fmtPct(v.roe)}</td>
             </tr>
           {/each}
         </tbody>
