@@ -64,12 +64,9 @@ async def _run(events_filter: list[str] | None = None, stream_name: str | None =
         calls = [c for c in calls if c[-1] in wanted]
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     sem = asyncio.Semaphore(TICK_CONCURRENCY)
-    t_start = datetime.now(timezone.utc).replace(tzinfo=None)
-    log.info("polling uniswap_v4 pools=%d -> %d calls/tick (every %ss, overlap=%dm) + gap-fill from watermark",
-             len(pools), len(calls), POLL_INTERVAL_SECONDS
-)
-
     sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS)
+    log.info("uniswap_v4 pools=%d -> %d calls/tick; live cadence=%ss, sweep cadence=%ss",
+             len(pools), len(calls), POLL_INTERVAL_SECONDS, sweep_cadence)
     async def live_loop():
         jitter = sweep.live_jitter_s(POLL_INTERVAL_SECONDS)
         log.info("live_loop: waiting %.0fs before first fire", jitter)

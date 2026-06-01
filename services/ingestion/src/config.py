@@ -61,6 +61,13 @@ EVM_ERC20_PAIRS = _parse_chain_token_pairs(
         "ETH:USDT,USDC,DAI,LINK;ARB:USDT,USDC,DAI,LINK;POLYGON:USDT,USDC,DAI,LINK;BASE:USDT,USDC,DAI,LINK;BSC:USDT,USDC,DAI,LINK",
     )
 )
+# Collapse PAIRS into per-chain token lists. The live job fires ONE
+# multi-token request per chain (with `.ignore_non_existing()`) so
+# DeFiStream skips tokens that aren't deployed on that chain. 5 chains
+# → 5 calls/tick regardless of token-roster size.
+EVM_ERC20_BY_CHAIN: dict[str, list[str]] = {}
+for _ch, _tok in EVM_ERC20_PAIRS:
+    EVM_ERC20_BY_CHAIN.setdefault(_ch, []).append(_tok)
 EVM_NATIVE_CHAINS = _parse_csv_list(os.environ.get("EVM_NATIVE_TRANSFERS", ""))
 BTC_TRANSFERS_ENABLED = os.environ.get("BTC_TRANSFERS_ENABLED", "1") == "1"
 TRON_NATIVE_TRANSFERS_ENABLED = os.environ.get("TRON_NATIVE_TRANSFERS_ENABLED", "1") == "1"

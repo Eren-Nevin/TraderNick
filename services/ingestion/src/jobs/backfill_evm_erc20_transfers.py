@@ -71,31 +71,51 @@ async def _write_status(
     )
 
 
-def _planned_chunks(pairs: list[list[str]], since: datetime, until: datetime):
+def _resolve_chain_tokens(chains: list[str]) -> dict[str, list[str]]:
+    """Build {chain: [tokens]} by looking up each chain in
+    config.EVM_ERC20_BY_CHAIN (same roster the live job uses).
+    Chains with no configured tokens are skipped."""
+    out: dict[str, list[str]] = {}
+    for chain in chains:
+        toks = config.EVM_ERC20_BY_CHAIN.get(chain.upper(), [])
+        if toks:
+            out[chain.upper()] = list(toks)
+    return out
+
+
+def _planned_chunks(by_chain: dict[str, list[str]], since: datetime, until: datetime):
+    """Yield (chain, tokens, since, until) tuples — one chunk per
+    (chain × time-window). Number of chunks = chains × time-buckets."""
     chunks = []
     step = timedelta(hours=CHUNK_HOURS)
-    for pair in pairs:
-        chain, token = pair[0], pair[1]
+    for chain, tokens in by_chain.items():
         t = since
         while t < until:
             t_end = min(t + step, until)
-            chunks.append((chain, token, t, t_end))
+            chunks.append((chain, tokens, t, t_end))
             t = t_end
     return chunks
 
 
-async def _fetch_chunk(ds: AsyncDeFiStream, chain: str, token: str, since: datetime, until: datetime) -> int:
+async def _fetch_chunk(ds: AsyncDeFiStream, chain: str, tokens: list[str], since: datetime, until: datetime) -> int:
+    """Multi-token batched fetch — one call per (chain, time-window).
+    `.ignore_non_existing()` makes DeFiStream silently skip tokens that
+    aren't deployed on this chain, so the same roster can be applied
+    across chains without curating per-deployment. Each returned row
+    carries its own `token` column."""
     df = await (
-        ds.evm.erc20.transfers(token)
+        ds.evm.erc20.transfers(*tokens)
         .network(chain)
         .time_range(_iso_z(since), _iso_z(until))
         .verbose()
         .with_value()
+        .ignore_non_existing()
         .as_df("polars")
     )
     if df.is_empty():
         return 0
-    pd_df = transfers_df_for_bulk_insert(df, kind="erc20", chain=chain, token_override=token)
+    # token_override=None — use each row's `token` column from the multi-token response.
+    pd_df = transfers_df_for_bulk_insert(df, kind="erc20", chain=chain, token_override=None)
     ch = await async_client()
     await ch.insert_df(TABLE, pd_df)
     return len(pd_df)
@@ -112,29 +132,34 @@ async def main(job_id: str):
     args = job["args"]
     started_at = job["started_at"]
 
-    pairs = args["pairs"]
+    # New input shape: chains-only. Tokens come from config (matching live).
+    chains = args.get("chains") or []
+    by_chain = _resolve_chain_tokens(chains)
+    if not by_chain:
+        raise RuntimeError(f"no resolvable chains in {chains}; check EVM_ERC20_BY_CHAIN")
     since = _parse_iso(args["since"])
     until = _parse_iso(args["until"])
     completed_set = {tuple(k) for k in args.get("completed_chunks", [])}
 
-    chunks = _planned_chunks(pairs, since, until)
+    chunks = _planned_chunks(by_chain, since, until)
     total = len(chunks)
-    done = sum(1 for chain, token, cs, _ in chunks if (chain, token, cs.isoformat()) in completed_set)
+    done = sum(1 for chain, _tokens, cs, _ in chunks if (chain, cs.isoformat()) in completed_set)
 
     await _write_status(job_id=job_id, job_type=job_type, args=args, status="running",
                        progress=(done / total) if total else 1.0, started_at=started_at)
-    log.info("job %s starting: pairs=%s chunks=%d resumed_at=%d force=%s",
-             job_id, pairs, total, done, bool(args.get("force")))
+    log.info("job %s starting: chains=%s chunks=%d resumed_at=%d force=%s",
+             job_id, list(by_chain.keys()), total, done, bool(args.get("force")))
 
-    if args.get("force") and pairs and done == 0:
-        pair_clauses = " OR ".join(
-            f"(chain = '{safe_ident(p[0])}' AND token = '{safe_ident(p[1])}')"
-            for p in pairs
+    if args.get("force") and by_chain and done == 0:
+        # Purge by chain only (not per-token) — multi-token batching means
+        # any token within the configured set could have rows in this window.
+        chain_clauses = " OR ".join(
+            f"chain = '{safe_ident(c)}'" for c in by_chain.keys()
         )
-        log.info("job %s force=true: purging existing erc20 rows for these pairs in [%s, %s)",
-                 job_id, since, until)
+        log.info("job %s force=true: purging existing erc20 rows for chains=%s in [%s, %s)",
+                 job_id, list(by_chain.keys()), since, until)
         await delete_transfers_range(
-            where_extra=f"kind = 'erc20' AND ({pair_clauses})",
+            where_extra=f"kind = 'erc20' AND ({chain_clauses})",
             since=since,
             until=until,
         )
@@ -142,7 +167,7 @@ async def main(job_id: str):
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     try:
-        for chain, token, cs, ce in chunks:
+        for chain, tokens, cs, ce in chunks:
             if _stop:
                 args["completed_chunks"] = sorted(map(list, completed_set))
                 await _write_status(job_id=job_id, job_type=job_type, args=args, status="cancelled",
@@ -150,19 +175,12 @@ async def main(job_id: str):
                                    finished_at=_utcnow())
                 log.info("job %s cancelled at %d/%d chunks", job_id, done, total)
                 return
-            key = (chain, token, cs.isoformat())
+            key = (chain, cs.isoformat())
             if key in completed_set:
                 continue
-            log.info("job %s chunk %s:%s %s..%s", job_id, chain, token, cs, ce)
-            try:
-                n = await _fetch_chunk(ds, chain, token, cs, ce)
-                log.info("job %s chunk %s:%s rows=%d", job_id, chain, token, n)
-            except Exception as exc:
-                msg = str(exc)
-                if "not available on network" in msg:
-                    log.warning("job %s skipping %s:%s (token not available on network)", job_id, chain, token)
-                else:
-                    raise
+            log.info("job %s chunk %s tokens=%d %s..%s", job_id, chain, len(tokens), cs, ce)
+            n = await _fetch_chunk(ds, chain, tokens, cs, ce)
+            log.info("job %s chunk %s rows=%d", job_id, chain, n)
             completed_set.add(key)
             done += 1
             args["completed_chunks"] = sorted(map(list, completed_set))

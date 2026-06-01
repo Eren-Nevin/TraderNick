@@ -245,21 +245,50 @@
   let selectedForm = $derived(
     BACKFILL_FORMS.find((f) => f.type === selectedFormType) ?? BACKFILL_FORMS[0]
   );
-  let fSince = $state('');
+  // Default `since` = yesterday 00:00:00 UTC, rendered in the user's local
+  // timezone so the datetime-local input shows the right wall-clock value.
+  // The submit path does `new Date(fSince).toISOString()` which round-trips
+  // local-time → UTC, so this lands at exactly 00:00:00Z yesterday.
+  function defaultSinceLocal(): string {
+    const now = new Date();
+    const utcYesterdayMidnight = new Date(
+      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1, 0, 0, 0, 0)
+    );
+    const pad = (n: number) => n.toString().padStart(2, '0');
+    return (
+      `${utcYesterdayMidnight.getFullYear()}-${pad(utcYesterdayMidnight.getMonth() + 1)}-` +
+      `${pad(utcYesterdayMidnight.getDate())}T` +
+      `${pad(utcYesterdayMidnight.getHours())}:${pad(utcYesterdayMidnight.getMinutes())}`
+    );
+  }
+  let fSince = $state(defaultSinceLocal());
   let fUntil = $state('');
   let fForce = $state(false);
   let fieldValues = $state<Record<string, string[] | string>>({});
   // pair-multiselect uses string[] of "left/right" tuples
   let submitMsg = $state<string | null>(null);
 
+  // Seed `fieldValues` from each field's `defaultSelected` so the live job's
+  // tokens/pairs are pre-selected on first render and whenever the user
+  // switches to a different backfill type.
+  function seedDefaults() {
+    const next: Record<string, string[] | string> = {};
+    for (const field of selectedForm.fields) {
+      if (field.defaultSelected && field.defaultSelected.length > 0) {
+        next[field.name] = [...field.defaultSelected];
+      }
+    }
+    fieldValues = next;
+  }
+
   function resetForm() {
-    fieldValues = {};
+    seedDefaults();
     submitMsg = null;
   }
   $effect(() => {
-    // when form type changes, clear inputs
+    // when form type changes, reseed defaults
     selectedFormType;
-    fieldValues = {};
+    seedDefaults();
     submitMsg = null;
   });
 
@@ -570,11 +599,11 @@
                 {/if}
               </td>
               <td class="px-2 py-1 text-right tabular-nums">{(j.progress * 100).toFixed(0)}</td>
-              <td class="px-2 py-1 text-zinc-400 whitespace-nowrap" title={`${j.args.since ?? ''} → ${j.args.until ?? ''}`}>
-                {(j.args.since as string ?? '?').slice(0, 10)} → {(j.args.until as string ?? '?').slice(0, 10)}
+              <td class="px-2 py-1 text-zinc-400 whitespace-nowrap" title={`${j.args?.since ?? ''} → ${j.args?.until ?? ''}`}>
+                {((j.args?.since as string | undefined) ?? '?').slice(0, 10)} → {((j.args?.until as string | undefined) ?? '?').slice(0, 10)}
               </td>
-              <td class="px-2 py-1 text-zinc-500 max-w-xs truncate font-mono" title={JSON.stringify(j.args)}>
-                {Object.entries(j.args)
+              <td class="px-2 py-1 text-zinc-500 max-w-xs truncate font-mono" title={JSON.stringify(j.args ?? {})}>
+                {Object.entries(j.args ?? {})
                   .filter(([k]) => !['since', 'until', 'force', 'completed_chunks'].includes(k))
                   .map(([k, v]) => `${k}=${Array.isArray(v) ? v.length : v}`)
                   .join(' ')}

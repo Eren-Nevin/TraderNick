@@ -17,6 +17,12 @@ export type FieldSpec = {
   kind: FieldKind;
   options?: string[];      // for multiselect / pair-multiselect (left side of pair)
   optionsRight?: string[]; // for pair-multiselect (right side of pair)
+  // Default selection seeded when the form opens. For multiselect each entry
+  // is one of `options`; for pair-multiselect each entry is "left/right".
+  // Mirrors the live job's configured tokens/chains/pairs so the common case
+  // ("backfill what we're polling live") is one click. Kept in lockstep with
+  // .env manually.
+  defaultSelected?: string[];
   placeholder?: string;
   required?: boolean;
 };
@@ -50,7 +56,30 @@ const INGEST_TOKENS = [
   'MORPHO', 'PENDLE', 'RENDER', 'SUSHI', 'UNI', 'WLD', 'VIRTUAL', 'PAXG'
 ];
 
-const ERC20_TOKENS = ['USDT', 'USDC', 'DAI', 'LINK', 'WETH'];
+// Universe of ERC-20 token symbols pickable in the backfill form. Wider than
+// the live-job set (which is just the 5 stables+majors actively polled) so
+// ad-hoc backfills can target other tokens we already track for prices/HL/
+// Binance. Some symbols are chain-specific (AERO=Base, CAKE=BSC); DeFiStream
+// will return a clear error for invalid (chain, token) combos.
+const ERC20_TOKENS = [
+  'USDT', 'USDC', 'DAI', 'LINK', 'WETH', 'WBTC',
+  'ARB', 'AAVE', 'UNI', 'MORPHO', 'PENDLE', 'ETHFI', 'ENA',
+  'AERO', 'COW', 'SUSHI', 'RENDER', 'FET', 'FIL', 'WLD', 'VIRTUAL',
+  'PAXG', 'CAKE',
+];
+
+// Live chain×token pairs (mirrors EVM_ERC20_TRANSFERS in .env). Used as the
+// default selection for the erc20 backfill form so "backfill what's live"
+// is one click.
+const LIVE_ERC20_PAIRS = [
+  'ETH/USDT', 'ETH/USDC', 'ETH/DAI', 'ETH/LINK', 'ETH/WETH',
+  'ARB/USDT', 'ARB/USDC', 'ARB/DAI', 'ARB/LINK', 'ARB/WETH',
+  'POLYGON/USDT', 'POLYGON/USDC', 'POLYGON/LINK', 'POLYGON/WETH',
+  'BASE/USDT', 'BASE/USDC', 'BASE/LINK', 'BASE/WETH',
+  'BSC/USDT', 'BSC/USDC', 'BSC/LINK', 'BSC/WETH',
+];
+const LIVE_EVM_NATIVE_CHAINS = ['ETH', 'ARB', 'BASE', 'BSC', 'POLYGON'];
+const LIVE_TRON_TRC20_TOKENS = ['USDT'];
 
 export const BACKFILL_FORMS: BackfillFormSpec[] = [
   {
@@ -65,13 +94,15 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
   {
     type: 'evm_erc20_transfers',
     label: 'EVM ERC-20 transfers',
+    description: 'Tokens come from the live job’s roster (EVM_ERC20_TRANSFERS env) — ' +
+      'one multi-token call per chain with .ignore_non_existing() filtering.',
     fields: [
       {
-        name: 'pairs',
-        label: 'Chain × token pairs',
-        kind: 'pair-multiselect',
+        name: 'chains',
+        label: 'Chains',
+        kind: 'multiselect',
         options: EVM_CHAINS,
-        optionsRight: ERC20_TOKENS,
+        defaultSelected: EVM_CHAINS,
         required: true
       }
     ]
@@ -80,7 +111,8 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
     type: 'evm_native_transfers',
     label: 'EVM native transfers',
     fields: [
-      { name: 'chains', label: 'Chains', kind: 'multiselect', options: EVM_CHAINS, required: true }
+      { name: 'chains', label: 'Chains', kind: 'multiselect',
+        options: EVM_CHAINS, defaultSelected: LIVE_EVM_NATIVE_CHAINS, required: true }
     ]
   },
   {
@@ -99,7 +131,8 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
     type: 'tron_trc20_transfers',
     label: 'Tron TRC-20 transfers',
     fields: [
-      { name: 'tokens', label: 'Tokens', kind: 'multiselect', options: ['USDT', 'USDC'], required: true }
+      { name: 'tokens', label: 'Tokens', kind: 'multiselect',
+        options: ['USDT', 'USDC'], defaultSelected: LIVE_TRON_TRC20_TOKENS, required: true }
     ]
   },
   {

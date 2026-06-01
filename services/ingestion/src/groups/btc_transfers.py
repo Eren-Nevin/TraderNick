@@ -15,7 +15,9 @@ from gap_fill import latest_time
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [btc_transfers] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 300
+# BTC has low transfer volume relative to other chains — pull less often.
+# Live = 30 min, sweep = 300 min (sweep_cadence_s = POLL_INTERVAL × 10).
+POLL_INTERVAL_SECONDS = 1800
 
 
 def _iso(dt: datetime) -> str:

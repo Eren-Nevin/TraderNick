@@ -80,7 +80,7 @@ STREAMS: list[StreamSpec] = [
     _binance("funding_rate"),
 
     # Transfers — 5 streams (one per chain-family, multi-asset internally).
-    StreamSpec("transfers.btc",         "streams.btc_transfers",         "Transfers", 300),
+    StreamSpec("transfers.btc",         "streams.btc_transfers",         "Transfers", 1800),
     StreamSpec("transfers.tron_native", "streams.tron_native_transfers", "Transfers", 300),
     StreamSpec("transfers.tron_trc20",  "streams.tron_trc20_transfers",  "Transfers", 300),
     StreamSpec("transfers.evm_native", "streams.evm_native_transfers",  "Transfers", 300),

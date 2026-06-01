@@ -191,27 +191,32 @@ class JobManager:
         ch = await async_client()
         rows = await ch.query(
             """
-            SELECT job_id, job_type, status, progress, started_at, finished_at, error, updated_at
+            SELECT job_id, job_type, args, status, progress, started_at, finished_at, error, updated_at
             FROM tradernick.ingestion_jobs FINAL
             ORDER BY started_at DESC
             LIMIT {limit:UInt32}
             """,
             parameters={"limit": limit},
         )
-        return [
-            {
+        out = []
+        for r in rows.result_rows:
+            try:
+                args = json.loads(r[2]) if r[2] else {}
+            except Exception:  # noqa: BLE001
+                args = {}
+            out.append({
                 "job_id": r[0],
                 "job_type": r[1],
-                "status": r[2],
-                "progress": float(r[3]),
-                "started_at": r[4].isoformat() if r[4] else None,
-                "finished_at": r[5].isoformat() if r[5] else None,
-                "error": r[6],
-                "updated_at": r[7].isoformat() if r[7] else None,
+                "args": args,
+                "status": r[3],
+                "progress": float(r[4]),
+                "started_at": r[5].isoformat() if r[5] else None,
+                "finished_at": r[6].isoformat() if r[6] else None,
+                "error": r[7],
+                "updated_at": r[8].isoformat() if r[8] else None,
                 "subprocess_alive": r[0] in self._procs,
-            }
-            for r in rows.result_rows
-        ]
+            })
+        return out
 
     async def resume_inflight(self):
         ch = await async_client()

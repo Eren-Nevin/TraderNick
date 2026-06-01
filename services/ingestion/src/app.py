@@ -297,6 +297,16 @@ def _extract_pairs(body):
     return None, {"pairs": norm}
 
 
+def _extract_erc20_chains(body):
+    """Backfill input shape for the simplified ERC-20 form: just `chains`.
+    Tokens come from config.EVM_ERC20_BY_CHAIN (same roster the live job
+    polls), so the backfill mirrors the live job by default."""
+    chains = body.get("chains")
+    if not chains or not isinstance(chains, list):
+        return "missing chains (list)", None
+    return None, {"chains": [str(c).upper() for c in chains]}
+
+
 def _extract_chains(body):
     chains = body.get("chains")
     if not chains or not isinstance(chains, list):
@@ -317,7 +327,7 @@ def _extract_empty(_body):
 
 @app.post("/jobs/backfill/evm_erc20_transfers")
 async def backfill_evm_erc20_transfers(request):
-    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_EVM_ERC20_TRANSFERS, _extract_pairs)
+    return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_EVM_ERC20_TRANSFERS, _extract_erc20_chains)
 
 
 @app.post("/jobs/backfill/evm_native_transfers")
