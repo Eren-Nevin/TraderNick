@@ -60,9 +60,13 @@ async def run(stream_name: str, event: str) -> None:
         while True:
             tick_end = time.monotonic() + tick_s
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            _sweep_rows = 0
+            _sweep_err: str | None = None
+            _sweep_t0 = time.monotonic()
             since = now - sweep.LIVE_OVERLAP
             n = 0
             err: str | None = None
+            _live_t0 = time.monotonic()
             await ch_status.write_tick_start(stream_name)
             try:
                 n = await _fetch_and_insert(ds, event=event, tokens=tokens, since=since, until=now)
@@ -70,7 +74,7 @@ async def run(stream_name: str, event: str) -> None:
             except Exception as exc:  # noqa: BLE001
                 err = f"{type(exc).__name__}: {exc}"[:1000]
                 log.exception("%s fetch failed", event)
-            await ch_status.write_tick(stream_name, n, error=err)
+            await ch_status.write_tick(stream_name, n, error=err, duration_s=time.monotonic()-_live_t0)
             await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
 
     async def sweep_loop():
@@ -81,6 +85,9 @@ async def run(stream_name: str, event: str) -> None:
         while True:
             next_fire = time.monotonic() + sweep_cadence
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            _sweep_rows = 0
+            _sweep_err: str | None = None
+            _sweep_t0 = time.monotonic()
             try:
                 if per_token:
                     last_seen = await min_watermark_per_token(ch, table=table, tokens=tokens)
@@ -93,6 +100,7 @@ async def run(stream_name: str, event: str) -> None:
                              event, since, now, n, last_seen)
             except Exception as exc:  # noqa: BLE001
                 log.exception("%s sweep failed: %s", event, exc)
+            await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, rows=_sweep_rows, error=_sweep_err) if stream_name else None
             await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
     await asyncio.gather(live_loop(), sweep_loop())

@@ -60,15 +60,16 @@ async def live_loop(ds, calls, sem, stream_name: str | None = None):
                 except Exception as exc:
                     err = f"{type(exc).__name__}: {exc}"[:1000]
                     log.exception("%s/%s fetch failed: %s", chain, ev, exc)
+        _live_t0 = time.monotonic()
         if stream_name:
             await ch_status.write_tick_start(stream_name)
         await asyncio.gather(*(_one(*c) for c in calls))
         if stream_name:
-            await ch_status.write_tick(stream_name, total_rows, error=err)
+            await ch_status.write_tick(stream_name, total_rows, error=err, duration_s=time.monotonic()-_live_t0)
         await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
 
 
-async def sweep_loop(ds, calls, sem, sweep_cadence: float):
+async def sweep_loop(ds, calls, sem, sweep_cadence: float, stream_name: str | None = None):
     jitter = sweep.sweep_jitter_s(sweep_cadence)
     log.info("sweep_loop: waiting %.0fs before first fire (cadence=%ss)", jitter, sweep_cadence)
     await asyncio.sleep(jitter)
@@ -76,7 +77,10 @@ async def sweep_loop(ds, calls, sem, sweep_cadence: float):
     while True:
         next_fire = time.monotonic() + sweep_cadence
         now = datetime.now(timezone.utc).replace(tzinfo=None)
+        _sweep_t0 = time.monotonic()
+        _sweep_err: str | None = None
         async def _one(chain, event):
+            nonlocal _sweep_err
             _method, table, _cols, _tf = SPARK_EVENTS[event]
             try:
                 last_seen = await latest_time(
@@ -92,8 +96,11 @@ async def sweep_loop(ds, calls, sem, sweep_cadence: float):
                     n = await fetch_and_insert(ds, chain=chain, event=event, since=since, until=now)
                 log.info("%s sweep window=%s..%s rows=%d (last_seen=%s)", label, since, now, n, last_seen)
             except Exception as exc:
+                _sweep_err = f"sweep {chain}/{event}: {type(exc).__name__}: {exc}"[:1000]
                 log.exception("sweep failed for %s/%s: %s", chain, event, exc)
         await asyncio.gather(*(_one(*c) for c in calls), return_exceptions=True)
+        if stream_name:
+            await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, error=_sweep_err)
         await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
 
@@ -117,7 +124,7 @@ async def _run(events_filter: list[str] | None = None, stream_name: str | None =
              chains, len(calls), POLL_INTERVAL_SECONDS, sweep_cadence)
     await asyncio.gather(
         live_loop(ds, calls, sem, stream_name=stream_name),
-        sweep_loop(ds, calls, sem, sweep_cadence),
+        sweep_loop(ds, calls, sem, sweep_cadence, stream_name=stream_name),
     )
 
 

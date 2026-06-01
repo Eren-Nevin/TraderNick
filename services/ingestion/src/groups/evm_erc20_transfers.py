@@ -61,9 +61,13 @@ async def main(stream_name: str | None = None):
         while True:
             tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            _sweep_rows = 0
+            _sweep_err: str | None = None
+            _sweep_t0 = time.monotonic()
             since = now - sweep.LIVE_OVERLAP
             total_rows = 0
             err: str | None = None
+            _live_t0 = time.monotonic()
             if stream_name:
                 await ch_status.write_tick_start(stream_name)
             for chain, token in pairs:
@@ -75,7 +79,7 @@ async def main(stream_name: str | None = None):
                     err = f"{chain}:{token}: {type(exc).__name__}: {exc}"[:1000]
                     log.exception("%s:%s fetch failed: %s", chain, token, exc)
             if stream_name:
-                await ch_status.write_tick(stream_name, total_rows, error=err)
+                await ch_status.write_tick(stream_name, total_rows, error=err, duration_s=time.monotonic()-_live_t0)
             await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
 
     async def sweep_loop():
@@ -86,6 +90,9 @@ async def main(stream_name: str | None = None):
         while True:
             next_fire = time.monotonic() + sweep_cadence
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            _sweep_rows = 0
+            _sweep_err: str | None = None
+            _sweep_t0 = time.monotonic()
 
             async def _one(chain, token):
                 try:
@@ -104,6 +111,7 @@ async def main(stream_name: str | None = None):
                     log.exception("sweep failed for %s:%s: %s", chain, token, exc)
 
             await asyncio.gather(*(_one(c, t) for c, t in pairs), return_exceptions=True)
+            await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, rows=_sweep_rows, error=_sweep_err) if stream_name else None
             await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
     await asyncio.gather(live_loop(), sweep_loop())

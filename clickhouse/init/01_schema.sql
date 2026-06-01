@@ -148,6 +148,11 @@ CREATE TABLE IF NOT EXISTS tradernick.ingestion_event_status
     -- Wall time of the last tick that completed with no error. Distinct from
     -- last_tick_at (any tick) — drives the dashboard's "Last Ran" column.
     last_success_at          Nullable(DateTime) CODEC(DoubleDelta, ZSTD(3)),
+    -- Wall-time duration (seconds) of the most recent completed live and
+    -- sweep ticks. Sub-second resolution. Surface as "live/sweep" in the
+    -- dashboard so it's easy to see which one is heavy.
+    last_live_duration_s     Nullable(Float32),
+    last_sweep_duration_s    Nullable(Float32),
     -- 1 between the start of a fetch tick and its insert completion; 0 between
     -- ticks. Drives the dashboard's "RUNNING" (actively fetching) pill.
     tick_in_progress         UInt8              DEFAULT 0,

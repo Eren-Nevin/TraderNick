@@ -24,6 +24,8 @@
       last_error?: string | null;
       last_error_at?: string | null;
       last_success_at?: string | null;
+      last_live_duration_s?: number | null;
+      last_sweep_duration_s?: number | null;
       tick_in_progress?: boolean;
       tick_started_at?: string | null;
     };
@@ -130,7 +132,8 @@
   // own (key, dir) so sorting one doesn't reflow the others.
   type StreamSortKey =
     | 'name' | 'pid' | 'running' | 'enabled' | 'cadence_s'
-    | 'last_tick_at' | 'last_success_at' | 'last_rows' | 'tick_count' | 'crash_count' | 'last_error';
+    | 'last_tick_at' | 'last_success_at' | 'last_rows' | 'tick_count' | 'crash_count'
+    | 'duration' | 'last_error';
   type GroupSort = { key: StreamSortKey; dir: 'asc' | 'desc' };
   let groupSorts = $state<Record<string, GroupSort>>({});
   function getGroupSort(group: string): GroupSort {
@@ -154,6 +157,7 @@
       case 'last_rows': return r.status?.last_rows ?? -1;
       case 'tick_count': return r.status?.tick_count ?? -1;
       case 'crash_count': return r.status?.crash_count ?? r.crash_count ?? 0;
+      case 'duration': return r.status?.last_live_duration_s ?? -1;
       case 'last_error': return r.status?.last_error ?? '';
     }
   }
@@ -221,6 +225,11 @@
     const h = Math.floor(m / 60);
     if (h < 24) return `${h}h`;
     return `${Math.floor(h / 24)}d`;
+  }
+  // "X/Y" for live/sweep seconds — em-dash for unknown halves.
+  function fmtDurations(live: number | null | undefined, sweep: number | null | undefined): string {
+    const f = (v: number | null | undefined) => (v == null ? '—' : (v >= 10 ? Math.round(v).toString() : v.toFixed(1)));
+    return `${f(live)}/${f(sweep)}`;
   }
   // Local time HH:MM:SS for compact datetime column.
   function fmtTime(iso: string | undefined | null): string {
@@ -425,6 +434,7 @@
                   ['cadence_s', 'Refresh'],
                   ['last_tick_at', 'Last tick'],
                   ['last_success_at', 'Last Ran'],
+                  ['duration', 'Dur (live/sweep s)'],
                   ['last_rows', 'Rows/tick'],
                   ['tick_count', 'Ticks'],
                   ['crash_count', 'Crashes'],
@@ -483,6 +493,10 @@
                     class:text-zinc-500={!r.status?.last_success_at}
                     title={r.status?.last_success_at ?? ''}
                   >{fmtTime(r.status?.last_success_at)}</td>
+                  <td
+                    class="px-2 py-1 whitespace-nowrap tabular-nums font-mono text-zinc-300"
+                    title="live / sweep seconds"
+                  >{fmtDurations(r.status?.last_live_duration_s, r.status?.last_sweep_duration_s)}</td>
                   <td class="px-2 py-1 text-right tabular-nums">{r.status?.last_rows ?? '—'}</td>
                   <td class="px-2 py-1 text-right tabular-nums text-zinc-400">{r.status?.tick_count ?? '—'}</td>
                   <td class="px-2 py-1 text-right tabular-nums"
@@ -521,7 +535,7 @@
   <!-- ============================ Backfill jobs ============================ -->
   <section class="space-y-2">
     <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wide">
-      Backfill jobs ({jobs.length})
+      Backfill jobs ({jobs.filter((j) => j.status === 'running').length})
     </h2>
     {#if jobsErr}
       <div class="text-xs text-red-300 bg-red-950/30 p-2 rounded">{jobsErr}</div>

@@ -108,6 +108,9 @@ async def _run(events_filter: list[str] | None = None, stream_name: str | None =
         while True:
             tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            _sweep_rows = 0
+            _sweep_err: str | None = None
+            _sweep_t0 = time.monotonic()
             since = now - sweep.LIVE_OVERLAP
 
             async def _one(chain, sym0, sym1, event):
@@ -126,11 +129,12 @@ async def _run(events_filter: list[str] | None = None, stream_name: str | None =
 
             total_rows = 0
             err: str | None = None
+            _live_t0 = time.monotonic()
             if stream_name:
                 await ch_status.write_tick_start(stream_name)
             await asyncio.gather(*(_one(*c) for c in calls))
             if stream_name:
-                await ch_status.write_tick(stream_name, total_rows, error=err)
+                await ch_status.write_tick(stream_name, total_rows, error=err, duration_s=time.monotonic()-_live_t0)
             await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
 
     async def sweep_loop():
@@ -141,6 +145,9 @@ async def _run(events_filter: list[str] | None = None, stream_name: str | None =
         while True:
             next_fire = time.monotonic() + sweep_cadence
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            _sweep_rows = 0
+            _sweep_err: str | None = None
+            _sweep_t0 = time.monotonic()
             async def _one(chain, sym0, sym1, event):
                 _method, table, _cols, _tf = UNISWAP_V2_EVENTS[event]
                 last_seen = await latest_time(
@@ -159,6 +166,7 @@ async def _run(events_filter: list[str] | None = None, stream_name: str | None =
                 total = await call(since, now)
                 log.info("%s sweep done rows=%d", label, total)
             await asyncio.gather(*(_one(*c) for c in calls), return_exceptions=True)
+            await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, rows=_sweep_rows, error=_sweep_err) if stream_name else None
             await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
     await asyncio.gather(live_loop(), sweep_loop())

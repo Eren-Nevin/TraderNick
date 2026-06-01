@@ -58,9 +58,13 @@ async def main(stream_name: str | None = None):
         while True:
             tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            _sweep_rows = 0
+            _sweep_err: str | None = None
+            _sweep_t0 = time.monotonic()
             since = now - sweep.LIVE_OVERLAP
             n = 0
             err: str | None = None
+            _live_t0 = time.monotonic()
             if stream_name:
                 await ch_status.write_tick_start(stream_name)
             try:
@@ -70,7 +74,7 @@ async def main(stream_name: str | None = None):
                 err = f"{type(exc).__name__}: {exc}"[:1000]
                 log.exception("multi-token fetch failed: %s", exc)
             if stream_name:
-                await ch_status.write_tick(stream_name, n, error=err)
+                await ch_status.write_tick(stream_name, n, error=err, duration_s=time.monotonic()-_live_t0)
             await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
 
     async def sweep_loop():
@@ -81,6 +85,9 @@ async def main(stream_name: str | None = None):
         while True:
             next_fire = time.monotonic() + sweep_cadence
             now = datetime.now(timezone.utc).replace(tzinfo=None)
+            _sweep_rows = 0
+            _sweep_err: str | None = None
+            _sweep_t0 = time.monotonic()
             try:
                 last_seen = await min_watermark_per_token(ch, table="tradernick.binance_funding_rate", tokens=tokens)
                 since = sweep.sweep_since(now=now, sweep_cadence_seconds=sweep_cadence, last_seen=last_seen)
@@ -89,6 +96,7 @@ async def main(stream_name: str | None = None):
                     log.info("binance_funding_rate sweep window=%s..%s rows=%d (min_last_seen=%s, tokens=%d)", since, now, n, last_seen, len(tokens))
             except Exception as exc:
                 log.exception("binance_funding_rate sweep failed: %s", exc)
+            await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, rows=_sweep_rows, error=_sweep_err) if stream_name else None
             await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
     await asyncio.gather(live_loop(), sweep_loop())
