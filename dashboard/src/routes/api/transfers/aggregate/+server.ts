@@ -23,6 +23,12 @@ const PASSTHROUGH = [
   'receiver_ex',
   'involving_in',
   'involving_ex',
+  // wallet category intersection (AND) filters — needed by Exchange Flow
+  // (and by the deprecated CeX/Perp templates that used to silently no-op
+  // when this proxy stripped these keys).
+  'sender_all_in',
+  'receiver_all_in',
+  'involving_all_in',
   // wallet entity filter passthrough
   'sender_entity_in',
   'sender_entity_ex',

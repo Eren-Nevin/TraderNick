@@ -2594,8 +2594,23 @@
   // outflow templates used to bake at insertion time, but here they're
   // derived live from the (exchange, flowType) selector pair on the
   // instance so the user can flip exchanges/directions in-place.
+  //
+  // Backend lowercases the filter values before matching against the
+  // pre-lowered materialized columns on tradernick.transfers (see
+  // routes/transfers.py:482), so casing isn't strictly load-bearing —
+  // BUT entity filters DO require the exact stored entity name. The
+  // wallets.entity column stores 'OKX' (all caps), not 'Okx'. Use an
+  // explicit map so the entity case is always correct.
   type TF = TransferFilters;
+  const EXCHANGE_LABEL: Record<string, string> = {
+    binance: 'Binance',
+    coinbase: 'Coinbase',
+    okx: 'OKX',
+    bybit: 'Bybit',
+    hyperliquid: 'Hyperliquid'
+  };
   function exchangeFlowInFilter(ex: string): TF {
+    const label = EXCHANGE_LABEL[ex] ?? ex;
     if (ex === 'hyperliquid') {
       // Perp umbrella: receiver must carry both the per-perp deposit tag
       // and the 'Perp' category. Sender must NOT be a perp wallet so we
@@ -2604,10 +2619,10 @@
     }
     // CeX umbrella: per-CEX deposit tag + 'CEX' category; sender not CEX
     // (excludes CEX-internal moves — those land under "CeX Internal Flow").
-    const label = ex.charAt(0).toUpperCase() + ex.slice(1); // binance → Binance
     return { receiver_all_in: [`${label}-Deposit`, 'CEX'], sender_ex: ['CEX'] };
   }
   function exchangeFlowOutFilter(ex: string): TF {
+    const label = EXCHANGE_LABEL[ex] ?? ex;
     if (ex === 'hyperliquid') {
       // Sender must carry both 'Hot-Wallet' and 'Perp'. Receiver must not
       // be Hyperliquid (avoids double-counting HL-internal moves).
@@ -2617,7 +2632,6 @@
         receiver_entity_ex: ['Hyperliquid']
       };
     }
-    const label = ex.charAt(0).toUpperCase() + ex.slice(1);
     return {
       sender_all_in: ['Hot-Wallet', 'CEX'],
       sender_entity_in: [label],
