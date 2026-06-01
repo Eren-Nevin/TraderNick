@@ -53,7 +53,7 @@
 
   <DynamicChartLayout
     tokens={data.tokens}
-    storageKey="tradernick:hyperliquid:layout:v1"
+    storageKey="tradernick:perp-hyperliquid:layout:v1"
     availableKinds={AVAILABLE_KINDS}
     defaultChain="HL"
     {defaultLayout}
