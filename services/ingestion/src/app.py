@@ -3,6 +3,7 @@ import hmac
 import logging
 import os
 import tempfile
+from datetime import datetime, timezone
 
 from sanic import Sanic, response
 
@@ -146,18 +147,67 @@ async def cancel_job(request, job_id: str):
     return response.json({"ok": True})
 
 
+_MAX_BACKFILL_DAYS = 365
+
+
+def _parse_backfill_window(body: dict):
+    """Parse + validate {since, until?} from a backfill request body.
+
+    Returns (since_dt, until_dt, None) on success or (None, None, error_str)
+    on failure. since is REQUIRED — there is no default. This is the
+    crucial fence against accidental long backfills: every call must
+    explicitly opt into its time window.
+
+    Format: ISO-8601 (UTC). Trailing 'Z' or '+00:00' both accepted.
+    until defaults to the current UTC minute (matches the live tick
+    boundary so the window is contiguous with live polling).
+    """
+    raw_since = body.get("since")
+    raw_until = body.get("until")
+    if not raw_since:
+        return None, None, "missing 'since' (ISO 8601 UTC timestamp). Example: '2026-05-31T00:00:00Z'"
+
+    def _parse(s: str) -> datetime:
+        return (
+            datetime.fromisoformat(s.replace("Z", "+00:00"))
+            .astimezone(timezone.utc)
+            .replace(tzinfo=None)
+        )
+
+    try:
+        since_dt = _parse(raw_since)
+    except (TypeError, ValueError):
+        return None, None, f"invalid 'since' (must be ISO 8601); got {raw_since!r}"
+
+    if raw_until:
+        try:
+            until_dt = _parse(raw_until)
+        except (TypeError, ValueError):
+            return None, None, f"invalid 'until' (must be ISO 8601); got {raw_until!r}"
+    else:
+        until_dt = datetime.now(timezone.utc).replace(second=0, microsecond=0, tzinfo=None)
+
+    if since_dt >= until_dt:
+        return None, None, f"'since' must be earlier than 'until' ({since_dt.isoformat()} >= {until_dt.isoformat()})"
+    span_days = (until_dt - since_dt).total_seconds() / 86400.0
+    if span_days > _MAX_BACKFILL_DAYS:
+        return None, None, f"window too wide ({span_days:.1f}d > {_MAX_BACKFILL_DAYS}d cap)"
+    return since_dt, until_dt, None
+
+
 async def _create_backfill(request, job_type: str):
+    """Token-based backfill (binance_*). Body: {since, until?, tokens?, force?}."""
     body = request.json or {}
     tokens = body.get("tokens") or config.INGEST_TOKENS
-    days = int(body.get("days", 30))
     force = bool(body.get("force", False))
     if not tokens:
         return response.json({"error": "no tokens"}, status=400)
-    if days <= 0 or days > 365:
-        return response.json({"error": "days must be in 1..365"}, status=400)
+    since_dt, until_dt, err = _parse_backfill_window(body)
+    if err:
+        return response.json({"error": err}, status=400)
     try:
         job = await request.app.ctx.jobs.create_backfill_args(
-            job_type, days, {"tokens": tokens, "force": force}
+            job_type, since_dt, until_dt, {"tokens": tokens, "force": force}
         )
     except RuntimeError as exc:
         return response.json({"error": str(exc)}, status=429)
@@ -190,17 +240,18 @@ async def backfill_funding_rate(request):
 
 
 async def _create_transfer_backfill(request, job_type: str, extract_args):
+    """Generic (non-token) backfill. Body: {since, until?, force?, …extras}."""
     body = request.json or {}
-    days = int(body.get("days", 30))
     force = bool(body.get("force", False))
-    if days <= 0 or days > 365:
-        return response.json({"error": "days must be in 1..365"}, status=400)
+    since_dt, until_dt, err = _parse_backfill_window(body)
+    if err:
+        return response.json({"error": err}, status=400)
     err, args_extra = extract_args(body)
     if err:
         return response.json({"error": err}, status=400)
     args_extra["force"] = force
     try:
-        job = await request.app.ctx.jobs.create_backfill_args(job_type, days, args_extra)
+        job = await request.app.ctx.jobs.create_backfill_args(job_type, since_dt, until_dt, args_extra)
     except RuntimeError as exc:
         return response.json({"error": str(exc)}, status=429)
     return response.json(job, status=202)

@@ -3,7 +3,7 @@ import json
 import logging
 import sys
 import uuid
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Optional
 
 import config
@@ -102,19 +102,23 @@ class JobManager:
             ],
         )
 
-    async def create_backfill(self, job_type: str, tokens: list[str], days: int) -> dict:
-        return await self.create_backfill_args(job_type, days, {"tokens": tokens})
-
-    async def create_backfill_args(self, job_type: str, days: int, args_extra: dict) -> dict:
+    async def create_backfill_args(
+        self,
+        job_type: str,
+        since: datetime,
+        until: datetime,
+        args_extra: dict,
+    ) -> dict:
+        """Create + spawn a backfill job for [since, until). Both bounds
+        are explicit UTC-naive datetimes. Callers (the HTTP handlers)
+        validate the values before reaching here — this method assumes
+        since < until and trusts the caller's range."""
         if job_type not in JOB_MODULES:
             raise ValueError(f"unknown job_type {job_type}")
         if len(self._procs) >= config.MAX_CONCURRENT_BACKFILLS:
             raise RuntimeError(
                 f"at MAX_CONCURRENT_BACKFILLS ({config.MAX_CONCURRENT_BACKFILLS}); try again later"
             )
-
-        until = self._utcnow().replace(second=0, microsecond=0)
-        since = until - timedelta(days=days)
         job_id = uuid.uuid4().hex
         args = {
             **args_extra,
