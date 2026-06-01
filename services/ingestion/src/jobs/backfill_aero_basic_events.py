@@ -10,7 +10,7 @@ from clickhouse import AERO_BASIC_EVENTS, async_client, safe_ident
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [backfill_aero_basic_events] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-CHUNK_HOURS = 24
+CHUNK_HOURS = 6
 INTER_CHUNK_SLEEP_S = 1.2
 RETRY_DELAYS_S = (1.0, 3.0, 8.0, 20.0, 45.0)
 _stop = False

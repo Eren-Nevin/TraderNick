@@ -52,11 +52,11 @@ _CHUNK_HOURS = {
     "ohlcv":            6,
     "trades":           6,
     "fills":            6,
-    "position_history": 1,
+    "position_history": 1,   # already finer — keep as-is
     "trade_history":    6,
-    "transfers":        24,
-    "funding":          24,
-    "vaults":           24,
+    "transfers":        6,
+    "funding":          6,
+    "vaults":           6,
 }
 
 # Events that get one chunk PER TOKEN (instead of one multi-token chunk).

@@ -13,7 +13,7 @@ from clickhouse import async_client, delete_transfers_range, transfers_df_for_bu
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [backfill_tron_native_transfers] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-CHUNK_HOURS = 12
+CHUNK_HOURS = 6
 TABLE = "tradernick.transfers"
 
 _stop = False

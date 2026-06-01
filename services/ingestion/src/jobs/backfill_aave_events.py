@@ -37,7 +37,9 @@ from clickhouse import AAVE_EVENTS, async_client, safe_ident
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [backfill_aave_events] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-CHUNK_HOURS = 24
+# 6h chunks: 4x finer progress updates than 24h, smaller per-chunk inserts,
+# same total throughput. Matches the transfers backfill cadence.
+CHUNK_HOURS = 6
 # DeFiStream throttles bursts: walking 1260 chunks at zero-delay back-to-back
 # trips a 429 well before the backfill finishes. Sleep a tick between chunks
 # (keeps us well under the limit) and retry on 429 with exponential backoff.
