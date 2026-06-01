@@ -266,6 +266,7 @@ export type ChartKind =
   | 'tt'
   | 'ls'
   | 'transfer'
+  | 'exchange_flow'
   | 'pc'
   | 'aave_deposit'
   | 'aave_withdraw'
@@ -369,6 +370,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   tt: 'Top Traders L/S',
   ls: 'Long/Short',
   transfer: 'Token Flow',
+  exchange_flow: 'Exchange Flow',
   pc: 'Price Comparison',
   aave_deposit: 'AAVE V3 Deposits',
   aave_withdraw: 'AAVE V3 Withdrawals',
@@ -1143,6 +1145,16 @@ export type ChartInstance = {
    *  being viewed. Empty = default to the rank-1 wallet. Persists across
    *  page reloads via the layout sanitize step. */
   hlSelectedWallet?: string;
+  /** exchange_flow only: which exchange the in/out filters target.
+   *  - 'binance' | 'coinbase' | 'okx' | 'bybit': CeX-style filters
+   *    (deposit umbrella receiver / hot-wallet sender), per-chain.
+   *  - 'hyperliquid': Perp-style filters; chain is forced to ARB. */
+  exchangeFlowExchange?: 'binance' | 'coinbase' | 'okx' | 'bybit' | 'hyperliquid';
+  /** exchange_flow only: which series to plot.
+   *  - 'inflow' / 'outflow': single line of that direction.
+   *  - 'netflow': single line, computed client-side = inflow - outflow.
+   *  - 'all': three lines (inflow green, outflow red, netflow cyan). */
+  exchangeFlowType?: 'inflow' | 'outflow' | 'netflow' | 'all';
   /** hl_top_vaults only: ranking metric for the leaderboard. */
   hlVaultSortBy?: 'net' | 'deposits' | 'withdrawals' | 'commission';
   /** hl_vault_detail only: which vault from the top-N list is currently
@@ -1314,6 +1326,13 @@ export function newChartInstance(
     base.chain = defaults.chain ?? 'ETH';
     base.filter = {};
     base.valueMode = 'usd';
+  }
+  if (kind === 'exchange_flow') {
+    base.chain = defaults.chain ?? 'ETH';
+    base.token = defaults.token ?? 'USDC';
+    base.valueMode = 'usd';
+    base.exchangeFlowExchange = 'binance';
+    base.exchangeFlowType = 'netflow';
   }
   if (isUniswapKind(kind)) {
     base.chain = defaults.chain ?? 'ETH';

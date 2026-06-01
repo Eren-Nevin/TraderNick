@@ -553,6 +553,13 @@
       const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
       return `${instance.kind}|${cPart}|${tPart}|${instance.interval}|${transferFilterKey()}`;
     }
+    if (instance.kind === 'exchange_flow') {
+      // The flow type selector (inflow/outflow/netflow/all) doesn't bust
+      // the cache — we always fetch both sides and pick at render time.
+      // Exchange does bust, since it changes which filters are sent.
+      const ex = instance.exchangeFlowExchange ?? 'binance';
+      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${ex}|${instance.interval}`;
+    }
     if (instance.kind === 'pc') {
       // Overlay tokens influence the rendered chart, so they belong in the
       // cache key. Sorted so order-of-add doesn't bust the key. Exchange
@@ -2166,6 +2173,71 @@
           });
           return;
         }
+        case 'exchange_flow': {
+          // Two parallel fetches against /transfers/aggregate — one with
+          // the inflow filter set, one with the outflow filter set. The
+          // resulting buckets are merged by time into rows that carry
+          // both sides (sum_*_in and sum_*_out) plus the client-computed
+          // net (sum_in - sum_out). The render-time lines derivation
+          // then picks which series to plot based on flowType.
+          const ex = instance.exchangeFlowExchange ?? 'binance';
+          const inFilter = exchangeFlowInFilter(ex);
+          const outFilter = exchangeFlowOutFilter(ex);
+          const buildQS = (filter: Record<string, string[]>) => {
+            const qs = transferBaseQS(sinceIso, untilIso);
+            for (const k of FILTER_KEYS) {
+              const arr = (filter as Record<string, string[]>)[k] ?? [];
+              if (arr.length) qs.set(k, arr.join(','));
+            }
+            if (forceFresh) qs.set('fresh', '1');
+            return qs;
+          };
+          const [inRes, outRes] = await Promise.all([
+            queuedFetch(`/api/transfers/aggregate?${buildQS(inFilter)}`, { signal }),
+            queuedFetch(`/api/transfers/aggregate?${buildQS(outFilter)}`, { signal })
+          ]);
+          if (!inRes.ok)  throw new Error(`exchange_flow inflow ${inRes.status}`);
+          if (!outRes.ok) throw new Error(`exchange_flow outflow ${outRes.status}`);
+          const inBody  = await inRes.json();
+          const outBody = await outRes.json();
+          const outByTime = new Map<number, { amount: number; usd: number }>();
+          for (const r of (outBody.series ?? []) as Array<Record<string, number>>) {
+            outByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd });
+          }
+          const out: Record<string, number>[] = [];
+          const seen = new Set<number>();
+          for (const r of (inBody.series ?? []) as Array<Record<string, number>>) {
+            const o = outByTime.get(r.time) ?? { amount: 0, usd: 0 };
+            out.push({
+              time: r.time,
+              sum_amount_in:     r.sum_amount,
+              sum_value_usd_in:  r.sum_value_usd,
+              sum_amount_out:    o.amount,
+              sum_value_usd_out: o.usd,
+              net_amount:        r.sum_amount - o.amount,
+              net_value_usd:     r.sum_value_usd - o.usd
+            });
+            seen.add(r.time);
+          }
+          for (const r of (outBody.series ?? []) as Array<Record<string, number>>) {
+            if (seen.has(r.time)) continue;
+            out.push({
+              time: r.time,
+              sum_amount_in: 0, sum_value_usd_in: 0,
+              sum_amount_out:    r.sum_amount,
+              sum_value_usd_out: r.sum_value_usd,
+              net_amount:    -r.sum_amount,
+              net_value_usd: -r.sum_value_usd
+            });
+          }
+          out.sort((a, b) => a.time - b.time);
+          data = out as unknown as AnyDatum[];
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
+        }
       }
       const res = await queuedFetch(url, { signal });
       if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -2517,6 +2589,68 @@
     ...cumulativeLines
   ]);
 
+  // exchange_flow chart: deposit-umbrella / hot-wallet filters per
+  // exchange. Mirrors the filter shapes the deprecated CeX/Perp inflow +
+  // outflow templates used to bake at insertion time, but here they're
+  // derived live from the (exchange, flowType) selector pair on the
+  // instance so the user can flip exchanges/directions in-place.
+  type TF = TransferFilters;
+  function exchangeFlowInFilter(ex: string): TF {
+    if (ex === 'hyperliquid') {
+      // Perp umbrella: receiver must carry both the per-perp deposit tag
+      // and the 'Perp' category. Sender must NOT be a perp wallet so we
+      // don't double-count perp-internal moves (bridge ↔ hot wallet).
+      return { receiver_all_in: ['Hyperliquid-Deposit', 'Perp'], sender_ex: ['Perp'] };
+    }
+    // CeX umbrella: per-CEX deposit tag + 'CEX' category; sender not CEX
+    // (excludes CEX-internal moves — those land under "CeX Internal Flow").
+    const label = ex.charAt(0).toUpperCase() + ex.slice(1); // binance → Binance
+    return { receiver_all_in: [`${label}-Deposit`, 'CEX'], sender_ex: ['CEX'] };
+  }
+  function exchangeFlowOutFilter(ex: string): TF {
+    if (ex === 'hyperliquid') {
+      // Sender must carry both 'Hot-Wallet' and 'Perp'. Receiver must not
+      // be Hyperliquid (avoids double-counting HL-internal moves).
+      return {
+        sender_all_in: ['Hot-Wallet', 'Perp'],
+        sender_entity_in: ['Hyperliquid'],
+        receiver_entity_ex: ['Hyperliquid']
+      };
+    }
+    const label = ex.charAt(0).toUpperCase() + ex.slice(1);
+    return {
+      sender_all_in: ['Hot-Wallet', 'CEX'],
+      sender_entity_in: [label],
+      receiver_ex: ['CEX']
+    };
+  }
+
+  // Lines for exchange_flow:
+  //   inflow   → 1 line, green  (positive bucket sums)
+  //   outflow  → 1 line, red    (positive bucket sums of outflow side)
+  //   netflow  → 1 line, cyan   (inflow - outflow)
+  //   all      → 3 lines (inflow + outflow + netflow), so the operator
+  //              can compare absolute flow sizes side-by-side AND see
+  //              the directional bias at a glance.
+  let exchangeFlowUseUsd = $derived((instance.valueMode ?? 'usd') === 'usd');
+  let exchangeFlowLinesD = $derived.by(() => {
+    if (!instance.showPoint) return [...cumulativeLines];
+    const field = exchangeFlowUseUsd ? 'sum_value_usd_in' : 'sum_amount_in';
+    const fieldOut = exchangeFlowUseUsd ? 'sum_value_usd_out' : 'sum_amount_out';
+    const fieldNet = exchangeFlowUseUsd ? 'net_value_usd' : 'net_amount';
+    const t = instance.exchangeFlowType ?? 'netflow';
+    const inLine = { key: 'in', label: 'Inflow', color: '#22c55e',
+      compute: (d: Record<string, number>) => d[field] ?? 0 };
+    const outLine = { key: 'out', label: 'Outflow', color: '#ef4444',
+      compute: (d: Record<string, number>) => d[fieldOut] ?? 0 };
+    const netLine = { key: 'net', label: 'Netflow', color: '#06b6d4',
+      compute: (d: Record<string, number>) => d[fieldNet] ?? 0 };
+    if (t === 'inflow')  return [inLine, ...cumulativeLines];
+    if (t === 'outflow') return [outLine, ...cumulativeLines];
+    if (t === 'netflow') return [netLine, ...cumulativeLines];
+    return [inLine, outLine, netLine, ...cumulativeLines]; // 'all'
+  });
+
   // For event-driven kinds (AAVE / Lido) the user can toggle between
   // sum_value_usd (default) and sum_amount via instance.valueMode. Both
   // fields come back from /aave/aggregate + /lido/aggregate today, so no
@@ -2823,7 +2957,19 @@
 
   let kindLabel = $derived(CHART_KIND_LABELS[instance.kind]);
   let isTemplate = $derived(typeof instance.templateName === 'string' && instance.templateName.length > 0);
-  let displayTitle = $derived(isTemplate ? (instance.templateName as string) : kindLabel);
+  let exchangeFlowLabel = $derived.by(() => {
+    if (instance.kind !== 'exchange_flow') return '';
+    const ex = instance.exchangeFlowExchange ?? 'binance';
+    const exLabel = ex.charAt(0).toUpperCase() + ex.slice(1);
+    const t = instance.exchangeFlowType ?? 'netflow';
+    const tLabel = t === 'all' ? 'All' : t.charAt(0).toUpperCase() + t.slice(1);
+    return `${exLabel} ${tLabel}`;
+  });
+  let displayTitle = $derived(
+    isTemplate ? (instance.templateName as string)
+    : instance.kind === 'exchange_flow' ? `${kindLabel} — ${exchangeFlowLabel}`
+    : kindLabel
+  );
   let panelTitle = $derived(
     `${displayTitle} — ${isUniswapKind(instance.kind) && instance.uniPool ? fmtUniPool(instance.uniPool) : instance.token} ${instance.interval}` +
       (instance.kind === 'sz' ? ` (< $${instance.under} / > $${instance.over})` : '')
@@ -3238,6 +3384,62 @@
                 <option value={g.name} title={g.description}>Σ {g.label}</option>
               {/each}
             </optgroup>
+          {/if}
+        </select>
+      {:else if instance.kind === 'exchange_flow'}
+        <!-- Exchange selector + Flow type selector + chain (locked to ARB
+             for Hyperliquid, freely chosen for CeXes). Token selector is
+             the same as transfer's. -->
+        {#if (instance.exchangeFlowExchange ?? 'binance') === 'hyperliquid'}
+          <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700" title="Hyperliquid is ARB-only">ARB</span>
+        {:else}
+          <select
+            bind:value={instance.chain}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          >
+            {#each chains as c (c)}<option value={c}>{c}</option>{/each}
+          </select>
+        {/if}
+        <select
+          value={instance.exchangeFlowExchange ?? 'binance'}
+          onchange={(e) => {
+            const v = e.currentTarget.value as 'binance' | 'coinbase' | 'okx' | 'bybit' | 'hyperliquid';
+            instance.exchangeFlowExchange = v;
+            if (v === 'hyperliquid') {
+              // HL bridge is ARB + USDC only; auto-correct both so the
+              // user doesn't have to reset them after the swap.
+              instance.chain = 'ARB';
+              instance.token = 'USDC';
+            }
+          }}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Which exchange's deposit/hot-wallet wallets to filter on"
+        >
+          <option value="binance">Binance</option>
+          <option value="coinbase">Coinbase</option>
+          <option value="okx">OKX</option>
+          <option value="bybit">Bybit</option>
+          <option value="hyperliquid">Hyperliquid</option>
+        </select>
+        <select
+          value={instance.exchangeFlowType ?? 'netflow'}
+          onchange={(e) => (instance.exchangeFlowType = e.currentTarget.value as 'inflow' | 'outflow' | 'netflow' | 'all')}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Which direction(s) of flow to plot"
+        >
+          <option value="inflow">Inflow</option>
+          <option value="outflow">Outflow</option>
+          <option value="netflow">Netflow</option>
+          <option value="all">All (in / out / net)</option>
+        </select>
+        <select
+          value={instance.token}
+          onchange={(e) => (instance.token = e.currentTarget.value)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          {#each tokensForChain as t (t)}<option value={t}>{t}</option>{/each}
+          {#if instance.token && !tokensForChain.includes(instance.token)}
+            <option value={instance.token}>{instance.token}</option>
           {/if}
         </select>
       {:else if instance.kind === 'transfer'}
@@ -3917,6 +4119,21 @@
         vRefLines={weekVRefLines}
         formatY={transferUseUsd ? fmtUsdAxis : fmtAmountAxis}
         formatTooltip={transferUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
+      />
+    {:else if instance.kind === 'exchange_flow'}
+      <LineChart
+        data={data as Array<Record<string, number>>}
+        lines={exchangeFlowLinesD}
+        refLines={NEUTRAL_REF}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={exchangeFlowUseUsd ? fmtUsdAxis : fmtAmountAxis}
+        formatTooltip={exchangeFlowUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
       />
     {:else if instance.kind === 'hl_top_traders'}
       <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />

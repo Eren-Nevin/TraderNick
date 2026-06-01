@@ -549,6 +549,22 @@
           inst.templateName = r.templateName;
         }
       }
+      if (inst.kind === 'exchange_flow') {
+        // Hyperliquid is ARB-only; CeXes default to ETH. Sanitize chain
+        // accordingly so a stored layout that selected HL on a non-ARB
+        // chain repairs itself on load.
+        const ex = r.exchangeFlowExchange;
+        const validEx = ['binance','coinbase','okx','bybit','hyperliquid'];
+        inst.exchangeFlowExchange = validEx.includes(ex) ? ex : 'binance';
+        const ft = r.exchangeFlowType;
+        inst.exchangeFlowType = ft === 'inflow' || ft === 'outflow' || ft === 'all' ? ft : 'netflow';
+        inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
+        if (inst.exchangeFlowExchange === 'hyperliquid') {
+          inst.chain = 'ARB';
+        } else {
+          inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
+        }
+      }
       out.push(inst);
       if (out.length >= MAX_CHARTS) break;
     }
