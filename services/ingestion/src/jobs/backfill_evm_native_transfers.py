@@ -16,7 +16,9 @@ from groups.evm_native_transfers import NATIVE_TOKEN_BY_CHAIN
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [backfill_evm_native_transfers] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-CHUNK_HOURS = 24
+# 6h chunks match the erc20 driver so high-volume chains (BSC, POLYGON)
+# don't stall on million-row inserts — 4x finer progress updates.
+CHUNK_HOURS = 6
 TABLE = "tradernick.transfers"
 
 _stop = False

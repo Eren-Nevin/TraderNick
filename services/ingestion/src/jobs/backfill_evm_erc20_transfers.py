@@ -13,7 +13,11 @@ from clickhouse import async_client, delete_transfers_range, safe_ident, transfe
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [backfill_evm_erc20_transfers] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-CHUNK_HOURS = 24
+# 6h chunks keep each fetch+insert under ~2.5M rows on BSC (the heaviest
+# chain). 24h chunks were producing ~10M-row inserts that took minutes
+# each and made progress feel stuck; 6h gives 4x more progress updates
+# and roughly the same total throughput.
+CHUNK_HOURS = 6
 TABLE = "tradernick.transfers"
 
 _stop = False
