@@ -320,10 +320,12 @@
   // Auto-snap token when the chain narrows and current token isn't reachable.
   // Skip when a token group is selected (groups span chains by design).
   $effect(() => {
-    if (instance.kind !== 'transfer') return;
+    if (instance.kind !== 'transfer' && instance.kind !== 'exchange_flow') return;
     if (activeTokenGroup !== null) return;
     if (tokensForChain.length > 0 && !tokensForChain.includes(instance.token)) {
-      instance.token = tokensForChain[0];
+      // Prefer USDT when available (stable, broadest cross-chain coverage),
+      // else fall back to the first listed token on the chain.
+      instance.token = tokensForChain.includes('USDT') ? 'USDT' : tokensForChain[0];
     }
   });
 
@@ -3451,8 +3453,19 @@
           onchange={(e) => (instance.token = e.currentTarget.value)}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
         >
-          {#each tokensForChain as t (t)}<option value={t}>{t}</option>{/each}
-          {#if instance.token && !tokensForChain.includes(instance.token)}
+          {#if tokenGroups.length > 0}
+            <optgroup label="Tokens on {instance.chain ?? ''}">
+              {#each tokensForChain as t (t)}<option value={t}>{t}</option>{/each}
+            </optgroup>
+            <optgroup label="Token group">
+              {#each tokenGroups as g (g.name)}
+                <option value={g.name} title={g.description}>Σ {g.label}</option>
+              {/each}
+            </optgroup>
+          {:else}
+            {#each tokensForChain as t (t)}<option value={t}>{t}</option>{/each}
+          {/if}
+          {#if instance.token && !tokensForChain.includes(instance.token) && !tokenGroups.some((g) => g.name === instance.token)}
             <option value={instance.token}>{instance.token}</option>
           {/if}
         </select>
@@ -4001,7 +4014,13 @@
       <div class="p-3 text-xs text-red-300 bg-red-950/30">{error}</div>
     {/if}
     {#if data.length === 0}
-      <div class="p-4 text-sm text-zinc-400">No data for {kindLabel}.</div>
+      <div class="p-4 text-sm text-zinc-400">
+        {#if instance.token && instance.chain && (instance.kind === 'transfer' || instance.kind === 'exchange_flow')}
+          No data available for {instance.token} on {instance.chain}.
+        {:else}
+          No data for {kindLabel}.
+        {/if}
+      </div>
     {:else if instance.kind === 'ohlcv'}
       <CandlestickChart
         candles={ohlcvCandles}
