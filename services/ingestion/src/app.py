@@ -8,7 +8,9 @@ from datetime import datetime, timezone
 from sanic import Sanic, response
 
 from scripts.bootstrap_wallets import (
+    exchange_flow_refresh_status,
     load_into_clickhouse,
+    refresh_exchange_flow,
     rematerialize_status,
     rematerialize_transfers,
 )
@@ -83,31 +85,11 @@ async def basic_auth(request):
 @app.before_server_start
 async def startup(app_, _loop):
     app_.ctx.supervisor = Supervisor()
-    app_.ctx.supervisor.start([
-        "binance_ohlcv",
-        "binance_raw_trades",
-        "binance_open_interest",
-        "binance_long_short_ratios",
-        "binance_funding_rate",
-        "evm_erc20_transfers",
-        "evm_native_transfers",
-        "btc_transfers",
-        "tron_native_transfers",
-        "tron_trc20_transfers",
-        "aave_events",
-        "uniswap_events",
-        "lido_events",
-        "aave_v2_events",
-        "uniswap_v2_events",
-        "uniswap_v4_events",
-        "aero_events",
-        "aero_basic_events",
-        "aave_v4_events",
-        "morpho_events",
-        "spark_events",
-        "gmx_events",
-        "hyperliquid_events",
-    ])
+    # New per-stream model: enumerate streams.STREAMS, consult the persisted
+    # ingestion_event_state table for on/off, spawn one worker per enabled
+    # stream. Legacy groups still in streams.LEGACY_GROUPS_* also get spawned
+    # by the same call until their migration completes.
+    await app_.ctx.supervisor.start_from_registry()
     app_.ctx.jobs = JobManager()
     try:
         await app_.ctx.jobs.resume_inflight()
@@ -120,9 +102,55 @@ async def health(_request):
     return response.json({"ok": True})
 
 
-@app.get("/groups")
-async def groups(request):
-    return response.json(request.app.ctx.supervisor.snapshot())
+@app.get("/streams")
+async def list_streams(request):
+    """Return one row per registered stream, joined with the persisted on/off
+    state and the latest tick heartbeat. Each row carries `group` (UI section
+    label) so the admin panel can lay out one table per protocol."""
+    import ch_status
+    from streams import STREAMS
+
+    proc_snapshot = request.app.ctx.supervisor.snapshot()
+    try:
+        statuses = await ch_status.read_all_status()
+        state = await ch_status.read_all_state()
+    except Exception as exc:  # noqa: BLE001
+        log.exception("read status/state failed: %s", exc)
+        statuses = []
+        state = {}
+    status_by_name = {s["name"]: s for s in statuses}
+    spec_by_name = {s.name: s for s in STREAMS}
+    out = []
+    for name, snap in proc_snapshot.items():
+        spec = spec_by_name.get(name)
+        out.append({
+            "name": name,
+            "group": spec.group if spec else "Other",
+            "cadence_s": spec.cadence_s if spec else None,
+            **snap,
+            "enabled": state.get(name, True),
+            "status": status_by_name.get(name, {}),
+        })
+    out.sort(key=lambda r: (r["group"], r["name"]))
+    return response.json({"streams": out})
+
+
+@app.post("/streams/<name>/start")
+async def stream_start(request, name: str):
+    res = await request.app.ctx.supervisor.admin_start(name)
+    return response.json(res, status=200 if res.get("ok") else 404)
+
+
+@app.post("/streams/<name>/stop")
+async def stream_stop(request, name: str):
+    res = await request.app.ctx.supervisor.admin_stop(name)
+    return response.json(res, status=200 if res.get("ok") else 404)
+
+
+@app.post("/streams/<name>/restart")
+async def stream_restart(request, name: str):
+    res = await request.app.ctx.supervisor.admin_restart(name)
+    return response.json(res, status=200 if res.get("ok") else 404)
 
 
 @app.get("/jobs")
@@ -739,3 +767,21 @@ async def admin_rematerialize(_request):
 @app.get("/admin/wallets/rematerialize/status")
 async def admin_rematerialize_status(_request):
     return response.json(await rematerialize_status())
+
+
+@app.post("/admin/exchange-flow/refresh")
+async def admin_exchange_flow_refresh(_request):
+    """Force a TRUNCATE + 30-day backfill of tradernick.exchange_flow_minute.
+
+    Auto-called as the final step of /admin/wallets/rematerialize so the
+    rollup stays consistent with the freshly-rewritten sender/receiver
+    categories on the transfers table. Exposed standalone here for manual
+    re-runs (e.g. after a filter-logic change in mv_exchange_flow that
+    requires a backfill but not a wallet-side rematerialize).
+    """
+    return response.json(await refresh_exchange_flow())
+
+
+@app.get("/admin/exchange-flow/refresh/status")
+async def admin_exchange_flow_refresh_status(_request):
+    return response.json(exchange_flow_refresh_status())

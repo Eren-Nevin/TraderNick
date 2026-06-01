@@ -44,7 +44,8 @@
       links: [
         { href: '/staking/lido', label: 'Lido' }
       ]
-    }
+    },
+    { kind: 'link', href: '/admin', label: 'Admin', short: 'A' }
   ];
 
   onMount(() => themeStore.hydrate());

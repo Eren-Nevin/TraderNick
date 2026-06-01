@@ -163,14 +163,15 @@ UNI_V3_ENABLED = os.environ.get("UNI_V3_ENABLED", "1") == "1"
 # pools — backfill still uses the full UNI_V3_POOLS list, so historic coverage
 # is unaffected.
 UNISWAP_V3_LIVE_POOLS_DEFAULT = (
-    # The 10 deepest pools across the 5 EVMs — covers >80% of total volume.
+    # The deepest pools across the 4 EVMs — covers >80% of total volume.
+    # BSC pools removed: DeFiStream reports "Uniswap pool not found" for
+    # BSC:BNB/USDT/500 (PancakeSwap is the dominant V3-style DEX on BSC,
+    # not Uniswap). Use the PancakeSwap-specific endpoint if/when added.
     "ETH:USDC/WETH/500,USDC/WETH/3000,USDT/WETH/500,USDC/WBTC/3000,WBTC/WETH/3000"
     ";"
     "ARB:USDC/WETH/500,ARB/USDC/500"
     ";"
     "BASE:USDC/WETH/500,CBBTC/WETH/3000"
-    ";"
-    "BSC:BNB/USDT/500"
 )
 UNI_V3_LIVE_POOLS = _parse_uniswap_pools(
     os.environ.get("UNI_V3_LIVE_POOLS", UNISWAP_V3_LIVE_POOLS_DEFAULT)

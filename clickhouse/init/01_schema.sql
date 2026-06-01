@@ -110,6 +110,54 @@ ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (job_id)
 TTL updated_at + INTERVAL 30 DAY;
 
+-- ---------------------------------------------------------------------------
+-- Per-stream live ingestion tracking.
+-- Replaces the in-memory supervisor.GroupStatus once the ingestion service
+-- moves to one subprocess per stream type. Two tables:
+--
+--   ingestion_event_state  — durable on/off switch the admin panel writes
+--   ingestion_event_status — periodic tick heartbeat each worker emits
+--
+-- A "stream" here is a slug like "hyperliquid.ohlcv" — see services/ingestion/
+-- src/streams.py for the registry.
+CREATE TABLE IF NOT EXISTS tradernick.ingestion_event_state
+(
+    name         LowCardinality(String),
+    enabled      Bool,
+    modified_at  DateTime  DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(modified_at)
+ORDER BY (name);
+
+CREATE TABLE IF NOT EXISTS tradernick.ingestion_event_status
+(
+    name                     LowCardinality(String),
+    pid                      UInt32,
+    started_at               DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    last_tick_at             DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    last_rows                UInt64             CODEC(T64, ZSTD(3)),
+    total_rows_since_start   UInt64             CODEC(T64, ZSTD(3)),
+    tick_count               UInt64             CODEC(T64, ZSTD(3)),
+    last_error               Nullable(String)   CODEC(ZSTD(3)),
+    last_error_at            Nullable(DateTime) CODEC(DoubleDelta, ZSTD(3)),
+    -- Persistent crash count — incremented by the supervisor each time a
+    -- subprocess exits non-zero. Survives container restarts so post-hoc
+    -- diagnostics see the full history rather than just what's happened
+    -- since the last supervisor boot.
+    crash_count              UInt64             CODEC(T64, ZSTD(3)),
+    -- Wall time of the last tick that completed with no error. Distinct from
+    -- last_tick_at (any tick) — drives the dashboard's "Last Ran" column.
+    last_success_at          Nullable(DateTime) CODEC(DoubleDelta, ZSTD(3)),
+    -- 1 between the start of a fetch tick and its insert completion; 0 between
+    -- ticks. Drives the dashboard's "RUNNING" (actively fetching) pill.
+    tick_in_progress         UInt8              DEFAULT 0,
+    tick_started_at          Nullable(DateTime64(3))  CODEC(DoubleDelta, ZSTD(3)),
+    updated_at               DateTime  DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (name)
+TTL updated_at + INTERVAL 7 DAY;
+
 -- Wallet labels imported from Horatio's chain-analysis (or any equivalent source).
 -- Addresses are stored verbatim from the source file; the bootstrap loader adds a
 -- lowercase variant for every `0x…` row so EVM lookups (which use lower(sender)) match
@@ -192,6 +240,76 @@ ALTER TABLE tradernick.transfers
   ADD INDEX IF NOT EXISTS idx_receiver_categories receiver_categories TYPE set(100) GRANULARITY 4,
   ADD INDEX IF NOT EXISTS idx_sender_entity sender_entity TYPE set(500) GRANULARITY 4,
   ADD INDEX IF NOT EXISTS idx_receiver_entity receiver_entity TYPE set(500) GRANULARITY 4;
+
+-- ---------------------------------------------------------------------------
+-- Exchange Flow rollups.
+-- One per-minute SummingMergeTree fed by a single materialized view that fans
+-- each transfer row into the set of (direction, exchange) buckets it matches
+-- (5 exchanges × {in, out}). The /exchange_flow/aggregate endpoint queries
+-- this table directly so the dashboard's Exchange Flow chart skips the
+-- ~80s scan of the 971M-row transfers table.
+--
+-- Bucketing rules (mirror exchangeFlowIn/OutFilter in ChartInstance.svelte;
+-- predicates use lowercase since the materialized category/entity columns
+-- store pre-lowered values):
+--   in/<E>   ← receiver_categories ∋ '<E>-deposit'  AND sender NOT umbrella
+--   out/<E>  ← sender_categories ∋ 'hot-wallet' AND sender_entity = '<E>' AND
+--             receiver NOT umbrella
+-- Umbrella = 'cex' for binance/coinbase/okx/bybit; for hyperliquid the
+-- inflow side checks 'perp' and the outflow side uses receiver_entity ≠
+-- 'hyperliquid' (HL inbox is a single bridge contract → category-based
+-- exclusion isn't precise enough).
+--
+-- Caveats: filter drift (any change to those JS helpers must come with a
+-- matching MV rebuild + backfill), and dictionary refresh on tradernick.wallets
+-- does NOT retro-update already-aggregated rows (MVs fire on INSERT only).
+CREATE TABLE IF NOT EXISTS tradernick.exchange_flow_minute
+(
+    direction     LowCardinality(String),
+    exchange      LowCardinality(String),
+    chain         LowCardinality(String),
+    token         LowCardinality(String),
+    time          DateTime          CODEC(DoubleDelta, ZSTD(3)),
+    sum_amount    Float64           CODEC(Gorilla, ZSTD(3)),
+    sum_value_usd Float64           CODEC(Gorilla, ZSTD(3)),
+    count         UInt64            CODEC(T64, ZSTD(3))
+)
+ENGINE = SummingMergeTree
+PARTITION BY toYYYYMM(time)
+ORDER BY (direction, exchange, chain, token, time)
+TTL time + INTERVAL 30 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.mv_exchange_flow
+TO tradernick.exchange_flow_minute AS
+SELECT
+    classified.1 AS direction,
+    classified.2 AS exchange,
+    chain,
+    token,
+    toStartOfMinute(time) AS time,
+    sum(amount) AS sum_amount,
+    -- Stablecoins are pegged $1 so sum_value_usd = sum_amount; otherwise trust
+    -- DeFiStream's stored value_usd. Mirrors the /transfers/aggregate stable
+    -- override so chart numbers match byte-for-byte across the two endpoints.
+    sum(if(token IN ('USDC', 'USDT', 'DAI', 'USDE'),
+           amount,
+           coalesce(value_usd, 0.0))) AS sum_value_usd,
+    count() AS count
+FROM tradernick.transfers
+ARRAY JOIN arrayConcat(
+    if(has(receiver_categories, 'binance-deposit')     AND NOT has(sender_categories, 'cex'),  [('in', 'binance')],     CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(receiver_categories, 'coinbase-deposit')    AND NOT has(sender_categories, 'cex'),  [('in', 'coinbase')],    CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(receiver_categories, 'okx-deposit')         AND NOT has(sender_categories, 'cex'),  [('in', 'okx')],         CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(receiver_categories, 'bybit-deposit')       AND NOT has(sender_categories, 'cex'),  [('in', 'bybit')],       CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(receiver_categories, 'hyperliquid-deposit') AND NOT has(sender_categories, 'perp'), [('in', 'hyperliquid')], CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'binance'     AND NOT has(receiver_categories, 'cex'),         [('out', 'binance')],     CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'coinbase'    AND NOT has(receiver_categories, 'cex'),         [('out', 'coinbase')],    CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'okx'         AND NOT has(receiver_categories, 'cex'),         [('out', 'okx')],         CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'bybit'       AND NOT has(receiver_categories, 'cex'),         [('out', 'bybit')],       CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'hyperliquid' AND coalesce(receiver_entity, '') != 'hyperliquid', [('out', 'hyperliquid')], CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String)))))
+) AS classified
+GROUP BY direction, exchange, chain, token, time;
+
 -- AAVE v3 events — six tables, one per event type, populated by DeFiStream's
 -- /evm/aave_v3/events/<type> endpoints. Column names match DeFiStream's CSV
 -- output exactly so the ingestion path is a direct df → rows mapping with

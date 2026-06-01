@@ -2,19 +2,20 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from defistream import AsyncDeFiStream
 
+import ch_status
 import config
+import sweep
 from clickhouse import TRANSFER_COLUMNS, async_client, transfers_df_to_rows
-from gap_fill import latest_time, resolve_since, run_chunked
+from gap_fill import latest_time
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [evm_native_transfers] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 60
-POLL_OVERLAP_MINUTES = 3
+POLL_INTERVAL_SECONDS = 300
 
 # Canonical native-asset symbol per EVM chain — gets written to the
 # `token` column so the dashboard shows ETH / BNB / POL rather than
@@ -51,7 +52,7 @@ async def fetch_and_insert(ds: AsyncDeFiStream, chain: str, since: datetime, unt
     return len(rows)
 
 
-async def main():
+async def main(stream_name: str | None = None):
     if not config.DEFISTREAM_API_KEY:
         log.error("DEFISTREAM_API_KEY is not set")
         sys.exit(2)
@@ -62,46 +63,63 @@ async def main():
             await asyncio.sleep(3600)
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
-    t_start = datetime.now(timezone.utc).replace(tzinfo=None)
-    log.info("polling evm native chains=%s every %ss (overlap=%dm) + gap-fill from watermark",
-             chains, POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES)
+    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS)
+    log.info("evm native chains=%s; live cadence=%ss, sweep cadence=%ss",
+             chains, POLL_INTERVAL_SECONDS, sweep_cadence)
 
     async def live_loop():
+        jitter = sweep.live_jitter_s(POLL_INTERVAL_SECONDS)
+        log.info("live_loop: waiting %.0fs before first fire", jitter)
+        await asyncio.sleep(jitter)
         while True:
             tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
+            since = now - sweep.LIVE_OVERLAP
+            total_rows = 0
+            err: str | None = None
+            if stream_name:
+                await ch_status.write_tick_start(stream_name)
             for chain in chains:
                 try:
                     n = await fetch_and_insert(ds, chain, since, now)
                     log.info("%s rows=%d", chain, n)
+                    total_rows += n
                 except Exception as exc:
+                    err = f"{chain}: {type(exc).__name__}: {exc}"[:1000]
                     log.exception("%s fetch failed: %s", chain, exc)
+            if stream_name:
+                await ch_status.write_tick(stream_name, total_rows, error=err)
             await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
 
-    async def gap_fill_task():
+    async def sweep_loop():
+        jitter = sweep.sweep_jitter_s(sweep_cadence)
+        log.info("sweep_loop: waiting %.0fs before first fire (cadence=%ss)", jitter, sweep_cadence)
+        await asyncio.sleep(jitter)
         ch = await async_client()
-        async def _one(chain):
-            # The native poller writes kind='native'. Token is whatever
-            # NATIVE_TOKEN_BY_CHAIN maps the chain to (defaults to chain
-            # itself if missing). Filter only by (kind, chain) since one
-            # poller covers exactly one token per chain.
-            last_seen = await latest_time(
-                ch, table="tradernick.transfers",
-                where="kind = 'native' AND chain = {chain:String}",
-                parameters={"chain": chain},
-            )
-            since = resolve_since(last_seen, t_start=t_start)
-            if since >= t_start: return
-            label = f"evm_native_transfers/{chain}"
-            log.info("%s gap-fill since=%s until=%s (last_seen=%s)", label, since, t_start, last_seen)
-            async def call(s, u):
-                return await fetch_and_insert(ds, chain, s, u)
-            total = await run_chunked(label=label, since=since, until=t_start, call=call)
-            log.info("%s gap-fill done total_rows=%d", label, total)
-        await asyncio.gather(*(_one(c) for c in chains), return_exceptions=True)
+        while True:
+            next_fire = time.monotonic() + sweep_cadence
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
 
-    await asyncio.gather(live_loop(), gap_fill_task())
+            async def _one(chain):
+                try:
+                    last_seen = await latest_time(
+                        ch, table="tradernick.transfers",
+                        where="kind = 'native' AND chain = {chain:String}",
+                        parameters={"chain": chain},
+                    )
+                    since = sweep.sweep_since(now=now, sweep_cadence_seconds=sweep_cadence, last_seen=last_seen)
+                    if since >= now:
+                        return
+                    label = f"evm_native_transfers/{chain}"
+                    n = await fetch_and_insert(ds, chain, since, now)
+                    log.info("%s sweep window=%s..%s rows=%d (last_seen=%s)", label, since, now, n, last_seen)
+                except Exception as exc:
+                    log.exception("sweep failed for %s: %s", chain, exc)
+
+            await asyncio.gather(*(_one(c) for c in chains), return_exceptions=True)
+            await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
+
+    await asyncio.gather(live_loop(), sweep_loop())
 
 
 if __name__ == "__main__":

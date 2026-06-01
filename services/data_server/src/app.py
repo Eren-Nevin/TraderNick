@@ -19,9 +19,10 @@ from routes.morpho import bp as morpho_bp
 from routes.spark import bp as spark_bp
 from routes.gmx import bp as gmx_bp
 from routes.hyperliquid import bp as hyperliquid_bp
+from routes.exchange_flow import bp as exchange_flow_bp
 
 app = Sanic("tradernick_data_server")
-app.config.RESPONSE_TIMEOUT = 60
+app.config.RESPONSE_TIMEOUT = 180
 
 app.blueprint(ohlcv_bp)
 app.blueprint(trade_volume_bp)
@@ -42,6 +43,7 @@ app.blueprint(morpho_bp)
 app.blueprint(spark_bp)
 app.blueprint(gmx_bp)
 app.blueprint(hyperliquid_bp)
+app.blueprint(exchange_flow_bp)
 
 
 @app.get("/health")

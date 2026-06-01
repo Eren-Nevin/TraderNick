@@ -58,8 +58,12 @@ services:
     build: ./dashboard
     depends_on:
       - data_server
+      - ingestion
     environment:
       INTERNAL_DATA_SERVER_URL: http://data_server:8000
+      INTERNAL_INGESTION_URL: http://ingestion:8000
+      INGESTION_ADMIN_USER: ${ADMIN_USER:-admin}
+      INGESTION_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change_me}
     ports:
       - "10000:3000"
     restart: unless-stopped

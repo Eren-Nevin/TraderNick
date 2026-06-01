@@ -219,6 +219,19 @@ async def _rematerialize_worker(table: str):
         log.info("rematerialize[worker]: waiting for MATERIALIZE COLUMN to finish")
         await _wait_for_mutations(ch, table=table, prefix="MATERIALIZE COLUMN ")
 
+        # exchange_flow_minute (SummingMergeTree fed by mv_exchange_flow) is
+        # downstream of the sender/receiver_categories + sender_entity
+        # materialized columns we just rewrote. The MV fires on INSERT only,
+        # so retroactive column changes don't propagate — we must drop +
+        # backfill the rollup to bring it in sync with the refreshed dict.
+        # Runs sequentially here so the rematerialize/status endpoint reflects
+        # the end-to-end state (column rewrite → index rebuild → rollup
+        # refresh) in a single mutation queue.
+        try:
+            await _refresh_exchange_flow_worker(ch)
+        except Exception:
+            log.exception("rematerialize[worker]: exchange_flow refresh failed (continuing)")
+
         # Index reset — DROP every one, then ADD them back, then MATERIALIZE.
         # `alter_sync = 0` so the DDL returns once metadata is applied (no
         # extra replica sync wait — we're single-node anyway).
@@ -323,6 +336,132 @@ async def rematerialize_status(*, table: str = "tradernick.transfers") -> dict:
         "in_progress": len(pending),
         "mutations": mutations,
     }
+
+
+# ---- exchange_flow rollup refresh ----------------------------------------
+# Mirrors the predicate baked into tradernick.mv_exchange_flow (see
+# clickhouse/init/01_schema.sql). Kept inline so the worker has no dependency
+# on the data_server service; the schema file is the single source of truth
+# but rebuild-by-INSERT-SELECT needs to repeat the predicate here.
+_EXCHANGE_FLOW_REFRESH_SQL = """
+INSERT INTO tradernick.exchange_flow_minute
+SELECT
+    classified.1 AS direction,
+    classified.2 AS exchange,
+    chain,
+    token,
+    toStartOfMinute(time) AS time,
+    sum(amount) AS sum_amount,
+    sum(if(token IN ('USDC', 'USDT', 'DAI', 'USDE'),
+           amount,
+           coalesce(value_usd, 0.0))) AS sum_value_usd,
+    count() AS count
+FROM tradernick.transfers
+ARRAY JOIN arrayConcat(
+    if(has(receiver_categories, 'binance-deposit')     AND NOT has(sender_categories, 'cex'),  [('in', 'binance')],     CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(receiver_categories, 'coinbase-deposit')    AND NOT has(sender_categories, 'cex'),  [('in', 'coinbase')],    CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(receiver_categories, 'okx-deposit')         AND NOT has(sender_categories, 'cex'),  [('in', 'okx')],         CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(receiver_categories, 'bybit-deposit')       AND NOT has(sender_categories, 'cex'),  [('in', 'bybit')],       CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(receiver_categories, 'hyperliquid-deposit') AND NOT has(sender_categories, 'perp'), [('in', 'hyperliquid')], CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'binance'     AND NOT has(receiver_categories, 'cex'),         [('out', 'binance')],     CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'coinbase'    AND NOT has(receiver_categories, 'cex'),         [('out', 'coinbase')],    CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'okx'         AND NOT has(receiver_categories, 'cex'),         [('out', 'okx')],         CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'bybit'       AND NOT has(receiver_categories, 'cex'),         [('out', 'bybit')],       CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
+    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'hyperliquid' AND coalesce(receiver_entity, '') != 'hyperliquid', [('out', 'hyperliquid')], CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String)))))
+) AS classified
+GROUP BY direction, exchange, chain, token, time
+SETTINGS max_execution_time = 1800
+"""
+
+
+# Live state for /admin/exchange-flow/refresh/status. Single concurrent run
+# guarded by the `running` flag; consecutive POSTs while running are no-ops.
+_EXCHANGE_FLOW_STATE: dict = {
+    "running": False,
+    "started_at": None,
+    "finished_at": None,
+    "duration_s": None,
+    "rows_after": None,
+    "error": None,
+}
+
+
+async def _refresh_exchange_flow_worker(ch=None) -> dict:
+    """Rebuild tradernick.exchange_flow_minute from the current state of
+    tradernick.transfers + its materialized category/entity columns. Called
+    automatically after every rematerialize (so the rollup is consistent with
+    the freshly-rewritten wallet labels) and exposed as
+    POST /admin/exchange-flow/refresh for manual runs.
+
+    Strategy: TRUNCATE the rollup then INSERT SELECT. The live mv_exchange_flow
+    keeps firing on incoming transfers during the ~50s reinsert; their
+    contributions may collide with the SELECT scan and be summed twice for
+    buckets in the current minute, but that's a sub-promille noise floor at
+    chart scale and avoids the bigger risk of dropping the MV mid-flight.
+    """
+    import asyncio as _asyncio
+    if _EXCHANGE_FLOW_STATE["running"]:
+        log.info("exchange_flow refresh: already running, skipping")
+        return {"ok": False, "reason": "already_running"}
+    _EXCHANGE_FLOW_STATE.update(
+        running=True,
+        started_at=_asyncio.get_event_loop().time(),
+        finished_at=None,
+        duration_s=None,
+        rows_after=None,
+        error=None,
+    )
+    t0 = _asyncio.get_event_loop().time()
+    try:
+        if ch is None:
+            ch = await async_client()
+        log.info("exchange_flow refresh: TRUNCATE tradernick.exchange_flow_minute")
+        await ch.command("TRUNCATE TABLE tradernick.exchange_flow_minute")
+        log.info("exchange_flow refresh: INSERT SELECT (30d backfill)")
+        await ch.command(_EXCHANGE_FLOW_REFRESH_SQL)
+        rows = await ch.query("SELECT count() FROM tradernick.exchange_flow_minute")
+        n = int(rows.result_rows[0][0]) if rows.result_rows else 0
+        dt = _asyncio.get_event_loop().time() - t0
+        _EXCHANGE_FLOW_STATE.update(
+            running=False,
+            finished_at=_asyncio.get_event_loop().time(),
+            duration_s=dt,
+            rows_after=n,
+        )
+        log.info("exchange_flow refresh: done in %.1fs, %d rows", dt, n)
+        return {"ok": True, "rows_after": n, "duration_s": dt}
+    except Exception as exc:
+        _EXCHANGE_FLOW_STATE.update(
+            running=False,
+            finished_at=_asyncio.get_event_loop().time(),
+            duration_s=_asyncio.get_event_loop().time() - t0,
+            error=str(exc),
+        )
+        log.exception("exchange_flow refresh: failed")
+        raise
+
+
+async def refresh_exchange_flow() -> dict:
+    """Dispatch the rollup refresh as a Sanic background task so the POST
+    returns immediately. Caller polls /admin/exchange-flow/refresh/status."""
+    try:
+        from sanic import Sanic
+        app = Sanic.get_app("tradernick_ingestion")
+        app.add_task(_refresh_exchange_flow_worker())
+        dispatch = "background_task"
+    except Exception:
+        await _refresh_exchange_flow_worker()
+        dispatch = "inline"
+    return {
+        "ok": True,
+        "table": "tradernick.exchange_flow_minute",
+        "dispatch": dispatch,
+        "note": "poll /admin/exchange-flow/refresh/status for progress",
+    }
+
+
+def exchange_flow_refresh_status() -> dict:
+    return dict(_EXCHANGE_FLOW_STATE)
 
 
 async def main_async(argv: list[str] | None = None):

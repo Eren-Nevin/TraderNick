@@ -4,21 +4,20 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from defistream import AsyncDeFiStream
 
+import ch_status
 import config
+import sweep
 from clickhouse import OPEN_INTEREST_COLUMNS, async_client, open_interest_df_to_rows
-from gap_fill import min_watermark_per_token, resolve_since, run_chunked
+from gap_fill import min_watermark_per_token
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [binance_open_interest] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 300
-POLL_OVERLAP_MINUTES = 15
-
-
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -38,7 +37,7 @@ async def fetch_and_insert(ds: AsyncDeFiStream, tokens: list[str], since: dateti
     return len(rows)
 
 
-async def main():
+async def main(stream_name: str | None = None):
     if not config.DEFISTREAM_API_KEY:
         log.error("DEFISTREAM_API_KEY is not set")
         sys.exit(2)
@@ -48,38 +47,52 @@ async def main():
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     tokens = list(config.INGEST_TOKENS)
-    t_start = datetime.now(timezone.utc).replace(tzinfo=None)
-    log.info("polling %d tokens every %ss (overlap=%dm) + gap-fill from min-watermark — 1 multi-token call/tick",
-             len(tokens), POLL_INTERVAL_SECONDS, POLL_OVERLAP_MINUTES)
+    log.info("polling %d tokens every %ss + gap-fill from min-watermark — 1 multi-token call/tick",
+             len(tokens), POLL_INTERVAL_SECONDS)
 
+    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS)
     async def live_loop():
+        jitter = sweep.live_jitter_s(POLL_INTERVAL_SECONDS)
+        log.info("live_loop: waiting %.0fs before first fire", jitter)
+        await asyncio.sleep(jitter)
         while True:
             tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            since = now - timedelta(minutes=POLL_OVERLAP_MINUTES)
+            since = now - sweep.LIVE_OVERLAP
+            n = 0
+            err: str | None = None
+            if stream_name:
+                await ch_status.write_tick_start(stream_name)
             try:
                 n = await fetch_and_insert(ds, tokens, since, now)
                 log.info("multi-token rows=%d (tokens=%d)", n, len(tokens))
             except Exception as exc:
+                err = f"{type(exc).__name__}: {exc}"[:1000]
                 log.exception("multi-token fetch failed: %s", exc)
+            if stream_name:
+                await ch_status.write_tick(stream_name, n, error=err)
             await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
 
-    async def gap_fill_task():
+    async def sweep_loop():
+        jitter = sweep.sweep_jitter_s(sweep_cadence)
+        log.info("sweep_loop: waiting %.0fs before first fire (cadence=%ss)", jitter, sweep_cadence)
+        await asyncio.sleep(jitter)
         ch = await async_client()
-        last_seen = await min_watermark_per_token(
-            ch, table="tradernick.binance_open_interest", tokens=tokens,
-        )
-        since = resolve_since(last_seen, t_start=t_start)
-        if since >= t_start:
-            return
-        log.info("binance_open_interest gap-fill since=%s until=%s (min_last_seen=%s, tokens=%d)",
-                 since, t_start, last_seen, len(tokens))
-        async def call(s, u):
-            return await fetch_and_insert(ds, tokens, s, u)
-        total = await run_chunked(label="binance_open_interest", since=since, until=t_start, call=call)
-        log.info("binance_open_interest gap-fill done total_rows=%d", total)
+        while True:
+            next_fire = time.monotonic() + sweep_cadence
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            try:
+                last_seen = await min_watermark_per_token(ch, table="tradernick.binance_open_interest", tokens=tokens)
+                since = sweep.sweep_since(now=now, sweep_cadence_seconds=sweep_cadence, last_seen=last_seen)
+                if since < now:
+                    n = await fetch_and_insert(ds, tokens, since, now)
+                    log.info("binance_open_interest sweep window=%s..%s rows=%d (min_last_seen=%s, tokens=%d)", since, now, n, last_seen, len(tokens))
+            except Exception as exc:
+                log.exception("binance_open_interest sweep failed: %s", exc)
+            await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
-    await asyncio.gather(live_loop(), gap_fill_task())
+    await asyncio.gather(live_loop(), sweep_loop())
+
 
 
 if __name__ == "__main__":

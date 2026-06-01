@@ -560,7 +560,9 @@
       // the cache — we always fetch both sides and pick at render time.
       // Exchange does bust, since it changes which filters are sent.
       const ex = instance.exchangeFlowExchange ?? 'binance';
-      return `${instance.kind}|${instance.chain ?? ''}|${instance.token}|${ex}|${instance.interval}`;
+      const cPart = activeChainGroup ? `cg:${activeChainGroup.name}` : (instance.chain ?? '');
+      const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
+      return `${instance.kind}|${cPart}|${tPart}|${ex}|${instance.interval}`;
     }
     if (instance.kind === 'pc') {
       // Overlay tokens influence the rendered chart, so they belong in the
@@ -2176,27 +2178,33 @@
           return;
         }
         case 'exchange_flow': {
-          // Two parallel fetches against /transfers/aggregate — one with
-          // the inflow filter set, one with the outflow filter set. The
-          // resulting buckets are merged by time into rows that carry
-          // both sides (sum_*_in and sum_*_out) plus the client-computed
-          // net (sum_in - sum_out). The render-time lines derivation
-          // then picks which series to plot based on flowType.
+          // Pre-rolled fast path: /exchange_flow/aggregate reads
+          // tradernick.exchange_flow_minute (SummingMergeTree fed by
+          // mv_exchange_flow). Same shape as /transfers/aggregate but the
+          // baked-in MV WHERE means All-chain queries finish in ms
+          // instead of ~80s. We still fire two requests — one per
+          // direction — so the render-time linesD can pick which series
+          // (inflow / outflow / netflow / all) to plot at toggle time
+          // without re-fetching.
           const ex = instance.exchangeFlowExchange ?? 'binance';
-          const inFilter = exchangeFlowInFilter(ex);
-          const outFilter = exchangeFlowOutFilter(ex);
-          const buildQS = (filter: Record<string, string[]>) => {
-            const qs = transferBaseQS(sinceIso, untilIso);
-            for (const k of FILTER_KEYS) {
-              const arr = (filter as Record<string, string[]>)[k] ?? [];
-              if (arr.length) qs.set(k, arr.join(','));
-            }
-            if (forceFresh) qs.set('fresh', '1');
+          const buildQS = (direction: 'in' | 'out') => {
+            const qs = new URLSearchParams({
+              direction,
+              exchange: ex,
+              interval: instance.interval,
+              since: sinceIso,
+              until: untilIso,
+              limit: '10000'
+            });
+            if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
+            else qs.set('chain', instance.chain ?? 'ETH');
+            if (activeTokenGroup !== null) qs.set('token_group', activeTokenGroup);
+            else qs.set('token', instance.token);
             return qs;
           };
           const [inRes, outRes] = await Promise.all([
-            queuedFetch(`/api/transfers/aggregate?${buildQS(inFilter)}`, { signal }),
-            queuedFetch(`/api/transfers/aggregate?${buildQS(outFilter)}`, { signal })
+            queuedFetch(`/api/exchange_flow/aggregate?${buildQS('in')}`, { signal }),
+            queuedFetch(`/api/exchange_flow/aggregate?${buildQS('out')}`, { signal })
           ]);
           if (!inRes.ok)  throw new Error(`exchange_flow inflow ${inRes.status}`);
           if (!outRes.ok) throw new Error(`exchange_flow outflow ${outRes.status}`);
@@ -2614,28 +2622,35 @@
   function exchangeFlowInFilter(ex: string): TF {
     const label = EXCHANGE_LABEL[ex] ?? ex;
     if (ex === 'hyperliquid') {
-      // Perp umbrella: receiver must carry both the per-perp deposit tag
-      // and the 'Perp' category. Sender must NOT be a perp wallet so we
-      // don't double-count perp-internal moves (bridge ↔ hot wallet).
-      return { receiver_all_in: ['Hyperliquid-Deposit', 'Perp'], sender_ex: ['Perp'] };
+      // Hyperliquid-Deposit already implies Perp (verified: every wallet
+      // tagged Hyperliquid-Deposit also carries 'Perp'). Sender-not-Perp
+      // still rules out HL-internal bridge ↔ hot wallet moves.
+      return { receiver_all_in: ['Hyperliquid-Deposit'], sender_ex: ['Perp'] };
     }
-    // CeX umbrella: per-CEX deposit tag + 'CEX' category; sender not CEX
-    // (excludes CEX-internal moves — those land under "CeX Internal Flow").
-    return { receiver_all_in: [`${label}-Deposit`, 'CEX'], sender_ex: ['CEX'] };
+    // {Exchange}-Deposit already implies CEX (verified across Binance,
+    // Coinbase, OKX, Bybit — 0 exceptions). Drop the redundant umbrella
+    // tag; sender-not-CEX still excludes CeX-internal moves (those land
+    // under the "CeX Internal Flow" template).
+    return { receiver_all_in: [`${label}-Deposit`], sender_ex: ['CEX'] };
   }
   function exchangeFlowOutFilter(ex: string): TF {
     const label = EXCHANGE_LABEL[ex] ?? ex;
     if (ex === 'hyperliquid') {
-      // Sender must carry both 'Hot-Wallet' and 'Perp'. Receiver must not
-      // be Hyperliquid (avoids double-counting HL-internal moves).
+      // sender_entity='Hyperliquid' already implies 'Perp', so the
+      // hasAll(['Hot-Wallet','Perp']) check is redundant — keep just
+      // 'Hot-Wallet'. Receiver-not-Hyperliquid still rules out HL-internal
+      // moves.
       return {
-        sender_all_in: ['Hot-Wallet', 'Perp'],
+        sender_all_in: ['Hot-Wallet'],
         sender_entity_in: ['Hyperliquid'],
         receiver_entity_ex: ['Hyperliquid']
       };
     }
+    // sender_entity=<CEX> already implies 'CEX', so the hasAll(['Hot-Wallet',
+    // 'CEX']) check is redundant — narrowing to 'Hot-Wallet' alone is what
+    // makes All-chain queries fast enough to clear the Sanic 180s budget.
     return {
-      sender_all_in: ['Hot-Wallet', 'CEX'],
+      sender_all_in: ['Hot-Wallet'],
       sender_entity_in: [label],
       receiver_ex: ['CEX']
     };
@@ -2983,7 +2998,6 @@
   });
   let displayTitle = $derived(
     isTemplate ? (instance.templateName as string)
-    : instance.kind === 'exchange_flow' ? `${kindLabel} — ${exchangeFlowLabel}`
     : kindLabel
   );
   let panelTitle = $derived(
@@ -3413,7 +3427,18 @@
             bind:value={instance.chain}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
           >
-            {#each chains as c (c)}<option value={c}>{c}</option>{/each}
+            {#if chainGroups.length > 0}
+              <optgroup label="Chain">
+                {#each chains as c (c)}<option value={c}>{c}</option>{/each}
+              </optgroup>
+              <optgroup label="Chain group">
+                {#each chainGroups as g (g.name)}
+                  <option value={g.name} title={g.description}>Σ {g.label}</option>
+                {/each}
+              </optgroup>
+            {:else}
+              {#each chains as c (c)}<option value={c}>{c}</option>{/each}
+            {/if}
           </select>
         {/if}
         <select
@@ -3446,7 +3471,7 @@
           <option value="inflow">Inflow</option>
           <option value="outflow">Outflow</option>
           <option value="netflow">Netflow</option>
-          <option value="all">All (in / out / net)</option>
+          <option value="all">All</option>
         </select>
         <select
           value={instance.token}
@@ -3454,7 +3479,7 @@
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
         >
           {#if tokenGroups.length > 0}
-            <optgroup label="Tokens on {instance.chain ?? ''}">
+            <optgroup label={activeChainGroup ? `Tokens on Σ ${activeChainGroup.label}` : `Tokens on ${instance.chain ?? ''}`}>
               {#each tokensForChain as t (t)}<option value={t}>{t}</option>{/each}
             </optgroup>
             <optgroup label="Token group">
@@ -4016,7 +4041,7 @@
     {#if data.length === 0}
       <div class="p-4 text-sm text-zinc-400">
         {#if instance.token && instance.chain && (instance.kind === 'transfer' || instance.kind === 'exchange_flow')}
-          No data available for {instance.token} on {instance.chain}.
+          No data available for {activeTokenGroup ? `Σ ${tokenGroups.find((g) => g.name === activeTokenGroup)?.label ?? activeTokenGroup}` : instance.token} on {activeChainGroup ? `Σ ${activeChainGroup.label}` : instance.chain}{instance.kind === 'exchange_flow' ? ` for ${EXCHANGE_LABEL[instance.exchangeFlowExchange ?? 'binance'] ?? (instance.exchangeFlowExchange ?? 'binance')}` : ''}.
         {:else}
           No data for {kindLabel}.
         {/if}
