@@ -978,7 +978,7 @@ export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('lido_')) return 'Lido';
   if (kind.startsWith('aero_basic_')) return 'Aerodrome Basic';
   if (kind.startsWith('aero_cl_')) return 'Aerodrome CL';
-  if (kind.startsWith('gmx_v2_')) return 'GMX V2';
+  if (kind.startsWith('gmx_v2_')) return 'GMX';
   if (kind.startsWith('hl_')) return 'Hyperliquid';
   return null;
 }
@@ -1012,7 +1012,7 @@ const _GROUP_ORDER: Record<string, number> = {
   'Uniswap V4': 32,
   'Aerodrome CL':    40,
   'Aerodrome Basic': 41,
-  'GMX V2':          50,
+  'GMX':             50,
   'Hyperliquid':     60
 };
 export function chartKindGroupOrder(group: string): number {
