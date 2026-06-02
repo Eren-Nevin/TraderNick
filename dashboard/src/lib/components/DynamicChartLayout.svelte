@@ -358,8 +358,9 @@
       // transfer kind. Default to the page's preferred chain. valueMode
       // ('usd' / 'amount') is restored if previously set; otherwise default
       // to 'usd' so the chart keeps its old behaviour after migration.
-      // Covers both `aave_*` (V3) and `aave_v2_*` / `aave_v4_*`.
-      if (inst.kind.startsWith('aave_')) {
+      // Covers `aave_v3_*`, `aave_v2_*`, and `aave_v4_*` (every kind in
+      // the union shares the `aave_v…_` prefix shape).
+      if (inst.kind.startsWith('aave_v')) {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
       }

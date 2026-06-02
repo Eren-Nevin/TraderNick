@@ -1,9 +1,6 @@
 <script lang="ts">
   import DynamicChartLayout from '$lib/components/DynamicChartLayout.svelte';
   import {
-    AAVE_CHART_KINDS,
-    AAVE_V2_CHART_KINDS,
-    AAVE_V4_CHART_KINDS,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind
@@ -12,18 +9,17 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = [
-    'ohlcv',
-    ...AAVE_CHART_KINDS, ...AAVE_V2_CHART_KINDS, ...AAVE_V4_CHART_KINDS
-  ];
+  // The three general wrapper kinds ('aave_v3', 'aave_v2', 'aave_v4') each
+  // expose an in-chart event selector (Deposits / Withdrawals / Net Deposit
+  // / …), collapsing what used to be 22 separate kinds in the picker into
+  // three. OHLCV stays available as a price reference.
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'aave_v3', 'aave_v2', 'aave_v4'];
   const LENDING_DEFAULT_TOKEN = 'USDC+USDT';
 
   function defaultLayout(): ChartInstanceT[] {
-    return AAVE_CHART_KINDS.map((kind) => {
-      const inst = newChartInstance(kind, { token: LENDING_DEFAULT_TOKEN, chain: 'ETH' });
-      inst.interval = '4h';
-      return inst;
-    });
+    const v3 = newChartInstance('aave_v3', { token: LENDING_DEFAULT_TOKEN, chain: 'ETH' });
+    v3.interval = '4h';
+    return [v3];
   }
 </script>
 

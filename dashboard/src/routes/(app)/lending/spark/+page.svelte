@@ -1,7 +1,6 @@
 <script lang="ts">
   import DynamicChartLayout from '$lib/components/DynamicChartLayout.svelte';
   import {
-    SPARK_CHART_KINDS,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind
@@ -10,15 +9,17 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', ...SPARK_CHART_KINDS];
+  // The general 'spark' wrapper kind exposes an in-chart event selector
+  // (Deposits / Withdrawals / Net Deposit / …), collapsing what used to be
+  // 8 separate kinds in the picker into one. OHLCV stays available so the
+  // page still has a price reference.
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'spark'];
   const LENDING_DEFAULT_TOKEN = 'USDC+USDT';
 
   function defaultLayout(): ChartInstanceT[] {
-    return SPARK_CHART_KINDS.map((kind) => {
-      const inst = newChartInstance(kind, { token: LENDING_DEFAULT_TOKEN, chain: 'ETH' });
-      inst.interval = '4h';
-      return inst;
-    });
+    const inst = newChartInstance('spark', { token: LENDING_DEFAULT_TOKEN, chain: 'ETH' });
+    inst.interval = '4h';
+    return [inst];
   }
 </script>
 

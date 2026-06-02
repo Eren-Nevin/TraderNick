@@ -268,14 +268,19 @@ export type ChartKind =
   | 'transfer'
   | 'exchange_flow'
   | 'pc'
-  | 'aave_deposit'
-  | 'aave_withdraw'
-  | 'aave_net_deposit'
-  | 'aave_borrow'
-  | 'aave_repay'
-  | 'aave_net_borrow'
-  | 'aave_flashloan'
-  | 'aave_liquidation'
+  | 'morpho'
+  | 'spark'
+  | 'aave_v3'
+  | 'aave_v2'
+  | 'aave_v4'
+  | 'aave_v3_deposit'
+  | 'aave_v3_withdraw'
+  | 'aave_v3_net_deposit'
+  | 'aave_v3_borrow'
+  | 'aave_v3_repay'
+  | 'aave_v3_net_borrow'
+  | 'aave_v3_flashloan'
+  | 'aave_v3_liquidation'
   | 'aave_v2_deposit'
   | 'aave_v2_withdraw'
   | 'aave_v2_net_deposit'
@@ -372,14 +377,17 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   transfer: 'Token Flow',
   exchange_flow: 'Exchange Flow',
   pc: 'Price Comparison',
-  aave_deposit: 'AAVE V3 Deposits',
-  aave_withdraw: 'AAVE V3 Withdrawals',
-  aave_net_deposit: 'AAVE V3 Net Deposit',
-  aave_borrow: 'AAVE V3 Borrows',
-  aave_repay: 'AAVE V3 Repays',
-  aave_net_borrow: 'AAVE V3 Net Borrow',
-  aave_flashloan: 'AAVE V3 Flash Loans',
-  aave_liquidation: 'AAVE V3 Liquidations',
+  aave_v3: 'AAVE V3',
+  aave_v2: 'AAVE V2',
+  aave_v4: 'AAVE V4',
+  aave_v3_deposit: 'AAVE V3 Deposits',
+  aave_v3_withdraw: 'AAVE V3 Withdrawals',
+  aave_v3_net_deposit: 'AAVE V3 Net Deposit',
+  aave_v3_borrow: 'AAVE V3 Borrows',
+  aave_v3_repay: 'AAVE V3 Repays',
+  aave_v3_net_borrow: 'AAVE V3 Net Borrow',
+  aave_v3_flashloan: 'AAVE V3 Flash Loans',
+  aave_v3_liquidation: 'AAVE V3 Liquidations',
   aave_v2_deposit: 'AAVE V2 Deposits',
   aave_v2_withdraw: 'AAVE V2 Withdrawals',
   aave_v2_net_deposit: 'AAVE V2 Net Deposit',
@@ -395,6 +403,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   aave_v4_repay: 'AAVE V4 Repays',
   aave_v4_net_borrow: 'AAVE V4 Net Borrow',
   aave_v4_liquidation: 'AAVE V4 Liquidations',
+  morpho: 'Morpho',
   morpho_supply: 'Morpho Supplies',
   morpho_withdraw: 'Morpho Withdrawals',
   morpho_net_supply: 'Morpho Net Supply',
@@ -405,6 +414,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   morpho_withdraw_collateral: 'Morpho Withdraw Collateral',
   morpho_net_collateral: 'Morpho Net Collateral',
   morpho_liquidation: 'Morpho Liquidations',
+  spark: 'Spark',
   spark_deposit: 'Spark Deposits',
   spark_withdraw: 'Spark Withdrawals',
   spark_net_deposit: 'Spark Net Deposit',
@@ -469,40 +479,44 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
 /** AAVE chart kinds collected for convenience (loop over them on the
  *  lending page + share helpers). Order matters — used as the default
  *  layout order on the Lending page. */
-export const AAVE_CHART_KINDS: ChartKind[] = [
-  'aave_deposit',
-  'aave_withdraw',
-  'aave_net_deposit',
-  'aave_borrow',
-  'aave_repay',
-  'aave_net_borrow',
-  'aave_flashloan',
-  'aave_liquidation'
+export const AAVE_V3_CHART_KINDS: ChartKind[] = [
+  'aave_v3_deposit',
+  'aave_v3_withdraw',
+  'aave_v3_net_deposit',
+  'aave_v3_borrow',
+  'aave_v3_repay',
+  'aave_v3_net_borrow',
+  'aave_v3_flashloan',
+  'aave_v3_liquidation'
 ];
 
-/** Map from a single-event ChartKind to the AAVE event slug. */
-export const AAVE_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
-  aave_deposit: 'deposit',
-  aave_withdraw: 'withdraw',
-  aave_borrow: 'borrow',
-  aave_repay: 'repay',
-  aave_flashloan: 'flashloan',
-  aave_liquidation: 'liquidation'
+/** Map from a single-event ChartKind to the AAVE V3 event slug. */
+export const AAVE_V3_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  aave_v3_deposit: 'deposit',
+  aave_v3_withdraw: 'withdraw',
+  aave_v3_borrow: 'borrow',
+  aave_v3_repay: 'repay',
+  aave_v3_flashloan: 'flashloan',
+  aave_v3_liquidation: 'liquidation'
 };
 
-/** Net AAVE kinds — each fetches two regular event aggregates in parallel
- *  and plots positive − negative per bucket. positive[0] is added,
- *  positive[1] is subtracted. */
-export const AAVE_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
-  aave_net_deposit: ['deposit', 'withdraw'],
-  aave_net_borrow: ['borrow', 'repay']
+/** Net AAVE V3 kinds — each fetches two regular event aggregates in
+ *  parallel and plots positive − negative per bucket. positive[0] is
+ *  added, positive[1] is subtracted. */
+export const AAVE_V3_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  aave_v3_net_deposit: ['deposit', 'withdraw'],
+  aave_v3_net_borrow: ['borrow', 'repay']
 };
 
-/** True for any AAVE kind (single-event or net). */
-export function isAaveKind(kind: ChartKind): boolean {
+/** True for any AAVE V3 kind (single-event, net, or the general wrapper).
+ *  The 'aave_v3' wrapper kind delegates to a concrete aave_v3_* event via
+ *  instance.aaveV3Subkind; every AAVE V3 routing branch reads the subkind
+ *  through the effective-kind derived value. */
+export function isAaveV3Kind(kind: ChartKind): boolean {
+  if (kind === 'aave_v3') return true;
   return (
-    AAVE_KIND_TO_EVENT[kind] !== undefined ||
-    AAVE_NET_KIND_TO_EVENTS[kind] !== undefined
+    AAVE_V3_KIND_TO_EVENT[kind] !== undefined ||
+    AAVE_V3_NET_KIND_TO_EVENTS[kind] !== undefined
   );
 }
 
@@ -532,6 +546,9 @@ export const AAVE_V2_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, stri
   aave_v2_net_borrow: ['borrow', 'repay']
 };
 export function isAaveV2Kind(kind: ChartKind): boolean {
+  // The 'aave_v2' wrapper kind delegates to a concrete aave_v2_* event via
+  // instance.aaveV2Subkind — see isAaveV3Kind for the same pattern.
+  if (kind === 'aave_v2') return true;
   return AAVE_V2_KIND_TO_EVENT[kind] !== undefined || AAVE_V2_NET_KIND_TO_EVENTS[kind] !== undefined;
 }
 
@@ -558,6 +575,9 @@ export const AAVE_V4_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, stri
   aave_v4_net_borrow: ['borrow', 'repay']
 };
 export function isAaveV4Kind(kind: ChartKind): boolean {
+  // The 'aave_v4' wrapper kind delegates to a concrete aave_v4_* event via
+  // instance.aaveV4Subkind — see isAaveV3Kind for the same pattern.
+  if (kind === 'aave_v4') return true;
   return AAVE_V4_KIND_TO_EVENT[kind] !== undefined || AAVE_V4_NET_KIND_TO_EVENTS[kind] !== undefined;
 }
 
@@ -593,6 +613,11 @@ export const MORPHO_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, strin
   morpho_net_collateral: ['supply_collateral', 'withdraw_collateral']
 };
 export function isMorphoKind(kind: ChartKind): boolean {
+  // The general 'morpho' wrapper kind delegates to a concrete morpho_* event
+  // via instance.morphoSubkind — every Morpho routing branch (data fetch,
+  // chain selector, value-mode toggle, render branch) treats it as a Morpho
+  // chart and reads the subkind through the effective-kind derived value.
+  if (kind === 'morpho') return true;
   return MORPHO_KIND_TO_EVENT[kind] !== undefined || MORPHO_NET_KIND_TO_EVENTS[kind] !== undefined;
 }
 
@@ -621,6 +646,11 @@ export const SPARK_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string
   spark_net_borrow: ['borrow', 'repay']
 };
 export function isSparkKind(kind: ChartKind): boolean {
+  // The general 'spark' wrapper kind delegates to a concrete spark_* event
+  // via instance.sparkSubkind — every Spark routing branch (data fetch,
+  // chain pin, value-mode toggle, render branch) treats it as a Spark
+  // chart and reads the subkind through the effective-kind derived value.
+  if (kind === 'spark') return true;
   return SPARK_KIND_TO_EVENT[kind] !== undefined || SPARK_NET_KIND_TO_EVENTS[kind] !== undefined;
 }
 
@@ -885,8 +915,8 @@ export type AeroBasicPool = {
  *  top of the menu. */
 export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('aave_v2_')) return 'AAVE V2';
+  if (kind.startsWith('aave_v3_')) return 'AAVE V3';
   if (kind.startsWith('aave_v4_')) return 'AAVE V4';
-  if (kind.startsWith('aave_')) return 'AAVE V3';
   if (kind.startsWith('morpho_')) return 'Morpho';
   if (kind.startsWith('spark_')) return 'Spark';
   if (kind.startsWith('uniswap_v2_')) return 'Uniswap V2';
@@ -1174,6 +1204,26 @@ export type ChartInstance = {
    *  (e.g. CeX Netflow = CeX Inflow − CeX Outflow). Mutually exclusive
    *  with `filter` — templates set one or the other, never both. */
   netFilter?: { positive: TransferFilters; negative: TransferFilters };
+  /** General-Morpho wrapper only (kind === 'morpho'): which concrete
+   *  Morpho event behavior the chart currently shows. The user picks via
+   *  the in-chart selector; switching busts the cache (subkind is folded
+   *  into the load key) and re-fires the morpho_aggregate fetch with the
+   *  new event. Ignored for any other chart kind. */
+  morphoSubkind?: ChartKind;
+  /** General-Spark wrapper only (kind === 'spark'): which concrete Spark
+   *  event behavior the chart currently shows. Same mechanism as
+   *  morphoSubkind. Ignored for any other chart kind. */
+  sparkSubkind?: ChartKind;
+  /** General-AAVE-V3 wrapper only (kind === 'aave_v3'): which concrete
+   *  aave_v3_* event behavior the chart currently shows. Same mechanism
+   *  as morphoSubkind. Ignored for any other chart kind. */
+  aaveV3Subkind?: ChartKind;
+  /** General-AAVE-V2 wrapper only (kind === 'aave_v2'): which concrete
+   *  aave_v2_* event the chart currently shows. */
+  aaveV2Subkind?: ChartKind;
+  /** General-AAVE-V4 wrapper only (kind === 'aave_v4'): which concrete
+   *  aave_v4_* event the chart currently shows. */
+  aaveV4Subkind?: ChartKind;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */
@@ -1261,33 +1311,60 @@ export function newChartInstance(
     base.overlayTokens = [];
     base.exchange = 'binance';
   }
-  if (isAaveKind(kind)) {
-    // AAVE charts (single-event + net) behave like transfer charts —
+  if (isAaveV3Kind(kind)) {
+    // AAVE V3 charts (single-event + net) behave like transfer charts —
     // keyed by (chain, token) — so we surface the same selectors.
     // Default eth_market is empty, which the data_server treats as
     // "all markets".
     base.chain = defaults.chain ?? 'ETH';
     base.valueMode = 'usd';
+    if (kind === 'aave_v3') {
+      // General wrapper — default to Deposits; the user flips via the
+      // in-chart sub-kind selector. Subkind must be a concrete aave_v3_*
+      // kind so AAVE_V3_KIND_TO_EVENT / AAVE_V3_NET_KIND_TO_EVENTS lookups
+      // resolve through it.
+      base.aaveV3Subkind = 'aave_v3_deposit';
+    }
   }
   if (isAaveV2Kind(kind)) {
     // V2 only has two configured chains (ETH + POLYGON) — defaults to ETH.
     base.chain = defaults.chain ?? 'ETH';
     base.valueMode = 'usd';
+    if (kind === 'aave_v2') {
+      base.aaveV2Subkind = 'aave_v2_deposit';
+    }
   }
   if (isAaveV4Kind(kind)) {
     // V4 is mainnet-only for now; default ETH.
     base.chain = 'ETH';
     base.valueMode = 'usd';
+    if (kind === 'aave_v4') {
+      base.aaveV4Subkind = 'aave_v4_deposit';
+    }
   }
   if (isMorphoKind(kind)) {
     // Morpho is ETH + BASE.
     base.chain = defaults.chain ?? 'ETH';
     base.valueMode = 'usd';
+    if (kind === 'morpho') {
+      // General wrapper — default to Supplies; the user flips via the
+      // in-chart sub-kind selector. Subkind must be a concrete morpho_*
+      // kind so MORPHO_KIND_TO_EVENT / MORPHO_NET_KIND_TO_EVENTS lookups
+      // resolve through it.
+      base.morphoSubkind = 'morpho_supply';
+    }
   }
   if (isSparkKind(kind)) {
     // Spark is ETH-only.
     base.chain = 'ETH';
     base.valueMode = 'usd';
+    if (kind === 'spark') {
+      // General wrapper — default to Deposits; the user flips via the
+      // in-chart sub-kind selector. Subkind must be a concrete spark_*
+      // kind so SPARK_KIND_TO_EVENT / SPARK_NET_KIND_TO_EVENTS lookups
+      // resolve through it.
+      base.sparkSubkind = 'spark_deposit';
+    }
   }
   if (isHlKind(kind)) {
     // Hyperliquid: token roster matches binance INGEST_TOKENS. Static "HL"

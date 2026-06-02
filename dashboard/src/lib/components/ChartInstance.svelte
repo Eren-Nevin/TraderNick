@@ -44,18 +44,24 @@
     sizeSeries,
     unixSec,
     weekBoundariesSec,
-    AAVE_KIND_TO_EVENT,
-    AAVE_NET_KIND_TO_EVENTS,
-    isAaveKind,
+    AAVE_V3_CHART_KINDS,
+    AAVE_V3_KIND_TO_EVENT,
+    AAVE_V3_NET_KIND_TO_EVENTS,
+    isAaveV3Kind,
+    AAVE_V2_CHART_KINDS,
     AAVE_V2_KIND_TO_EVENT,
     AAVE_V2_NET_KIND_TO_EVENTS,
     isAaveV2Kind,
+    AAVE_V4_CHART_KINDS,
     AAVE_V4_KIND_TO_EVENT,
     AAVE_V4_NET_KIND_TO_EVENTS,
     isAaveV4Kind,
+    MORPHO_CHART_KINDS,
     MORPHO_KIND_TO_EVENT,
     MORPHO_NET_KIND_TO_EVENTS,
     isMorphoKind,
+    chartKindShortLabel,
+    SPARK_CHART_KINDS,
     SPARK_KIND_TO_EVENT,
     SPARK_NET_KIND_TO_EVENTS,
     isSparkKind,
@@ -154,6 +160,26 @@
     onRemove: (id: string) => void;
     onSwap: (id: string, ev: MouseEvent) => void;
   } = $props();
+
+  // ---- effective kind ----
+  // The general 'morpho' / 'spark' / 'aave_v3' / 'aave_v2' / 'aave_v4' wrapper
+  // kinds delegate to a concrete *_subkind selected by the in-chart picker.
+  // Every protocol routing lookup (KIND_TO_EVENT, NET_KIND_TO_EVENTS, cache
+  // key) reads through this so switching subkinds re-fetches the right
+  // event. For every other kind, effectiveKind is just instance.kind.
+  let effectiveKind = $derived(
+    instance.kind === 'morpho'
+      ? ((instance.morphoSubkind ?? 'morpho_supply') as ChartInstanceT['kind'])
+      : instance.kind === 'spark'
+      ? ((instance.sparkSubkind ?? 'spark_deposit') as ChartInstanceT['kind'])
+      : instance.kind === 'aave_v3'
+      ? ((instance.aaveV3Subkind ?? 'aave_v3_deposit') as ChartInstanceT['kind'])
+      : instance.kind === 'aave_v2'
+      ? ((instance.aaveV2Subkind ?? 'aave_v2_deposit') as ChartInstanceT['kind'])
+      : instance.kind === 'aave_v4'
+      ? ((instance.aaveV4Subkind ?? 'aave_v4_deposit') as ChartInstanceT['kind'])
+      : instance.kind
+  );
 
   // ---- uniswap-kind helpers (derived from `uniPools`) ----
   // `uniPools` is the response from /uniswap/streams: one row per
@@ -573,14 +599,17 @@
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}|ov:${ov}`;
     }
-    if (isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind)) {
+    if (isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind)) {
       // AAVE charts (single-event + net) depend on chain + token (event_type
       // derived from kind). Either axis may be a group name — fold the
       // group flag into the key so toggling busts the cache. Same shape
-      // for AAVE V2 (different endpoint, identical key shape).
+      // for AAVE V2 (different endpoint, identical key shape). For the
+      // general Morpho wrapper we key on effectiveKind so the subkind
+      // selector (Supplies / Net Borrow / …) busts the cache and re-fires
+      // the right /api/morpho/aggregate?event=… fetch.
       const cPart = activeChainGroup ? `cg:${activeChainGroup.name}` : (instance.chain ?? '');
       const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
-      return `${instance.kind}|${cPart}|${tPart}|${instance.interval}`;
+      return `${effectiveKind}|${cPart}|${tPart}|${instance.interval}`;
     }
     if (isGmxKind(instance.kind)) {
       // GMX charts depend on chain (ARB-only for now) + market_name selector.
@@ -776,7 +805,7 @@
       let untilIso: string;
       const isWideWindowKind =
         instance.kind === 'transfer' ||
-        isAaveKind(instance.kind) ||
+        isAaveV3Kind(instance.kind) ||
         isAaveV2Kind(instance.kind) ||
         isAaveV4Kind(instance.kind) ||
         isMorphoKind(instance.kind) ||
@@ -829,7 +858,7 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const netEvs = MORPHO_NET_KIND_TO_EVENTS[instance.kind];
+        const netEvs = MORPHO_NET_KIND_TO_EVENTS[effectiveKind];
         if (netEvs) {
           const [posEvent, negEvent] = netEvs;
           const [posRes, negRes] = await Promise.all([
@@ -868,7 +897,7 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        const morphoEvent = MORPHO_KIND_TO_EVENT[instance.kind];
+        const morphoEvent = MORPHO_KIND_TO_EVENT[effectiveKind];
         if (morphoEvent) {
           const res = await queuedFetch(`/api/morpho/aggregate?${buildMorphoQs(morphoEvent)}`, { signal });
           if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -898,7 +927,7 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const netEvs = SPARK_NET_KIND_TO_EVENTS[instance.kind];
+        const netEvs = SPARK_NET_KIND_TO_EVENTS[effectiveKind];
         if (netEvs) {
           const [posEvent, negEvent] = netEvs;
           const [posRes, negRes] = await Promise.all([
@@ -937,7 +966,7 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        const sparkEvent = SPARK_KIND_TO_EVENT[instance.kind];
+        const sparkEvent = SPARK_KIND_TO_EVENT[effectiveKind];
         if (sparkEvent) {
           const res = await queuedFetch(`/api/spark/aggregate?${buildSparkQs(sparkEvent)}`, { signal });
           if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -1256,7 +1285,7 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const netV4Events = AAVE_V4_NET_KIND_TO_EVENTS[instance.kind];
+        const netV4Events = AAVE_V4_NET_KIND_TO_EVENTS[effectiveKind];
         if (netV4Events) {
           const [posEvent, negEvent] = netV4Events;
           const [posRes, negRes] = await Promise.all([
@@ -1295,7 +1324,7 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        const v4Event = AAVE_V4_KIND_TO_EVENT[instance.kind];
+        const v4Event = AAVE_V4_KIND_TO_EVENT[effectiveKind];
         if (v4Event) {
           const res = await queuedFetch(`/api/aave_v4/aggregate?${buildV4Qs(v4Event)}`, { signal });
           if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -1325,7 +1354,7 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const netV2Events = AAVE_V2_NET_KIND_TO_EVENTS[instance.kind];
+        const netV2Events = AAVE_V2_NET_KIND_TO_EVENTS[effectiveKind];
         if (netV2Events) {
           const [posEvent, negEvent] = netV2Events;
           const [posRes, negRes] = await Promise.all([
@@ -1364,7 +1393,7 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        const v2Event = AAVE_V2_KIND_TO_EVENT[instance.kind];
+        const v2Event = AAVE_V2_KIND_TO_EVENT[effectiveKind];
         if (v2Event) {
           const res = await queuedFetch(`/api/aave_v2/aggregate?${buildV2Qs(v2Event)}`, { signal });
           if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -1381,7 +1410,7 @@
       // borrows − repays) fire two parallel /api/aave/aggregate calls and
       // subtract on the client. Same (chain, token, interval) shape as the
       // single-event kinds — the only difference is the dual fetch.
-      const aaveNetEvents = AAVE_NET_KIND_TO_EVENTS[instance.kind];
+      const aaveNetEvents = AAVE_V3_NET_KIND_TO_EVENTS[effectiveKind];
       if (aaveNetEvents) {
         const [posEvent, negEvent] = aaveNetEvents;
         const buildAaveQs = (event: string) => {
@@ -2013,7 +2042,7 @@
         loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
         return;
       }
-      const aaveEvent = AAVE_KIND_TO_EVENT[instance.kind];
+      const aaveEvent = AAVE_V3_KIND_TO_EVENT[effectiveKind];
       if (aaveEvent) {
         const qs = new URLSearchParams({
           event: aaveEvent,
@@ -2342,7 +2371,7 @@
   // are excluded because summing them produces nonsense.
   let canSum = $derived(
     instance.kind === 'transfer'
-      || isAaveKind(instance.kind)
+      || isAaveV3Kind(instance.kind)
       || isAaveV2Kind(instance.kind)
       || isAaveV4Kind(instance.kind)
       || isMorphoKind(instance.kind)
@@ -2516,21 +2545,106 @@
           });
           break;
         }
-        case 'transfer': {
-          const arr = data as TransferBucket[];
-          // MAs follow whatever the main series is plotting — USD value by
-          // default, raw token amount when the chart is in Amount mode.
+        default: {
+          // Generic MA branch for event-summary kinds whose rows expose
+          // {sum_value_usd, sum_amount} — transfer, AAVE V2/V3/V4, Morpho,
+          // Spark, Lido, Aerodrome (CL + basic), Uniswap (USD mode).
+          //
+          // Special-cased inline below:
+          //   - exchange_flow: one MA per displayed inflow/outflow/netflow line
+          //   - gmx:           MA on the per-kind primary field (GMX_PRIMARY_FIELD)
+          //   - uniswap (amount mode): per-token MAs on amt0 + amt1
+          //
+          // Kinds with no usable scalar value field (pc, hl_*) intentionally
+          // fall through without producing an MA line.
+          const rows = data as unknown as Record<string, number>[];
+
+          if (instance.kind === 'exchange_flow') {
+            const useUsd = (instance.valueMode ?? 'usd') === 'usd';
+            const t = instance.exchangeFlowType ?? 'netflow';
+            const fIn  = useUsd ? 'sum_value_usd_in'  : 'sum_amount_in';
+            const fOut = useUsd ? 'sum_value_usd_out' : 'sum_amount_out';
+            const fNet = useUsd ? 'net_value_usd'     : 'net_amount';
+            const lbl  = useUsd ? 'USD' : 'Amount';
+            const pushFlow = (key: string, line: string, field: string, dash: string) => {
+              const a = maArray(rows.map((r) => r[field] ?? 0), ma.length, ma.type);
+              out.push({
+                key: `cum_${key}_${idx}`,
+                label: `${line} ${lbl} ${tag}`,
+                color, dash,
+                compute: (_d: unknown, i: number) => a[i]
+              });
+            };
+            if (t === 'inflow')  pushFlow('in',  'Inflow',  fIn,  SUB_DASH[0]);
+            else if (t === 'outflow') pushFlow('out', 'Outflow', fOut, SUB_DASH[0]);
+            else if (t === 'netflow') pushFlow('net', 'Netflow', fNet, SUB_DASH[0]);
+            else {
+              pushFlow('in',  'Inflow',  fIn,  SUB_DASH[0]);
+              pushFlow('out', 'Outflow', fOut, SUB_DASH[1]);
+              pushFlow('net', 'Netflow', fNet, SUB_DASH[2]);
+            }
+            break;
+          }
+
+          if (isGmxKind(instance.kind)) {
+            const field = GMX_PRIMARY_FIELD[instance.kind] ?? 'sum_value_usd';
+            const a = maArray(rows.map((r) => r[field] ?? 0), ma.length, ma.type);
+            out.push({
+              key: `cum_gmx_${idx}`,
+              label: `${field === 'sum_value_usd' ? 'USD' : 'Amount'} ${tag}`,
+              color, dash: SUB_DASH[0],
+              compute: (_d: unknown, i: number) => a[i]
+            });
+            break;
+          }
+
+          const isUniAmtMode =
+            (isUniswapKind(instance.kind)
+              || isUniswapV2Kind(instance.kind)
+              || instance.kind === 'uniswap_v4_swap')
+            && uniswapValueModeEffective === 'amount';
+          if (isUniAmtMode) {
+            const sym0 = instance.uniV4Pool?.symbol0
+              ?? instance.aeroPool?.symbol0
+              ?? instance.aeroBasicPool?.symbol0
+              ?? instance.uniPool?.symbol0 ?? 't0';
+            const sym1 = instance.uniV4Pool?.symbol1
+              ?? instance.aeroPool?.symbol1
+              ?? instance.aeroBasicPool?.symbol1
+              ?? instance.uniPool?.symbol1 ?? 't1';
+            const a0 = maArray(rows.map((r) => r.sum_amount0 ?? 0), ma.length, ma.type);
+            const a1 = maArray(rows.map((r) => r.sum_amount1 ?? 0), ma.length, ma.type);
+            out.push({
+              key: `cum_amt0_${idx}`,
+              label: `${sym0} ${tag}`,
+              color, dash: SUB_DASH[0],
+              axis: 'primary' as const,
+              compute: (_d: unknown, i: number) => a0[i]
+            });
+            out.push({
+              key: `cum_amt1_${idx}`,
+              label: `${sym1} ${tag}`,
+              color, dash: SUB_DASH[1],
+              axis: 'secondary' as const,
+              compute: (_d: unknown, i: number) => a1[i]
+            });
+            break;
+          }
+
+          // Kinds we know have no {sum_value_usd, sum_amount} scalar — skip
+          // rather than feed maArray a NaN-filled series.
+          if (instance.kind === 'pc' || instance.kind.startsWith('hl_')) break;
+
           const useUsd = (instance.valueMode ?? 'usd') === 'usd';
-          const arrMa = maArray(
-            arr.map((b) => (useUsd ? b.sum_value_usd : b.sum_amount)),
+          const a = maArray(
+            rows.map((r) => (useUsd ? r.sum_value_usd : r.sum_amount) ?? 0),
             ma.length, ma.type
           );
           out.push({
-            key: `cum_transfer_${idx}`,
+            key: `cum_${idx}`,
             label: `${useUsd ? 'USD' : 'Amount'} ${tag}`,
-            color,
-            dash: SUB_DASH[0],
-            compute: (_d: TransferBucket, i: number) => arrMa[i]
+            color, dash: SUB_DASH[0],
+            compute: (_d: unknown, i: number) => a[i]
           });
           break;
         }
@@ -2986,6 +3100,9 @@
     instance.height = match.height as ChartHeight;
   }
 
+  // Title-bar label. The general Morpho wrapper always reads as "Morpho"
+  // (per spec) — the active subkind is communicated via the in-chart
+  // selector rendered alongside the chain/token controls below.
   let kindLabel = $derived(CHART_KIND_LABELS[instance.kind]);
   let isTemplate = $derived(typeof instance.templateName === 'string' && instance.templateName.length > 0);
   let exchangeFlowLabel = $derived.by(() => {
@@ -3112,7 +3229,20 @@
       {:else if isMorphoKind(instance.kind)}
         <!-- Morpho: ETH + BASE. Same token selector pattern as V2/V3.
              Markets (market_id) are summed across — they aren't a chart
-             dimension in V1. -->
+             dimension in V1. The general wrapper (instance.kind === 'morpho')
+             also surfaces an event sub-kind selector — picks which Morpho
+             event the chart is currently showing. -->
+        {#if instance.kind === 'morpho'}
+          <select
+            bind:value={instance.morphoSubkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Morpho event to display"
+          >
+            {#each MORPHO_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <select
           bind:value={instance.chain}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -3144,7 +3274,20 @@
         </select>
       {:else if isSparkKind(instance.kind)}
         <!-- Spark: ETH-only (AAVE V3 fork by Sky/Maker). Static ETH chip
-             + token selector identical to V3. -->
+             + token selector identical to V3. The general wrapper
+             (instance.kind === 'spark') also surfaces an event sub-kind
+             selector that picks which Spark event the chart is showing. -->
+        {#if instance.kind === 'spark'}
+          <select
+            bind:value={instance.sparkSubkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Spark event to display"
+          >
+            {#each SPARK_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">ETH</span>
         <select
           value={instance.token}
@@ -3254,7 +3397,20 @@
         {/if}
       {:else if isAaveV4Kind(instance.kind)}
         <!-- AAVE V4: ETH-only (V4 is mainnet-only currently). Static
-             chain chip + the same token selector as V2/V3. -->
+             chain chip + the same token selector as V2/V3. The general
+             wrapper (instance.kind === 'aave_v4') also surfaces an event
+             sub-kind selector. -->
+        {#if instance.kind === 'aave_v4'}
+          <select
+            bind:value={instance.aaveV4Subkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="AAVE V4 event to display"
+          >
+            {#each AAVE_V4_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">ETH</span>
         <select
           value={instance.token}
@@ -3280,7 +3436,20 @@
       {:else if isAaveV2Kind(instance.kind)}
         <!-- AAVE V2: ETH + POLYGON only (the two chains DeFiStream has
              V2 configured for). Same token selector + token-group support
-             as V3 since the data shape is identical. -->
+             as V3 since the data shape is identical. The general wrapper
+             (instance.kind === 'aave_v2') also surfaces an event sub-kind
+             selector. -->
+        {#if instance.kind === 'aave_v2'}
+          <select
+            bind:value={instance.aaveV2Subkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="AAVE V2 event to display"
+          >
+            {#each AAVE_V2_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <select
           bind:value={instance.chain}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -3367,11 +3536,23 @@
             <span class="text-zinc-500 ml-1">{instance.aeroBasicPool.stable ? 'sAMM' : 'vAMM'}</span>
           </span>
         {/if}
-      {:else if isAaveKind(instance.kind)}
+      {:else if isAaveV3Kind(instance.kind)}
         <!-- AAVE kinds: chain dropdown (5 EVMs + chain groups) + token
              <select> with a "Token group" optgroup so the user can pick
              e.g. "USDC+USDT" or "Stables" and the chart sums across the
-             group's members. -->
+             group's members. The general wrapper (instance.kind === 'aave_v3')
+             also surfaces an event sub-kind selector. -->
+        {#if instance.kind === 'aave_v3'}
+          <select
+            bind:value={instance.aaveV3Subkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="AAVE V3 event to display"
+          >
+            {#each AAVE_V3_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <select
           bind:value={instance.chain}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -3723,7 +3904,7 @@
         <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
         Week lines
       </label>
-      {#if instance.kind === 'transfer' || isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow') || isUniswapV2Kind(instance.kind) || instance.kind === 'uniswap_v4_swap' || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
+      {#if instance.kind === 'transfer' || isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow') || isUniswapV2Kind(instance.kind) || instance.kind === 'uniswap_v4_swap' || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
         <!-- USD ⇆ Amount toggle. For AAVE / Lido the chart shows a single
              series in either mode. For Uniswap (except net_swap_flow which
              is intrinsically directional USD), Amount mode renders TWO
@@ -4262,7 +4443,7 @@
         formatY={fmtUsdAxis}
         formatTooltip={fmtUsdTooltip}
       />
-    {:else if isAaveKind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxKind(instance.kind) || isHlKind(instance.kind)}
+    {:else if isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxKind(instance.kind) || isHlKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={aaveLinesD}
