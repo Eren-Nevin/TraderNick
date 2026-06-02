@@ -318,6 +318,23 @@ async def write_crash(name: str, error_text: Optional[str]) -> None:
         log.warning("ch_status write_crash(%s) failed: %s", name, exc)
 
 
+async def clear_tick_in_progress(name: str) -> None:
+    """Force tick_in_progress=0 for `name`. Called by the supervisor on every
+    subprocess exit (crash, stop, or clean) so a worker that got SIGTERM'd
+    mid-fetch doesn't leave the dashboard stuck on RUNNING. Read-modify-write
+    against CH because the supervisor process doesn't share _TICK_COUNTERS
+    with the worker."""
+    try:
+        c = await _read_counter_from_ch(name)
+        if c is None:
+            return
+        row = _build_row(c, name, now=_now(), tick_in_progress=0)
+        ch = await async_client()
+        await ch.insert(_STATUS_TABLE, [row], column_names=_COLUMN_NAMES)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("ch_status clear_tick_in_progress(%s) failed: %s", name, exc)
+
+
 async def reset_crash_count(name: str) -> None:
     """Set crash_count back to 0 for `name`. Called from the admin panel /
     /streams/<name>/reset-crash-count endpoint."""

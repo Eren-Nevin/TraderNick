@@ -87,10 +87,12 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
   {
     type: 'hyperliquid_events',
     label: 'Hyperliquid events',
-    description: 'Each event runs as its own subprocess (live + gap-fill); backfill kicks an extra one-shot scan for the given window.',
+    description: 'Defaults to all events × the live INGEST_TOKENS roster — same set the per-event live streams poll. Deselect to narrow.',
     fields: [
-      { name: 'events', label: 'Events', kind: 'multiselect', options: HL_EVENTS, required: true },
-      { name: 'tokens', label: 'Tokens', kind: 'multiselect', options: INGEST_TOKENS }
+      { name: 'events', label: 'Events', kind: 'multiselect',
+        options: HL_EVENTS, defaultSelected: HL_EVENTS, required: true },
+      { name: 'tokens', label: 'Tokens', kind: 'multiselect',
+        options: INGEST_TOKENS, defaultSelected: INGEST_TOKENS }
     ]
   },
   {

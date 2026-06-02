@@ -44,9 +44,19 @@ async def run(stream_name: str, event: str) -> None:
         sys.exit(2)
 
     tokens = list(config.INGEST_TOKENS)
-    ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
+    # Generous per-request timeout — position_history responses can balloon
+    # when the sweep `since` reaches back across a long stale gap. SDK
+    # default is 600s; bump to 1800s so we don't trip ReadTimeout while
+    # DeFiStream is still streaming the parquet body.
+    ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY, timeout=1800.0)
     tick_s, _ = _CADENCE[event]
-    sweep_cadence = sweep.sweep_cadence_s(tick_s)
+    # Sweep cadence override — position_history responses are heavy
+    # (~50K rows per 5 min × 26 tokens), so the default 10× live cadence
+    # (50 min) ends up assembling a several-hundred-MB payload per fire.
+    # A tighter 30-min cadence keeps each individual sweep cheaper at
+    # DeFiStream's expense and avoids long read stalls.
+    _SWEEP_CADENCE_OVERRIDES = {"position_history": 1800.0}  # 30 min
+    sweep_cadence = _SWEEP_CADENCE_OVERRIDES.get(event, sweep.sweep_cadence_s(tick_s))
     _method, table, _cols, _tf = HL_EVENTS[event]
     per_token = event in _PER_TOKEN_TABLE
 

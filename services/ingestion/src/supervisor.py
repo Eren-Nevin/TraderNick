@@ -156,6 +156,15 @@ class Supervisor:
             status.running = False
             status.last_exit_code = code
             self._procs.pop(name, None)
+            # Always clear tick_in_progress on the way out. If the worker was
+            # mid-fetch when SIGTERM'd or crashed, write_tick_start had set
+            # the flag to 1 but write_tick never ran to set it back to 0.
+            # Leaving it stuck makes the dashboard show RUNNING forever
+            # against a process that no longer exists.
+            try:
+                await ch_status.clear_tick_in_progress(name)
+            except Exception as exc:  # noqa: BLE001
+                log.debug("clear_tick_in_progress(%s) failed: %s", name, exc)
             if status.requested_stop:
                 log.info("worker %s exited after stop request (code=%s)", name, code)
                 return
