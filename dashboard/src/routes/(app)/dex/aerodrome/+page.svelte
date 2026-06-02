@@ -1,8 +1,6 @@
 <script lang="ts">
   import DynamicChartLayout from '$lib/components/DynamicChartLayout.svelte';
   import {
-    AERO_CHART_KINDS,
-    AERO_BASIC_CHART_KINDS,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind
@@ -11,18 +9,17 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = [
-    'ohlcv',
-    ...AERO_CHART_KINDS,
-    ...AERO_BASIC_CHART_KINDS
-  ];
+  // The two general wrapper kinds ('aero_cl', 'aero_basic') each expose an
+  // in-chart event selector (Swaps / Deposits / Withdrawals / Collects |
+  // Claims / Net Liquidity), collapsing what used to be 10 explicit
+  // per-event kinds in the picker into two. OHLCV stays as a price
+  // reference.
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'aero_cl', 'aero_basic'];
 
   function defaultLayout(): ChartInstanceT[] {
-    return AERO_CHART_KINDS.map((kind) => {
-      const inst = newChartInstance(kind, { token: 'USDC', chain: 'BASE' });
-      inst.interval = '4h';
-      return inst;
-    });
+    const inst = newChartInstance('aero_cl', { token: 'USDC', chain: 'BASE' });
+    inst.interval = '4h';
+    return [inst];
   }
 </script>
 

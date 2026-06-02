@@ -1,8 +1,6 @@
 <script lang="ts">
   import DynamicChartLayout from '$lib/components/DynamicChartLayout.svelte';
   import {
-    LIDO_CHART_KINDS,
-    LIDO_L1_KINDS,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind
@@ -11,17 +9,16 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', ...LIDO_CHART_KINDS];
+  // The general 'lido' wrapper kind exposes an in-chart event selector
+  // (Deposits / Withdrawal Requests / Net Stake / L2 Bridge / …),
+  // collapsing what used to be 9 explicit per-event kinds in the picker
+  // into one. OHLCV stays as a price reference.
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'lido'];
 
   function defaultLayout(): ChartInstanceT[] {
-    return LIDO_CHART_KINDS.map((kind) => {
-      const inst = newChartInstance(kind, {
-        token: 'STETH',
-        chain: LIDO_L1_KINDS.has(kind) ? 'ETH' : 'ARB'
-      });
-      inst.interval = '4h';
-      return inst;
-    });
+    const inst = newChartInstance('lido', { token: 'STETH', chain: 'ETH' });
+    inst.interval = '4h';
+    return [inst];
   }
 </script>
 

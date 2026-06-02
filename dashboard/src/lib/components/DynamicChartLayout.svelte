@@ -6,6 +6,7 @@
   import ChartInstance from '$lib/components/ChartInstance.svelte';
   import {
     CHART_KIND_LABELS,
+    LIDO_L1_KINDS,
     MAX_MAS,
     chartKindGroup,
     chartKindGroupOrder,
@@ -397,20 +398,20 @@
       }
       // Lido chart kinds need a `chain` but no token / pool. L1 kinds are
       // ETH-pinned; L2 kinds default to ARB (highest wstETH bridge volume).
-      if (inst.kind.startsWith('lido_')) {
-        const isL1 =
-          inst.kind === 'lido_deposit' ||
-          inst.kind === 'lido_withdrawal_request' ||
-          inst.kind === 'lido_withdrawal_claimed' ||
-          inst.kind === 'lido_net_stake' ||
-          inst.kind === 'lido_net_request_stake' ||
-          inst.kind === 'lido_request_pending';
+      // Covers the bare 'lido' wrapper too — it carries lidoSubkind, which
+      // we read to decide L1 vs L2.
+      if (inst.kind === 'lido' || inst.kind.startsWith('lido_')) {
+        const subkindForL1: ChartKind = inst.kind === 'lido'
+          ? ((inst.lidoSubkind ?? 'lido_deposit') as ChartKind)
+          : inst.kind;
+        const isL1 = LIDO_L1_KINDS.has(subkindForL1);
         const ch = typeof r.chain === 'string' ? r.chain : (isL1 ? 'ETH' : (defaultChain ?? 'ARB'));
         inst.chain = isL1 ? 'ETH' : ch;
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
       }
-      // Aerodrome basic-pool chart kinds (BASE-only, Solidly v1).
-      if (inst.kind.startsWith('aero_basic_')) {
+      // Aerodrome basic-pool chart kinds (BASE-only, Solidly v1). Covers
+      // the 'aero_basic' wrapper kind too.
+      if (inst.kind === 'aero_basic' || inst.kind.startsWith('aero_basic_')) {
         inst.chain = 'BASE';
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         const rp = r.aeroBasicPool as Record<string, unknown> | undefined;
@@ -424,10 +425,11 @@
           inst.aeroBasicPool = { symbol0: 'USDC', symbol1: 'WETH', stable: false };
         }
       }
-      // Aerodrome concentrated chart kinds. NOTE: this branch must come
-      // AFTER the aero_basic_ branch since startsWith('aero_') matches
-      // both — the basic branch sets aeroBasicPool, this one sets aeroPool.
-      else if (inst.kind.startsWith('aero_')) {
+      // Aerodrome CL chart kinds + the 'aero_cl' wrapper. (BASE-only.) The
+      // basic branch above already matched-and-returned for aero_basic_*
+      // and the 'aero_basic' wrapper, so we can rely on aero_cl_* /
+      // 'aero_cl' being unambiguous here.
+      else if (inst.kind === 'aero_cl' || inst.kind.startsWith('aero_cl_')) {
         inst.chain = 'BASE';
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         const rp = r.aeroPool as Record<string, unknown> | undefined;

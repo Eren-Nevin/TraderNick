@@ -340,11 +340,13 @@ export type ChartKind =
   | 'uniswap_v4_withdraw'
   | 'uniswap_v4_initialize'
   | 'uniswap_v4_net_liquidity'
-  | 'aero_swap'
-  | 'aero_deposit'
-  | 'aero_withdraw'
-  | 'aero_collect'
-  | 'aero_net_liquidity'
+  | 'aero_cl'
+  | 'aero_basic'
+  | 'aero_cl_swap'
+  | 'aero_cl_deposit'
+  | 'aero_cl_withdraw'
+  | 'aero_cl_collect'
+  | 'aero_cl_net_liquidity'
   | 'aero_basic_swap'
   | 'aero_basic_deposit'
   | 'aero_basic_withdraw'
@@ -359,6 +361,7 @@ export type ChartKind =
   | 'uniswap_v3_collect'
   | 'uniswap_v3_net_liquidity'
   | 'uniswap_v3_net_swap_flow'
+  | 'lido'
   | 'lido_deposit'
   | 'lido_withdrawal_request'
   | 'lido_withdrawal_claimed'
@@ -452,11 +455,13 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   uniswap_v4_withdraw: 'Uniswap V4 Withdrawals',
   uniswap_v4_initialize: 'Uniswap V4 Pool Initializations',
   uniswap_v4_net_liquidity: 'Uniswap V4 Net Liquidity',
-  aero_swap: 'Aerodrome CL Swaps',
-  aero_deposit: 'Aerodrome CL Deposits',
-  aero_withdraw: 'Aerodrome CL Withdrawals',
-  aero_collect: 'Aerodrome CL Collects',
-  aero_net_liquidity: 'Aerodrome CL Net Liquidity',
+  aero_cl: 'Aerodrome CL',
+  aero_basic: 'Aerodrome Basic',
+  aero_cl_swap: 'Aerodrome CL Swaps',
+  aero_cl_deposit: 'Aerodrome CL Deposits',
+  aero_cl_withdraw: 'Aerodrome CL Withdrawals',
+  aero_cl_collect: 'Aerodrome CL Collects',
+  aero_cl_net_liquidity: 'Aerodrome CL Net Liquidity',
   aero_basic_swap: 'Aerodrome Basic Swaps',
   aero_basic_deposit: 'Aerodrome Basic Deposits',
   aero_basic_withdraw: 'Aerodrome Basic Withdrawals',
@@ -471,6 +476,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   uniswap_v3_collect: 'Uniswap V3 Collects',
   uniswap_v3_net_liquidity: 'Uniswap V3 Net Liquidity',
   uniswap_v3_net_swap_flow: 'Uniswap V3 Net Swap Flow',
+  lido: 'Lido',
   lido_deposit: 'Lido Deposits',
   lido_withdrawal_request: 'Lido Withdrawal Requests',
   lido_withdrawal_claimed: 'Lido Withdrawal Claims',
@@ -861,27 +867,31 @@ export type UniV4Pool = {
   hooks: string;
 };
 
-/** Aerodrome (concentrated-pool only) chart kinds. BASE chain only. */
-export const AERO_CHART_KINDS: ChartKind[] = [
-  'aero_swap',
-  'aero_deposit',
-  'aero_withdraw',
-  'aero_collect',
-  'aero_net_liquidity'
+/** Aerodrome CL (concentrated-pool) chart kinds. BASE chain only. */
+export const AERO_CL_CHART_KINDS: ChartKind[] = [
+  'aero_cl_swap',
+  'aero_cl_deposit',
+  'aero_cl_withdraw',
+  'aero_cl_collect',
+  'aero_cl_net_liquidity'
 ];
-export const AERO_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
-  aero_swap: 'swap',
-  aero_deposit: 'deposit',
-  aero_withdraw: 'withdraw',
-  aero_collect: 'collect'
+export const AERO_CL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  aero_cl_swap: 'swap',
+  aero_cl_deposit: 'deposit',
+  aero_cl_withdraw: 'withdraw',
+  aero_cl_collect: 'collect'
 };
-export const AERO_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
-  aero_net_liquidity: ['deposit', 'withdraw']
+export const AERO_CL_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  aero_cl_net_liquidity: ['deposit', 'withdraw']
 };
-export function isAeroKind(kind: ChartKind): boolean {
+/** True for any Aerodrome CL kind (single-event, net, or the general
+ *  wrapper). The 'aero_cl' wrapper delegates to a concrete aero_cl_*
+ *  subkind via instance.aeroClSubkind. */
+export function isAeroClKind(kind: ChartKind): boolean {
+  if (kind === 'aero_cl') return true;
   return (
-    AERO_KIND_TO_EVENT[kind] !== undefined ||
-    AERO_NET_KIND_TO_EVENTS[kind] !== undefined
+    AERO_CL_KIND_TO_EVENT[kind] !== undefined ||
+    AERO_CL_NET_KIND_TO_EVENTS[kind] !== undefined
   );
 }
 
@@ -911,7 +921,11 @@ export const AERO_BASIC_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
 export const AERO_BASIC_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
   aero_basic_net_liquidity: ['deposit', 'withdraw']
 };
+/** True for any Aerodrome Basic kind (single-event, net, or the general
+ *  wrapper). The 'aero_basic' wrapper delegates to a concrete aero_basic_*
+ *  subkind via instance.aeroBasicSubkind. */
 export function isAeroBasicKind(kind: ChartKind): boolean {
+  if (kind === 'aero_basic') return true;
   return (
     AERO_BASIC_KIND_TO_EVENT[kind] !== undefined ||
     AERO_BASIC_NET_KIND_TO_EVENTS[kind] !== undefined
@@ -939,7 +953,7 @@ export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('uniswap_v4_')) return 'Uniswap V4';
   if (kind.startsWith('lido_')) return 'Lido';
   if (kind.startsWith('aero_basic_')) return 'Aerodrome Basic';
-  if (kind.startsWith('aero_')) return 'Aerodrome CL';
+  if (kind.startsWith('aero_cl_')) return 'Aerodrome CL';
   if (kind.startsWith('gmx_')) return 'GMX V2';
   if (kind.startsWith('hl_')) return 'Hyperliquid';
   return null;
@@ -1035,8 +1049,11 @@ export const LIDO_L1_KINDS = new Set<ChartKind>([
   'lido_request_pending'
 ]);
 
-/** True for any Lido kind (single-event or net). */
+/** True for any Lido kind (single-event, net, or the general wrapper).
+ *  The 'lido' wrapper delegates to a concrete lido_* subkind via
+ *  instance.lidoSubkind; routing branches read through effective-kind. */
 export function isLidoKind(kind: ChartKind): boolean {
+  if (kind === 'lido') return true;
   return (
     LIDO_KIND_TO_EVENT[kind] !== undefined ||
     LIDO_NET_KIND_TO_EVENTS[kind] !== undefined
@@ -1248,6 +1265,16 @@ export type ChartInstance = {
   /** General-Uniswap-V4 wrapper only (kind === 'uniswap_v4'): which concrete
    *  uniswap_v4_* event the chart currently shows. */
   uniswapV4Subkind?: ChartKind;
+  /** General-Aerodrome-CL wrapper only (kind === 'aero_cl'): which concrete
+   *  aero_cl_* event the chart currently shows. */
+  aeroClSubkind?: ChartKind;
+  /** General-Aerodrome-Basic wrapper only (kind === 'aero_basic'): which
+   *  concrete aero_basic_* event the chart currently shows. */
+  aeroBasicSubkind?: ChartKind;
+  /** General-Lido wrapper only (kind === 'lido'): which concrete lido_*
+   *  event the chart currently shows. Switching between an L1 and an L2
+   *  subkind also flips the chain selector — see ChartInstance.svelte. */
+  lidoSubkind?: ChartKind;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */
@@ -1475,24 +1502,39 @@ export function newChartInstance(
       base.uniswapV4Subkind = 'uniswap_v4_swap';
     }
   }
-  if (isAeroKind(kind)) {
+  if (isAeroClKind(kind)) {
     base.chain = 'BASE';
     // Default to USDC/WETH ts=100 (top Aero CL pool by volume).
     base.aeroPool = { symbol0: 'USDC', symbol1: 'WETH', tick_spacing: 100 };
     base.valueMode = 'usd';
+    if (kind === 'aero_cl') {
+      // General wrapper — default to Swaps; the in-chart sub-kind selector
+      // flips between the 5 concrete aero_cl_* event behaviors.
+      base.aeroClSubkind = 'aero_cl_swap';
+    }
   }
   if (isAeroBasicKind(kind)) {
     base.chain = 'BASE';
     // Default to USDC/WETH vAMM (top basic pool by volume).
     base.aeroBasicPool = { symbol0: 'USDC', symbol1: 'WETH', stable: false };
     base.valueMode = 'usd';
+    if (kind === 'aero_basic') {
+      base.aeroBasicSubkind = 'aero_basic_swap';
+    }
   }
   if (isLidoKind(kind)) {
     // Lido charts are chain-only (no token / pool axis). L1 kinds are
     // pinned to ETH by construction; L2 kinds default to ARB (highest
     // wstETH bridge volume), the user can flip via the chain dropdown.
-    base.chain = LIDO_L1_KINDS.has(kind) ? 'ETH' : (defaults.chain ?? 'ARB');
+    // The general 'lido' wrapper defaults to the lido_deposit (L1) subkind,
+    // so its initial chain is ETH; switching to an L2 subkind via the
+    // in-chart selector unpins the chain dropdown (see ChartInstance).
+    const effectiveDefaultKind: ChartKind = kind === 'lido' ? 'lido_deposit' : kind;
+    base.chain = LIDO_L1_KINDS.has(effectiveDefaultKind) ? 'ETH' : (defaults.chain ?? 'ARB');
     base.valueMode = 'usd';
+    if (kind === 'lido') {
+      base.lidoSubkind = 'lido_deposit';
+    }
   }
   return base;
 }

@@ -84,13 +84,16 @@
     UNISWAP_V4_KIND_TO_EVENT,
     UNISWAP_V4_NET_KIND_TO_EVENTS,
     isUniswapV4Kind,
-    AERO_KIND_TO_EVENT,
-    AERO_NET_KIND_TO_EVENTS,
-    isAeroKind,
+    AERO_CL_CHART_KINDS,
+    AERO_CL_KIND_TO_EVENT,
+    AERO_CL_NET_KIND_TO_EVENTS,
+    isAeroClKind,
+    AERO_BASIC_CHART_KINDS,
     AERO_BASIC_KIND_TO_EVENT,
     AERO_BASIC_NET_KIND_TO_EVENTS,
     isAeroBasicKind,
     fmtUniPool,
+    LIDO_CHART_KINDS,
     LIDO_KIND_TO_EVENT,
     LIDO_NET_KIND_TO_EVENTS,
     LIDO_L1_KINDS,
@@ -188,6 +191,12 @@
       ? ((instance.uniswapV2Subkind ?? 'uniswap_v2_swap') as ChartInstanceT['kind'])
       : instance.kind === 'uniswap_v4'
       ? ((instance.uniswapV4Subkind ?? 'uniswap_v4_swap') as ChartInstanceT['kind'])
+      : instance.kind === 'aero_cl'
+      ? ((instance.aeroClSubkind ?? 'aero_cl_swap') as ChartInstanceT['kind'])
+      : instance.kind === 'aero_basic'
+      ? ((instance.aeroBasicSubkind ?? 'aero_basic_swap') as ChartInstanceT['kind'])
+      : instance.kind === 'lido'
+      ? ((instance.lidoSubkind ?? 'lido_deposit') as ChartInstanceT['kind'])
       : instance.kind
   );
 
@@ -262,12 +271,12 @@
   const _L2_FALLBACK = ['ARB', 'BASE', 'OP', 'ZK', 'MANTLE', 'MODE', 'SONEIUM', 'UNI', 'ZIRCUIT'];
   let lidoChainsForKind = $derived.by<string[]>(() => {
     if (!isLidoKind(instance.kind)) return [];
-    if (LIDO_L1_KINDS.has(instance.kind)) return ['ETH'];
+    if (LIDO_L1_KINDS.has(effectiveKind)) return ['ETH'];
     // L2 kinds: filter streams to the relevant event(s) for the kind.
     const targetEvents: string[] = (() => {
-      const single = LIDO_KIND_TO_EVENT[instance.kind];
+      const single = LIDO_KIND_TO_EVENT[effectiveKind];
       if (single) return [single];
-      const net = LIDO_NET_KIND_TO_EVENTS[instance.kind];
+      const net = LIDO_NET_KIND_TO_EVENTS[effectiveKind];
       return net ? [net[0], net[1]] : [];
     })();
     const seen = new Set<string>();
@@ -286,7 +295,7 @@
     if (!isLidoKind(instance.kind)) return;
     const list = lidoChainsForKind;
     if (list.length === 0) return;
-    if (LIDO_L1_KINDS.has(instance.kind)) {
+    if (LIDO_L1_KINDS.has(effectiveKind)) {
       if (instance.chain !== 'ETH') instance.chain = 'ETH';
       return;
     }
@@ -657,24 +666,29 @@
       const pPart = p ? `${p.symbol0}|${p.symbol1}|${p.fee}|${p.tick_spacing}|${p.hooks}` : '';
       return `${effectiveKind}|${instance.chain ?? ''}|${pPart}|${instance.interval}`;
     }
-    if (isAeroKind(instance.kind)) {
+    if (isAeroClKind(instance.kind)) {
+      // Key on effectiveKind so the 'aero_cl' wrapper re-fetches when the
+      // in-chart subkind selector flips (Swaps → Deposits → Net Liquidity).
       const p = instance.aeroPool;
       const pPart = p ? `${p.symbol0}|${p.symbol1}|${p.tick_spacing}` : '';
-      return `${instance.kind}|${instance.chain ?? 'BASE'}|${pPart}|${instance.interval}`;
+      return `${effectiveKind}|${instance.chain ?? 'BASE'}|${pPart}|${instance.interval}`;
     }
     if (isAeroBasicKind(instance.kind)) {
+      // Same effectiveKind rule as aero_cl above.
       const p = instance.aeroBasicPool;
       const pPart = p ? `${p.symbol0}|${p.symbol1}|${p.stable ? 's' : 'v'}` : '';
-      return `${instance.kind}|${instance.chain ?? 'BASE'}|${pPart}|${instance.interval}`;
+      return `${effectiveKind}|${instance.chain ?? 'BASE'}|${pPart}|${instance.interval}`;
     }
     if (isLidoKind(instance.kind)) {
       // Lido charts are keyed by (kind, chain | chain_group, interval). L1
       // kinds are ETH-pinned but we include the axis anyway. The cg: prefix
       // makes "EVM" (group) cache-distinct from a literal "EVM" chain name.
+      // effectiveKind so the 'lido' wrapper re-fetches when the subkind
+      // selector flips (Deposits → L2 Bridge → Net Stake / …).
       const cPart = activeChainGroup
         ? `cg:${activeChainGroup.name}`
         : (instance.chain ?? '');
-      return `${instance.kind}|${cPart}|${instance.interval}`;
+      return `${effectiveKind}|${cPart}|${instance.interval}`;
     }
     if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'ls') {
       // Exchange selector busts the cache so flipping Binance ↔ HL re-fetches.
@@ -829,7 +843,7 @@
         isUniswapV3Kind(instance.kind) ||
         isUniswapV2Kind(instance.kind) ||
         isUniswapV4Kind(instance.kind) ||
-        isAeroKind(instance.kind) ||
+        isAeroClKind(instance.kind) ||
         isAeroBasicKind(instance.kind) ||
         isLidoKind(instance.kind);
       if (isWideWindowKind) {
@@ -1517,7 +1531,7 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const lidoNetEvents = LIDO_NET_KIND_TO_EVENTS[instance.kind];
+        const lidoNetEvents = LIDO_NET_KIND_TO_EVENTS[effectiveKind];
         if (lidoNetEvents) {
           const [posEvent, negEvent] = lidoNetEvents;
           const [posRes, negRes] = await Promise.all([
@@ -1557,7 +1571,7 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        const lidoEvent = LIDO_KIND_TO_EVENT[instance.kind];
+        const lidoEvent = LIDO_KIND_TO_EVENT[effectiveKind];
         if (!lidoEvent) throw new Error(`unmapped lido kind ${instance.kind}`);
         const res = await queuedFetch(
           `/api/lido/aggregate?${buildLidoQs(lidoEvent)}`,
@@ -1681,7 +1695,7 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const netEvs = AERO_BASIC_NET_KIND_TO_EVENTS[instance.kind];
+        const netEvs = AERO_BASIC_NET_KIND_TO_EVENTS[effectiveKind];
         if (netEvs) {
           const [posEvent, negEvent] = netEvs;
           const [posRes, negRes] = await Promise.all([
@@ -1733,7 +1747,7 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        const eventForKind = AERO_BASIC_KIND_TO_EVENT[instance.kind];
+        const eventForKind = AERO_BASIC_KIND_TO_EVENT[effectiveKind];
         if (!eventForKind) throw new Error(`unmapped aero_basic kind ${instance.kind}`);
         const res = await queuedFetch(`/api/aero_basic/aggregate?${buildAeroBasicQs(eventForKind)}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -1746,7 +1760,7 @@
         return;
       }
       // Aerodrome (concentrated pools, BASE only).
-      if (isAeroKind(instance.kind)) {
+      if (isAeroClKind(instance.kind)) {
         const pool = instance.aeroPool;
         if (!pool) {
           data = []; since = sinceIso; until = untilIso;
@@ -1770,7 +1784,7 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const netEvs = AERO_NET_KIND_TO_EVENTS[instance.kind];
+        const netEvs = AERO_CL_NET_KIND_TO_EVENTS[effectiveKind];
         if (netEvs) {
           const [posEvent, negEvent] = netEvs;
           const [posRes, negRes] = await Promise.all([
@@ -1822,7 +1836,7 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        const eventForKind = AERO_KIND_TO_EVENT[instance.kind];
+        const eventForKind = AERO_CL_KIND_TO_EVENT[effectiveKind];
         if (!eventForKind) throw new Error(`unmapped aero kind ${instance.kind}`);
         const res = await queuedFetch(`/api/aero/aggregate?${buildAeroQs(eventForKind)}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -2391,7 +2405,7 @@
       || isMorphoKind(instance.kind)
       || isSparkKind(instance.kind)
       || isLidoKind(instance.kind)
-      || isAeroKind(instance.kind)
+      || isAeroClKind(instance.kind)
       || isAeroBasicKind(instance.kind)
       // GMX charts already pick a single value field per kind (via
       // GMX_PRIMARY_FIELD); the running sum of that field is meaningful
@@ -3187,13 +3201,28 @@
              L2 kinds list the chains DeFiStream has actually delivered for
              this kind's event PLUS any compound chain groups (EVM, All)
              surfaced by the server. Selecting a group resolves to
-             `chain IN (...)` server-side. -->
+             `chain IN (...)` server-side. The general wrapper
+             (instance.kind === 'lido') also surfaces an event sub-kind
+             selector; switching between an L1 and an L2 subkind also flips
+             the chain dropdown's disabled / options state via the L1/L2
+             auto-snap effect. -->
+        {#if instance.kind === 'lido'}
+          <select
+            bind:value={instance.lidoSubkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Lido event to display"
+          >
+            {#each LIDO_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <select
           bind:value={instance.chain}
-          disabled={LIDO_L1_KINDS.has(instance.kind)}
+          disabled={LIDO_L1_KINDS.has(effectiveKind)}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 disabled:opacity-60 disabled:cursor-not-allowed"
         >
-          {#if !LIDO_L1_KINDS.has(instance.kind) && chainGroups.length > 0}
+          {#if !LIDO_L1_KINDS.has(effectiveKind) && chainGroups.length > 0}
             <optgroup label="Chain">
               {#each lidoChainsForKind as c (c)}
                 <option value={c}>{c}</option>
@@ -3565,9 +3594,22 @@
             <span class="text-zinc-500 ml-1">{(instance.uniV4Pool.fee / 10000).toFixed(2)}% · ts={instance.uniV4Pool.tick_spacing}</span>
           </span>
         {/if}
-      {:else if isAeroKind(instance.kind)}
-        <!-- Aerodrome: chain is BASE-only; show as static label.
-             Pool = (sym0, sym1, tick_spacing). -->
+      {:else if isAeroClKind(instance.kind)}
+        <!-- Aerodrome CL: chain is BASE-only; show as static label.
+             Pool = (sym0, sym1, tick_spacing). The general wrapper
+             (instance.kind === 'aero_cl') also surfaces an event
+             sub-kind selector. -->
+        {#if instance.kind === 'aero_cl'}
+          <select
+            bind:value={instance.aeroClSubkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Aerodrome CL event to display"
+          >
+            {#each AERO_CL_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">BASE</span>
         {#if instance.aeroPool}
           <span class="text-zinc-100 text-xs font-medium px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">
@@ -3578,7 +3620,19 @@
       {:else if isAeroBasicKind(instance.kind)}
         <!-- Aerodrome basic: BASE-only; pool = (sym0, sym1, stable). The
              stable flag chip distinguishes vAMM (constant-product) from
-             sAMM (stableswap curve). -->
+             sAMM (stableswap curve). The general wrapper (instance.kind
+             === 'aero_basic') also surfaces an event sub-kind selector. -->
+        {#if instance.kind === 'aero_basic'}
+          <select
+            bind:value={instance.aeroBasicSubkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Aerodrome Basic event to display"
+          >
+            {#each AERO_BASIC_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">BASE</span>
         {#if instance.aeroBasicPool}
           <span class="text-zinc-100 text-xs font-medium px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">
@@ -3954,7 +4008,7 @@
         <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
         Week lines
       </label>
-      {#if instance.kind === 'transfer' || isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapV3Kind(instance.kind) && effectiveKind !== 'uniswap_v3_net_swap_flow') || isUniswapV2Kind(instance.kind) || effectiveKind === 'uniswap_v4_swap' || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
+      {#if instance.kind === 'transfer' || isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapV3Kind(instance.kind) && effectiveKind !== 'uniswap_v3_net_swap_flow') || isUniswapV2Kind(instance.kind) || effectiveKind === 'uniswap_v4_swap' || isAeroClKind(instance.kind) || isAeroBasicKind(instance.kind)}
         <!-- USD ⇆ Amount toggle. For AAVE / Lido the chart shows a single
              series in either mode. For Uniswap (except net_swap_flow which
              is intrinsically directional USD), Amount mode renders TWO
@@ -4507,7 +4561,7 @@
         formatY={valueAxisFn}
         formatTooltip={valueTooltipFn}
       />
-    {:else if isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind) || isUniswapV4Kind(instance.kind) || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
+    {:else if isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind) || isUniswapV4Kind(instance.kind) || isAeroClKind(instance.kind) || isAeroBasicKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={uniswapLinesD}
