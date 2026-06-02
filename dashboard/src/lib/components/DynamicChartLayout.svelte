@@ -105,7 +105,10 @@
   let expandedGroups = $state<Set<string>>(new Set());
   // Category-mode expansion (Dashboard page). Independent of expandedGroups
   // because the category menu has its own first-level taxonomy.
-  let expandedCategories = $state<Set<ChartCategory>>(new Set());
+  // Top-level expansion: used for category headers in categorizedMenu mode
+  // AND protocol-family headers in non-categorized mode (so the same Set
+  // works for both modes, keyed by the visible header label).
+  let expandedCategories = $state<Set<string>>(new Set());
   // Third-level expansion for providers with multiple versions (AAVE V2/V3/V4,
   // Uniswap V2/V3/V4, Aerodrome CL/Basic). Keyed by `${category}::${provider}`
   // so two categories could safely reuse the same provider name without colliding.
@@ -122,7 +125,7 @@
     if (next.has(name)) next.delete(name); else next.add(name);
     expandedGroups = next;
   }
-  function toggleCategoryExpand(name: ChartCategory) {
+  function toggleCategoryExpand(name: string) {
     const next = new Set(expandedCategories);
     if (next.has(name)) next.delete(name); else next.add(name);
     expandedCategories = next;
@@ -171,10 +174,9 @@
     swapIdx = null;
     filterText = '';
     highlightedIdx = 0;
-    expandedTemplates = new Set();
-    expandedGroups = new Set();
-    expandedCategories = new Set();
-    expandedProviders = new Set();
+    // Note: expandedCategories / expandedProviders intentionally persist
+    // across dialog opens so a user who always reaches for AAVE doesn't
+    // have to re-expand on every insert.
   }
   function toggleTemplateExpand(id: string) {
     const next = new Set(expandedTemplates);
@@ -311,10 +313,157 @@
     return items;
   });
 
-  let filteredItems = $derived.by((): FlatItem[] => {
+  // Visible rows for the dialog. Two modes:
+  //   1. Filter active → flat list of matches with breadcrumbs on each row.
+  //   2. No filter    → tree: category headers → optional provider sub-
+  //                     header (only when ≥2 versions) → leaves. Click or
+  //                     Enter on a header toggles. expandedCategories /
+  //                     expandedProviders persist across opens.
+  type DialogRow =
+    | {
+        type: 'header';
+        level: 1 | 2;
+        key: string;            // toggle key (top: category name; sub: `${cat}::${provider}`)
+        label: string;
+        expanded: boolean;
+        count: number;
+        scope: 'category' | 'provider';
+      }
+    | { type: 'leaf'; item: FlatItem; indent: 0 | 1 | 2; showGroup: boolean };
+
+  let dialogRows = $derived.by((): DialogRow[] => {
     const q = filterText.trim().toLowerCase();
-    if (!q) return flatAllItems;
-    return flatAllItems.filter((it) => it.searchKey.includes(q));
+
+    // Filter mode: one leaf per match, with its group breadcrumb shown.
+    if (q) {
+      return flatAllItems
+        .filter((it) => it.searchKey.includes(q))
+        .map((item) => ({ type: 'leaf' as const, item, indent: 0, showGroup: true }));
+    }
+
+    // Tree mode. Bucket every item by its top-level group.
+    //   categorizedMenu → top = chartKindCategory(); sub = chartKindProvider()
+    //   non-categorized → top = chartKindGroup() (protocol family), no sub
+    // Templates always go first if present; flat single-family kinds (no
+    // group at all) bubble to the very top with no header so OHLCV / Token
+    // Flow etc. don't need an extra click.
+    const buckets = new Map<string, FlatItem[]>();
+    const orderedTops: string[] = [];
+    const FLAT = '(Flat)';
+    const TEMPLATES = 'Templates';
+
+    function push(top: string, it: FlatItem) {
+      if (!buckets.has(top)) { buckets.set(top, []); orderedTops.push(top); }
+      buckets.get(top)!.push(it);
+    }
+    for (const it of flatAllItems) {
+      if (it.type === 'template') {
+        push(TEMPLATES, it);
+        continue;
+      }
+      const top = categorizedMenu
+        ? (chartKindCategory(it.kind) ?? FLAT)
+        : (chartKindGroup(it.kind) ?? FLAT);
+      push(top, it);
+    }
+
+    // Ordering: Templates first; then categorized → CHART_CATEGORIES order;
+    // non-categorized → chartKindGroupOrder. Flat-leaves bucket always
+    // first inside whichever section it sits in (top of dialog).
+    const finalOrder: string[] = [];
+    if (buckets.has(TEMPLATES)) finalOrder.push(TEMPLATES);
+    if (buckets.has(FLAT)) finalOrder.push(FLAT);
+    if (categorizedMenu) {
+      for (const c of CHART_CATEGORIES) {
+        if (c !== TEMPLATES && c !== FLAT && buckets.has(c)) finalOrder.push(c);
+      }
+    } else {
+      const groups = orderedTops.filter(
+        (k) => k !== TEMPLATES && k !== FLAT
+      );
+      groups.sort((a, b) => chartKindGroupOrder(a) - chartKindGroupOrder(b));
+      finalOrder.push(...groups);
+    }
+    // Any unexpected leftovers (defensive).
+    for (const k of orderedTops) {
+      if (!finalOrder.includes(k)) finalOrder.push(k);
+    }
+
+    const rows: DialogRow[] = [];
+    for (const top of finalOrder) {
+      const items = buckets.get(top) ?? [];
+
+      if (top === FLAT) {
+        // No header — render leaves directly at the top of the dialog.
+        for (const it of items) {
+          rows.push({ type: 'leaf', item: it, indent: 0, showGroup: false });
+        }
+        continue;
+      }
+
+      const expanded = expandedCategories.has(top);
+      rows.push({
+        type: 'header',
+        level: 1,
+        key: top,
+        label: top,
+        expanded,
+        count: items.length,
+        scope: 'category'
+      });
+      if (!expanded) continue;
+
+      // Inside the category: optional provider sub-grouping (categorizedMenu only).
+      if (categorizedMenu && top !== TEMPLATES) {
+        // Count items per provider so we know which ones earn a sub-header.
+        const provCounts = new Map<string, number>();
+        for (const it of items) {
+          if (it.type !== 'kind') continue;
+          const p = chartKindProvider(it.kind);
+          if (p) provCounts.set(p.provider, (provCounts.get(p.provider) ?? 0) + 1);
+        }
+        const emittedProvs = new Set<string>();
+        for (const it of items) {
+          let provider: string | null = null;
+          if (it.type === 'kind') {
+            const p = chartKindProvider(it.kind);
+            if (p) provider = p.provider;
+          }
+          if (provider && (provCounts.get(provider) ?? 0) >= 2) {
+            if (emittedProvs.has(provider)) continue;
+            emittedProvs.add(provider);
+            const pkey = `${top}::${provider}`;
+            const pExpanded = expandedProviders.has(pkey);
+            // All items for this provider, in their original order.
+            const pItems = items.filter(
+              (x) =>
+                x.type === 'kind' && chartKindProvider(x.kind)?.provider === provider
+            );
+            rows.push({
+              type: 'header',
+              level: 2,
+              key: pkey,
+              label: provider,
+              expanded: pExpanded,
+              count: pItems.length,
+              scope: 'provider'
+            });
+            if (pExpanded) {
+              for (const pit of pItems) {
+                rows.push({ type: 'leaf', item: pit, indent: 2, showGroup: false });
+              }
+            }
+          } else {
+            rows.push({ type: 'leaf', item: it, indent: 1, showGroup: false });
+          }
+        }
+      } else {
+        for (const it of items) {
+          rows.push({ type: 'leaf', item: it, indent: 1, showGroup: false });
+        }
+      }
+    }
+    return rows;
   });
 
   // Reset the highlight whenever the filter text changes.
@@ -344,16 +493,22 @@
   function onSearchKey(ev: KeyboardEvent) {
     if (ev.key === 'ArrowDown') {
       ev.preventDefault();
-      const n = filteredItems.length;
+      const n = dialogRows.length;
       if (n > 0) highlightedIdx = (highlightedIdx + 1) % n;
     } else if (ev.key === 'ArrowUp') {
       ev.preventDefault();
-      const n = filteredItems.length;
+      const n = dialogRows.length;
       if (n > 0) highlightedIdx = (highlightedIdx - 1 + n) % n;
     } else if (ev.key === 'Enter') {
       ev.preventDefault();
-      const it = filteredItems[highlightedIdx];
-      if (it) pickItem(it);
+      const row = dialogRows[highlightedIdx];
+      if (!row) return;
+      if (row.type === 'header') {
+        if (row.scope === 'category') toggleCategoryExpand(row.key);
+        else toggleProviderExpand(row.key);
+      } else {
+        pickItem(row.item);
+      }
     } else if (ev.key === 'Escape') {
       ev.preventDefault();
       closeInsert();
@@ -1075,32 +1230,60 @@
         />
       </div>
       <div bind:this={listEl} class="flex-1 overflow-y-auto scrollbar-none py-1">
-        {#if filteredItems.length === 0}
+        {#if dialogRows.length === 0}
           <div class="px-3 py-6 text-xs text-zinc-500 text-center">No matches</div>
         {:else}
-          {#each filteredItems as item, i (item.id)}
-            <button
-              type="button"
-              data-idx={i}
-              onclick={() => pickItem(item)}
-              onmouseenter={() => (highlightedIdx = i)}
-              class="w-full flex items-center gap-2 text-left px-3 py-1.5 text-xs transition-colors
-                     {i === highlightedIdx
-                       ? 'bg-zinc-800 text-zinc-50'
-                       : 'text-zinc-200 hover:bg-zinc-900'}"
-            >
-              {#if item.group}
-                <span class="text-[10px] text-zinc-500 truncate">{item.group}</span>
-                <span class="text-[10px] text-zinc-600">›</span>
-              {/if}
-              <span class="truncate">{item.label}</span>
-            </button>
+          {#each dialogRows as row, i (i)}
+            {@const isHi = i === highlightedIdx}
+            {#if row.type === 'header'}
+              <!-- Category / provider header. Click or Enter toggles it.
+                   level-1 = top category, level-2 = provider sub-group. -->
+              <button
+                type="button"
+                data-idx={i}
+                onclick={() => row.scope === 'category'
+                  ? toggleCategoryExpand(row.key)
+                  : toggleProviderExpand(row.key)}
+                onmouseenter={() => (highlightedIdx = i)}
+                aria-expanded={row.expanded}
+                class="w-full flex items-center gap-2 text-left py-1.5 text-xs transition-colors
+                       {row.level === 1 ? 'font-medium text-zinc-100' : 'text-zinc-200'}
+                       {isHi ? 'bg-zinc-800' : 'hover:bg-zinc-900'}"
+                style="padding-left: {0.75 + (row.level - 1) * 1}rem; padding-right: 0.75rem;"
+              >
+                <span class="text-zinc-500 text-[10px] w-3 inline-block">{row.expanded ? '▾' : '▸'}</span>
+                <span class="flex-1 truncate">{row.label}</span>
+                <span class="text-zinc-500 text-[10px]">{row.count}</span>
+              </button>
+            {:else}
+              <button
+                type="button"
+                data-idx={i}
+                onclick={() => pickItem(row.item)}
+                onmouseenter={() => (highlightedIdx = i)}
+                class="w-full flex items-center gap-2 text-left py-1.5 text-xs transition-colors
+                       {isHi ? 'bg-zinc-800 text-zinc-50' : 'text-zinc-300 hover:bg-zinc-900'}"
+                style="padding-left: {0.75 + row.indent * 1}rem; padding-right: 0.75rem;"
+              >
+                {#if row.showGroup && row.item.group}
+                  <span class="text-[10px] text-zinc-500 truncate">{row.item.group}</span>
+                  <span class="text-[10px] text-zinc-600">›</span>
+                {/if}
+                <span class="truncate">{row.item.label}</span>
+              </button>
+            {/if}
           {/each}
         {/if}
       </div>
       <div class="px-3 py-1.5 border-t border-zinc-800 text-[10px] text-zinc-500 flex items-center justify-between">
-        <span>↑↓ navigate · ↵ select · esc close</span>
-        <span>{filteredItems.length} result{filteredItems.length === 1 ? '' : 's'}</span>
+        <span>↑↓ navigate · ↵ select / expand · esc close</span>
+        <span>
+          {#if filterText.trim()}
+            {dialogRows.length} match{dialogRows.length === 1 ? '' : 'es'}
+          {:else}
+            {flatAllItems.length} item{flatAllItems.length === 1 ? '' : 's'}
+          {/if}
+        </span>
       </div>
     </div>
   </div>
