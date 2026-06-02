@@ -1040,6 +1040,15 @@ export function chartKindProvider(kind: ChartKind): { provider: string; variant:
   if (kind === 'uniswap_v4') return { provider: 'Uniswap', variant: 'V4' };
   if (kind === 'aero_cl')    return { provider: 'Aerodrome', variant: 'CL' };
   if (kind === 'aero_basic') return { provider: 'Aerodrome', variant: 'Basic' };
+  // Hyperliquid: every hl_* kind nests under one Hyperliquid sub-menu.
+  // Variant = the CHART_KIND_LABELS entry minus the "HL " prefix so the
+  // leaf reads as "Realized PnL" / "Unrealized PnL" / "Bridge Flows" / …
+  // under the Hyperliquid header instead of repeating "HL" each time.
+  if (isHlKind(kind)) {
+    const full = CHART_KIND_LABELS[kind] ?? kind;
+    const variant = full.startsWith('HL ') ? full.slice(3) : full;
+    return { provider: 'Hyperliquid', variant };
+  }
   return null;
 }
 
