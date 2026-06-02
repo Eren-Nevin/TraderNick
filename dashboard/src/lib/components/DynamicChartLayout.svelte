@@ -1250,8 +1250,9 @@
     position: fixed;
     pointer-events: none;
     z-index: 1000;
-    border: 2px dashed rgba(96 165 250 / 0.85);    /* blue-400 */
-    background-color: rgba(59 130 246 / 0.08);     /* blue-500/8 */
+    /* Soft desaturated outline — visible enough to track without dominating
+       the chart underneath. No fill so the chart stays readable through it. */
+    border: 1px dashed rgba(161 161 170 / 0.45);   /* zinc-400 / 45% */
     border-radius: 0.75rem;                         /* match chart rounded-xl */
     transition: none;
   }
@@ -1261,8 +1262,8 @@
     bottom: 6px;
     font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
     font-size: 11px;
-    color: rgb(191 219 254);                       /* blue-200 */
-    background-color: rgba(15 23 42 / 0.85);       /* slate-900/85 */
+    color: rgb(212 212 216);                       /* zinc-300 */
+    background-color: rgba(15 23 42 / 0.7);        /* slate-900/70 */
     padding: 1px 6px;
     border-radius: 4px;
   }
