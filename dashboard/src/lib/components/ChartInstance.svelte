@@ -643,15 +643,19 @@
     }
     if (isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind)) {
       // Uniswap V2/V3 charts: pool keyed by (sym0, sym1, fee) — fee=0 marks V2.
+      // Key on effectiveKind so the general 'uniswap_v3'/'uniswap_v2'
+      // wrappers re-fetch when the in-chart subkind selector flips
+      // (Swaps → Deposits → Net Liquidity → …).
       const cPart = instance.chain ?? '';
       const pPart = uniPoolKey(instance.uniPool);
-      return `${instance.kind}|${cPart}|${pPart}|${instance.interval}`;
+      return `${effectiveKind}|${cPart}|${pPart}|${instance.interval}`;
     }
     if (isUniswapV4Kind(instance.kind)) {
       // V4 pool keyed by 5-tuple (sym0, sym1, fee, tick_spacing, hooks).
+      // effectiveKind for the same reason as V2/V3 above.
       const p = instance.uniV4Pool;
       const pPart = p ? `${p.symbol0}|${p.symbol1}|${p.fee}|${p.tick_spacing}|${p.hooks}` : '';
-      return `${instance.kind}|${instance.chain ?? ''}|${pPart}|${instance.interval}`;
+      return `${effectiveKind}|${instance.chain ?? ''}|${pPart}|${instance.interval}`;
     }
     if (isAeroKind(instance.kind)) {
       const p = instance.aeroPool;
