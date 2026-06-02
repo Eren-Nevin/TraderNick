@@ -113,7 +113,7 @@
     </select>
     <span class="text-[10px] text-zinc-600 ml-auto">Click any column header to re-sort the returned set</span>
   </div>
-  <div class="flex-1 overflow-auto">
+  <div class="flex-1 overflow-auto scrollbar-none">
     {#if vaults.length === 0}
       <div class="h-full flex items-center justify-center text-zinc-500">No vault activity in this window</div>
     {:else}

@@ -78,7 +78,7 @@
      in bubble phase before the chart-card-level dnd-action listener;
      Svelte 5's delegated onmousedown handlers run too late (at the
      document level) to intercept the drag. -->
-<div class="h-full overflow-auto text-xs" use:stopDragEvents>
+<div class="h-full overflow-auto scrollbar-none text-xs" use:stopDragEvents>
   {#if (leaders as Leader[]).length === 0}
     <div class="h-full flex items-center justify-center text-zinc-500">
       No traders in the visible window

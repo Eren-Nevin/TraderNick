@@ -204,7 +204,7 @@
   </div>
 
   <!-- Position breakdown for selected wallet -->
-  <div class="flex-1 overflow-auto">
+  <div class="flex-1 overflow-auto scrollbar-none">
     {#if !selectedEntry || selectedEntry.positions.length === 0}
       <div class="h-full flex items-center justify-center text-zinc-500">
         {wallets.length === 0 ? 'No data — backfill or live tick not caught up yet' : 'No open positions for this wallet'}

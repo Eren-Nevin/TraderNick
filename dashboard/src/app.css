@@ -88,3 +88,15 @@ html.light .text-red-300 { color: #b91c1c; }
 html.light .chart-titlebar-bg {
   background-image: linear-gradient(to bottom, rgba(228, 228, 231, 0.55), transparent);
 }
+
+/* Hide the native scrollbar on any element with `.scrollbar-none` but keep
+ * scrolling behaviour. Used by the table-view charts (HL Top Vaults / LPs /
+ * Top Positions) where the chunky default scrollbar dominated a small panel.
+ * Wheel + drag + keyboard scrolling still works. */
+.scrollbar-none {
+  scrollbar-width: none;        /* Firefox */
+  -ms-overflow-style: none;     /* old IE/Edge */
+}
+.scrollbar-none::-webkit-scrollbar {
+  display: none;                /* WebKit/Blink */
+}

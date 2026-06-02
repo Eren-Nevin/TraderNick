@@ -45,7 +45,7 @@
 </script>
 
 <!-- use:stopDragEvents — see actions/stopDragEvents.ts. -->
-<div class="h-full overflow-auto text-xs" use:stopDragEvents>
+<div class="h-full overflow-auto scrollbar-none text-xs" use:stopDragEvents>
   {#if lps.length === 0}
     <div class="h-full flex items-center justify-center text-zinc-500">No vault LPs in this window</div>
   {:else}
