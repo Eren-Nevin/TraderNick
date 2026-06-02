@@ -212,84 +212,22 @@ async def aggregate(request):
             ORDER BY bucket
             LIMIT {{limit:UInt32}}
         """
-    elif event == "collect":
-        # Collect events on a CL pool include BOTH the position principal
-        # being withdrawn (after a Burn in the same tx) AND any accrued
-        # fees. On rebalance-heavy pools (USDC/WETH ts=100 sees ~133k
-        # collects/day driven by Gamma/Steer/etc.) the principal portion
-        # dwarfs the fees, producing $10B+/day collect totals — visually
-        # alarming and not what an LP-analytics chart wants to show.
-        #
-        # Match the Uniswap V3 subgraph convention: report the *fee*
-        # component only, by subtracting the matched Burn amount per
-        # position. Match key is (tx_id, owner, tick_lower, tick_upper) —
-        # a single Mint→…→Burn→Collect cycle is always one tx, and the
-        # position identity uniquely identifies one LP's range. Pure
-        # fee-only collects (no Burn in the same tx — rare in practice)
-        # naturally pass through with full amount = fees.
-        #
-        # Both sides are pre-aggregated by the position key so a tx with
-        # multiple Burn events on the same range doesn't double-subtract
-        # against a single Collect. MAX(time) per position carries the
-        # block timestamp through to the ASOF pricing JOIN — every row
-        # in a single tx shares the same block time, so the max is the
-        # actual time.
-        sql = f"""
-            SELECT
-                toUnixTimestamp(toStartOfInterval(j.time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
-                sum(j.amount0 + j.amount1)   AS sum_amount,
-                sum(j.amount0)               AS sum_amount0,
-                sum(j.amount1)               AS sum_amount1,
-                sum({side0_expr.replace('amount0', 'j.amount0')} + {side1_expr.replace('amount1', 'j.amount1')}) AS sum_value_usd,
-                count()                      AS count
-            FROM (
-                SELECT
-                    c.time_max AS time,
-                    c.c_amt0 - coalesce(w.w_amt0, 0) AS amount0,
-                    c.c_amt1 - coalesce(w.w_amt1, 0) AS amount1
-                    {ptok0_select.replace(', ', ', ')}
-                    {ptok1_select.replace(', ', ', ')}
-                FROM (
-                    SELECT
-                        tx_id, owner, tick_lower, tick_upper,
-                        max(time) AS time_max,
-                        sum(amount0) AS c_amt0,
-                        sum(amount1) AS c_amt1
-                    FROM {table} FINAL
-                    WHERE chain    = {{chain:String}}
-                      AND symbol0  = {{symbol0:String}}
-                      AND symbol1  = {{symbol1:String}}
-                      AND tick_spacing = {{ts:UInt32}}
-                      AND time >= {{since:DateTime}}
-                      AND time <  {{until:DateTime}}
-                    GROUP BY tx_id, owner, tick_lower, tick_upper
-                ) AS c
-                LEFT JOIN (
-                    SELECT
-                        tx_id, owner, tick_lower, tick_upper,
-                        sum(amount0) AS w_amt0,
-                        sum(amount1) AS w_amt1
-                    FROM tradernick.aero_concentrated_withdrawals FINAL
-                    WHERE chain    = {{chain:String}}
-                      AND symbol0  = {{symbol0:String}}
-                      AND symbol1  = {{symbol1:String}}
-                      AND tick_spacing = {{ts:UInt32}}
-                      AND time >= {{since:DateTime}}
-                      AND time <  {{until:DateTime}}
-                    GROUP BY tx_id, owner, tick_lower, tick_upper
-                ) AS w
-                  ON c.tx_id = w.tx_id AND c.owner = w.owner
-                 AND c.tick_lower = w.tick_lower AND c.tick_upper = w.tick_upper
-            ) AS j
-            {joins_sql.replace('AS p0', 'AS p0').replace('AS p1', 'AS p1').replace('t.pricing_token0', 'j.pricing_token0').replace('t.pricing_token1', 'j.pricing_token1').replace('t.time', 'j.time')}
-            GROUP BY bucket
-            ORDER BY bucket
-            LIMIT {{limit:UInt32}}
-        """
     else:
-        # Deposit / withdraw: per-row amount0/amount1, total USD = side0 +
-        # side1. Each side is amount × price (stable sides skip the JOIN
-        # and multiply by 1).
+        # LP events (deposit / withdraw / collect): per-row amount0/amount1.
+        # Total USD = side0 + side1; each side is amount × price (stable
+        # sides skip the JOIN and multiply by 1).
+        #
+        # NOTE on `collect`: the endpoint still answers, but the dashboard
+        # hides it from the subkind picker. The raw aggregate mixes
+        # principal-withdrawn-after-Burn and actual fees, and we tried
+        # subtracting matched Burn amounts to recover just fees — that
+        # works for same-tx Burn→Collect cycles but is fundamentally
+        # broken when an LP burns one day and collects accumulated
+        # tokensOwed days later (the Burn is outside any reasonable query
+        # window, so the Collect is reported as pure fees when it's
+        # really old principal). Use swap_volume × fee_tier for a real
+        # "fees" chart; we keep this branch unmodified so direct API
+        # consumers still get the raw collect aggregate.
         sql = f"""
             SELECT
                 toUnixTimestamp(toStartOfInterval(t.time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,

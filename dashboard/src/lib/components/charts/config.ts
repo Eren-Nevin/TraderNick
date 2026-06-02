@@ -762,12 +762,17 @@ export const HL_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_val
   // generic /hyperliquid/aggregate one.
 };
 
-/** Uniswap V3 chart kinds collected for the DeX page (default layout order). */
+/** Uniswap V3 chart kinds exposed in the in-chart subkind picker.
+ *  NOTE: 'uniswap_v3_collect' is intentionally omitted — same rationale
+ *  as AERO_CL_CHART_KINDS (Collect events mix principal + fees and
+ *  can't be split cleanly from events alone once a Collect crosses
+ *  days from its Burn). The underlying ChartKind + KIND_TO_EVENT
+ *  entries stay so saved layouts that reference 'uniswap_v3_collect'
+ *  continue to load. */
 export const UNISWAP_V3_CHART_KINDS: ChartKind[] = [
   'uniswap_v3_swap',
   'uniswap_v3_deposit',
   'uniswap_v3_withdraw',
-  'uniswap_v3_collect',
   'uniswap_v3_net_liquidity',
   'uniswap_v3_net_swap_flow'
 ];
@@ -867,12 +872,18 @@ export type UniV4Pool = {
   hooks: string;
 };
 
-/** Aerodrome CL (concentrated-pool) chart kinds. BASE chain only. */
+/** Aerodrome CL (concentrated-pool) chart kinds exposed in the in-chart
+ *  subkind picker. BASE chain only. NOTE: 'aero_cl_collect' is
+ *  intentionally omitted — the raw Collect aggregate mixes principal
+ *  (returned after Burn) and fees, and there's no event-only way to
+ *  split them once a Collect crosses days from its Burn (tokensOwed is
+ *  a persistent state slot, not derivable from events alone). The
+ *  underlying ChartKind + KIND_TO_EVENT entries stay so saved layouts
+ *  that reference 'aero_cl_collect' continue to load. */
 export const AERO_CL_CHART_KINDS: ChartKind[] = [
   'aero_cl_swap',
   'aero_cl_deposit',
   'aero_cl_withdraw',
-  'aero_cl_collect',
   'aero_cl_net_liquidity'
 ];
 export const AERO_CL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
