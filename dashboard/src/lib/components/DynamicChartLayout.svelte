@@ -95,10 +95,6 @@
   // calls openSwapAt). Mutually exclusive with insertIdx — the same menu
   // serves both modes since the catalog of pickable kinds is identical.
   let swapIdx = $state<number | null>(null);
-  // Viewport coords of the "+" that triggered the menu, used so the menu can
-  // appear next to the click instead of always at the bottom pad. null when
-  // the menu was triggered from the bottom "+ Insert Chart" pad.
-  let insertMenuPos = $state<{ x: number; y: number } | null>(null);
   // IDs of templates whose parameter sub-list is currently expanded in the menu.
   let expandedTemplates = $state<Set<string>>(new Set());
   // Protocol-group names that are currently expanded in the Insert menu.
@@ -114,6 +110,12 @@
   // Uniswap V2/V3/V4, Aerodrome CL/Basic). Keyed by `${category}::${provider}`
   // so two categories could safely reuse the same provider name without colliding.
   let expandedProviders = $state<Set<string>>(new Set());
+
+  // Insert dialog state: a single centered modal with a typeahead filter
+  // and arrow-key navigation. Replaces the old click-anchored menu.
+  let filterText = $state('');
+  let highlightedIdx = $state(0);
+  let listEl: HTMLDivElement | null = $state(null);
 
   function toggleGroupExpand(name: string) {
     const next = new Set(expandedGroups);
@@ -131,52 +133,35 @@
     expandedProviders = next;
   }
 
-  function openInsert() {
-    if (instances.length >= MAX_CHARTS) return;
-    insertOpen = !insertOpen;
-    insertIdx = null;
-    swapIdx = null;
-    insertMenuPos = null;
-    if (!insertOpen) {
-      expandedTemplates = new Set();
-      expandedGroups = new Set();
-      expandedCategories = new Set();
-      expandedProviders = new Set();
-    }
-  }
-  function openInsertAt(idx: number, ev: MouseEvent) {
+  function openInsertAt(idx: number, _ev: MouseEvent) {
     if (instances.length >= MAX_CHARTS) return;
     insertIdx = idx;
     swapIdx = null;
-    // Anchor the menu to the clicked +. getBoundingClientRect would be more
-    // precise; using clientX/Y is fine since the menu uses translate-X to
-    // centre itself on the anchor.
-    insertMenuPos = { x: ev.clientX, y: ev.clientY };
+    filterText = '';
+    highlightedIdx = 0;
     insertOpen = true;
-    expandedTemplates = new Set();
   }
-  /** Append-at-end variant. insertIdx is left null (placeInstance falls
-   *  through to the "append" branch) but the menu still anchors to the
-   *  click so it doesn't fall back to the bottom-pad fixed position
-   *  (which no longer exists in non-empty layouts). */
-  function openInsertAtEnd(ev: MouseEvent) {
+  /** Append-at-end variant — same as openInsertAt but leaves insertIdx
+   *  null so placeInstance() falls through to the "append" branch. */
+  function openInsertAtEnd(_ev: MouseEvent) {
     if (instances.length >= MAX_CHARTS) return;
     insertIdx = null;
     swapIdx = null;
-    insertMenuPos = { x: ev.clientX, y: ev.clientY };
+    filterText = '';
+    highlightedIdx = 0;
     insertOpen = true;
-    expandedTemplates = new Set();
   }
   /** Open the menu to swap the chart at `idx` with a different kind. The
       replacement preserves width + height so the layout doesn't reflow; the
       id is fresh (a different chart = a different cache key). MAX_CHARTS does
       not gate this because we're replacing, not adding. */
-  function openSwapAt(id: string, ev: MouseEvent) {
+  function openSwapAt(id: string, _ev: MouseEvent) {
     const idx = instances.findIndex((i) => i.id === id);
     if (idx < 0) return;
     swapIdx = idx;
     insertIdx = null;
-    insertMenuPos = { x: ev.clientX, y: ev.clientY };
+    filterText = '';
+    highlightedIdx = 0;
     insertOpen = true;
     expandedTemplates = new Set();
   }
@@ -184,7 +169,8 @@
     insertOpen = false;
     insertIdx = null;
     swapIdx = null;
-    insertMenuPos = null;
+    filterText = '';
+    highlightedIdx = 0;
     expandedTemplates = new Set();
     expandedGroups = new Set();
     expandedCategories = new Set();
@@ -237,6 +223,146 @@
   }
   function removeChart(id: string) {
     instances = instances.filter((i) => i.id !== id);
+  }
+
+  // ---- insert dialog: flat searchable item list ----
+  // Each item carries a display label + a "group" breadcrumb + a lowercase
+  // search key. Matching is a plain substring against the search key, so
+  // typing "AA" surfaces every AAVE row, "Perp" surfaces everything in
+  // the Perp category, etc.
+  type FlatItem =
+    | {
+        type: 'kind';
+        id: string;
+        kind: ChartKind;
+        label: string;
+        group: string;
+        searchKey: string;
+      }
+    | {
+        type: 'template';
+        id: string;
+        build: (defaults: { token: string; chain?: string }) => ChartInstanceT;
+        label: string;
+        group: string;
+        searchKey: string;
+      };
+
+  let flatAllItems = $derived.by((): FlatItem[] => {
+    const items: FlatItem[] = [];
+    // Templates first — only used on /flows currently.
+    for (const t of templates) {
+      if (t.build) {
+        items.push({
+          type: 'template',
+          id: `tpl-${t.id}`,
+          build: t.build,
+          label: t.label,
+          group: 'Templates',
+          searchKey: `Templates ${t.label}`.toLowerCase()
+        });
+      }
+      if (t.variants) {
+        for (const v of t.variants) {
+          items.push({
+            type: 'template',
+            id: `tpl-${t.id}-${v.id}`,
+            build: v.build,
+            label: v.label,
+            group: `Templates › ${t.label}`,
+            searchKey: `Templates ${t.label} ${v.label}`.toLowerCase()
+          });
+        }
+      }
+    }
+    // Chart kinds: in categorizedMenu mode use the Category / Provider
+    // taxonomy; otherwise use the per-page group prefix.
+    for (const k of availableKinds) {
+      const fullLabel = CHART_KIND_LABELS[k] ?? k;
+      if (categorizedMenu) {
+        const cat = chartKindCategory(k);
+        const prov = chartKindProvider(k);
+        const label = prov ? prov.variant : fullLabel;
+        const groupParts: string[] = [];
+        if (cat) groupParts.push(cat);
+        if (prov) groupParts.push(prov.provider);
+        const group = groupParts.join(' › ');
+        items.push({
+          type: 'kind',
+          id: `kind-${k}`,
+          kind: k,
+          label,
+          group,
+          searchKey: `${group} ${label} ${fullLabel}`.toLowerCase()
+        });
+      } else {
+        const grp = chartKindGroup(k);
+        const label = grp ? chartKindShortLabel(k) : fullLabel;
+        items.push({
+          type: 'kind',
+          id: `kind-${k}`,
+          kind: k,
+          label,
+          group: grp ?? '',
+          searchKey: `${grp ?? ''} ${fullLabel}`.toLowerCase()
+        });
+      }
+    }
+    return items;
+  });
+
+  let filteredItems = $derived.by((): FlatItem[] => {
+    const q = filterText.trim().toLowerCase();
+    if (!q) return flatAllItems;
+    return flatAllItems.filter((it) => it.searchKey.includes(q));
+  });
+
+  // Reset the highlight whenever the filter text changes.
+  $effect(() => {
+    filterText;
+    highlightedIdx = 0;
+  });
+
+  // Keep the highlighted row scrolled into view as the user arrow-navigates.
+  $effect(() => {
+    if (!listEl) return;
+    highlightedIdx; // re-run on change
+    const el = listEl.querySelector(`[data-idx="${highlightedIdx}"]`) as HTMLElement | null;
+    el?.scrollIntoView({ block: 'nearest' });
+  });
+
+  function pickItem(item: FlatItem) {
+    if (swapIdx === null && instances.length >= MAX_CHARTS) return;
+    const tk = defaultToken ?? tokens[0] ?? 'BTC';
+    const inst =
+      item.type === 'kind'
+        ? newChartInstance(item.kind, { token: tk, chain: defaultChain })
+        : item.build({ token: tk, chain: defaultChain });
+    placeInstance(inst);
+  }
+
+  function onSearchKey(ev: KeyboardEvent) {
+    if (ev.key === 'ArrowDown') {
+      ev.preventDefault();
+      const n = filteredItems.length;
+      if (n > 0) highlightedIdx = (highlightedIdx + 1) % n;
+    } else if (ev.key === 'ArrowUp') {
+      ev.preventDefault();
+      const n = filteredItems.length;
+      if (n > 0) highlightedIdx = (highlightedIdx - 1 + n) % n;
+    } else if (ev.key === 'Enter') {
+      ev.preventDefault();
+      const it = filteredItems[highlightedIdx];
+      if (it) pickItem(it);
+    } else if (ev.key === 'Escape') {
+      ev.preventDefault();
+      closeInsert();
+    }
+  }
+
+  function focusSearchInput(node: HTMLInputElement) {
+    node.focus();
+    node.select();
   }
 
   // ---- drag-to-resize ----
@@ -877,229 +1003,6 @@
   </div>
 {/if}
 
-{#snippet insertMenuBody()}
-  {#if swapIdx !== null}
-    <div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-widest text-amber-300 border-b border-zinc-800">
-      Swap this chart — pick a replacement
-    </div>
-  {/if}
-  {#if templates.length > 0}
-    <div class="px-3 pt-1 pb-0.5 text-[10px] uppercase tracking-widest text-zinc-500">
-      Templates
-    </div>
-    {#each templates as t (t.id)}
-      {#if t.variants && t.variants.length > 0}
-        <button
-          type="button"
-          onclick={() => toggleTemplateExpand(t.id)}
-          class="flex items-center justify-between w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-          aria-expanded={expandedTemplates.has(t.id)}
-        >
-          <span>{t.label}</span>
-          <span class="text-zinc-500 text-[10px] ml-2"
-            >{expandedTemplates.has(t.id) ? '▾' : '▸'}</span
-          >
-        </button>
-        {#if expandedTemplates.has(t.id)}
-          <div class="bg-zinc-900/40">
-            {#each t.variants as v (v.id)}
-              <button
-                type="button"
-                onclick={() => addTemplateVariant(v.build)}
-                class="block w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-              >{v.label}</button>
-            {/each}
-          </div>
-        {/if}
-      {:else if t.build}
-        <button
-          type="button"
-          onclick={() => addTemplate(t)}
-          class="block w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-        >{t.label}</button>
-      {/if}
-    {/each}
-    <div class="border-t border-zinc-800 my-1"></div>
-  {/if}
-  {#if categorizedMenu}
-    <!-- Dashboard mode: bucket every kind by its high-level category
-         (Exchange / Flows / Lending / DeX / Perp / Staking). Each category
-         is a collapsible header; clicking a leaf inserts that chart kind
-         directly. Kinds with no category (shouldn't happen for the
-         Dashboard kind list) are silently dropped. -->
-    {@const _byCategory = (() => {
-      const m = new Map<ChartCategory, ChartKind[]>();
-      for (const k of availableKinds) {
-        const c = chartKindCategory(k);
-        if (!c) continue;
-        if (!m.has(c)) m.set(c, []);
-        m.get(c)!.push(k);
-      }
-      return m;
-    })()}
-    {#each CHART_CATEGORIES as cat (cat)}
-      {@const kinds = _byCategory.get(cat) ?? []}
-      {#if kinds.length > 0}
-        {@const _grouping = (() => {
-          // Inside the category, partition kinds into provider buckets
-          // (AAVE V2/V3/V4 → AAVE; Uniswap V2/V3/V4 → Uniswap; Aerodrome
-          // CL/Basic → Aerodrome) plus a flat tail for everything else.
-          // A provider gets its own collapsible sub-row only if it has ≥2
-          // kinds in this category — a single-version provider stays flat.
-          const provGroups = new Map<string, { provider: string; variant: string; kind: ChartKind }[]>();
-          const flat: ChartKind[] = [];
-          const order: { type: 'provider'; provider: string } | { type: 'flat'; kind: ChartKind } | undefined = undefined;
-          const seq: ({ type: 'provider'; provider: string } | { type: 'flat'; kind: ChartKind })[] = [];
-          const seen = new Set<string>();
-          for (const k of kinds) {
-            const p = chartKindProvider(k);
-            if (p) {
-              if (!provGroups.has(p.provider)) provGroups.set(p.provider, []);
-              provGroups.get(p.provider)!.push({ provider: p.provider, variant: p.variant, kind: k });
-              if (!seen.has(p.provider)) {
-                seq.push({ type: 'provider', provider: p.provider });
-                seen.add(p.provider);
-              }
-            } else {
-              seq.push({ type: 'flat', kind: k });
-            }
-          }
-          // Demote single-version providers back to flat — saves a click
-          // when the bucket would only ever contain one entry.
-          const finalSeq: ({ type: 'provider'; entries: { variant: string; kind: ChartKind }[]; provider: string } | { type: 'flat'; kind: ChartKind })[] = [];
-          const usedProvSingleton = new Set<string>();
-          for (const item of seq) {
-            if (item.type === 'flat') {
-              finalSeq.push(item);
-              continue;
-            }
-            const entries = provGroups.get(item.provider) ?? [];
-            if (entries.length <= 1) {
-              if (entries.length === 1 && !usedProvSingleton.has(item.provider)) {
-                finalSeq.push({ type: 'flat', kind: entries[0].kind });
-                usedProvSingleton.add(item.provider);
-              }
-            } else {
-              finalSeq.push({ type: 'provider', provider: item.provider, entries });
-            }
-          }
-          return finalSeq;
-        })()}
-        <button
-          type="button"
-          onclick={() => toggleCategoryExpand(cat)}
-          class="flex items-center justify-between w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-          aria-expanded={expandedCategories.has(cat)}
-        >
-          <span>{cat}</span>
-          <span class="text-zinc-500 text-[10px] ml-2"
-            >{kinds.length} <span class="ml-1">{expandedCategories.has(cat) ? '▾' : '▸'}</span></span
-          >
-        </button>
-        {#if expandedCategories.has(cat)}
-          <div class="bg-zinc-900/40">
-            {#each _grouping as item, i (i)}
-              {#if item.type === 'flat'}
-                <button
-                  type="button"
-                  onclick={() => addChart(item.kind)}
-                  class="block w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-                >{CHART_KIND_LABELS[item.kind]}</button>
-              {:else}
-                {@const pkey = `${cat}::${item.provider}`}
-                <button
-                  type="button"
-                  onclick={() => toggleProviderExpand(pkey)}
-                  class="flex items-center justify-between w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-                  aria-expanded={expandedProviders.has(pkey)}
-                >
-                  <span>{item.provider}</span>
-                  <span class="text-zinc-500 text-[10px] ml-2"
-                    >{item.entries.length} <span class="ml-1">{expandedProviders.has(pkey) ? '▾' : '▸'}</span></span
-                  >
-                </button>
-                {#if expandedProviders.has(pkey)}
-                  <div class="bg-zinc-900/60">
-                    {#each item.entries as e (e.kind)}
-                      <button
-                        type="button"
-                        onclick={() => addChart(e.kind)}
-                        class="block w-full text-left pl-12 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-                      >{e.variant}</button>
-                    {/each}
-                  </div>
-                {/if}
-              {/if}
-            {/each}
-          </div>
-        {/if}
-      {/if}
-    {/each}
-  {:else}
-    {@const _flat = availableKinds.filter((k) => chartKindGroup(k) === null)}
-    {@const _grouped = (() => {
-      // Bucket the event-driven kinds by their protocol group (AAVE V3,
-      // Uniswap V4, etc.), then sort the groups by chartKindGroupOrder so
-      // versions inside a family render in ascending order (V2 → V3 → V4)
-      // regardless of how the page composed `availableKinds`. Items inside
-      // each group preserve their page-given order so per-page customisation
-      // still works for the leaf listing.
-      const m = new Map<string, ChartKind[]>();
-      for (const k of availableKinds) {
-        const g = chartKindGroup(k);
-        if (!g) continue;
-        if (!m.has(g)) m.set(g, []);
-        m.get(g)!.push(k);
-      }
-      return Array.from(m.entries())
-        .sort(([a], [b]) => {
-          const da = chartKindGroupOrder(a);
-          const db = chartKindGroupOrder(b);
-          return da !== db ? da - db : a.localeCompare(b);
-        });
-    })()}
-    <!-- Top-level (single-kind families: OHLCV, Token Flow, …). -->
-    {#each _flat as k (k)}
-      <button
-        type="button"
-        onclick={() => addChart(k)}
-        class="block w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-      >{CHART_KIND_LABELS[k]}</button>
-    {/each}
-    <!-- Grouped (protocol families with multiple event-driven kinds). -->
-    {#each _grouped as [groupName, groupKinds] (groupName)}
-      <button
-        type="button"
-        onclick={() => toggleGroupExpand(groupName)}
-        class="flex items-center justify-between w-full text-left px-3 py-1.5 text-xs text-zinc-200 hover:bg-zinc-800"
-        aria-expanded={expandedGroups.has(groupName)}
-      >
-        <span>{groupName}</span>
-        <span class="text-zinc-500 text-[10px] ml-2"
-          >{groupKinds.length} <span class="ml-1">{expandedGroups.has(groupName) ? '▾' : '▸'}</span></span
-        >
-      </button>
-      {#if expandedGroups.has(groupName)}
-        <div class="bg-zinc-900/40">
-          {#each groupKinds as k (k)}
-            <button
-              type="button"
-              onclick={() => addChart(k)}
-              class="block w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-            >{chartKindShortLabel(k)}</button>
-          {/each}
-        </div>
-      {/if}
-    {/each}
-  {/if}
-  <div class="border-t border-zinc-800 mt-1 pt-1">
-    <button
-      type="button"
-      onclick={closeInsert}
-      class="block w-full text-left px-3 py-1 text-[10px] uppercase tracking-widest text-zinc-500 hover:text-zinc-300"
-    >Cancel</button>
-  </div>
-{/snippet}
 
 {#if instances.length >= MAX_CHARTS}
   <!-- At MAX_CHARTS the floating insert button and per-chart "+" hover
@@ -1133,22 +1036,73 @@
   </button>
 {/if}
 
-<!-- Floating insert menu — anchored to the per-chart "+" that opened it. -->
-{#if insertOpen && insertMenuPos !== null}
-  <!-- Click-outside scrim. Captures clicks anywhere on the page and closes the menu. -->
+<!-- Centered insert dialog with typeahead filter + arrow/Enter keyboard
+     navigation. Renders whenever insertOpen is true; the trigger
+     (per-chart "+" or FAB) sets insertIdx / swapIdx so placeInstance
+     knows where to land the chart. -->
+{#if insertOpen}
   <div
-    class="fixed inset-0 z-40"
+    class="fixed inset-0 z-40 bg-black/55"
     onclick={closeInsert}
     role="presentation"
   ></div>
   <div
-    class="fixed z-50 bg-zinc-950 border border-zinc-700 rounded-md shadow-xl shadow-black/60 py-1 min-w-[260px] max-h-[60vh] overflow-y-auto"
-    style="left: {Math.min(Math.max(insertMenuPos.x - 130, 8), (typeof window !== 'undefined' ? window.innerWidth : 1200) - 268)}px; top: {insertMenuPos.y + 8}px;"
-    role="menu"
-    onclick={(e) => e.stopPropagation()}
-    onkeydown={(e) => { if (e.key === 'Escape') closeInsert(); }}
+    class="fixed z-50 inset-0 flex items-start justify-center pt-24 pointer-events-none"
+    role="presentation"
   >
-    {@render insertMenuBody()}
+    <div
+      class="insert-dialog pointer-events-auto bg-zinc-950 border border-zinc-700 rounded-lg shadow-2xl shadow-black/60 w-[480px] max-w-[92vw] max-h-[60vh] flex flex-col overflow-hidden"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Insert chart"
+      onclick={(e) => e.stopPropagation()}
+    >
+      {#if swapIdx !== null}
+        <div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-widest text-amber-300 border-b border-zinc-800">
+          Swap this chart — pick a replacement
+        </div>
+      {/if}
+      <div class="px-3 py-2 border-b border-zinc-800 flex items-center gap-2">
+        <span class="text-zinc-500 text-sm leading-none" aria-hidden="true">⌕</span>
+        <input
+          type="text"
+          bind:value={filterText}
+          onkeydown={onSearchKey}
+          use:focusSearchInput
+          placeholder="Search chart kinds — e.g. AA, Uniswap, OHLCV"
+          class="flex-1 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+          aria-label="Search chart kinds"
+        />
+      </div>
+      <div bind:this={listEl} class="flex-1 overflow-y-auto scrollbar-none py-1">
+        {#if filteredItems.length === 0}
+          <div class="px-3 py-6 text-xs text-zinc-500 text-center">No matches</div>
+        {:else}
+          {#each filteredItems as item, i (item.id)}
+            <button
+              type="button"
+              data-idx={i}
+              onclick={() => pickItem(item)}
+              onmouseenter={() => (highlightedIdx = i)}
+              class="w-full flex items-center gap-2 text-left px-3 py-1.5 text-xs transition-colors
+                     {i === highlightedIdx
+                       ? 'bg-zinc-800 text-zinc-50'
+                       : 'text-zinc-200 hover:bg-zinc-900'}"
+            >
+              {#if item.group}
+                <span class="text-[10px] text-zinc-500 truncate">{item.group}</span>
+                <span class="text-[10px] text-zinc-600">›</span>
+              {/if}
+              <span class="truncate">{item.label}</span>
+            </button>
+          {/each}
+        {/if}
+      </div>
+      <div class="px-3 py-1.5 border-t border-zinc-800 text-[10px] text-zinc-500 flex items-center justify-between">
+        <span>↑↓ navigate · ↵ select · esc close</span>
+        <span>{filteredItems.length} result{filteredItems.length === 1 ? '' : 's'}</span>
+      </div>
+    </div>
   </div>
 {/if}
 
