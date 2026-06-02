@@ -228,13 +228,33 @@
   }
 
   // ---- drag-to-resize ----
-  // CSS `gap-6` on the chart grid resolves to 1.5rem = 24px. We need this
-  // to translate pointer movement into discrete grid-step deltas.
+  // CSS `gap-6` on the chart grid resolves to 1.5rem = 24px. We use this
+  // to translate pointer movement into grid-step deltas.
   const GRID_GAP_PX = 24;
+
+  // While the user is dragging a resize handle we render a floating "ghost"
+  // outline that follows the pointer at pixel resolution. The chart itself
+  // stays at its starting size — committing the new span only happens on
+  // pointerup so the live grid doesn't reflow mid-drag (which is what
+  // caused the previous snap-jitter). The ghost carries both the live
+  // pixel rect and the snapped target span so we can label it.
+  let resizeGhost = $state<{
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+    snappedW: 1 | 2 | 3 | 4;
+    snappedH: 1 | 2 | 3 | 4;
+  } | null>(null);
+
+  function clamp4(n: number): 1 | 2 | 3 | 4 {
+    return Math.max(1, Math.min(4, n)) as 1 | 2 | 3 | 4;
+  }
 
   /** Start a resize drag from a wrapper-edge handle.
    *  dir = 'e' resizes width only, 's' resizes height only, 'se' both.
-   *  Snaps to integer column/row spans in [1, 4]. */
+   *  Ghost follows the pointer continuously; the actual chart snaps to
+   *  the nearest integer column/row span in [1, 4] on release. */
   function startResize(idx: number, ev: PointerEvent, dir: 'e' | 's' | 'se') {
     ev.preventDefault();
     ev.stopPropagation();
@@ -250,28 +270,58 @@
     // between cells, so one extra column adds (colW + gap) pixels.
     const xPerStep = (rect.width + GRID_GAP_PX) / startW;
     const yPerStep = (rect.height + GRID_GAP_PX) / startH;
+    // Floor / ceil widths/heights in pixels (so the ghost can't shrink to
+    // nothing or balloon past the 4-span maximum).
+    const minW = xPerStep - GRID_GAP_PX;            // = colW; equivalent to 1 col
+    const minH = yPerStep - GRID_GAP_PX;            // = rowH; equivalent to 1 row
+    const maxW = 4 * xPerStep - GRID_GAP_PX;        // 4 cols + 3 gaps
+    const maxH = 4 * yPerStep - GRID_GAP_PX;
+
+    // Seed the ghost at the current host rect.
+    resizeGhost = {
+      left: rect.left,
+      top: rect.top,
+      width: rect.width,
+      height: rect.height,
+      snappedW: startW,
+      snappedH: startH
+    };
 
     handle.setPointerCapture(ev.pointerId);
-    function clamp4(n: number): 1 | 2 | 3 | 4 {
-      return Math.max(1, Math.min(4, n)) as 1 | 2 | 3 | 4;
-    }
     function onMove(e: PointerEvent) {
+      const dx = e.clientX - startX;
+      const dy = e.clientY - startY;
+      let ghostW = rect.width;
+      let ghostH = rect.height;
+      let snapW = startW;
+      let snapH = startH;
       if (dir === 'e' || dir === 'se') {
-        const dx = e.clientX - startX;
-        const newW = clamp4(Math.round(startW + dx / xPerStep));
-        if (newW !== instances[idx].width) instances[idx].width = newW;
+        ghostW = Math.max(minW, Math.min(maxW, rect.width + dx));
+        snapW = clamp4(Math.round(startW + dx / xPerStep));
       }
       if (dir === 's' || dir === 'se') {
-        const dy = e.clientY - startY;
-        const newH = clamp4(Math.round(startH + dy / yPerStep));
-        if (newH !== instances[idx].height) instances[idx].height = newH;
+        ghostH = Math.max(minH, Math.min(maxH, rect.height + dy));
+        snapH = clamp4(Math.round(startH + dy / yPerStep));
       }
+      resizeGhost = {
+        left: rect.left,
+        top: rect.top,
+        width: ghostW,
+        height: ghostH,
+        snappedW: snapW,
+        snappedH: snapH
+      };
     }
     function onUp(e: PointerEvent) {
       try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
       handle.removeEventListener('pointermove', onMove);
       handle.removeEventListener('pointerup', onUp);
       handle.removeEventListener('pointercancel', onUp);
+      const g = resizeGhost;
+      resizeGhost = null;
+      if (!g) return;
+      if (g.snappedW !== instances[idx].width) instances[idx].width = g.snappedW;
+      if (g.snappedH !== instances[idx].height) instances[idx].height = g.snappedH;
     }
     handle.addEventListener('pointermove', onMove);
     handle.addEventListener('pointerup', onUp);
@@ -800,6 +850,21 @@
   {/each}
 </section>
 
+<!-- Live resize ghost. Position:fixed in viewport coordinates so it's
+     independent of the chart grid's reflow. Carries the snapped target
+     span as a small label so the user can preview where the chart will
+     land before releasing. Rendered outside the section to avoid being
+     clipped by the grid. -->
+{#if resizeGhost}
+  <div
+    class="resize-ghost"
+    style="left:{resizeGhost.left}px; top:{resizeGhost.top}px; width:{resizeGhost.width}px; height:{resizeGhost.height}px;"
+    aria-hidden="true"
+  >
+    <span class="resize-ghost-label">{resizeGhost.snappedW}×{resizeGhost.snappedH}</span>
+  </div>
+{/if}
+
 {#snippet insertMenuBody()}
   {#if swapIdx !== null}
     <div class="px-3 pt-2 pb-1 text-[10px] uppercase tracking-widest text-amber-300 border-b border-zinc-800">
@@ -1177,4 +1242,28 @@
   }
   /* No hover/active background — cursor change alone signals the
      grabbable edges. */
+
+  /* Live resize ghost. Follows the pointer at pixel resolution while
+     the underlying chart stays put — the chart itself only snaps to
+     the new grid span on pointerup. */
+  .resize-ghost {
+    position: fixed;
+    pointer-events: none;
+    z-index: 1000;
+    border: 2px dashed rgba(96 165 250 / 0.85);    /* blue-400 */
+    background-color: rgba(59 130 246 / 0.08);     /* blue-500/8 */
+    border-radius: 0.75rem;                         /* match chart rounded-xl */
+    transition: none;
+  }
+  .resize-ghost-label {
+    position: absolute;
+    right: 6px;
+    bottom: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    color: rgb(191 219 254);                       /* blue-200 */
+    background-color: rgba(15 23 42 / 0.85);       /* slate-900/85 */
+    padding: 1px 6px;
+    border-radius: 4px;
+  }
 </style>
