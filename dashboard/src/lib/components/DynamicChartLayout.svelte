@@ -732,7 +732,7 @@
   use:dndzone={{ items: instances, flipDurationMs: FLIP_MS, dropTargetStyle: {} }}
   onconsider={handleSort}
   onfinalize={handleSort}
-  class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6"
+  class="grid grid-cols-4 gap-6"
   style="grid-auto-rows: 320px; grid-auto-flow: dense;"
 >
   {#each instances as inst, idx (inst.id)}
@@ -1025,7 +1025,7 @@
 {/snippet}
 
 {#if instances.length < MAX_CHARTS}
-  <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+  <div class="grid grid-cols-4 gap-6">
     <!-- Entire dashed pad is the click target — easier than aiming at the
          small "+ Insert Chart" label. Keyboard equivalent: Enter/Space. -->
     <div
@@ -1175,9 +1175,6 @@
     height: 14px;
     cursor: nwse-resize;
   }
-  .insert-host:hover > .resize-handle:hover,
-  .insert-host > .resize-handle:active {
-    background-color: rgba(59 130 246 / 0.35);   /* blue-500/35 */
-    border-radius: 2px;
-  }
+  /* No hover/active background — cursor change alone signals the
+     grabbable edges. */
 </style>

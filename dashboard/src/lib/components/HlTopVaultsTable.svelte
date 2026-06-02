@@ -125,7 +125,6 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('deposits')}>Deposits{sortArrow('deposits')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('withdrawals')}>Withdrawals{sortArrow('withdrawals')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('net')}>Net{sortArrow('net')}</th>
-            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('commission')}>Commission{sortArrow('commission')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('lp_count')}>LPs{sortArrow('lp_count')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none border-l border-zinc-800" onclick={() => onSort('open_notional')}>Open Notional{sortArrow('open_notional')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('realized_pnl')}>Realized PnL{sortArrow('realized_pnl')}</th>
@@ -152,7 +151,6 @@
                   class:text-rose-400={v.net < 0}
                   class:text-zinc-400={v.net === 0}
               >{fmtUsd(v.net)}</td>
-              <td class="px-3 py-1 text-right font-mono text-zinc-200">{fmtUsd(v.commission)}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtNum(v.lp_count)}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-300 border-l border-zinc-800">{v.open_notional > 0 ? fmtUsd(v.open_notional) : '—'}</td>
               <td class="px-3 py-1 text-right font-mono"
