@@ -764,9 +764,6 @@
     {/each}
     <div class="border-t border-zinc-800 my-1"></div>
   {/if}
-  <div class="px-3 pt-0.5 pb-0.5 text-[10px] uppercase tracking-widest text-zinc-500">
-    Blank chart
-  </div>
   {#if categorizedMenu}
     <!-- Dashboard mode: bucket every kind by its high-level category
          (Exchange / Flows / Lending / DeX / Perp / Staking). Each category
