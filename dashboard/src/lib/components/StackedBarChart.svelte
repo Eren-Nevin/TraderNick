@@ -376,7 +376,7 @@
   <svg bind:this={svgEl} {width} {height} class="block bg-zinc-950"></svg>
   {#if hoverDatum}
     <div
-      class="absolute top-2 right-20 px-3 py-2 rounded border border-zinc-700 bg-zinc-900/90 text-xs font-mono text-zinc-100 pointer-events-none shadow"
+      class="absolute top-2 right-20 px-3 py-2 rounded border border-zinc-700/70 bg-zinc-900/70 text-xs font-mono text-zinc-100 pointer-events-none shadow"
     >
       <div class="text-zinc-400">
         {fmtUtcTime(hoverDatum.time)}

@@ -48,6 +48,12 @@ _EVENT_TABLES = {
 }
 _EVENT_KEYS = tuple(_EVENT_TABLES.keys())
 
+# Events whose source table carries an `is_long` column. For these we also
+# emit per-side sums (sum_amount_long / sum_amount_short and the matching
+# *_value_usd_*) so the dashboard can plot Long, Short, Total, and Net as
+# separate series on the same chart.
+_EVENT_HAS_IS_LONG = {"position_increase", "position_decrease", "liquidation"}
+
 _STREAMS_CACHE: dict = {"at": 0.0, "value": None}
 _STREAMS_TTL_SECONDS = 60.0
 
@@ -107,12 +113,32 @@ async def aggregate(request):
 
     value_sum_expr = "sum(coalesce(value_usd, 0))" if has_value_usd else "0"
 
+    has_long = event in _EVENT_HAS_IS_LONG
+    if has_long:
+        # Per-side sums + per-side value_usd (only meaningful when the event
+        # table carries value_usd; otherwise 0s keep the response shape stable).
+        if has_value_usd:
+            value_long_expr = "sumIf(coalesce(value_usd, 0), is_long = 1)"
+            value_short_expr = "sumIf(coalesce(value_usd, 0), is_long = 0)"
+        else:
+            value_long_expr = "0"
+            value_short_expr = "0"
+        extra_select = (
+            f", sumIf({amount_expr}, is_long = 1) AS sum_amount_long"
+            f", sumIf({amount_expr}, is_long = 0) AS sum_amount_short"
+            f", {value_long_expr} AS sum_value_usd_long"
+            f", {value_short_expr} AS sum_value_usd_short"
+        )
+    else:
+        extra_select = ""
+
     sql = f"""
         SELECT
             toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
             sum({amount_expr})  AS sum_amount,
             {value_sum_expr}    AS sum_value_usd,
             count()             AS count
+            {extra_select}
         FROM {table} FINAL
         WHERE {where_chain}
           {where_market}
@@ -128,10 +154,25 @@ async def aggregate(request):
         "seconds": seconds, "since": since_dt, "until": until_dt,
         "limit": limit, **extra,
     })
-    series = [
-        {"time": int(r[0]), "sum_amount": float(r[1]), "sum_value_usd": float(r[2]), "count": int(r[3])}
-        for r in rows.result_rows
-    ]
+    if has_long:
+        series = [
+            {
+                "time": int(r[0]),
+                "sum_amount": float(r[1]),
+                "sum_value_usd": float(r[2]),
+                "count": int(r[3]),
+                "sum_amount_long": float(r[4]),
+                "sum_amount_short": float(r[5]),
+                "sum_value_usd_long": float(r[6]),
+                "sum_value_usd_short": float(r[7]),
+            }
+            for r in rows.result_rows
+        ]
+    else:
+        series = [
+            {"time": int(r[0]), "sum_amount": float(r[1]), "sum_value_usd": float(r[2]), "count": int(r[3])}
+            for r in rows.result_rows
+        ]
     body = {"event": event, "interval": interval, "series": series}
     if chain_group:
         body["chain_group"] = chain_group

@@ -61,6 +61,7 @@
     MORPHO_NET_KIND_TO_EVENTS,
     isMorphoKind,
     chartKindShortLabel,
+    chartKindGroup,
     SPARK_CHART_KINDS,
     SPARK_KIND_TO_EVENT,
     SPARK_NET_KIND_TO_EVENTS,
@@ -312,6 +313,12 @@
   // `gmxMarkets` is the response from /gmx/streams: one row per (event,
   // chain, market_name). For the selector we collapse to unique markets
   // ranked by total rows so the most-active perp floats to the top.
+  // Display helper: market_name from DS is `BTC/USD [WBTC-USDC]` — the
+  // bracketed pool token-pair is noise for picker UI, hide it. The stored
+  // value (instance.gmxMarket) keeps the full string the server needs.
+  function gmxMarketShort(m: string): string {
+    return m.replace(/\s*\[[^\]]*\]\s*$/, '');
+  }
   let gmxMarketsForKind = $derived.by<{ market: string; rows: number }[]>(() => {
     if (!isGmxV2Kind(instance.kind)) return [];
     // Identify which underlying events the kind reads from.
@@ -1041,6 +1048,14 @@
         // Returned datum mirrors both fields so downstream code can keep
         // reading sum_amount / sum_value_usd uniformly.
         const pick = (r: Record<string, number>): number => Number(r[primary] ?? 0);
+        // For events with an `is_long` column the server emits per-side sums
+        // alongside the total — we copy them across so the render layer can
+        // pull Long / Short / Net out of the same datum. The "_long_field"
+        // here mirrors the chosen `primary` field (sum_amount / sum_value_usd).
+        const longField  = primary === 'sum_amount' ? 'sum_amount_long'  : 'sum_value_usd_long';
+        const shortField = primary === 'sum_amount' ? 'sum_amount_short' : 'sum_value_usd_short';
+        const pickLong  = (r: Record<string, number>): number => Number(r[longField]  ?? 0);
+        const pickShort = (r: Record<string, number>): number => Number(r[shortField] ?? 0);
 
         const netEvs = GMX_V2_NET_KIND_TO_EVENTS[effectiveKind];
         if (netEvs) {
@@ -1053,21 +1068,29 @@
           if (!negRes.ok) throw new Error(`${instance.kind} ${negRes.status}`);
           const posBody = await posRes.json();
           const negBody = await negRes.json();
-          const negByTime = new Map<number, { val: number; count: number }>();
+          const negByTime = new Map<number, { val: number; long: number; short: number; count: number }>();
           for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
-            negByTime.set(r.time, { val: pick(r), count: r.count });
+            negByTime.set(r.time, { val: pick(r), long: pickLong(r), short: pickShort(r), count: r.count });
           }
           const out: Record<string, number>[] = [];
           const seen = new Set<number>();
           for (const r of (posBody.series ?? []) as Array<Record<string, number>>) {
-            const n = negByTime.get(r.time) ?? { val: 0, count: 0 };
+            const n = negByTime.get(r.time) ?? { val: 0, long: 0, short: 0, count: 0 };
             const diff = pick(r) - n.val;
-            out.push({ time: r.time, sum_amount: diff, sum_value_usd: diff, count: r.count + n.count });
+            out.push({
+              time: r.time, sum_amount: diff, sum_value_usd: diff, count: r.count + n.count,
+              sum_amount_long: pickLong(r) - n.long,
+              sum_amount_short: pickShort(r) - n.short
+            });
             seen.add(r.time);
           }
           for (const r of (negBody.series ?? []) as Array<Record<string, number>>) {
             if (seen.has(r.time)) continue;
-            out.push({ time: r.time, sum_amount: -pick(r), sum_value_usd: -pick(r), count: r.count });
+            out.push({
+              time: r.time, sum_amount: -pick(r), sum_value_usd: -pick(r), count: r.count,
+              sum_amount_long: -pickLong(r),
+              sum_amount_short: -pickShort(r)
+            });
           }
           out.sort((a, b) => a.time - b.time);
           data = out as unknown as AnyDatum[];
@@ -1085,7 +1108,11 @@
           const out: Record<string, number>[] = [];
           for (const r of (body.series ?? []) as Array<Record<string, number>>) {
             const v = pick(r);
-            out.push({ time: r.time, sum_amount: v, sum_value_usd: v, count: r.count });
+            out.push({
+              time: r.time, sum_amount: v, sum_value_usd: v, count: r.count,
+              sum_amount_long: pickLong(r),
+              sum_amount_short: pickShort(r)
+            });
           }
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
@@ -2838,6 +2865,36 @@
   let valueAxisFn = $derived(useUsdValue ? fmtUsdAxis : fmtAmountAxis);
   let valueTooltipFn = $derived(useUsdValue ? fmtUsdTooltip : fmtAmountTooltip);
 
+  // GMX V2 position/liquidation events: the server emits sum_amount_long
+  // and sum_amount_short alongside the existing combined sum_amount, so we
+  // expose 4 series (Long, Short, Long + Short, Net) on a single chart.
+  // Colors mirror the long/short convention used elsewhere (HL OI / HL PnL):
+  // long = green, short = red, total = cyan accent, net = amber.
+  let gmxIsPositionLongShortKind = $derived(
+    effectiveKind === 'gmx_v2_position_increase' ||
+    effectiveKind === 'gmx_v2_position_decrease' ||
+    effectiveKind === 'gmx_v2_liquidation' ||
+    effectiveKind === 'gmx_v2_net_position'
+  );
+  let gmxPositionLinesD = $derived.by(() => {
+    if (!instance.showPoint) return [];
+    const longLine = { key: 'gmx_long',  label: 'Long',  color: '#22c55e',
+      compute: (d: Record<string, number>) => d.sum_amount_long ?? 0 };
+    const shortLine = { key: 'gmx_short', label: 'Short', color: '#ef4444',
+      compute: (d: Record<string, number>) => d.sum_amount_short ?? 0 };
+    const totalLine = { key: 'gmx_total', label: 'Long + Short', color: '#06b6d4',
+      compute: (d: Record<string, number>) =>
+        (d.sum_amount ?? ((d.sum_amount_long ?? 0) + (d.sum_amount_short ?? 0))) };
+    const netLine  = { key: 'gmx_net',   label: 'Net Long', color: '#f59e0b',
+      compute: (d: Record<string, number>) => (d.sum_amount_long ?? 0) - (d.sum_amount_short ?? 0) };
+    const mode = instance.gmxLongShortDisplay ?? 'total';
+    if (mode === 'long')  return [longLine];
+    if (mode === 'short') return [shortLine];
+    if (mode === 'net')   return [netLine];
+    if (mode === 'all')   return [longLine, shortLine, totalLine, netLine];
+    return [totalLine]; // 'total' (default)
+  });
+
   // AAVE event lines — cyan main series + the chart's MAs. With
   // valueMode='amount' we plot sum_amount (raw token units, summed across
   // whatever the chain/token-group selector resolves to) instead of USD.
@@ -3398,12 +3455,31 @@
           {#if gmxMarketsForKind.length === 0 && instance.gmxMarket}
             <!-- Fallback: keep the stored market visible even before the
                  streams list loads (or if it's empty for this kind). -->
-            <option value={instance.gmxMarket}>{instance.gmxMarket}</option>
+            <option value={instance.gmxMarket}>{gmxMarketShort(instance.gmxMarket)}</option>
           {/if}
           {#each gmxMarketsForKind as m (m.market)}
-            <option value={m.market}>{m.market}</option>
+            <option value={m.market}>{gmxMarketShort(m.market)}</option>
           {/each}
         </select>
+        {#if gmxIsPositionLongShortKind}
+          <!-- Long/Short series selector. The chart shows the chosen side
+               only (one line) by default, or all four when 'All' is picked.
+               Default 'total' = the original "Long + Short" single line. -->
+          <select
+            value={instance.gmxLongShortDisplay ?? 'total'}
+            onchange={(e) =>
+              (instance.gmxLongShortDisplay = e.currentTarget.value as
+                'long' | 'short' | 'total' | 'net' | 'all')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Which side(s) of the position to plot"
+          >
+            <option value="long">Long</option>
+            <option value="short">Short</option>
+            <option value="total">Long + Short</option>
+            <option value="net">Net Long</option>
+            <option value="all">All</option>
+          </select>
+        {/if}
       {:else if isHlKind(instance.kind)}
         <!-- Hyperliquid: static HL chip + token dropdown from the binance
              roster + optional wallet filter (free-text EVM address OR
@@ -4344,6 +4420,8 @@
       <div class="p-4 text-sm text-zinc-400">
         {#if instance.token && instance.chain && (instance.kind === 'transfer' || instance.kind === 'exchange_flow')}
           No data available for {activeTokenGroup ? `Σ ${tokenGroups.find((g) => g.name === activeTokenGroup)?.label ?? activeTokenGroup}` : instance.token} on {activeChainGroup ? `Σ ${activeChainGroup.label}` : instance.chain}{instance.kind === 'exchange_flow' ? ` for ${EXCHANGE_LABEL[instance.exchangeFlowExchange ?? 'binance'] ?? (instance.exchangeFlowExchange ?? 'binance')}` : ''}.
+        {:else if chartKindGroup(instance.kind)}
+          No data for {chartKindGroup(instance.kind)} for {chartKindShortLabel(instance.kind)}.
         {:else}
           No data for {kindLabel}.
         {/if}
@@ -4563,6 +4641,20 @@
         vRefLines={weekVRefLines}
         formatY={fmtUsdAxis}
         formatTooltip={fmtUsdTooltip}
+      />
+    {:else if isGmxV2Kind(instance.kind) && gmxIsPositionLongShortKind}
+      <LineChart
+        data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
+        lines={[...gmxPositionLinesD, ...cumulativeLines]}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={valueAxisFn}
+        formatTooltip={valueTooltipFn}
       />
     {:else if isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxV2Kind(instance.kind) || isHlKind(instance.kind)}
       <LineChart

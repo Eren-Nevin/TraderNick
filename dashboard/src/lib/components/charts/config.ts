@@ -1302,6 +1302,11 @@ export type ChartInstance = {
   /** General-GMX-V2 wrapper only (kind === 'gmx_v2'): which concrete
    *  gmx_v2_* event the chart currently shows. */
   gmxV2Subkind?: ChartKind;
+  /** GMX V2 position / liquidation kinds: which side(s) to render —
+   *  'long' / 'short' / 'total' (Long + Short) / 'net' (Long − Short)
+   *  / 'all' (the four lines together). Default 'total' so the chart
+   *  matches the original single-line behavior. */
+  gmxLongShortDisplay?: 'long' | 'short' | 'total' | 'net' | 'all';
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */
