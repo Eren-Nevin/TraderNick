@@ -1,8 +1,6 @@
 <script lang="ts">
   import DynamicChartLayout from '$lib/components/DynamicChartLayout.svelte';
   import {
-    UNISWAP_CHART_KINDS,
-    UNISWAP_V2_CHART_KINDS,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind
@@ -11,19 +9,17 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = [
-    'ohlcv',
-    ...UNISWAP_CHART_KINDS,
-    // V4 hidden until pools are configured. Re-add UNISWAP_V4_CHART_KINDS here.
-    ...UNISWAP_V2_CHART_KINDS
-  ];
+  // The three general wrapper kinds ('uniswap_v3', 'uniswap_v2', 'uniswap_v4')
+  // each expose an in-chart event selector (Swaps / Deposits / Withdrawals /
+  // Collects / Net Liquidity / …), collapsing what used to be 15 explicit
+  // per-event kinds in the picker into three. OHLCV stays as a price
+  // reference.
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'uniswap_v3', 'uniswap_v2', 'uniswap_v4'];
 
   function defaultLayout(): ChartInstanceT[] {
-    return UNISWAP_CHART_KINDS.map((kind) => {
-      const inst = newChartInstance(kind, { token: 'USDC', chain: 'ETH' });
-      inst.interval = '4h';
-      return inst;
-    });
+    const inst = newChartInstance('uniswap_v3', { token: 'USDC', chain: 'ETH' });
+    inst.interval = '4h';
+    return [inst];
   }
 </script>
 

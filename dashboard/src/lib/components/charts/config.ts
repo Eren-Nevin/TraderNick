@@ -350,12 +350,15 @@ export type ChartKind =
   | 'aero_basic_withdraw'
   | 'aero_basic_claim'
   | 'aero_basic_net_liquidity'
-  | 'uniswap_swap'
-  | 'uniswap_deposit'
-  | 'uniswap_withdraw'
-  | 'uniswap_collect'
-  | 'uniswap_net_liquidity'
-  | 'uniswap_net_swap_flow'
+  | 'uniswap_v3'
+  | 'uniswap_v2'
+  | 'uniswap_v4'
+  | 'uniswap_v3_swap'
+  | 'uniswap_v3_deposit'
+  | 'uniswap_v3_withdraw'
+  | 'uniswap_v3_collect'
+  | 'uniswap_v3_net_liquidity'
+  | 'uniswap_v3_net_swap_flow'
   | 'lido_deposit'
   | 'lido_withdrawal_request'
   | 'lido_withdrawal_claimed'
@@ -459,12 +462,15 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   aero_basic_withdraw: 'Aerodrome Basic Withdrawals',
   aero_basic_claim: 'Aerodrome Basic Claims',
   aero_basic_net_liquidity: 'Aerodrome Basic Net Liquidity',
-  uniswap_swap: 'Uniswap V3 Swaps',
-  uniswap_deposit: 'Uniswap V3 Deposits',
-  uniswap_withdraw: 'Uniswap V3 Withdrawals',
-  uniswap_collect: 'Uniswap V3 Collects',
-  uniswap_net_liquidity: 'Uniswap V3 Net Liquidity',
-  uniswap_net_swap_flow: 'Uniswap V3 Net Swap Flow',
+  uniswap_v3: 'Uniswap V3',
+  uniswap_v2: 'Uniswap V2',
+  uniswap_v4: 'Uniswap V4',
+  uniswap_v3_swap: 'Uniswap V3 Swaps',
+  uniswap_v3_deposit: 'Uniswap V3 Deposits',
+  uniswap_v3_withdraw: 'Uniswap V3 Withdrawals',
+  uniswap_v3_collect: 'Uniswap V3 Collects',
+  uniswap_v3_net_liquidity: 'Uniswap V3 Net Liquidity',
+  uniswap_v3_net_swap_flow: 'Uniswap V3 Net Swap Flow',
   lido_deposit: 'Lido Deposits',
   lido_withdrawal_request: 'Lido Withdrawal Requests',
   lido_withdrawal_claimed: 'Lido Withdrawal Claims',
@@ -750,37 +756,40 @@ export const HL_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_val
   // generic /hyperliquid/aggregate one.
 };
 
-/** Uniswap chart kinds collected for the DeX page (default layout order). */
-export const UNISWAP_CHART_KINDS: ChartKind[] = [
-  'uniswap_swap',
-  'uniswap_deposit',
-  'uniswap_withdraw',
-  'uniswap_collect',
-  'uniswap_net_liquidity',
-  'uniswap_net_swap_flow'
+/** Uniswap V3 chart kinds collected for the DeX page (default layout order). */
+export const UNISWAP_V3_CHART_KINDS: ChartKind[] = [
+  'uniswap_v3_swap',
+  'uniswap_v3_deposit',
+  'uniswap_v3_withdraw',
+  'uniswap_v3_collect',
+  'uniswap_v3_net_liquidity',
+  'uniswap_v3_net_swap_flow'
 ];
 
-/** Map from a single-event Uniswap kind → the data_server event slug. */
-export const UNISWAP_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
-  uniswap_swap: 'swap',
-  uniswap_deposit: 'deposit',
-  uniswap_withdraw: 'withdraw',
-  uniswap_collect: 'collect'
+/** Map from a single-event Uniswap V3 kind → the data_server event slug. */
+export const UNISWAP_V3_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  uniswap_v3_swap: 'swap',
+  uniswap_v3_deposit: 'deposit',
+  uniswap_v3_withdraw: 'withdraw',
+  uniswap_v3_collect: 'collect'
 };
 
-/** Net Uniswap kinds — net_liquidity fetches two endpoints (deposit +
+/** Net Uniswap V3 kinds — net_liquidity fetches two endpoints (deposit +
  *  withdraw); net_swap_flow uses the swap endpoint's directional split
  *  via sum_value_usd_t0t1 − sum_value_usd_t1t0 (no second fetch). */
-export const UNISWAP_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
-  uniswap_net_liquidity: ['deposit', 'withdraw']
+export const UNISWAP_V3_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  uniswap_v3_net_liquidity: ['deposit', 'withdraw']
 };
 
-/** True for any Uniswap kind (single-event, net-liquidity, net-swap-flow). */
-export function isUniswapKind(kind: ChartKind): boolean {
+/** True for any Uniswap V3 kind (single-event, net-liquidity, net-swap-flow,
+ *  or the general wrapper). The 'uniswap_v3' wrapper delegates to a concrete
+ *  uniswap_v3_* subkind via instance.uniswapV3Subkind. */
+export function isUniswapV3Kind(kind: ChartKind): boolean {
+  if (kind === 'uniswap_v3') return true;
   return (
-    UNISWAP_KIND_TO_EVENT[kind] !== undefined ||
-    UNISWAP_NET_KIND_TO_EVENTS[kind] !== undefined ||
-    kind === 'uniswap_net_swap_flow'
+    UNISWAP_V3_KIND_TO_EVENT[kind] !== undefined ||
+    UNISWAP_V3_NET_KIND_TO_EVENTS[kind] !== undefined ||
+    kind === 'uniswap_v3_net_swap_flow'
   );
 }
 
@@ -801,6 +810,9 @@ export const UNISWAP_V2_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, s
   uniswap_v2_net_liquidity: ['deposit', 'withdraw']
 };
 export function isUniswapV2Kind(kind: ChartKind): boolean {
+  // The 'uniswap_v2' wrapper kind delegates to a concrete uniswap_v2_*
+  // subkind via instance.uniswapV2Subkind.
+  if (kind === 'uniswap_v2') return true;
   return (
     UNISWAP_V2_KIND_TO_EVENT[kind] !== undefined ||
     UNISWAP_V2_NET_KIND_TO_EVENTS[kind] !== undefined
@@ -828,6 +840,9 @@ export const UNISWAP_V4_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, s
   uniswap_v4_net_liquidity: ['deposit', 'withdraw']
 };
 export function isUniswapV4Kind(kind: ChartKind): boolean {
+  // The 'uniswap_v4' wrapper kind delegates to a concrete uniswap_v4_*
+  // subkind via instance.uniswapV4Subkind.
+  if (kind === 'uniswap_v4') return true;
   return (
     UNISWAP_V4_KIND_TO_EVENT[kind] !== undefined ||
     UNISWAP_V4_NET_KIND_TO_EVENTS[kind] !== undefined
@@ -920,8 +935,8 @@ export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('morpho_')) return 'Morpho';
   if (kind.startsWith('spark_')) return 'Spark';
   if (kind.startsWith('uniswap_v2_')) return 'Uniswap V2';
+  if (kind.startsWith('uniswap_v3_')) return 'Uniswap V3';
   if (kind.startsWith('uniswap_v4_')) return 'Uniswap V4';
-  if (kind.startsWith('uniswap_')) return 'Uniswap V3';
   if (kind.startsWith('lido_')) return 'Lido';
   if (kind.startsWith('aero_basic_')) return 'Aerodrome Basic';
   if (kind.startsWith('aero_')) return 'Aerodrome CL';
@@ -1224,6 +1239,15 @@ export type ChartInstance = {
   /** General-AAVE-V4 wrapper only (kind === 'aave_v4'): which concrete
    *  aave_v4_* event the chart currently shows. */
   aaveV4Subkind?: ChartKind;
+  /** General-Uniswap-V3 wrapper only (kind === 'uniswap_v3'): which concrete
+   *  uniswap_v3_* event behavior the chart currently shows. */
+  uniswapV3Subkind?: ChartKind;
+  /** General-Uniswap-V2 wrapper only (kind === 'uniswap_v2'): which concrete
+   *  uniswap_v2_* event the chart currently shows. */
+  uniswapV2Subkind?: ChartKind;
+  /** General-Uniswap-V4 wrapper only (kind === 'uniswap_v4'): which concrete
+   *  uniswap_v4_* event the chart currently shows. */
+  uniswapV4Subkind?: ChartKind;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */
@@ -1411,7 +1435,7 @@ export function newChartInstance(
     base.exchangeFlowExchange = 'binance';
     base.exchangeFlowType = 'netflow';
   }
-  if (isUniswapKind(kind)) {
+  if (isUniswapV3Kind(kind)) {
     base.chain = defaults.chain ?? 'ETH';
     // Conservative default: canonical USDC/WETH 0.05%. The page-level loader
     // will replace this with the first available pool from /uniswap/streams.
@@ -1419,6 +1443,14 @@ export function newChartInstance(
     // Default USD for the headline series. Amount mode is per-chart and
     // not meaningful for net_swap_flow (see ChartInstance for the gate).
     base.valueMode = 'usd';
+    if (kind === 'uniswap_v3') {
+      // General wrapper — default to Swaps; the in-chart sub-kind selector
+      // flips between Swaps / Deposits / Withdrawals / Collects / Net
+      // Liquidity / Net Swap Flow. Subkind must be a concrete uniswap_v3_*
+      // kind so UNISWAP_V3_KIND_TO_EVENT / UNISWAP_V3_NET_KIND_TO_EVENTS
+      // lookups resolve through it.
+      base.uniswapV3Subkind = 'uniswap_v3_swap';
+    }
   }
   if (isUniswapV2Kind(kind)) {
     base.chain = defaults.chain ?? 'ETH';
@@ -1427,6 +1459,9 @@ export function newChartInstance(
     // selector + fetch paths don't need a parallel shape.
     base.uniPool = { symbol0: 'USDC', symbol1: 'WETH', fee: 0 };
     base.valueMode = 'usd';
+    if (kind === 'uniswap_v2') {
+      base.uniswapV2Subkind = 'uniswap_v2_swap';
+    }
   }
   if (isUniswapV4Kind(kind)) {
     base.chain = defaults.chain ?? 'ETH';
@@ -1436,6 +1471,9 @@ export function newChartInstance(
       hooks: '0x0000000000000000000000000000000000000000'
     };
     base.valueMode = 'usd';
+    if (kind === 'uniswap_v4') {
+      base.uniswapV4Subkind = 'uniswap_v4_swap';
+    }
   }
   if (isAeroKind(kind)) {
     base.chain = 'BASE';

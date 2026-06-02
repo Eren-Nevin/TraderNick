@@ -444,11 +444,15 @@
       // Uniswap chart kinds also need a `chain`, plus a `uniPool` 3-tuple
       // (symbol0 / symbol1 / fee). Validate the pool shape; fall back to a
       // canonical default so a corrupt save can't strand the chart.
-      // valueMode supported on all uniswap_* except net_swap_flow (which
-      // ignores it at the chart layer). Covers V2 too (uniswap_v2_*) —
-      // V2 uses fee=0 as a sentinel for "no fee tier". V4 carries a
-      // separate uniV4Pool with extra tick_spacing + hooks fields.
-      if (inst.kind.startsWith('uniswap_v4_')) {
+      // valueMode supported on every uniswap_v* kind except
+      // uniswap_v3_net_swap_flow (which ignores it at the chart layer).
+      // V2 uses fee=0 as a sentinel for "no fee tier"; V4 carries a
+      // separate uniV4Pool with extra tick_spacing + hooks fields. The
+      // bare 'uniswap_v3' / 'uniswap_v2' / 'uniswap_v4' wrapper kinds
+      // share the same `uniswap_v…_` prefix shape via the wrapper-kind
+      // branches below — sanitize them through the same default-uniPool
+      // path so a missing pool can't strand the chart after a restore.
+      if (inst.kind.startsWith('uniswap_v4')) {
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         const rp = r.uniV4Pool as Record<string, unknown> | undefined;
@@ -468,7 +472,7 @@
             hooks: '0x0000000000000000000000000000000000000000'
           };
         }
-      } else if (inst.kind.startsWith('uniswap_')) {
+      } else if (inst.kind.startsWith('uniswap_v')) {
         inst.valueMode = r.valueMode === 'amount' ? 'amount' : 'usd';
         inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         const rp = r.uniPool;

@@ -72,12 +72,15 @@
     HL_KIND_TO_EVENT,
     HL_PRIMARY_FIELD,
     isHlKind,
-    UNISWAP_KIND_TO_EVENT,
-    UNISWAP_NET_KIND_TO_EVENTS,
-    isUniswapKind,
+    UNISWAP_V3_CHART_KINDS,
+    UNISWAP_V3_KIND_TO_EVENT,
+    UNISWAP_V3_NET_KIND_TO_EVENTS,
+    isUniswapV3Kind,
+    UNISWAP_V2_CHART_KINDS,
     UNISWAP_V2_KIND_TO_EVENT,
     UNISWAP_V2_NET_KIND_TO_EVENTS,
     isUniswapV2Kind,
+    UNISWAP_V4_CHART_KINDS,
     UNISWAP_V4_KIND_TO_EVENT,
     UNISWAP_V4_NET_KIND_TO_EVENTS,
     isUniswapV4Kind,
@@ -162,11 +165,12 @@
   } = $props();
 
   // ---- effective kind ----
-  // The general 'morpho' / 'spark' / 'aave_v3' / 'aave_v2' / 'aave_v4' wrapper
-  // kinds delegate to a concrete *_subkind selected by the in-chart picker.
-  // Every protocol routing lookup (KIND_TO_EVENT, NET_KIND_TO_EVENTS, cache
-  // key) reads through this so switching subkinds re-fetches the right
-  // event. For every other kind, effectiveKind is just instance.kind.
+  // The general wrapper kinds (morpho, spark, aave_v2/v3/v4, uniswap_v2/v3/v4)
+  // delegate to a concrete *_subkind selected by the in-chart picker. Every
+  // protocol routing lookup (KIND_TO_EVENT, NET_KIND_TO_EVENTS, cache key,
+  // per-kind inline comparisons like uniswap_v3_net_swap_flow) reads through
+  // this so switching subkinds re-fetches the right event. For every other
+  // kind, effectiveKind is just instance.kind.
   let effectiveKind = $derived(
     instance.kind === 'morpho'
       ? ((instance.morphoSubkind ?? 'morpho_supply') as ChartInstanceT['kind'])
@@ -178,6 +182,12 @@
       ? ((instance.aaveV2Subkind ?? 'aave_v2_deposit') as ChartInstanceT['kind'])
       : instance.kind === 'aave_v4'
       ? ((instance.aaveV4Subkind ?? 'aave_v4_deposit') as ChartInstanceT['kind'])
+      : instance.kind === 'uniswap_v3'
+      ? ((instance.uniswapV3Subkind ?? 'uniswap_v3_swap') as ChartInstanceT['kind'])
+      : instance.kind === 'uniswap_v2'
+      ? ((instance.uniswapV2Subkind ?? 'uniswap_v2_swap') as ChartInstanceT['kind'])
+      : instance.kind === 'uniswap_v4'
+      ? ((instance.uniswapV4Subkind ?? 'uniswap_v4_swap') as ChartInstanceT['kind'])
       : instance.kind
   );
 
@@ -218,7 +228,7 @@
   let uniPoolsForChain = $derived(uniPoolsByChain.get(instance.chain ?? '') ?? []);
   // Auto-snap pool when the chain narrows and the current pool isn't on it.
   $effect(() => {
-    if (!isUniswapKind(instance.kind)) return;
+    if (!isUniswapV3Kind(instance.kind)) return;
     const list = uniPoolsForChain;
     if (list.length === 0) return;
     const current = instance.uniPool;
@@ -631,7 +641,7 @@
         ? `|sort:${instance.hlVaultSortBy ?? 'net'}` : '';
       return `${instance.kind}|${instance.token}|${wPart}|${instance.interval}${sortPart}`;
     }
-    if (isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind)) {
+    if (isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind)) {
       // Uniswap V2/V3 charts: pool keyed by (sym0, sym1, fee) — fee=0 marks V2.
       const cPart = instance.chain ?? '';
       const pPart = uniPoolKey(instance.uniPool);
@@ -812,7 +822,7 @@
         isSparkKind(instance.kind) ||
         isGmxKind(instance.kind) ||
         isHlKind(instance.kind) ||
-        isUniswapKind(instance.kind) ||
+        isUniswapV3Kind(instance.kind) ||
         isUniswapV2Kind(instance.kind) ||
         isUniswapV4Kind(instance.kind) ||
         isAeroKind(instance.kind) ||
@@ -1589,7 +1599,7 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const netEvs = UNISWAP_V4_NET_KIND_TO_EVENTS[instance.kind];
+        const netEvs = UNISWAP_V4_NET_KIND_TO_EVENTS[effectiveKind];
         if (netEvs) {
           const [posEvent, negEvent] = netEvs;
           const [posRes, negRes] = await Promise.all([
@@ -1628,7 +1638,7 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        const eventForKind = UNISWAP_V4_KIND_TO_EVENT[instance.kind];
+        const eventForKind = UNISWAP_V4_KIND_TO_EVENT[effectiveKind];
         if (!eventForKind) throw new Error(`unmapped uniswap_v4 kind ${instance.kind}`);
         const res = await queuedFetch(`/api/uniswap_v4/aggregate?${buildV4Qs(eventForKind)}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -1847,7 +1857,7 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const netEvs = UNISWAP_V2_NET_KIND_TO_EVENTS[instance.kind];
+        const netEvs = UNISWAP_V2_NET_KIND_TO_EVENTS[effectiveKind];
         if (netEvs) {
           const [posEvent, negEvent] = netEvs;
           const [posRes, negRes] = await Promise.all([
@@ -1899,7 +1909,7 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        const eventForKind = UNISWAP_V2_KIND_TO_EVENT[instance.kind];
+        const eventForKind = UNISWAP_V2_KIND_TO_EVENT[effectiveKind];
         if (!eventForKind) throw new Error(`unmapped uniswap_v2 kind ${instance.kind}`);
         const res = await queuedFetch(
           `/api/uniswap_v2/aggregate?${buildUniV2Qs(eventForKind)}`, { signal }
@@ -1914,11 +1924,11 @@
         return;
       }
       // Uniswap chart kinds. The single-event ones hit /api/uniswap/aggregate
-      // once. uniswap_net_liquidity needs two parallel calls (deposit −
-      // withdraw, by sum_amount of amount0+amount1). uniswap_net_swap_flow
+      // once. uniswap_v3_net_liquidity needs two parallel calls (deposit −
+      // withdraw, by sum_amount of amount0+amount1). uniswap_v3_net_swap_flow
       // makes a single swap call and uses the server's directional split
       // (sum_value_usd_t0t1 − sum_value_usd_t1t0) — no second fetch.
-      if (isUniswapKind(instance.kind)) {
+      if (isUniswapV3Kind(instance.kind)) {
         const pool = instance.uniPool;
         if (!pool || !instance.chain) {
           // Render an empty series — the auto-snap effect will retry once
@@ -1946,7 +1956,7 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const uniNetEvents = UNISWAP_NET_KIND_TO_EVENTS[instance.kind];
+        const uniNetEvents = UNISWAP_V3_NET_KIND_TO_EVENTS[effectiveKind];
         if (uniNetEvents) {
           const [posEvent, negEvent] = uniNetEvents;
           const [posRes, negRes] = await Promise.all([
@@ -2007,12 +2017,12 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        // Single-event path (including uniswap_net_swap_flow, which uses the
+        // Single-event path (including uniswap_v3_net_swap_flow, which uses the
         // swap endpoint and computes net from its directional t0t1/t1t0 split).
         const eventForKind =
-          instance.kind === 'uniswap_net_swap_flow'
+          effectiveKind === 'uniswap_v3_net_swap_flow'
             ? 'swap'
-            : UNISWAP_KIND_TO_EVENT[instance.kind];
+            : UNISWAP_V3_KIND_TO_EVENT[effectiveKind];
         if (!eventForKind) {
           throw new Error(`unmapped uniswap kind ${instance.kind}`);
         }
@@ -2023,7 +2033,7 @@
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
         const body = await res.json();
         const series = (body.series ?? []) as Array<Record<string, number>>;
-        if (instance.kind === 'uniswap_net_swap_flow') {
+        if (effectiveKind === 'uniswap_v3_net_swap_flow') {
           // Net swap flow = $ moved token0 → token1 minus $ moved token1 →
           // token0. Positive = net buying of token1 (= selling token0).
           data = series.map((r) => ({
@@ -2387,7 +2397,7 @@
       // Uniswap: only when plotting a single USD line — amount mode is
       // dual-axis (token0 + token1) so the secondary axis is already taken
       // and there's no single "the amount" to sum.
-      || ((isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind) || instance.kind === 'uniswap_v4_swap')
+      || ((isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind) || effectiveKind === 'uniswap_v4_swap')
             && (instance.valueMode ?? 'usd') === 'usd')
   );
 
@@ -2599,9 +2609,9 @@
           }
 
           const isUniAmtMode =
-            (isUniswapKind(instance.kind)
+            (isUniswapV3Kind(instance.kind)
               || isUniswapV2Kind(instance.kind)
-              || instance.kind === 'uniswap_v4_swap')
+              || effectiveKind === 'uniswap_v4_swap')
             && uniswapValueModeEffective === 'amount';
           if (isUniAmtMode) {
             const sym0 = instance.uniV4Pool?.symbol0
@@ -2877,17 +2887,17 @@
   // Amount mode: two lines (token0 on primary axis, token1 on secondary
   // axis) — each token has its own scale because t0/t1 magnitudes can be
   // off by 4-6 orders (e.g. USDC vs WETH). The toggle is hidden in the
-  // settings UI for uniswap_net_swap_flow (which is intrinsically a
+  // settings UI for uniswap_v3_net_swap_flow (which is intrinsically a
   // directional USD chart with no clean per-token amount split).
   // V4 LP events (deposit/withdraw/initialize) and net_liquidity have no
   // per-token amount split — only liquidity_delta. Force USD mode for
   // those even if the toggle is on (the server returns 0 for sum_amount0/1).
   let uniswapValueModeEffective = $derived(
-    instance.kind === 'uniswap_net_swap_flow'
-      || instance.kind === 'uniswap_v4_deposit'
-      || instance.kind === 'uniswap_v4_withdraw'
-      || instance.kind === 'uniswap_v4_net_liquidity'
-      || instance.kind === 'uniswap_v4_initialize'
+    effectiveKind === 'uniswap_v3_net_swap_flow'
+      || effectiveKind === 'uniswap_v4_deposit'
+      || effectiveKind === 'uniswap_v4_withdraw'
+      || effectiveKind === 'uniswap_v4_net_liquidity'
+      || effectiveKind === 'uniswap_v4_initialize'
       ? 'usd'
       : (instance.valueMode ?? 'usd')
   );
@@ -3118,7 +3128,7 @@
     : kindLabel
   );
   let panelTitle = $derived(
-    `${displayTitle} — ${isUniswapKind(instance.kind) && instance.uniPool ? fmtUniPool(instance.uniPool) : instance.token} ${instance.interval}` +
+    `${displayTitle} — ${isUniswapV3Kind(instance.kind) && instance.uniPool ? fmtUniPool(instance.uniPool) : instance.token} ${instance.interval}` +
       (instance.kind === 'sz' ? ` (< $${instance.under} / > $${instance.over})` : '')
   );
 
@@ -3196,11 +3206,23 @@
             {/each}
           {/if}
         </select>
-      {:else if isUniswapKind(instance.kind)}
-        <!-- Uniswap kinds: chain dropdown (only chains that have ingested
-             pools) + a pool dropdown filtered to that chain. Pools are
-             sorted by total rows desc so the most-traded pool floats to
-             the top of the list. -->
+      {:else if isUniswapV3Kind(instance.kind)}
+        <!-- Uniswap V3 kinds: chain dropdown (only chains that have
+             ingested pools) + a pool dropdown filtered to that chain.
+             Pools are sorted by total rows desc so the most-traded pool
+             floats to the top. The general wrapper (instance.kind ===
+             'uniswap_v3') also surfaces an event sub-kind selector. -->
+        {#if instance.kind === 'uniswap_v3'}
+          <select
+            bind:value={instance.uniswapV3Subkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Uniswap V3 event to display"
+          >
+            {#each UNISWAP_V3_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <select
           bind:value={instance.chain}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -3482,7 +3504,19 @@
       {:else if isUniswapV2Kind(instance.kind)}
         <!-- Uniswap V2: chain dropdown (same EVM set) + pool dropdown.
              No fee tier — fmtUniPool's "0.00%" sentinel is suppressed for
-             V2 below. -->
+             V2 below. The general wrapper (instance.kind === 'uniswap_v2')
+             also surfaces an event sub-kind selector. -->
+        {#if instance.kind === 'uniswap_v2'}
+          <select
+            bind:value={instance.uniswapV2Subkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Uniswap V2 event to display"
+          >
+            {#each UNISWAP_V2_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <select
           bind:value={instance.chain}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -3500,7 +3534,19 @@
         <!-- Uniswap V4: chain dropdown + a static pool tag (V4 pool
              identity is a 6-tuple — too wide for a single <select>; we
              show the currently configured pool and let saved layouts
-             carry the rest). -->
+             carry the rest). The general wrapper (instance.kind ===
+             'uniswap_v4') also surfaces an event sub-kind selector. -->
+        {#if instance.kind === 'uniswap_v4'}
+          <select
+            bind:value={instance.uniswapV4Subkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Uniswap V4 event to display"
+          >
+            {#each UNISWAP_V4_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <select
           bind:value={instance.chain}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -3904,7 +3950,7 @@
         <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
         Week lines
       </label>
-      {#if instance.kind === 'transfer' || isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapKind(instance.kind) && instance.kind !== 'uniswap_net_swap_flow') || isUniswapV2Kind(instance.kind) || instance.kind === 'uniswap_v4_swap' || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
+      {#if instance.kind === 'transfer' || isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapV3Kind(instance.kind) && effectiveKind !== 'uniswap_v3_net_swap_flow') || isUniswapV2Kind(instance.kind) || effectiveKind === 'uniswap_v4_swap' || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
         <!-- USD ⇆ Amount toggle. For AAVE / Lido the chart shows a single
              series in either mode. For Uniswap (except net_swap_flow which
              is intrinsically directional USD), Amount mode renders TWO
@@ -3927,7 +3973,7 @@
             class={'px-2 py-0.5 text-[11px] border-l border-zinc-700 ' + (instance.valueMode === 'amount'
               ? 'bg-zinc-800 text-zinc-100'
               : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
-            title={isUniswapKind(instance.kind)
+            title={isUniswapV3Kind(instance.kind)
               ? 'Plot raw token0 + token1 amounts on independent axes'
               : 'Plot sum of raw token amount (units depend on the event)'}
           >Amount</button>
@@ -4457,7 +4503,7 @@
         formatY={valueAxisFn}
         formatTooltip={valueTooltipFn}
       />
-    {:else if isUniswapKind(instance.kind) || isUniswapV2Kind(instance.kind) || isUniswapV4Kind(instance.kind) || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
+    {:else if isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind) || isUniswapV4Kind(instance.kind) || isAeroKind(instance.kind) || isAeroBasicKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={uniswapLinesD}
