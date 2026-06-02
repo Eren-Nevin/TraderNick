@@ -17,21 +17,12 @@
   const entries: Entry[] = [
     { kind: 'link',  href: '/trades', label: 'Trades', short: 'T' },
     { kind: 'link',  href: '/flows',  label: 'Flows',  short: 'F' },
-    {
-      kind: 'group', label: 'Lending', short: 'L',
-      links: [
-        { href: '/lending/aave',   label: 'AAVE' },
-        { href: '/lending/morpho', label: 'Morpho' },
-        { href: '/lending/spark',  label: 'Spark' }
-      ]
-    },
-    {
-      kind: 'group', label: 'DeX', short: 'D',
-      links: [
-        { href: '/dex/uniswap',   label: 'Uniswap' },
-        { href: '/dex/aerodrome', label: 'Aerodrome' }
-      ]
-    },
+    // Lending / DeX / Staking are single consolidated pages — each hosts
+    // every protocol-wrapper kind for that category in its picker. Perp
+    // stays grouped (GMX vs Hyperliquid have distinct page chrome and
+    // selectors that don't share well yet).
+    { kind: 'link',  href: '/lending', label: 'Lending', short: 'L' },
+    { kind: 'link',  href: '/dex',     label: 'DeX',     short: 'D' },
     {
       kind: 'group', label: 'Perp', short: 'P',
       links: [
@@ -39,12 +30,7 @@
         { href: '/perp/hyperliquid', label: 'Hyperliquid' }
       ]
     },
-    {
-      kind: 'group', label: 'Staking', short: 'S',
-      links: [
-        { href: '/staking/lido', label: 'Lido' }
-      ]
-    }
+    { kind: 'link',  href: '/staking', label: 'Staking', short: 'S' }
     // Admin link intentionally removed — admin pages live at /admin under
     // their own isolated layout and are out of scope for the dashboard's
     // public-facing nav. Will be reachable behind a separate auth gate.

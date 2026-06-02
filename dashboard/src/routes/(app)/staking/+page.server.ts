@@ -8,6 +8,9 @@ export type LidoStream = {
   rows: number;
 };
 
+// Single Staking page hosts every staking-protocol wrapper kind. Lido is
+// the only one for now; future Stader / Frax etc. can be added to
+// AVAILABLE_KINDS on the page without touching this loader.
 export const load: PageServerLoad = async ({ fetch }) => {
   const [tokensRes, lidoRes, chainGroupsRes] = await Promise.all([
     fetch(`${INTERNAL_DATA_SERVER_URL}/tokens`),
