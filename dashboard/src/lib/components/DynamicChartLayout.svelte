@@ -155,6 +155,18 @@
     insertOpen = true;
     expandedTemplates = new Set();
   }
+  /** Append-at-end variant. insertIdx is left null (placeInstance falls
+   *  through to the "append" branch) but the menu still anchors to the
+   *  click so it doesn't fall back to the bottom-pad fixed position
+   *  (which no longer exists in non-empty layouts). */
+  function openInsertAtEnd(ev: MouseEvent) {
+    if (instances.length >= MAX_CHARTS) return;
+    insertIdx = null;
+    swapIdx = null;
+    insertMenuPos = { x: ev.clientX, y: ev.clientY };
+    insertOpen = true;
+    expandedTemplates = new Set();
+  }
   /** Open the menu to swap the chart at `idx` with a different kind. The
       replacement preserves width + height so the layout doesn't reflow; the
       id is fresh (a different chart = a different cache key). MAX_CHARTS does
@@ -802,6 +814,20 @@
       >
         <PlusCircle size={16} strokeWidth={1.5} class="insert-plus-icon" />
       </button>
+      <!-- Mirror "+" on the right edge of the *last* chart only — gives
+           the user a hover-only way to append at the end now that the
+           fixed bottom dashed pad is gone. Hidden when at MAX_CHARTS. -->
+      {#if idx === instances.length - 1 && instances.length < MAX_CHARTS}
+        <button
+          type="button"
+          class="insert-plus insert-plus-end"
+          aria-label="Insert chart at end"
+          title="Insert chart here"
+          onclick={(e) => openInsertAtEnd(e)}
+        >
+          <PlusCircle size={16} strokeWidth={1.5} class="insert-plus-icon" />
+        </button>
+      {/if}
       <ChartInstance
         bind:instance={instances[idx]}
         {tokens}
@@ -1089,10 +1115,13 @@
   </div>
 {/snippet}
 
-{#if instances.length < MAX_CHARTS}
+{#if instances.length === 0}
+  <!-- Empty-state-only call to action. With no charts present there are
+       no hover affordances to reveal, so we keep one visible pad until
+       the user adds their first chart; after that the per-chart "+"
+       hover zones (left edge of each chart + right edge of the last)
+       take over. -->
   <div class="grid grid-cols-4 gap-6">
-    <!-- Entire dashed pad is the click target — easier than aiming at the
-         small "+ Insert Chart" label. Keyboard equivalent: Enter/Space. -->
     <div
       class="relative rounded-xl border border-dashed border-zinc-700 hover:border-zinc-500 bg-zinc-950/30 hover:bg-zinc-900/40 min-h-[180px] flex items-center justify-center cursor-pointer transition-colors"
       role="button"
@@ -1103,9 +1132,6 @@
     >
       <span class="text-sm text-zinc-400 px-3 py-2 pointer-events-none">+ Insert Chart</span>
       {#if insertOpen && insertMenuPos === null}
-        <!-- Click-outside scrim — any outside click closes the menu.
-             stopPropagation prevents the click from bubbling to the pad's
-             onclick (which would otherwise toggle the menu back open). -->
         <div
           class="fixed inset-0 z-40"
           onclick={(e) => { e.stopPropagation(); closeInsert(); }}
@@ -1122,7 +1148,7 @@
       {/if}
     </div>
   </div>
-{:else}
+{:else if instances.length >= MAX_CHARTS}
   <!-- At MAX_CHARTS — the bottom Insert Chart pad and the per-chart "+"
        hover buttons are silently inert. Surface this so the user knows why
        clicking + does nothing, rather than just removing the affordance. -->
@@ -1188,6 +1214,14 @@
     background: transparent;
     border: none;
     cursor: pointer;
+  }
+  /* Right-edge "+" — only rendered on the last chart so the user can
+     append at the end of the layout. Mirrors the left-edge geometry but
+     anchored to the wrapper's right side, overhanging into the column
+     gap that follows. */
+  .insert-host > .insert-plus.insert-plus-end {
+    left: auto;
+    right: -1.5rem;
   }
   /* Show when the wrapper is hovered, or when the button itself is
      focus-visible (keyboard access). */
