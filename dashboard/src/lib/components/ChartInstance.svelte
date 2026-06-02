@@ -3361,6 +3361,7 @@
     const usable = Number.isFinite(pmin) && Number.isFinite(pmax) && pspan !== 0;
     const out: LineLike[] = [];
     for (const o of overlays) {
+      if (o.hidden) continue; // chip kept; line suppressed.
       const load = overlayLoaded.get(o.id);
       const data = load?.data ?? [];
       if (data.length === 0) continue;
@@ -3448,6 +3449,13 @@
     const next = new Map(overlayLoaded);
     next.delete(id);
     overlayLoaded = next;
+  }
+  function toggleOverlayHidden(id: string) {
+    const list = (instance.overlays ?? []).slice();
+    const i = list.findIndex((x) => x.id === id);
+    if (i < 0) return;
+    list[i] = { ...list[i], hidden: !list[i].hidden };
+    instance.overlays = list;
   }
   function openOverlayAdd() {
     overlayEditing = null;
@@ -4271,11 +4279,20 @@
           tabindex="0"
           onclick={() => openOverlayEdit(o)}
           onkeydown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openOverlayEdit(o); } }}
-          title="Click to edit overlay"
-          class="overlay-chip inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 max-w-[18rem] cursor-pointer hover:border-zinc-500"
+          title={o.hidden ? 'Hidden — click dot to show · click label to edit' : 'Click dot to hide · click label to edit'}
+          class={'overlay-chip inline-flex items-center gap-1.5 rounded-md border bg-zinc-900 px-1.5 py-0.5 max-w-[18rem] cursor-pointer ' +
+                 (o.hidden ? 'border-zinc-800 opacity-50 hover:opacity-80' : 'border-zinc-700 hover:border-zinc-500')}
         >
-          <span class="inline-block w-2 h-2 rounded-full" style="background: {o.color}"></span>
-          <span class="text-zinc-200 truncate">{overlayChipLabel(o)}</span>
+          <button
+            type="button"
+            onclick={(e) => { e.stopPropagation(); toggleOverlayHidden(o.id); }}
+            aria-pressed={!o.hidden}
+            aria-label={o.hidden ? 'Show series' : 'Hide series'}
+            title={o.hidden ? 'Show series' : 'Hide series'}
+            class={'inline-block w-2.5 h-2.5 rounded-full leading-none p-0 ' + (o.hidden ? 'border border-zinc-500 bg-transparent' : '')}
+            style={o.hidden ? `border-color: ${o.color}` : `background: ${o.color}`}
+          ></button>
+          <span class={'truncate ' + (o.hidden ? 'text-zinc-500 line-through decoration-zinc-700' : 'text-zinc-200')}>{overlayChipLabel(o)}</span>
           <button
             type="button"
             onclick={(e) => { e.stopPropagation(); removeOverlay(o.id); }}

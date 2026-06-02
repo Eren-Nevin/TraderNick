@@ -1415,6 +1415,10 @@ export type ChartOverlay = {
    *  drawing — only the MA line shows. To see raw + MA together the user
    *  adds the overlay twice (one raw, one MA). */
   ma?: { type: MAType; length: number };
+  /** True = chip stays in the header but the line is not drawn. Toggled
+   *  by clicking the coloured dot inside the chip. Persisted, so the
+   *  hide-then-reload-then-show pattern works as expected. */
+  hidden?: boolean;
   /** Per-kind config fields, mirroring the host ChartInstance shape but
    *  carrying only the dimensions the chosen `kind` reads. Validated
    *  through `sanitizeOverlay()`. */
@@ -1592,6 +1596,7 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
     : seriesList[0].key;
   const color = typeof r.color === 'string' && r.color.length > 0 ? r.color : OVERLAY_COLORS[0];
   const o: ChartOverlay = { id: r.id, kind: kind as ChartKind, seriesKey, color };
+  if (r.hidden === true) o.hidden = true;
   // MA — drop unless { type, length } are both valid.
   if (r.ma && typeof r.ma === 'object') {
     const m = r.ma as Record<string, unknown>;
