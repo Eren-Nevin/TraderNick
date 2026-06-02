@@ -30,7 +30,6 @@
     MA_COLORS,
     NEUTRAL_REF,
     OI_LINES,
-    SIZE_CYCLE,
     TOP_TRADERS_LINES,
     defaultView,
     fmtAmountAxis,
@@ -100,9 +99,7 @@
     LIDO_NET_KIND_TO_EVENTS,
     LIDO_L1_KINDS,
     isLidoKind,
-    type ChartHeight,
     type ChartInstance as ChartInstanceT,
-    type ChartWidth,
     type TransferFilters,
     type UniPool
   } from '$lib/components/charts/config';
@@ -3179,16 +3176,9 @@
   let chartAreaHeight = $state(0);
   let chartCanvasHeight = $derived(Math.max(140, chartAreaHeight - 2));
 
-  // Encode/decode (width, height) as a single string so we can drive the
-  // <select> with a normal bind-style onchange. Mirrors SIZE_CYCLE order.
-  let sizeValue = $derived(`${instance.width}x${instance.height}`);
-  function onSizeChange(v: string) {
-    const [w, h] = v.split('x').map(Number);
-    const match = SIZE_CYCLE.find((s) => s.width === w && s.height === h);
-    if (!match) return;
-    instance.width = match.width as ChartWidth;
-    instance.height = match.height as ChartHeight;
-  }
+  // Size is now controlled by edge/corner drag handles on the wrapper in
+  // DynamicChartLayout — see startResize there. The chart instance just
+  // reads instance.width / instance.height to fit its content.
 
   // Title-bar label. The general Morpho wrapper always reads as "Morpho"
   // (per spec) — the active subkind is communicated via the in-chart
@@ -3985,16 +3975,6 @@
         class="w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center
                {settingsOpen ? 'bg-zinc-800 text-zinc-100 border-zinc-700' : ''}"
       >⚙</button>
-      <select
-        value={sizeValue}
-        onchange={(e) => onSizeChange(e.currentTarget.value)}
-        title="Chart size"
-        class="h-7 bg-zinc-900 border border-zinc-700 rounded-md px-2 text-[11px] font-mono text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-      >
-        {#each SIZE_CYCLE as s (s.width + 'x' + s.height)}
-          <option value="{s.width}x{s.height}">{s.width}×{s.height}</option>
-        {/each}
-      </select>
       <button
         type="button"
         onclick={() => onRemove(instance.id)}

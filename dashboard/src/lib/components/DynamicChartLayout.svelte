@@ -4,6 +4,7 @@
   import { dndzone, type DndEvent } from 'svelte-dnd-action';
   import PlusCircle from '@lucide/svelte/icons/plus-circle';
   import ChartInstance from '$lib/components/ChartInstance.svelte';
+  import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import {
     CHART_CATEGORIES,
     CHART_KIND_LABELS,
@@ -226,6 +227,57 @@
     instances = instances.filter((i) => i.id !== id);
   }
 
+  // ---- drag-to-resize ----
+  // CSS `gap-6` on the chart grid resolves to 1.5rem = 24px. We need this
+  // to translate pointer movement into discrete grid-step deltas.
+  const GRID_GAP_PX = 24;
+
+  /** Start a resize drag from a wrapper-edge handle.
+   *  dir = 'e' resizes width only, 's' resizes height only, 'se' both.
+   *  Snaps to integer column/row spans in [1, 4]. */
+  function startResize(idx: number, ev: PointerEvent, dir: 'e' | 's' | 'se') {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const handle = ev.currentTarget as HTMLElement;
+    const host = handle.parentElement;
+    if (!host) return;
+    const rect = host.getBoundingClientRect();
+    const startW = instances[idx].width;
+    const startH = instances[idx].height;
+    const startX = ev.clientX;
+    const startY = ev.clientY;
+    // Pixels per single-column / single-row span step. Spans include gaps
+    // between cells, so one extra column adds (colW + gap) pixels.
+    const xPerStep = (rect.width + GRID_GAP_PX) / startW;
+    const yPerStep = (rect.height + GRID_GAP_PX) / startH;
+
+    handle.setPointerCapture(ev.pointerId);
+    function clamp4(n: number): 1 | 2 | 3 | 4 {
+      return Math.max(1, Math.min(4, n)) as 1 | 2 | 3 | 4;
+    }
+    function onMove(e: PointerEvent) {
+      if (dir === 'e' || dir === 'se') {
+        const dx = e.clientX - startX;
+        const newW = clamp4(Math.round(startW + dx / xPerStep));
+        if (newW !== instances[idx].width) instances[idx].width = newW;
+      }
+      if (dir === 's' || dir === 'se') {
+        const dy = e.clientY - startY;
+        const newH = clamp4(Math.round(startH + dy / yPerStep));
+        if (newH !== instances[idx].height) instances[idx].height = newH;
+      }
+    }
+    function onUp(e: PointerEvent) {
+      try { handle.releasePointerCapture(e.pointerId); } catch { /* ignore */ }
+      handle.removeEventListener('pointermove', onMove);
+      handle.removeEventListener('pointerup', onUp);
+      handle.removeEventListener('pointercancel', onUp);
+    }
+    handle.addEventListener('pointermove', onMove);
+    handle.addEventListener('pointerup', onUp);
+    handle.addEventListener('pointercancel', onUp);
+  }
+
   // ---- drag-drop via svelte-dnd-action ----
   function handleSort(e: CustomEvent<DndEvent<ChartInstanceT>>) {
     instances = e.detail.items as ChartInstanceT[];
@@ -311,21 +363,23 @@
       if (!isChartKind(r.kind)) return null;
       if (typeof r.token !== 'string') return null;
       if (typeof r.interval !== 'string') return null;
-      // Size migration: the old format had width ∈ {1,2} and no height. Map
-      // old → new so existing saved layouts keep their look.
-      //   old width=1 → new 2×2 (default)
-      //   old width=2 → new 4×2 (wide)
-      let width: 1 | 2 | 4;
-      let height: 1 | 2;
-      if (r.height === 1 || r.height === 2) {
-        width = r.width === 1 || r.width === 2 || r.width === 4 ? r.width : 2;
-        height = r.height;
-      } else if (r.width === 2) {
-        width = 4;
-        height = 2;
-      } else {
-        width = 2;
-        height = 2;
+      // Width / height are 1–4 spans now (resize handles let the user pick
+      // any value in range). Legacy saves had width ∈ {1,2} with no height
+      // — migrate those into the new range so old layouts still load.
+      let width: 1 | 2 | 3 | 4 = 2;
+      let height: 1 | 2 | 3 | 4 = 1;
+      const rw = r.width;
+      const rh = r.height;
+      if (rh === 1 || rh === 2 || rh === 3 || rh === 4) {
+        height = rh;
+      }
+      if (rw === 1 || rw === 2 || rw === 3 || rw === 4) {
+        width = rw;
+      }
+      // Legacy: row missing entirely → reproduce the pre-resize default sizes.
+      if (rh === undefined) {
+        if (rw === 2) { width = 4; height = 2; }
+        else { width = 2; height = 2; }
       }
 
       const inst: ChartInstanceT = {
@@ -716,6 +770,32 @@
         onRemove={removeChart}
         onSwap={openSwapAt}
       />
+      <!-- Resize handles (right edge, bottom edge, bottom-right corner).
+           stopDragEvents prevents the underlying dnd-kit zone from
+           interpreting the pointer-down as a card-reorder drag. -->
+      <div
+        class="resize-handle resize-e"
+        onpointerdown={(e) => startResize(idx, e, 'e')}
+        use:stopDragEvents
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize chart width"
+      ></div>
+      <div
+        class="resize-handle resize-s"
+        onpointerdown={(e) => startResize(idx, e, 's')}
+        use:stopDragEvents
+        role="separator"
+        aria-orientation="horizontal"
+        aria-label="Resize chart height"
+      ></div>
+      <div
+        class="resize-handle resize-se"
+        onpointerdown={(e) => startResize(idx, e, 'se')}
+        use:stopDragEvents
+        role="separator"
+        aria-label="Resize chart"
+      ></div>
     </div>
   {/each}
 </section>
@@ -1059,5 +1139,45 @@
   }
   .insert-host > .insert-plus:hover :global(.insert-plus-icon) {
     color: rgb(96 165 250);                     /* blue-400 */
+  }
+
+  /* Resize handles. Three handles per chart: east edge (width), south
+     edge (height), south-east corner (both). Each is invisible until
+     the wrapper is hovered, then a subtle blue tint hints at the
+     grabbable area. Hit zones are wide enough to grab without being
+     pixel-perfect, but stop short of overlapping the insert-+ on the
+     left and the chart's title-bar controls on top. */
+  .insert-host > .resize-handle {
+    position: absolute;
+    z-index: 25;
+    background: transparent;
+    transition: background-color 120ms ease;
+    touch-action: none; /* prevent the browser from scroll-snapping the drag */
+  }
+  .insert-host > .resize-handle.resize-e {
+    top: 8px;
+    bottom: 16px;
+    right: -4px;
+    width: 8px;
+    cursor: ew-resize;
+  }
+  .insert-host > .resize-handle.resize-s {
+    left: 8px;
+    right: 16px;
+    bottom: -4px;
+    height: 8px;
+    cursor: ns-resize;
+  }
+  .insert-host > .resize-handle.resize-se {
+    right: -4px;
+    bottom: -4px;
+    width: 14px;
+    height: 14px;
+    cursor: nwse-resize;
+  }
+  .insert-host:hover > .resize-handle:hover,
+  .insert-host > .resize-handle:active {
+    background-color: rgba(59 130 246 / 0.35);   /* blue-500/35 */
+    border-radius: 2px;
   }
 </style>

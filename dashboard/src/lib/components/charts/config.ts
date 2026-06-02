@@ -1219,8 +1219,13 @@ export type TransferFilters = {
   involving_addr_ex?: string[];
 };
 
-export type ChartWidth = 1 | 2 | 4;
-export type ChartHeight = 1 | 2;
+// Width + height are grid-column / grid-row spans. Both axes accept 1–4
+// so the user can drag any chart to anything from 1×1 (compact) up to
+// 4×4 (full-width tall). The CSS grid has 4 columns at lg breakpoint,
+// so 4 spans the entire row; at narrower breakpoints CSS clips to the
+// available column count.
+export type ChartWidth = 1 | 2 | 3 | 4;
+export type ChartHeight = 1 | 2 | 3 | 4;
 
 export type ChartInstance = {
   id: string;
@@ -1406,17 +1411,6 @@ export type ChartTemplate = {
     build: ChartTemplateBuild;
   }[];
 };
-
-/** Cycle of canonical sizes the chart can be toggled through.
- *  1×1 = compact (1 col, 270px chart),
- *  2×2 = default (2 cols, 540px chart),
- *  4×2 = wide   (4 cols, 540px chart). */
-export const SIZE_CYCLE: { width: ChartWidth; height: ChartHeight }[] = [
-  { width: 1, height: 1 },
-  { width: 2, height: 1 },
-  { width: 2, height: 2 },
-  { width: 4, height: 2 }
-];
 
 export function newChartInstance(
   kind: ChartKind,
