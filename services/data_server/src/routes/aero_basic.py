@@ -1,7 +1,13 @@
 """Aerodrome basic-pool aggregate endpoint (BASE only). Pool identity:
 (chain, sym0, sym1, stable). 4 events (swap/deposit/withdraw/claim).
 Per-token sum_amount0/sum_amount1 split on swap via sumIf (basic swaps
-store token_sold/token_bought)."""
+store token_sold/token_bought).
+
+USD pricing: identical pattern to routes/aero.py — ingestion stores
+value_usd=NULL for every row, so we ASOF-join each side of the pool
+against tradernick.binance_ohlcv_1m at query time. See aero.py for the
+full rationale (stable short-circuit, wrapped-token unwrap, subquery
+ordering)."""
 from __future__ import annotations
 import time
 from datetime import datetime, timezone
@@ -13,13 +19,31 @@ from routes.ohlcv import INTERVAL_SECONDS
 
 bp = Blueprint("aero_basic")
 
-_EVENT_TABLES: dict[str, tuple[str, str]] = {
-    "swap":     ("tradernick.aero_basic_swaps",       "amount_sold"),
-    "deposit":  ("tradernick.aero_basic_deposits",    "amount0 + amount1"),
-    "withdraw": ("tradernick.aero_basic_withdrawals", "amount0 + amount1"),
-    "claim":    ("tradernick.aero_basic_claims",      "amount0 + amount1"),
+_EVENT_TABLES: dict[str, str] = {
+    "swap":     "tradernick.aero_basic_swaps",
+    "deposit":  "tradernick.aero_basic_deposits",
+    "withdraw": "tradernick.aero_basic_withdrawals",
+    "claim":    "tradernick.aero_basic_claims",
 }
 _EVENT_KEYS = tuple(_EVENT_TABLES.keys())
+
+# Same stable + wrapped-token lookups as routes/aero.py. Kept inline
+# rather than imported so the pricing rules live alongside the SQL that
+# uses them (one place to update if a token's spot symbol or the stable
+# basket changes).
+_STABLES = frozenset({"USDC", "USDT", "DAI", "USDE", "USDS", "PYUSD"})
+_OHLCV_TOKEN_UNWRAP: dict[str, str] = {
+    "WETH": "ETH", "STETH": "ETH", "WSTETH": "ETH", "WEETH": "ETH", "RETH": "ETH",
+    "WBTC": "BTC", "CBBTC": "BTC",
+}
+
+
+def _ohlcv_token(symbol: str) -> str | None:
+    s = symbol.upper()
+    if s in _STABLES:
+        return None
+    return _OHLCV_TOKEN_UNWRAP.get(s, s)
+
 
 _STREAMS_CACHE: dict = {"at": 0.0, "value": None}
 _STREAMS_TTL_SECONDS = 60.0
@@ -34,7 +58,7 @@ async def aggregate(request):
     event = request.args.get("event")
     if event not in _EVENT_TABLES:
         return response.json({"error": f"event must be one of {list(_EVENT_KEYS)}"}, status=400)
-    table, amount_expr = _EVENT_TABLES[event]
+    table = _EVENT_TABLES[event]
 
     chain = request.args.get("chain", "BASE")
     symbol0 = request.args.get("symbol0")
@@ -60,38 +84,121 @@ async def aggregate(request):
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since); until_dt = _parse_iso(until)
 
+    # Per-side price expression + ASOF JOIN setup — mirrors aero.py.
+    ohlcv0 = _ohlcv_token(sym0_u)
+    ohlcv1 = _ohlcv_token(sym1_u)
+
+    join_lines: list[str] = []
+
+    if ohlcv0 is None:
+        side0_expr = "amount0 * 1.0"
+        ptok0_select = ""
+    else:
+        side0_expr = "amount0 * coalesce(p0.close, 0.0)"
+        ptok0_select = f", '{ohlcv0}' AS pricing_token0"
+        join_lines.append(
+            "ASOF LEFT JOIN tradernick.binance_ohlcv_1m AS p0\n"
+            "  ON p0.token = t.pricing_token0 AND p0.time <= t.time"
+        )
+
+    if ohlcv1 is None:
+        side1_expr = "amount1 * 1.0"
+        ptok1_select = ""
+    else:
+        side1_expr = "amount1 * coalesce(p1.close, 0.0)"
+        ptok1_select = f", '{ohlcv1}' AS pricing_token1"
+        join_lines.append(
+            "ASOF LEFT JOIN tradernick.binance_ohlcv_1m AS p1\n"
+            "  ON p1.token = t.pricing_token1 AND p1.time <= t.time"
+        )
+
+    joins_sql = "\n        ".join(join_lines)
+
     if event == "swap":
+        # Same pivot + per-row swap pricing as aero.py.
         amount0_expr = (
-            "sumIf(amount_sold, token_sold = {symbol0:String}) +"
-            " sumIf(amount_bought, token_bought = {symbol0:String})"
+            "sumIf(t.amount_sold, t.token_sold = {symbol0:String}) +"
+            " sumIf(t.amount_bought, t.token_bought = {symbol0:String})"
         )
         amount1_expr = (
-            "sumIf(amount_sold, token_sold = {symbol1:String}) +"
-            " sumIf(amount_bought, token_bought = {symbol1:String})"
+            "sumIf(t.amount_sold, t.token_sold = {symbol1:String}) +"
+            " sumIf(t.amount_bought, t.token_bought = {symbol1:String})"
         )
-    else:
-        amount0_expr = "sum(amount0)"
-        amount1_expr = "sum(amount1)"
+        if ohlcv0 is None and ohlcv1 is None:
+            row_value_usd = "t.amount_sold"
+        elif ohlcv0 is None:
+            row_value_usd = (
+                "t.amount_sold * if(t.token_sold = {symbol0:String},"
+                " 1.0,"
+                " coalesce(p1.close, 0.0))"
+            )
+        elif ohlcv1 is None:
+            row_value_usd = (
+                "t.amount_sold * if(t.token_sold = {symbol1:String},"
+                " 1.0,"
+                " coalesce(p0.close, 0.0))"
+            )
+        else:
+            row_value_usd = (
+                "t.amount_sold * if(t.token_sold = {symbol0:String},"
+                " coalesce(p0.close, 0.0),"
+                " coalesce(p1.close, 0.0))"
+            )
 
-    sql = f"""
-        SELECT
-            toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
-            sum({amount_expr})           AS sum_amount,
-            {amount0_expr}               AS sum_amount0,
-            {amount1_expr}               AS sum_amount1,
-            sum(coalesce(value_usd, 0))  AS sum_value_usd,
-            count()                      AS count
-        FROM {table} FINAL
-        WHERE chain    = {{chain:String}}
-          AND symbol0  = {{symbol0:String}}
-          AND symbol1  = {{symbol1:String}}
-          AND stable   = {{stable:UInt8}}
-          AND time >= {{since:DateTime}}
-          AND time <  {{until:DateTime}}
-        GROUP BY bucket
-        ORDER BY bucket
-        LIMIT {{limit:UInt32}}
-    """
+        sql = f"""
+            SELECT
+                toUnixTimestamp(toStartOfInterval(t.time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
+                sum(t.amount_sold)           AS sum_amount,
+                {amount0_expr}               AS sum_amount0,
+                {amount1_expr}               AS sum_amount1,
+                sum({row_value_usd})         AS sum_value_usd,
+                count()                      AS count
+            FROM (
+                SELECT
+                    time, amount_sold, amount_bought, token_sold, token_bought
+                    {ptok0_select}
+                    {ptok1_select}
+                FROM {table} FINAL
+                WHERE chain    = {{chain:String}}
+                  AND symbol0  = {{symbol0:String}}
+                  AND symbol1  = {{symbol1:String}}
+                  AND stable   = {{stable:UInt8}}
+                  AND time >= {{since:DateTime}}
+                  AND time <  {{until:DateTime}}
+            ) AS t
+            {joins_sql}
+            GROUP BY bucket
+            ORDER BY bucket
+            LIMIT {{limit:UInt32}}
+        """
+    else:
+        # LP events: deposit/withdraw/claim — all carry amount0/amount1.
+        sql = f"""
+            SELECT
+                toUnixTimestamp(toStartOfInterval(t.time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
+                sum(t.amount0 + t.amount1)   AS sum_amount,
+                sum(t.amount0)               AS sum_amount0,
+                sum(t.amount1)               AS sum_amount1,
+                sum({side0_expr.replace('amount0', 't.amount0')} + {side1_expr.replace('amount1', 't.amount1')}) AS sum_value_usd,
+                count()                      AS count
+            FROM (
+                SELECT
+                    time, amount0, amount1
+                    {ptok0_select}
+                    {ptok1_select}
+                FROM {table} FINAL
+                WHERE chain    = {{chain:String}}
+                  AND symbol0  = {{symbol0:String}}
+                  AND symbol1  = {{symbol1:String}}
+                  AND stable   = {{stable:UInt8}}
+                  AND time >= {{since:DateTime}}
+                  AND time <  {{until:DateTime}}
+            ) AS t
+            {joins_sql}
+            GROUP BY bucket
+            ORDER BY bucket
+            LIMIT {{limit:UInt32}}
+        """
 
     ch = await client()
     rows = await ch.query(sql, parameters={
@@ -124,7 +231,7 @@ async def streams(_request):
         return response.json({"streams": _STREAMS_CACHE["value"]})
     ch = await client()
     out: list[dict] = []
-    for ev, (table, _) in _EVENT_TABLES.items():
+    for ev, table in _EVENT_TABLES.items():
         rows = await ch.query(f"""
             SELECT chain, symbol0, symbol1, stable, count() AS rows
             FROM {table} FINAL
