@@ -15,21 +15,18 @@
   type Entry    = FlatLink | Group;
 
   const entries: Entry[] = [
+    // Dashboard is the cross-cutting picker (any chart from any category).
+    // First entry by design — it's the "home" the user lands on after the
+    // root redirect when we point it there.
+    { kind: 'link',  href: '/dashboard', label: 'Dashboard', short: 'D' },
     { kind: 'link',  href: '/trades', label: 'Trades', short: 'T' },
     { kind: 'link',  href: '/flows',  label: 'Flows',  short: 'F' },
-    // Lending / DeX / Staking are single consolidated pages — each hosts
-    // every protocol-wrapper kind for that category in its picker. Perp
-    // stays grouped (GMX vs Hyperliquid have distinct page chrome and
-    // selectors that don't share well yet).
+    // Lending / DeX / Perp / Staking are single consolidated pages — each
+    // hosts every protocol-wrapper kind for that category in its picker.
+    // DeX uses 'X' (collapsed letter) so it doesn't collide with Dashboard.
     { kind: 'link',  href: '/lending', label: 'Lending', short: 'L' },
-    { kind: 'link',  href: '/dex',     label: 'DeX',     short: 'D' },
-    {
-      kind: 'group', label: 'Perp', short: 'P',
-      links: [
-        { href: '/perp/gmx',         label: 'GMX' },
-        { href: '/perp/hyperliquid', label: 'Hyperliquid' }
-      ]
-    },
+    { kind: 'link',  href: '/dex',     label: 'DeX',     short: 'X' },
+    { kind: 'link',  href: '/perp',    label: 'Perp',    short: 'P' },
     { kind: 'link',  href: '/staking', label: 'Staking', short: 'S' }
     // Admin link intentionally removed — admin pages live at /admin under
     // their own isolated layout and are out of scope for the dashboard's

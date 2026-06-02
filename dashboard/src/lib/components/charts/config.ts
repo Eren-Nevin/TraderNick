@@ -983,6 +983,45 @@ export function chartKindGroup(kind: ChartKind): string | null {
   return null;
 }
 
+/** High-level Insert-menu category used by the Dashboard page. Splits every
+ *  surfaceable chart kind into one of 6 user-facing buckets — Exchange /
+ *  Flows / Lending / DeX / Perp / Staking — instead of the protocol-family
+ *  grouping the per-category pages use. Returns null for kinds we don't
+ *  want to surface from the Dashboard picker. */
+export type ChartCategory = 'Exchange' | 'Flows' | 'Lending' | 'DeX' | 'Perp' | 'Staking';
+
+export const CHART_CATEGORIES: ChartCategory[] = [
+  'Exchange', 'Flows', 'Lending', 'DeX', 'Perp', 'Staking'
+];
+
+export function chartKindCategory(kind: ChartKind): ChartCategory | null {
+  // Exchange — Binance OHLCV + derivatives. The chart's in-built exchange
+  // selector lets the user flip these to Hyperliquid in place, so we list
+  // them once under Exchange rather than duplicating under Perp.
+  if (kind === 'ohlcv' || kind === 'pc' || kind === 'oi' || kind === 'fr'
+      || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls') {
+    return 'Exchange';
+  }
+  // Flows — on-chain token transfers + exchange-flow wrapper.
+  if (kind === 'transfer' || kind === 'exchange_flow') return 'Flows';
+  // Lending — AAVE V2/V3/V4, Morpho, Spark wrappers (sub-events live in
+  // each wrapper's in-chart event picker).
+  if (kind === 'aave_v2' || kind === 'aave_v3' || kind === 'aave_v4'
+      || kind === 'morpho' || kind === 'spark') {
+    return 'Lending';
+  }
+  // DeX — Uniswap V2/V3/V4, Aerodrome CL + Basic wrappers.
+  if (kind === 'uniswap_v2' || kind === 'uniswap_v3' || kind === 'uniswap_v4'
+      || kind === 'aero_cl' || kind === 'aero_basic') {
+    return 'DeX';
+  }
+  // Perp — GMX V2 + Hyperliquid family.
+  if (kind === 'gmx_v2' || isHlKind(kind)) return 'Perp';
+  // Staking — Lido (and future Stader/Frax).
+  if (kind === 'lido') return 'Staking';
+  return null;
+}
+
 /** Trim the protocol prefix off a chart-kind label so it reads naturally
  *  under a grouped parent in the Insert menu. E.g. "AAVE V3 Deposits" →
  *  "Deposits" when shown under the "AAVE V3" group header. */
