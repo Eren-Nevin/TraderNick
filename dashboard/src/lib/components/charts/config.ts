@@ -1022,6 +1022,27 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   return null;
 }
 
+/** Sub-grouping inside a Dashboard category: collapses multiple wrapper
+ *  kinds that share a provider into one expandable parent ("AAVE" instead
+ *  of three siblings AAVE V2 / V3 / V4). Returns null for kinds that
+ *  should stay flat in their category.
+ *
+ *  `variant` is the leaf label shown under the provider header. We pick a
+ *  short form (V2/V3/V4 for AAVE/Uniswap, CL/Basic for Aerodrome) rather
+ *  than reusing CHART_KIND_LABELS so the leaf row reads cleanly under the
+ *  provider header instead of repeating the provider name. */
+export function chartKindProvider(kind: ChartKind): { provider: string; variant: string } | null {
+  if (kind === 'aave_v2') return { provider: 'AAVE',      variant: 'V2' };
+  if (kind === 'aave_v3') return { provider: 'AAVE',      variant: 'V3' };
+  if (kind === 'aave_v4') return { provider: 'AAVE',      variant: 'V4' };
+  if (kind === 'uniswap_v2') return { provider: 'Uniswap', variant: 'V2' };
+  if (kind === 'uniswap_v3') return { provider: 'Uniswap', variant: 'V3' };
+  if (kind === 'uniswap_v4') return { provider: 'Uniswap', variant: 'V4' };
+  if (kind === 'aero_cl')    return { provider: 'Aerodrome', variant: 'CL' };
+  if (kind === 'aero_basic') return { provider: 'Aerodrome', variant: 'Basic' };
+  return null;
+}
+
 /** Trim the protocol prefix off a chart-kind label so it reads naturally
  *  under a grouped parent in the Insert menu. E.g. "AAVE V3 Deposits" →
  *  "Deposits" when shown under the "AAVE V3" group header. */

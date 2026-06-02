@@ -12,6 +12,7 @@
     chartKindCategory,
     chartKindGroup,
     chartKindGroupOrder,
+    chartKindProvider,
     chartKindShortLabel,
     defaultMAs,
     newChartInstance,
@@ -108,6 +109,10 @@
   // Category-mode expansion (Dashboard page). Independent of expandedGroups
   // because the category menu has its own first-level taxonomy.
   let expandedCategories = $state<Set<ChartCategory>>(new Set());
+  // Third-level expansion for providers with multiple versions (AAVE V2/V3/V4,
+  // Uniswap V2/V3/V4, Aerodrome CL/Basic). Keyed by `${category}::${provider}`
+  // so two categories could safely reuse the same provider name without colliding.
+  let expandedProviders = $state<Set<string>>(new Set());
 
   function toggleGroupExpand(name: string) {
     const next = new Set(expandedGroups);
@@ -119,6 +124,11 @@
     if (next.has(name)) next.delete(name); else next.add(name);
     expandedCategories = next;
   }
+  function toggleProviderExpand(key: string) {
+    const next = new Set(expandedProviders);
+    if (next.has(key)) next.delete(key); else next.add(key);
+    expandedProviders = next;
+  }
 
   function openInsert() {
     if (instances.length >= MAX_CHARTS) return;
@@ -126,7 +136,12 @@
     insertIdx = null;
     swapIdx = null;
     insertMenuPos = null;
-    if (!insertOpen) { expandedTemplates = new Set(); expandedGroups = new Set(); expandedCategories = new Set(); }
+    if (!insertOpen) {
+      expandedTemplates = new Set();
+      expandedGroups = new Set();
+      expandedCategories = new Set();
+      expandedProviders = new Set();
+    }
   }
   function openInsertAt(idx: number, ev: MouseEvent) {
     if (instances.length >= MAX_CHARTS) return;
@@ -160,6 +175,7 @@
     expandedTemplates = new Set();
     expandedGroups = new Set();
     expandedCategories = new Set();
+    expandedProviders = new Set();
   }
   function toggleTemplateExpand(id: string) {
     const next = new Set(expandedTemplates);
@@ -770,6 +786,51 @@
     {#each CHART_CATEGORIES as cat (cat)}
       {@const kinds = _byCategory.get(cat) ?? []}
       {#if kinds.length > 0}
+        {@const _grouping = (() => {
+          // Inside the category, partition kinds into provider buckets
+          // (AAVE V2/V3/V4 → AAVE; Uniswap V2/V3/V4 → Uniswap; Aerodrome
+          // CL/Basic → Aerodrome) plus a flat tail for everything else.
+          // A provider gets its own collapsible sub-row only if it has ≥2
+          // kinds in this category — a single-version provider stays flat.
+          const provGroups = new Map<string, { provider: string; variant: string; kind: ChartKind }[]>();
+          const flat: ChartKind[] = [];
+          const order: { type: 'provider'; provider: string } | { type: 'flat'; kind: ChartKind } | undefined = undefined;
+          const seq: ({ type: 'provider'; provider: string } | { type: 'flat'; kind: ChartKind })[] = [];
+          const seen = new Set<string>();
+          for (const k of kinds) {
+            const p = chartKindProvider(k);
+            if (p) {
+              if (!provGroups.has(p.provider)) provGroups.set(p.provider, []);
+              provGroups.get(p.provider)!.push({ provider: p.provider, variant: p.variant, kind: k });
+              if (!seen.has(p.provider)) {
+                seq.push({ type: 'provider', provider: p.provider });
+                seen.add(p.provider);
+              }
+            } else {
+              seq.push({ type: 'flat', kind: k });
+            }
+          }
+          // Demote single-version providers back to flat — saves a click
+          // when the bucket would only ever contain one entry.
+          const finalSeq: ({ type: 'provider'; entries: { variant: string; kind: ChartKind }[]; provider: string } | { type: 'flat'; kind: ChartKind })[] = [];
+          const usedProvSingleton = new Set<string>();
+          for (const item of seq) {
+            if (item.type === 'flat') {
+              finalSeq.push(item);
+              continue;
+            }
+            const entries = provGroups.get(item.provider) ?? [];
+            if (entries.length <= 1) {
+              if (entries.length === 1 && !usedProvSingleton.has(item.provider)) {
+                finalSeq.push({ type: 'flat', kind: entries[0].kind });
+                usedProvSingleton.add(item.provider);
+              }
+            } else {
+              finalSeq.push({ type: 'provider', provider: item.provider, entries });
+            }
+          }
+          return finalSeq;
+        })()}
         <button
           type="button"
           onclick={() => toggleCategoryExpand(cat)}
@@ -783,12 +844,38 @@
         </button>
         {#if expandedCategories.has(cat)}
           <div class="bg-zinc-900/40">
-            {#each kinds as k (k)}
-              <button
-                type="button"
-                onclick={() => addChart(k)}
-                class="block w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
-              >{CHART_KIND_LABELS[k]}</button>
+            {#each _grouping as item, i (i)}
+              {#if item.type === 'flat'}
+                <button
+                  type="button"
+                  onclick={() => addChart(item.kind)}
+                  class="block w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+                >{CHART_KIND_LABELS[item.kind]}</button>
+              {:else}
+                {@const pkey = `${cat}::${item.provider}`}
+                <button
+                  type="button"
+                  onclick={() => toggleProviderExpand(pkey)}
+                  class="flex items-center justify-between w-full text-left pl-7 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+                  aria-expanded={expandedProviders.has(pkey)}
+                >
+                  <span>{item.provider}</span>
+                  <span class="text-zinc-500 text-[10px] ml-2"
+                    >{item.entries.length} <span class="ml-1">{expandedProviders.has(pkey) ? '▾' : '▸'}</span></span
+                  >
+                </button>
+                {#if expandedProviders.has(pkey)}
+                  <div class="bg-zinc-900/60">
+                    {#each item.entries as e (e.kind)}
+                      <button
+                        type="button"
+                        onclick={() => addChart(e.kind)}
+                        class="block w-full text-left pl-12 pr-3 py-1 text-xs text-zinc-300 hover:bg-zinc-800"
+                      >{e.variant}</button>
+                    {/each}
+                  </div>
+                {/if}
+              {/if}
             {/each}
           </div>
         {/if}
@@ -862,20 +949,31 @@
 
 {#if instances.length < MAX_CHARTS}
   <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+    <!-- Entire dashed pad is the click target — easier than aiming at the
+         small "+ Insert Chart" label. Keyboard equivalent: Enter/Space. -->
     <div
-      class="relative rounded-xl border border-dashed border-zinc-700 bg-zinc-950/30 min-h-[180px] flex items-center justify-center"
-      role="region"
+      class="relative rounded-xl border border-dashed border-zinc-700 hover:border-zinc-500 bg-zinc-950/30 hover:bg-zinc-900/40 min-h-[180px] flex items-center justify-center cursor-pointer transition-colors"
+      role="button"
+      tabindex="0"
       aria-label="Insert chart"
+      onclick={openInsert}
+      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openInsert(); } }}
     >
-      <button
-        type="button"
-        onclick={openInsert}
-        class="text-sm text-zinc-400 hover:text-zinc-100 px-3 py-2"
-      >+ Insert Chart</button>
+      <span class="text-sm text-zinc-400 px-3 py-2 pointer-events-none">+ Insert Chart</span>
       {#if insertOpen && insertMenuPos === null}
+        <!-- Click-outside scrim — any outside click closes the menu.
+             stopPropagation prevents the click from bubbling to the pad's
+             onclick (which would otherwise toggle the menu back open). -->
         <div
-          class="absolute z-30 top-12 left-1/2 -translate-x-1/2 bg-zinc-950 border border-zinc-700 rounded-md shadow-xl shadow-black/60 py-1 min-w-[260px] max-h-[60vh] overflow-y-auto"
+          class="fixed inset-0 z-40"
+          onclick={(e) => { e.stopPropagation(); closeInsert(); }}
+          role="presentation"
+        ></div>
+        <div
+          class="absolute z-50 top-12 left-1/2 -translate-x-1/2 bg-zinc-950 border border-zinc-700 rounded-md shadow-xl shadow-black/60 py-1 min-w-[260px] max-h-[60vh] overflow-y-auto"
           role="menu"
+          onclick={(e) => e.stopPropagation()}
+          onkeydown={(e) => { if (e.key === 'Escape') closeInsert(); }}
         >
           {@render insertMenuBody()}
         </div>
