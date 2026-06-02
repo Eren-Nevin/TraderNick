@@ -44,8 +44,10 @@
       links: [
         { href: '/staking/lido', label: 'Lido' }
       ]
-    },
-    { kind: 'link', href: '/admin', label: 'Admin', short: 'A' }
+    }
+    // Admin link intentionally removed — admin pages live at /admin under
+    // their own isolated layout and are out of scope for the dashboard's
+    // public-facing nav. Will be reachable behind a separate auth gate.
   ];
 
   onMount(() => themeStore.hydrate());
