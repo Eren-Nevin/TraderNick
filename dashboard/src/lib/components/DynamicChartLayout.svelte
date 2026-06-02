@@ -814,20 +814,6 @@
       >
         <PlusCircle size={16} strokeWidth={1.5} class="insert-plus-icon" />
       </button>
-      <!-- Mirror "+" on the right edge of the *last* chart only — gives
-           the user a hover-only way to append at the end now that the
-           fixed bottom dashed pad is gone. Hidden when at MAX_CHARTS. -->
-      {#if idx === instances.length - 1 && instances.length < MAX_CHARTS}
-        <button
-          type="button"
-          class="insert-plus insert-plus-end"
-          aria-label="Insert chart at end"
-          title="Insert chart here"
-          onclick={(e) => openInsertAtEnd(e)}
-        >
-          <PlusCircle size={16} strokeWidth={1.5} class="insert-plus-icon" />
-        </button>
-      {/if}
       <ChartInstance
         bind:instance={instances[idx]}
         {tokens}
@@ -1115,43 +1101,10 @@
   </div>
 {/snippet}
 
-{#if instances.length === 0}
-  <!-- Empty-state-only call to action. With no charts present there are
-       no hover affordances to reveal, so we keep one visible pad until
-       the user adds their first chart; after that the per-chart "+"
-       hover zones (left edge of each chart + right edge of the last)
-       take over. -->
-  <div class="grid grid-cols-4 gap-6">
-    <div
-      class="relative rounded-xl border border-dashed border-zinc-700 hover:border-zinc-500 bg-zinc-950/30 hover:bg-zinc-900/40 min-h-[180px] flex items-center justify-center cursor-pointer transition-colors"
-      role="button"
-      tabindex="0"
-      aria-label="Insert chart"
-      onclick={openInsert}
-      onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openInsert(); } }}
-    >
-      <span class="text-sm text-zinc-400 px-3 py-2 pointer-events-none">+ Insert Chart</span>
-      {#if insertOpen && insertMenuPos === null}
-        <div
-          class="fixed inset-0 z-40"
-          onclick={(e) => { e.stopPropagation(); closeInsert(); }}
-          role="presentation"
-        ></div>
-        <div
-          class="absolute z-50 top-12 left-1/2 -translate-x-1/2 bg-zinc-950 border border-zinc-700 rounded-md shadow-xl shadow-black/60 py-1 min-w-[260px] max-h-[60vh] overflow-y-auto"
-          role="menu"
-          onclick={(e) => e.stopPropagation()}
-          onkeydown={(e) => { if (e.key === 'Escape') closeInsert(); }}
-        >
-          {@render insertMenuBody()}
-        </div>
-      {/if}
-    </div>
-  </div>
-{:else if instances.length >= MAX_CHARTS}
-  <!-- At MAX_CHARTS — the bottom Insert Chart pad and the per-chart "+"
-       hover buttons are silently inert. Surface this so the user knows why
-       clicking + does nothing, rather than just removing the affordance. -->
+{#if instances.length >= MAX_CHARTS}
+  <!-- At MAX_CHARTS the floating insert button and per-chart "+" hover
+       zones go inert. Surface why so the user knows it's a limit, not
+       a bug. -->
   <div
     class="rounded-xl border border-dashed border-amber-700/60 bg-amber-900/10 px-4 py-3 text-xs text-amber-300 flex items-center gap-2"
     role="status"
@@ -1163,6 +1116,21 @@
       keep page-level fetches in budget — each chart is its own data load.
     </span>
   </div>
+{:else}
+  <!-- Page-wide floating action button. Always visible (until MAX_CHARTS)
+       so the user has a discoverable single-click "add a chart" target
+       even on an empty layout. Anchored to the viewport — fixed
+       positioning keeps it in the bottom-right corner as the user
+       scrolls the chart grid. -->
+  <button
+    type="button"
+    onclick={(e) => openInsertAtEnd(e)}
+    aria-label="Insert chart"
+    title="Insert chart"
+    class="fab-insert"
+  >
+    <PlusCircle size={28} strokeWidth={1.75} />
+  </button>
 {/if}
 
 <!-- Floating insert menu — anchored to the per-chart "+" that opened it. -->
@@ -1214,14 +1182,6 @@
     background: transparent;
     border: none;
     cursor: pointer;
-  }
-  /* Right-edge "+" — only rendered on the last chart so the user can
-     append at the end of the layout. Mirrors the left-edge geometry but
-     anchored to the wrapper's right side, overhanging into the column
-     gap that follows. */
-  .insert-host > .insert-plus.insert-plus-end {
-    left: auto;
-    right: -1.5rem;
   }
   /* Show when the wrapper is hovered, or when the button itself is
      focus-visible (keyboard access). */
@@ -1300,5 +1260,42 @@
     background-color: rgba(15 23 42 / 0.7);        /* slate-900/70 */
     padding: 1px 6px;
     border-radius: 4px;
+  }
+
+  /* Floating action button — fixed in the viewport's bottom-right corner.
+     Single discoverable target for "add a chart" that works on empty
+     layouts and replaces the old fixed dashed pad. Subtle dark fill so
+     it doesn't dominate the chart grid; hover brightens + lifts. */
+  .fab-insert {
+    position: fixed;
+    right: 1.5rem;
+    bottom: 1.5rem;
+    width: 3.5rem;
+    height: 3.5rem;
+    z-index: 30;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    border: 1px solid rgb(63 63 70);               /* zinc-700 */
+    background-color: rgb(24 24 27);               /* zinc-900 */
+    color: rgb(212 212 216);                       /* zinc-300 */
+    box-shadow: 0 8px 24px rgba(0 0 0 / 0.45);
+    cursor: pointer;
+    transition: transform 120ms ease, background-color 120ms ease,
+                color 120ms ease, border-color 120ms ease;
+  }
+  .fab-insert:hover {
+    background-color: rgb(39 39 42);               /* zinc-800 */
+    border-color: rgb(82 82 91);                   /* zinc-600 */
+    color: rgb(244 244 245);                       /* zinc-100 */
+    transform: translateY(-1px);
+  }
+  .fab-insert:active {
+    transform: translateY(0);
+  }
+  .fab-insert:focus-visible {
+    outline: 2px solid rgb(96 165 250);            /* blue-400 */
+    outline-offset: 2px;
   }
 </style>
