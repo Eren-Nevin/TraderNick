@@ -108,6 +108,7 @@
   } from '$lib/components/charts/config';
   import type { View } from '$lib/chart-zoom';
   import { queuedFetch } from '$lib/fetch-queue';
+  import { stopDragEvents } from '$lib/actions/stopDragEvents';
 
   // Module-scope cache survives component remounts. svelte-dnd-action
   // destroys and recreates the chart component when its DOM node moves
@@ -4003,7 +4004,7 @@
     </div>
   </div>
 
-  <div class="flex-1 relative min-h-0" bind:clientHeight={chartAreaHeight}>
+  <div class="flex-1 relative min-h-0 cursor-default" bind:clientHeight={chartAreaHeight} use:stopDragEvents>
 
   {#if settingsOpen}
     <div class="absolute inset-0 z-20 bg-zinc-950/95 overflow-y-auto">
@@ -4416,12 +4417,20 @@
     {#if error}
       <div class="p-3 text-xs text-red-300 bg-red-950/30">{error}</div>
     {/if}
-    {#if data.length === 0}
+    {#if data.length === 0 && loading}
+      <div class="p-4 text-sm text-zinc-400 flex items-center gap-2">
+        <svg class="animate-spin h-4 w-4 text-zinc-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-opacity="0.25"/>
+          <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+        </svg>
+        Loading {chartKindGroup(effectiveKind) ? `${chartKindGroup(effectiveKind)} ${chartKindShortLabel(effectiveKind)}` : kindLabel}…
+      </div>
+    {:else if data.length === 0}
       <div class="p-4 text-sm text-zinc-400">
         {#if instance.token && instance.chain && (instance.kind === 'transfer' || instance.kind === 'exchange_flow')}
           No data available for {activeTokenGroup ? `Σ ${tokenGroups.find((g) => g.name === activeTokenGroup)?.label ?? activeTokenGroup}` : instance.token} on {activeChainGroup ? `Σ ${activeChainGroup.label}` : instance.chain}{instance.kind === 'exchange_flow' ? ` for ${EXCHANGE_LABEL[instance.exchangeFlowExchange ?? 'binance'] ?? (instance.exchangeFlowExchange ?? 'binance')}` : ''}.
-        {:else if chartKindGroup(instance.kind)}
-          No data for {chartKindGroup(instance.kind)} for {chartKindShortLabel(instance.kind)}.
+        {:else if chartKindGroup(effectiveKind)}
+          No data for {chartKindGroup(effectiveKind)} {chartKindShortLabel(effectiveKind)}.
         {:else}
           No data for {kindLabel}.
         {/if}

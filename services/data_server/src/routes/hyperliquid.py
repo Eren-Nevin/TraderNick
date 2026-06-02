@@ -964,6 +964,12 @@ async def unrealized_pnl(request):
         params["wallet"] = wallet.lower()
     inner_where_sql = " AND ".join(inner_where)
 
+    # No FINAL: argMax(unrealized_pnl, time) inside the inner GROUP BY already
+    # collapses duplicate (bucket, wallet, side) rows to the latest snapshot in
+    # the bucket. FINAL would only matter if duplicates shared an identical
+    # `time` and we needed `ingested_at` as a tiebreaker — that's not the case
+    # for a state stream at fixed 5m cadence. FINAL on a 1B-row ReplacingMT
+    # forces a merge-on-read across parts and is the slowest part of the query.
     sql = f"""
         SELECT
             toUnixTimestamp(bucket)         AS bucket,
@@ -977,7 +983,7 @@ async def unrealized_pnl(request):
                 toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND) AS bucket,
                 wallet, side,
                 argMax(unrealized_pnl, time) AS latest_pnl
-            FROM tradernick.hl_position_history FINAL
+            FROM tradernick.hl_position_history
             WHERE {inner_where_sql}
             GROUP BY bucket, wallet, side
         )
