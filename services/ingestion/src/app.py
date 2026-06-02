@@ -175,6 +175,25 @@ async def cancel_job(request, job_id: str):
     return response.json({"ok": True})
 
 
+@app.post("/jobs/clear-finished")
+async def clear_finished_jobs(_request):
+    """Hard-delete every job row that isn't currently running. Used by the
+    admin panel's 'Clear finished' button to drop completed / failed /
+    cancelled jobs and reduce table clutter. Running jobs are preserved."""
+    from clickhouse import async_client
+    ch = await async_client()
+    # Count first so we can report.
+    pre = await ch.query(
+        "SELECT count() FROM tradernick.ingestion_jobs FINAL WHERE status != 'running'"
+    )
+    n = int(pre.result_rows[0][0]) if pre.result_rows else 0
+    await ch.command(
+        "ALTER TABLE tradernick.ingestion_jobs DELETE WHERE status != 'running' "
+        "SETTINGS mutations_sync=2"
+    )
+    return response.json({"ok": True, "deleted": n})
+
+
 _MAX_BACKFILL_DAYS = 365
 
 
