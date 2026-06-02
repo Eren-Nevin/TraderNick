@@ -2,7 +2,7 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from defistream import AsyncDeFiStream
 
@@ -18,6 +18,23 @@ log = logging.getLogger(__name__)
 # BTC has low transfer volume relative to other chains — pull less often.
 # Live = 30 min, sweep = 300 min (sweep_cadence_s = POLL_INTERVAL × 10).
 POLL_INTERVAL_SECONDS = 1800
+
+# BTC mines a block every ~10 minutes on average. The default 5-minute live
+# overlap (sweep.LIVE_OVERLAP) hits empty windows half the time, and
+# DeFiStream rejects those with "No Bitcoin blocks found for the specified
+# time range". 60 minutes guarantees ≥4 blocks per window; RMT dedupes the
+# overlap with the previous tick.
+LIVE_OVERLAP_BTC = timedelta(minutes=60)
+
+
+def _is_no_blocks_error(exc: Exception) -> bool:
+    """DeFiStream raises ValidationError('No Bitcoin blocks found for the
+    specified time range') when the [since, until] window happens to fall
+    between two blocks. With the 60-minute window above this should be
+    rare, but treat it as benign (rows=0) rather than an error so the
+    dashboard doesn't flag the stream as broken."""
+    msg = str(exc).lower()
+    return "no bitcoin blocks found" in msg
 
 
 def _iso(dt: datetime) -> str:
@@ -59,10 +76,7 @@ async def main(stream_name: str | None = None):
         while True:
             tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            _sweep_rows = 0
-            _sweep_err: str | None = None
-            _sweep_t0 = time.monotonic()
-            since = now - sweep.LIVE_OVERLAP
+            since = now - LIVE_OVERLAP_BTC
             n = 0
             err: str | None = None
             _live_t0 = time.monotonic()
@@ -72,8 +86,12 @@ async def main(stream_name: str | None = None):
                 n = await fetch_and_insert(ds, since, now)
                 log.info("BTC rows=%d", n)
             except Exception as exc:
-                err = f"{type(exc).__name__}: {exc}"[:1000]
-                log.exception("BTC fetch failed: %s", exc)
+                if _is_no_blocks_error(exc):
+                    # Benign: window between blocks. Don't surface as error.
+                    log.info("BTC tick: no blocks in window [%s, %s)", since, now)
+                else:
+                    err = f"{type(exc).__name__}: {exc}"[:1000]
+                    log.exception("BTC fetch failed: %s", exc)
             if stream_name:
                 await ch_status.write_tick(stream_name, n, error=err, duration_s=time.monotonic()-_live_t0)
             await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
@@ -99,7 +117,11 @@ async def main(stream_name: str | None = None):
                     n = await fetch_and_insert(ds, since, now)
                     log.info("btc_transfers sweep window=%s..%s rows=%d (last_seen=%s)", since, now, n, last_seen)
             except Exception as exc:
-                log.exception("btc_transfers sweep failed: %s", exc)
+                if _is_no_blocks_error(exc):
+                    log.info("btc_transfers sweep: no blocks in window")
+                else:
+                    _sweep_err = f"{type(exc).__name__}: {exc}"[:1000]
+                    log.exception("btc_transfers sweep failed: %s", exc)
             await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, rows=_sweep_rows, error=_sweep_err) if stream_name else None
             await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
