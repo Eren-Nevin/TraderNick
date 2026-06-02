@@ -17,6 +17,7 @@
     chartKindShortLabel,
     defaultMAs,
     newChartInstance,
+    sanitizeOverlay,
     type ChartCategory,
     type ChartInstance as ChartInstanceT,
     type ChartKind,
@@ -1002,6 +1003,16 @@
         } else {
           inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         }
+      }
+      // Compound overlays — preserved across reloads. Each entry is validated
+      // through sanitizeOverlay() so a corrupt save can't strand the chart.
+      if (Array.isArray(r.overlays)) {
+        const cleaned: NonNullable<ChartInstanceT['overlays']> = [];
+        for (const ov of r.overlays) {
+          const c = sanitizeOverlay(ov);
+          if (c) cleaned.push(c);
+        }
+        if (cleaned.length > 0) inst.overlays = cleaned;
       }
       out.push(inst);
       if (out.length >= MAX_CHARTS) break;

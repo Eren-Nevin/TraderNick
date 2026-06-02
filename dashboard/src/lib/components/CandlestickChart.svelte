@@ -12,6 +12,11 @@
     color: string;
     compute: (d: Candle, i: number, data: Candle[]) => number;
     dash?: string;
+    /** Compound overlay lines call `compute` with a *remapped* value so the
+     *  drawn path fits the primary chart's Y range. When set, the tooltip
+     *  shows `rawValue` instead so the user sees the line's native unit. */
+    rawValue?: (d: Candle, i: number, data: Candle[]) => number;
+    rawFormat?: (v: number) => string;
   };
 
   /** Vertical reference line at a specific Unix-second timestamp. */
@@ -447,11 +452,11 @@
       {#if lines.length && hoverIdx !== null}
         <div class="mt-1 pt-1 border-t border-zinc-800"></div>
         {#each lines as ln (ln.key)}
-          {@const v = ln.compute(hoverCandle, hoverIdx, candles)}
+          {@const v = ln.rawValue ? ln.rawValue(hoverCandle, hoverIdx, candles) : ln.compute(hoverCandle, hoverIdx, candles)}
           <div class="flex items-center gap-2">
             <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
             <span class="text-zinc-400 w-24">{ln.label}</span>
-            <span class="w-20 text-right">{v.toFixed(4)}</span>
+            <span class="w-20 text-right">{ln.rawFormat ? ln.rawFormat(v) : v.toFixed(4)}</span>
           </div>
         {/each}
       {/if}

@@ -12,6 +12,10 @@
     color: string;
     compute: (d: Datum, i: number, data: Datum[]) => number;
     dash?: string;
+    /** Compound-overlay tooltip override — see LineChart Line type. */
+    rawValue?: (d: Datum, i: number, data: Datum[]) => number;
+    rawFormat?: (v: number) => string;
+    axis?: 'primary' | 'secondary';
   };
 
   /** Vertical reference line at a specific Unix-second timestamp. */

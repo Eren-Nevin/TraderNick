@@ -17,6 +17,14 @@
      *  Used by Uniswap amount-mode charts so token0 + token1 can render
      *  on the same chart with independent scales. */
     axis?: 'primary' | 'secondary';
+    /** Compound overlay lines call `compute` with a *remapped* value so the
+     *  drawn path fits the primary chart's Y range. When set, the tooltip
+     *  reads `rawValue` (the line's native unit) instead so the user sees
+     *  the real number — e.g. "$42.3M" — rather than the remap scalar. */
+    rawValue?: (d: Datum, i: number, data: Datum[]) => number;
+    /** Formatter used by the tooltip when `rawValue` is present. Defaults
+     *  to the chart's `formatTooltip`. */
+    rawFormat?: (v: number) => string;
   };
   type RefLine = { value: number; label?: string; color?: string };
   /** Vertical reference line at a specific Unix-second timestamp. Used for
@@ -430,8 +438,10 @@
         {fmtUtcTime(hoverDatum.time)}
       </div>
       {#each lines as ln (ln.key)}
-        {@const v = ln.compute(hoverDatum, hoverIdx ?? 0, data)}
-        {@const fmt = ln.axis === 'secondary' ? (formatTooltip2 ?? formatTooltip) : formatTooltip}
+        {@const v = ln.rawValue ? ln.rawValue(hoverDatum, hoverIdx ?? 0, data) : ln.compute(hoverDatum, hoverIdx ?? 0, data)}
+        {@const fmt = ln.rawValue && ln.rawFormat
+                      ? ln.rawFormat
+                      : (ln.axis === 'secondary' ? (formatTooltip2 ?? formatTooltip) : formatTooltip)}
         <div class="flex items-center gap-2">
           <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
           <span class="text-zinc-400 w-28">{ln.label}</span>

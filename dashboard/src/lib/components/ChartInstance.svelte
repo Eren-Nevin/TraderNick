@@ -8,7 +8,7 @@
   import HlTopVaultLpsTable from '$lib/components/HlTopVaultLpsTable.svelte';
   import HlVaultDetailChart from '$lib/components/HlVaultDetailChart.svelte';
   import SignedBarChart from '$lib/components/SignedBarChart.svelte';
-  import { onMount } from 'svelte';
+  import { onMount, untrack } from 'svelte';
   import {
     INTERVALS,
     type Candle,
@@ -99,10 +99,16 @@
     LIDO_NET_KIND_TO_EVENTS,
     LIDO_L1_KINDS,
     isLidoKind,
+    overlayChipLabel,
+    nextOverlayColor,
+    OVERLAY_KIND_SERIES,
     type ChartInstance as ChartInstanceT,
+    type ChartOverlay,
     type TransferFilters,
     type UniPool
   } from '$lib/components/charts/config';
+  import { fetchOverlayData, type OverlayPoint } from '$lib/components/charts/overlay-fetch';
+  import AddOverlayDialog from '$lib/components/AddOverlayDialog.svelte';
   import type { View } from '$lib/chart-zoom';
   import { queuedFetch } from '$lib/fetch-queue';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
@@ -3203,6 +3209,279 @@
   );
 
   let settingsOpen = $state(false);
+
+  // ── Compound overlays ───────────────────────────────────────────────
+  // Per-overlay fetched series, keyed by overlay.id. Re-fetched whenever
+  // the host's interval changes or an overlay is added/edited/removed.
+  // The (+) FAB is hidden on `pc` and on every TableView kind (those
+  // can't host or be added as overlays — see overlayableKinds()).
+  type OverlayLoad = { data: OverlayPoint[]; key: string };
+  let overlayLoaded = $state<Map<string, OverlayLoad>>(new Map());
+  let overlayLoading = $state(false);
+  let overlayDialogOpen = $state(false);
+  let overlayEditing = $state<ChartOverlay | null>(null);
+
+  let canHaveOverlays = $derived(
+    instance.kind !== 'pc'
+    && instance.kind !== 'hl_top_traders'
+    && instance.kind !== 'hl_top_positions'
+    && instance.kind !== 'hl_top_vaults'
+    && instance.kind !== 'hl_top_vault_lps'
+    && instance.kind !== 'hl_vault_detail'
+  );
+
+  function overlayLoadKey(o: ChartOverlay, iv: Interval, sinceIso: string, untilIso: string): string {
+    // Hash the full config + interval + window so any field change re-fetches.
+    return [
+      o.kind, o.seriesKey, iv, sinceIso, untilIso,
+      o.token ?? '', o.chain ?? '', o.exchange ?? '', o.valueMode ?? '',
+      o.gmxMarket ?? '', o.hlWallet ?? '', o.hlWalletCategory ?? '',
+      o.exchangeFlowExchange ?? '',
+      o.uniPool ? `${o.uniPool.symbol0}|${o.uniPool.symbol1}|${o.uniPool.fee}` : '',
+      o.uniV4Pool ? `${o.uniV4Pool.symbol0}|${o.uniV4Pool.symbol1}|${o.uniV4Pool.fee}|${o.uniV4Pool.tick_spacing}|${o.uniV4Pool.hooks}` : '',
+      o.aeroPool ? `${o.aeroPool.symbol0}|${o.aeroPool.symbol1}|${o.aeroPool.tick_spacing}` : '',
+      o.aeroBasicPool ? `${o.aeroBasicPool.symbol0}|${o.aeroBasicPool.symbol1}|${o.aeroBasicPool.stable}` : '',
+      o.ma ? `${o.ma.type}|${o.ma.length}` : ''
+    ].join('#');
+  }
+
+  let overlayFetchCtl: AbortController | null = null;
+  $effect(() => {
+    // Subscribe only to the inputs that should re-trigger overlay loading.
+    // Anything we *read but write back to* (overlayLoaded itself) is read
+    // through `untrack` so the write at the end doesn't loop the effect.
+    const overlays = instance.overlays ?? [];
+    const iv = instance.interval;
+    const sinceIso = since;
+    const untilIso = until;
+    if (!canHaveOverlays) {
+      untrack(() => { if (overlayLoaded.size > 0) overlayLoaded = new Map(); });
+      return;
+    }
+    if (overlays.length === 0) {
+      untrack(() => { if (overlayLoaded.size > 0) overlayLoaded = new Map(); });
+      return;
+    }
+    // Avoid double-fetch storms during the host's own pending load.
+    if (sinceIso === new Date(0).toISOString()) return;
+
+    if (overlayFetchCtl) overlayFetchCtl.abort();
+    const ctl = new AbortController();
+    overlayFetchCtl = ctl;
+    const sinceD = new Date(sinceIso);
+    const untilD = new Date(untilIso);
+
+    untrack(() => {
+      const next = new Map(overlayLoaded);
+      let changed = false;
+      const tasks: Promise<void>[] = [];
+      for (const o of overlays) {
+        const k = overlayLoadKey(o, iv, sinceIso, untilIso);
+        const cached = next.get(o.id);
+        if (cached && cached.key === k) continue;
+        tasks.push((async () => {
+          try {
+            const points = await fetchOverlayData(o, iv, sinceD, untilD, ctl.signal);
+            if (ctl.signal.aborted) return;
+            next.set(o.id, { data: points, key: k });
+            changed = true;
+          } catch {
+            if (!ctl.signal.aborted) {
+              next.set(o.id, { data: [], key: k });
+              changed = true;
+            }
+          }
+        })());
+      }
+      // Drop entries for overlays that no longer exist on the host.
+      const currentIds = new Set(overlays.map((o) => o.id));
+      for (const id of [...next.keys()]) {
+        if (!currentIds.has(id)) { next.delete(id); changed = true; }
+      }
+      if (tasks.length === 0) {
+        // Only publish a new Map when content actually changed — otherwise
+        // reassigning the same content would still flip the $state ref and
+        // re-trigger any effect that *did* subscribe to overlayLoaded.
+        if (changed) overlayLoaded = next;
+        overlayLoading = false;
+        return;
+      }
+      overlayLoading = true;
+      Promise.all(tasks).finally(() => {
+        if (ctl.signal.aborted) return;
+        if (changed) overlayLoaded = next;
+        overlayLoading = false;
+      });
+    });
+  });
+
+  /** Build remapped Line[] for the host chart. Computes the primary Y range
+   *  from `primarySource` (OHLCV high/low band, otherwise the host's primary
+   *  lines' numeric range over the loaded data), then for each overlay
+   *  scales its raw values into the same range. Tooltip shows the raw
+   *  (un-remapped) number via `rawValue`. */
+  type LineLike = {
+    key: string; label: string; color: string;
+    compute: (d: Record<string, number>, i: number, arr: Record<string, number>[]) => number;
+    rawValue?: (d: Record<string, number>, i: number, arr: Record<string, number>[]) => number;
+    rawFormat?: (v: number) => string;
+    axis?: 'primary' | 'secondary';
+  };
+  function computePrimaryRangeFromLines(
+    src: Record<string, number>[],
+    lines: { compute: (d: Record<string, number>, i: number, arr: Record<string, number>[]) => number; axis?: 'primary' | 'secondary' }[]
+  ): [number, number] {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < src.length; i++) {
+      for (const ln of lines) {
+        if ((ln.axis ?? 'primary') !== 'primary') continue;
+        const v = ln.compute(src[i], i, src);
+        if (Number.isFinite(v)) {
+          if (v < lo) lo = v;
+          if (v > hi) hi = v;
+        }
+      }
+    }
+    return [lo, hi];
+  }
+  function computePrimaryRangeFromCandles(candles: Candle[]): [number, number] {
+    let lo = Infinity, hi = -Infinity;
+    for (const c of candles) {
+      if (c.low < lo) lo = c.low;
+      if (c.high > hi) hi = c.high;
+    }
+    return [lo, hi];
+  }
+
+  function buildOverlayLines(pRange: [number, number]): LineLike[] {
+    const overlays = instance.overlays ?? [];
+    if (overlays.length === 0) return [];
+    const [pmin, pmax] = pRange;
+    const pspan = pmax - pmin;
+    const usable = Number.isFinite(pmin) && Number.isFinite(pmax) && pspan !== 0;
+    const out: LineLike[] = [];
+    for (const o of overlays) {
+      const load = overlayLoaded.get(o.id);
+      const data = load?.data ?? [];
+      if (data.length === 0) continue;
+      let omin = Infinity, omax = -Infinity;
+      for (const p of data) {
+        if (Number.isFinite(p.value)) {
+          if (p.value < omin) omin = p.value;
+          if (p.value > omax) omax = p.value;
+        }
+      }
+      const rawByTime = new Map<number, number>();
+      const mappedByTime = new Map<number, number>();
+      const oRange = omax - omin;
+      for (const p of data) {
+        if (!Number.isFinite(p.value)) continue;
+        rawByTime.set(p.time, p.value);
+        if (usable && oRange !== 0) {
+          mappedByTime.set(p.time, pmin + ((p.value - omin) * pspan) / oRange);
+        } else if (usable) {
+          // overlay is flat — pin to mid-range so the line still shows.
+          mappedByTime.set(p.time, (pmin + pmax) / 2);
+        }
+      }
+      out.push({
+        key: 'ovl-' + o.id,
+        label: overlayChipLabel(o),
+        color: o.color,
+        axis: 'primary',
+        compute: (d) => mappedByTime.get(d.time) ?? NaN,
+        rawValue: (d) => rawByTime.get(d.time) ?? NaN,
+        rawFormat: fmtUsdTooltip
+      });
+    }
+    return out;
+  }
+
+  // Per-host overlay lines. The primary range source depends on the chart
+  // kind — OHLCV uses high/low across all candles; everything else derives
+  // from the host's already-computed primary lines (axis='primary' only).
+  let overlayLinesD = $derived.by((): LineLike[] => {
+    if (!canHaveOverlays) return [];
+    if ((instance.overlays ?? []).length === 0) return [];
+    if (instance.kind === 'ohlcv') {
+      const range = computePrimaryRangeFromCandles(ohlcvCandles);
+      return buildOverlayLines(range);
+    }
+    // Pick the right per-kind primary-lines array. Falls through to an empty
+    // range when no primary lines exist (overlay will render flat-centered).
+    let primaryLines: typeof aaveLinesD = [];
+    if (instance.kind === 'oi') primaryLines = oiLinesD;
+    else if (instance.kind === 'fr') primaryLines = frLinesD;
+    else if (instance.kind === 'tt') primaryLines = ttLinesD;
+    else if (instance.kind === 'ls') primaryLines = lsLinesD;
+    else if (instance.kind === 'bs') primaryLines = bsLines;
+    else if (instance.kind === 'sz') primaryLines = szLinesD;
+    else if (instance.kind === 'transfer') primaryLines = transferLinesD;
+    else if (instance.kind === 'exchange_flow') primaryLines = exchangeFlowLinesD;
+    else if (instance.kind === 'hl_unrealized_pnl') primaryLines = hlUnrealizedLinesD;
+    else if (instance.kind === 'hl_vault_net') primaryLines = hlVaultFlowLinesD;
+    else if (instance.kind === 'hl_transfers') primaryLines = hlBridgeFlowsLinesD;
+    else if (isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind)
+             || isUniswapV4Kind(instance.kind) || isAeroClKind(instance.kind)
+             || isAeroBasicKind(instance.kind)) primaryLines = uniswapLinesD;
+    else if (isLidoKind(instance.kind)) primaryLines = lidoLinesD;
+    else if (isGmxV2Kind(instance.kind) && gmxIsPositionLongShortKind) primaryLines = [...gmxPositionLinesD, ...cumulativeLines] as typeof aaveLinesD;
+    else primaryLines = aaveLinesD;
+    const range = computePrimaryRangeFromLines(
+      data as unknown as Record<string, number>[],
+      primaryLines as unknown as { compute: (d: Record<string, number>, i: number, arr: Record<string, number>[]) => number; axis?: 'primary' | 'secondary' }[]
+    );
+    return buildOverlayLines(range);
+  });
+
+  function addOverlay(o: ChartOverlay) {
+    const list = (instance.overlays ?? []).slice();
+    const existingIdx = list.findIndex((x) => x.id === o.id);
+    if (existingIdx >= 0) list[existingIdx] = o;
+    else list.push(o);
+    instance.overlays = list;
+    overlayDialogOpen = false;
+    overlayEditing = null;
+  }
+  function removeOverlay(id: string) {
+    instance.overlays = (instance.overlays ?? []).filter((x) => x.id !== id);
+    const next = new Map(overlayLoaded);
+    next.delete(id);
+    overlayLoaded = next;
+  }
+  function openOverlayAdd() {
+    overlayEditing = null;
+    overlayDialogOpen = true;
+  }
+  function openOverlayEdit(o: ChartOverlay) {
+    overlayEditing = o;
+    overlayDialogOpen = true;
+  }
+  let usedOverlayColors = $derived((instance.overlays ?? []).map((o) => o.color));
+
+  // ── Stable merged-lines per chart kind ──────────────────────────────
+  // We can't do `lines={[...primary, ...overlayLinesD]}` inline at each
+  // call site — the array literal would be a new reference on every parent
+  // render, refiring LineChart's $effect (which calls zoom.transform) and
+  // killing any in-progress pan/zoom. Wrapping each merge in a $derived
+  // makes the result a stable reference whenever neither input changes,
+  // so pan/zoom stops fighting the redraw cycle.
+  let ohlcvLinesM        = $derived(overlayLinesD.length === 0 ? ohlcvLinesD : [...ohlcvLinesD, ...overlayLinesD]);
+  let oiLinesM           = $derived(overlayLinesD.length === 0 ? oiLinesD : [...oiLinesD, ...overlayLinesD]);
+  let frLinesM           = $derived(overlayLinesD.length === 0 ? frLinesD : [...frLinesD, ...overlayLinesD]);
+  let bsLinesM           = $derived(overlayLinesD.length === 0 ? bsLines : [...bsLines, ...overlayLinesD]);
+  let szLinesM           = $derived(overlayLinesD.length === 0 ? szLinesD : [...szLinesD, ...overlayLinesD]);
+  let ttLinesM           = $derived(overlayLinesD.length === 0 ? ttLinesD : [...ttLinesD, ...overlayLinesD]);
+  let lsLinesM           = $derived(overlayLinesD.length === 0 ? lsLinesD : [...lsLinesD, ...overlayLinesD]);
+  let transferLinesM     = $derived(overlayLinesD.length === 0 ? transferLinesD : [...transferLinesD, ...overlayLinesD]);
+  let exchangeFlowLinesM = $derived(overlayLinesD.length === 0 ? exchangeFlowLinesD : [...exchangeFlowLinesD, ...overlayLinesD]);
+  let hlUnrealizedLinesM = $derived(overlayLinesD.length === 0 ? hlUnrealizedLinesD : [...hlUnrealizedLinesD, ...overlayLinesD]);
+  let hlVaultFlowLinesM  = $derived(overlayLinesD.length === 0 ? hlVaultFlowLinesD : [...hlVaultFlowLinesD, ...overlayLinesD]);
+  let hlBridgeFlowsLinesM= $derived(overlayLinesD.length === 0 ? hlBridgeFlowsLinesD : [...hlBridgeFlowsLinesD, ...overlayLinesD]);
+  let gmxPositionLinesM  = $derived(overlayLinesD.length === 0 ? [...gmxPositionLinesD, ...cumulativeLines] : [...gmxPositionLinesD, ...cumulativeLines, ...overlayLinesD]);
+  let aaveLinesM         = $derived(overlayLinesD.length === 0 ? aaveLinesD : [...aaveLinesD, ...overlayLinesD]);
+  let uniswapLinesM      = $derived(overlayLinesD.length === 0 ? uniswapLinesD : [...uniswapLinesD, ...overlayLinesD]);
+  let lidoLinesM         = $derived(overlayLinesD.length === 0 ? lidoLinesD : [...lidoLinesD, ...overlayLinesD]);
 </script>
 
 <div
@@ -3984,7 +4263,34 @@
     </div>
   </div>
 
-  <div class="flex-1 relative min-h-0 cursor-default" bind:clientHeight={chartAreaHeight} use:stopDragEvents>
+  {#if canHaveOverlays && (instance.overlays ?? []).length > 0}
+    <div class="px-3 py-1.5 border-b border-zinc-800/60 bg-zinc-950 flex flex-wrap items-center gap-1.5 text-[11px]">
+      {#each (instance.overlays ?? []) as o (o.id)}
+        <div
+          role="button"
+          tabindex="0"
+          onclick={() => openOverlayEdit(o)}
+          onkeydown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openOverlayEdit(o); } }}
+          title="Click to edit overlay"
+          class="overlay-chip inline-flex items-center gap-1.5 rounded-md border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 max-w-[18rem] cursor-pointer hover:border-zinc-500"
+        >
+          <span class="inline-block w-2 h-2 rounded-full" style="background: {o.color}"></span>
+          <span class="text-zinc-200 truncate">{overlayChipLabel(o)}</span>
+          <button
+            type="button"
+            onclick={(e) => { e.stopPropagation(); removeOverlay(o.id); }}
+            aria-label="Remove overlay"
+            class="text-zinc-500 hover:text-rose-400 leading-none"
+          >×</button>
+        </div>
+      {/each}
+      {#if overlayLoading}
+        <span class="text-zinc-500 text-[10px]">loading…</span>
+      {/if}
+    </div>
+  {/if}
+
+  <div class="flex-1 relative min-h-0 cursor-default group/chart" bind:clientHeight={chartAreaHeight} use:stopDragEvents>
 
   {#if settingsOpen}
     <div class="absolute inset-0 z-20 bg-zinc-950/95 overflow-y-auto">
@@ -4418,7 +4724,7 @@
     {:else if instance.kind === 'ohlcv'}
       <CandlestickChart
         candles={ohlcvCandles}
-        lines={ohlcvLinesD}
+        lines={ohlcvLinesM}
         showCandles={instance.showPoint}
         formatVolume={(instance.volumeUnit ?? 'token') === 'usd'
           ? fmtUsdCompact
@@ -4448,7 +4754,7 @@
     {:else if instance.kind === 'oi'}
       <LineChart
         data={data as OpenInterestRow[]}
-        lines={oiLinesD}
+        lines={oiLinesM}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -4463,7 +4769,7 @@
       <SignedBarChart
         data={frBpsData}
         valueKey="rate_bps"
-        lines={frLinesD}
+        lines={frLinesM}
         showBars={instance.showPoint}
         valueLabel={frIsApr ? 'APR' : 'Rate'}
         height={chartCanvasHeight}
@@ -4481,7 +4787,7 @@
       <StackedBarChart
         data={data as VolumeBucket[]}
         series={bsBars}
-        lines={bsLines}
+        lines={bsLinesM}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -4494,7 +4800,7 @@
       <StackedBarChart
         data={data as VolumeBucket[]}
         series={szBars}
-        lines={szLinesD}
+        lines={szLinesM}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -4506,7 +4812,7 @@
     {:else if instance.kind === 'tt'}
       <LineChart
         data={data as LongShortRow[]}
-        lines={ttLinesD}
+        lines={ttLinesM}
         refLines={NEUTRAL_REF}
         height={chartCanvasHeight}
         {xExtent}
@@ -4521,7 +4827,7 @@
     {:else if instance.kind === 'ls'}
       <LineChart
         data={data as LongShortRow[]}
-        lines={lsLinesD}
+        lines={lsLinesM}
         refLines={NEUTRAL_REF}
         height={chartCanvasHeight}
         {xExtent}
@@ -4536,7 +4842,7 @@
     {:else if instance.kind === 'transfer'}
       <LineChart
         data={data as TransferBucket[]}
-        lines={transferLinesD}
+        lines={transferLinesM}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -4550,7 +4856,7 @@
     {:else if instance.kind === 'exchange_flow'}
       <LineChart
         data={data as Array<Record<string, number>>}
-        lines={exchangeFlowLinesD}
+        lines={exchangeFlowLinesM}
         refLines={NEUTRAL_REF}
         height={chartCanvasHeight}
         {xExtent}
@@ -4573,7 +4879,7 @@
     {:else if instance.kind === 'hl_unrealized_pnl'}
       <LineChart
         data={data as Array<Record<string, number>>}
-        lines={hlUnrealizedLinesD}
+        lines={hlUnrealizedLinesM}
         refLines={NEUTRAL_REF}
         height={chartCanvasHeight}
         {xExtent}
@@ -4588,7 +4894,7 @@
     {:else if instance.kind === 'hl_vault_net'}
       <LineChart
         data={data as Array<Record<string, number>>}
-        lines={hlVaultFlowLinesD}
+        lines={hlVaultFlowLinesM}
         refLines={NEUTRAL_REF}
         height={chartCanvasHeight}
         {xExtent}
@@ -4619,7 +4925,7 @@
     {:else if instance.kind === 'hl_transfers'}
       <LineChart
         data={data as Array<Record<string, number>>}
-        lines={hlBridgeFlowsLinesD}
+        lines={hlBridgeFlowsLinesM}
         refLines={NEUTRAL_REF}
         height={chartCanvasHeight}
         {xExtent}
@@ -4634,7 +4940,7 @@
     {:else if isGmxV2Kind(instance.kind) && gmxIsPositionLongShortKind}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
-        lines={[...gmxPositionLinesD, ...cumulativeLines]}
+        lines={gmxPositionLinesM}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -4648,7 +4954,7 @@
     {:else if isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxV2Kind(instance.kind) || isHlKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
-        lines={aaveLinesD}
+        lines={aaveLinesM}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -4662,7 +4968,7 @@
     {:else if isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind) || isUniswapV4Kind(instance.kind) || isAeroClKind(instance.kind) || isAeroBasicKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
-        lines={uniswapLinesD}
+        lines={uniswapLinesM}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -4678,7 +4984,7 @@
     {:else if isLidoKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
-        lines={lidoLinesD}
+        lines={lidoLinesM}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -4691,8 +4997,30 @@
       />
     {/if}
 
+  {#if canHaveOverlays}
+    <!-- Add-overlay FAB. Only visible while the chart card is hovered (so it
+         doesn't sit on top of the chart at rest). Click opens the two-step
+         overlay dialog. -->
+    <button
+      type="button"
+      onclick={openOverlayAdd}
+      title="Add overlay series"
+      aria-label="Add overlay series"
+      class="overlay-fab"
+    >+</button>
+  {/if}
   </div>
 </div>
+
+{#if canHaveOverlays}
+  <AddOverlayDialog
+    open={overlayDialogOpen}
+    initial={overlayEditing}
+    usedColors={usedOverlayColors}
+    onSubmit={addOverlay}
+    onClose={() => { overlayDialogOpen = false; overlayEditing = null; }}
+  />
+{/if}
 
 <style>
   /* Indeterminate progress strip — a coloured segment slides left→right→left
@@ -4717,5 +5045,43 @@
   @keyframes loadbar-slide {
     0%   { left: -35%; }
     100% { left: 100%; }
+  }
+
+  /* Compound-chart "+" floating action button. Sits in the bottom-right of
+     the chart canvas and only fades in while the chart card is hovered, so
+     it stays out of the way at rest. Click opens the overlay dialog. */
+  .overlay-fab {
+    position: absolute;
+    bottom: 0.5rem;
+    right: 0.5rem;
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 999px;
+    background: rgb(24 24 27);
+    border: 1px solid rgb(82 82 91);
+    color: rgb(212 212 216);
+    font-size: 1rem;
+    line-height: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    opacity: 0;
+    /* Don't intercept pointer events when invisible — otherwise the FAB
+       silently swallows clicks in the bottom-right corner of the chart,
+       which would block d3.zoom from seeing pan/zoom gestures that
+       start there. */
+    pointer-events: none;
+    transition: opacity 120ms ease-out, background-color 120ms ease-out, color 120ms ease-out;
+    z-index: 15;
+    cursor: pointer;
+  }
+  .group\/chart:hover .overlay-fab {
+    opacity: 0.85;
+    pointer-events: auto;
+  }
+  .overlay-fab:hover {
+    opacity: 1 !important;
+    background: rgb(39 39 42);
+    color: rgb(244 244 245);
   }
 </style>

@@ -14,6 +14,10 @@
     compute: (d: Datum, i: number, data: Datum[]) => number;
     dash?: string;
     scale?: 'pct' | 'value';
+    /** Compound-overlay tooltip override (see LineChart Line type for details). */
+    rawValue?: (d: Datum, i: number, data: Datum[]) => number;
+    rawFormat?: (v: number) => string;
+    axis?: 'primary' | 'secondary';
   };
 
   let {

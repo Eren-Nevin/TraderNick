@@ -1385,7 +1385,313 @@ export type ChartInstance = {
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */
   templateName?: string;
+  /** Compound-chart overlays — extra series from other chart kinds layered
+   *  on the primary axis. Each overlay carries its own kind + config (token,
+   *  chain, pool, …) and a chosen `seriesKey`. The overlay's data is fetched
+   *  at the primary chart's interval, range-matched to the primary's visible
+   *  Y range, and drawn as one additional line. Empty / undefined = no
+   *  overlays (the chart renders unchanged). */
+  overlays?: ChartOverlay[];
 };
+
+/** One overlay series layered onto a host ChartInstance. The fields mirror
+ *  the host ChartInstance config — only the dimensions the overlay's kind
+ *  actually uses get populated. Persisted alongside the host in localStorage. */
+export type ChartOverlay = {
+  id: string;
+  /** The other chart kind whose data we want to overlay. Must be in
+   *  `overlayableKinds()` — i.e. produces a time series (not a table) and
+   *  isn't `pc` (PC is itself an overlay-on-OHLCV view). */
+  kind: ChartKind;
+  /** Which named series (line) from the overlay's data to plot. For kinds
+   *  that emit one inherent series this is the canonical key (e.g.
+   *  'sum_value_usd'); for multi-series kinds (BS, SZ, exchange_flow,
+   *  hl_transfers, …) the user picks it from a sub-dropdown. See
+   *  OVERLAY_KIND_SERIES for the per-kind list. */
+  seriesKey: string;
+  /** Auto-assigned from OVERLAY_COLORS. */
+  color: string;
+  /** When set, the overlay's values are passed through maArray() before
+   *  drawing — only the MA line shows. To see raw + MA together the user
+   *  adds the overlay twice (one raw, one MA). */
+  ma?: { type: MAType; length: number };
+  /** Per-kind config fields, mirroring the host ChartInstance shape but
+   *  carrying only the dimensions the chosen `kind` reads. Validated
+   *  through `sanitizeOverlay()`. */
+  token?: string;
+  chain?: string;
+  exchange?: 'binance' | 'hl';
+  frDisplay?: 'rate8h' | 'apr';
+  valueMode?: 'usd' | 'amount';
+  under?: number;
+  over?: number;
+  uniPool?: UniPool;
+  uniV4Pool?: UniV4Pool;
+  aeroPool?: AeroPool;
+  aeroBasicPool?: AeroBasicPool;
+  gmxMarket?: string;
+  hlWallet?: string;
+  hlWalletCategory?: string;
+  exchangeFlowExchange?: 'binance' | 'coinbase' | 'okx' | 'bybit' | 'hyperliquid';
+};
+
+/** One addable series exposed by a chart kind. Single-series kinds list one
+ *  entry; multi-series kinds enumerate each user-pickable line. `key` is
+ *  what the overlay-fetch helper reads off each row to project the value. */
+export type OverlaySeriesDef = {
+  key: string;
+  label: string;
+};
+
+/** Per-kind catalogue of addable overlay series. Empty `[]` means the kind
+ *  cannot be overlaid (TableViews + PC). */
+export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>> = {
+  // Exchange — OHLCV exposes each candle field; the rest are single-line
+  // overlays except for the multi-line HL OI / L/S / TT / BS / SZ kinds.
+  ohlcv: [
+    { key: 'close',  label: 'Close' },
+    { key: 'open',   label: 'Open' },
+    { key: 'high',   label: 'High' },
+    { key: 'low',    label: 'Low' },
+    { key: 'volume', label: 'Volume' }
+  ],
+  oi: [
+    // The user picks long/short/total at add-time. For binance OI, only
+    // 'total' is meaningful; the overlay-fetch helper falls back to the
+    // total series when long/short slots are unavailable.
+    { key: 'total_oi_value', label: 'Total OI' },
+    { key: 'long_oi_value',  label: 'Long OI (HL only)' },
+    { key: 'short_oi_value', label: 'Short OI (HL only)' }
+  ],
+  fr: [ { key: 'rate_bps', label: 'Funding Rate' } ],
+  bs: [
+    { key: 'buyer_taker_usd',  label: 'Buyer Taker $' },
+    { key: 'seller_taker_usd', label: 'Seller Taker $' }
+  ],
+  sz: [
+    { key: 'small_usd', label: 'Small Trades $' },
+    { key: 'mid_usd',   label: 'Mid Trades $' },
+    { key: 'large_usd', label: 'Large Trades $' }
+  ],
+  tt: [
+    { key: 'top_trader_count_ratio', label: 'Top Trader Count L/S' },
+    { key: 'top_trader_vol_ratio',   label: 'Top Trader Volume L/S' }
+  ],
+  ls: [
+    { key: 'long_short_count_ratio',     label: 'All Count L/S' },
+    { key: 'taker_long_short_vol_ratio', label: 'Taker Volume L/S' }
+  ],
+  // Flows
+  transfer: [
+    { key: 'sum_value_usd', label: 'Value (USD)' },
+    { key: 'sum_amount',    label: 'Amount (token)' }
+  ],
+  exchange_flow: [
+    { key: 'inflow',  label: 'Inflow' },
+    { key: 'outflow', label: 'Outflow' },
+    { key: 'netflow', label: 'Net flow' }
+  ],
+  // HL multi-line specials
+  hl_transfers: [
+    { key: 'deposit',    label: 'Bridge Deposit' },
+    { key: 'withdrawal', label: 'Bridge Withdraw' },
+    { key: 'net',        label: 'Net Bridge Flow' }
+  ],
+  hl_vault_net: [
+    { key: 'deposit',  label: 'Vault Deposit' },
+    { key: 'withdraw', label: 'Vault Withdraw' },
+    { key: 'net',      label: 'Net Vault Flow' }
+  ],
+  hl_unrealized_pnl: [
+    { key: 'long_pnl',  label: 'Long PnL' },
+    { key: 'short_pnl', label: 'Short PnL' },
+    { key: 'net_pnl',   label: 'Net PnL' }
+  ],
+  // PC is excluded from the picker — empty list signals "not overlayable".
+  pc: []
+};
+
+/** Default single-series entry for every event-driven kind. Filled at module
+ *  init so we don't have to keep this in sync with the ChartKind union by
+ *  hand. */
+function _populateDefaultOverlaySeries() {
+  const VALUE_LABEL = 'Value';
+  const valueOnly: OverlaySeriesDef[] = [{ key: 'sum_value_usd', label: VALUE_LABEL }];
+  const valueOrAmount: OverlaySeriesDef[] = [
+    { key: 'sum_value_usd', label: 'Value (USD)' },
+    { key: 'sum_amount',    label: 'Amount (token)' }
+  ];
+  const concreteValueOrAmount: ChartKind[] = [
+    // AAVE V2/V3/V4 concrete
+    ...AAVE_V2_CHART_KINDS, ...AAVE_V3_CHART_KINDS, ...AAVE_V4_CHART_KINDS,
+    // Morpho / Spark
+    ...MORPHO_CHART_KINDS, ...SPARK_CHART_KINDS,
+    // GMX (sum_amount is USD-denominated for position kinds; pretend
+    // it's "value" for the overlay picker)
+    ...GMX_V2_CHART_KINDS,
+    // Lido
+    ...LIDO_CHART_KINDS,
+    // Uniswap V2/V3/V4 + Aerodrome
+    ...UNISWAP_V2_CHART_KINDS, ...UNISWAP_V3_CHART_KINDS, ...UNISWAP_V4_CHART_KINDS,
+    ...AERO_CL_CHART_KINDS, ...AERO_BASIC_CHART_KINDS,
+    // HL realized PnL
+    'hl_pnl'
+  ];
+  for (const k of concreteValueOrAmount) {
+    if (!OVERLAY_KIND_SERIES[k]) OVERLAY_KIND_SERIES[k] = valueOrAmount;
+  }
+  // Wrapper kinds are not picker entries (we expose concrete kinds instead).
+  // Table kinds are explicitly empty so they get filtered out.
+  const tabular: ChartKind[] = [
+    'hl_top_vaults','hl_top_vault_lps','hl_vault_detail',
+    'hl_top_traders','hl_top_positions'
+  ];
+  for (const k of tabular) OVERLAY_KIND_SERIES[k] = [];
+  void valueOnly;
+}
+_populateDefaultOverlaySeries();
+
+/** Every kind that can be added as a compound-chart overlay (non-empty
+ *  series list). Used as the picker dialog's source list. */
+export function overlayableKinds(): ChartKind[] {
+  const out: ChartKind[] = [];
+  for (const k of Object.keys(OVERLAY_KIND_SERIES) as ChartKind[]) {
+    const arr = OVERLAY_KIND_SERIES[k];
+    if (arr && arr.length > 0) out.push(k);
+  }
+  return out;
+}
+
+/** Auto-assign palette for overlay lines. The host chart's primary series
+ *  uses its own kind-specific colours; overlays cycle through this list. */
+export const OVERLAY_COLORS = [
+  '#22d3ee', '#a78bfa', '#f472b6', '#84cc16',
+  '#fb923c', '#facc15', '#38bdf8', '#f87171'
+];
+
+export function nextOverlayColor(used: string[]): string {
+  for (const c of OVERLAY_COLORS) {
+    if (!used.includes(c)) return c;
+  }
+  return OVERLAY_COLORS[used.length % OVERLAY_COLORS.length];
+}
+
+/** Validate one overlay against its kind's expectations. Returns a cleaned
+ *  copy or null if the input is malformed beyond rescue. Always called from
+ *  the layout sanitize() so corrupt persistence can't strand a chart. */
+export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const r = raw as Record<string, unknown>;
+  if (typeof r.id !== 'string' || r.id.length === 0) return null;
+  const kind = r.kind;
+  if (typeof kind !== 'string') return null;
+  if (!OVERLAY_KIND_SERIES[kind as ChartKind] || OVERLAY_KIND_SERIES[kind as ChartKind]!.length === 0) return null;
+  const seriesList = OVERLAY_KIND_SERIES[kind as ChartKind]!;
+  const seriesKey = typeof r.seriesKey === 'string' && seriesList.some(s => s.key === r.seriesKey)
+    ? r.seriesKey
+    : seriesList[0].key;
+  const color = typeof r.color === 'string' && r.color.length > 0 ? r.color : OVERLAY_COLORS[0];
+  const o: ChartOverlay = { id: r.id, kind: kind as ChartKind, seriesKey, color };
+  // MA — drop unless { type, length } are both valid.
+  if (r.ma && typeof r.ma === 'object') {
+    const m = r.ma as Record<string, unknown>;
+    const t = m.type;
+    const len = m.length;
+    if ((t === 'sma' || t === 'ema' || t === 'wma') && typeof len === 'number' && len >= 2 && len <= 500) {
+      o.ma = { type: t, length: Math.floor(len) };
+    }
+  }
+  // Per-kind config fields. Copy through whatever the kind actually reads.
+  if (typeof r.token === 'string') o.token = r.token;
+  if (typeof r.chain === 'string') o.chain = r.chain;
+  if (r.exchange === 'binance' || r.exchange === 'hl') o.exchange = r.exchange;
+  if (r.frDisplay === 'rate8h' || r.frDisplay === 'apr') o.frDisplay = r.frDisplay;
+  if (r.valueMode === 'usd' || r.valueMode === 'amount') o.valueMode = r.valueMode;
+  if (typeof r.under === 'number') o.under = r.under;
+  if (typeof r.over === 'number') o.over = r.over;
+  if (typeof r.gmxMarket === 'string') o.gmxMarket = r.gmxMarket;
+  if (typeof r.hlWallet === 'string') o.hlWallet = r.hlWallet;
+  if (typeof r.hlWalletCategory === 'string') o.hlWalletCategory = r.hlWalletCategory;
+  if (typeof r.exchangeFlowExchange === 'string'
+      && ['binance','coinbase','okx','bybit','hyperliquid'].includes(r.exchangeFlowExchange)) {
+    o.exchangeFlowExchange = r.exchangeFlowExchange as ChartOverlay['exchangeFlowExchange'];
+  }
+  const rp = r.uniPool as Record<string, unknown> | undefined;
+  if (rp && typeof rp.symbol0 === 'string' && typeof rp.symbol1 === 'string' && typeof rp.fee === 'number') {
+    o.uniPool = { symbol0: rp.symbol0.toUpperCase(), symbol1: rp.symbol1.toUpperCase(), fee: rp.fee };
+  }
+  const rp4 = r.uniV4Pool as Record<string, unknown> | undefined;
+  if (rp4 && typeof rp4.symbol0 === 'string' && typeof rp4.symbol1 === 'string'
+      && typeof rp4.fee === 'number' && typeof rp4.tick_spacing === 'number'
+      && typeof rp4.hooks === 'string') {
+    o.uniV4Pool = {
+      symbol0: rp4.symbol0.toUpperCase(),
+      symbol1: rp4.symbol1.toUpperCase(),
+      fee: rp4.fee,
+      tick_spacing: rp4.tick_spacing,
+      hooks: rp4.hooks
+    };
+  }
+  const rpa = r.aeroPool as Record<string, unknown> | undefined;
+  if (rpa && typeof rpa.symbol0 === 'string' && typeof rpa.symbol1 === 'string'
+      && typeof rpa.tick_spacing === 'number') {
+    o.aeroPool = {
+      symbol0: rpa.symbol0.toUpperCase(),
+      symbol1: rpa.symbol1.toUpperCase(),
+      tick_spacing: rpa.tick_spacing
+    };
+  }
+  const rpab = r.aeroBasicPool as Record<string, unknown> | undefined;
+  if (rpab && typeof rpab.symbol0 === 'string' && typeof rpab.symbol1 === 'string'
+      && typeof rpab.stable === 'boolean') {
+    o.aeroBasicPool = {
+      symbol0: rpab.symbol0.toUpperCase(),
+      symbol1: rpab.symbol1.toUpperCase(),
+      stable: rpab.stable
+    };
+  }
+  return o;
+}
+
+/** Short human-readable label for a chip in the chart header. Keeps the
+ *  pieces the user picked: kind label + (where applicable) token + chain
+ *  + pool + series. Trims to ~50 chars to fit. */
+export function overlayChipLabel(o: ChartOverlay): string {
+  const parts: string[] = [];
+  parts.push(CHART_KIND_LABELS[o.kind] ?? o.kind);
+  if (o.token) parts.push(o.token);
+  if (o.chain && o.chain !== 'HL') parts.push(o.chain);
+  if (o.uniPool) parts.push(fmtUniPool(o.uniPool));
+  else if (o.aeroPool) parts.push(`${o.aeroPool.symbol0}/${o.aeroPool.symbol1} ts${o.aeroPool.tick_spacing}`);
+  else if (o.aeroBasicPool) parts.push(`${o.aeroBasicPool.symbol0}/${o.aeroBasicPool.symbol1} ${o.aeroBasicPool.stable ? 'stable' : 'vAMM'}`);
+  else if (o.uniV4Pool) parts.push(`${o.uniV4Pool.symbol0}/${o.uniV4Pool.symbol1} ${(o.uniV4Pool.fee/10000).toFixed(2)}%`);
+  // Append the series suffix when the kind has multiple series.
+  const list = OVERLAY_KIND_SERIES[o.kind] ?? [];
+  if (list.length > 1) {
+    const s = list.find(x => x.key === o.seriesKey);
+    if (s) parts.push(s.label);
+  }
+  if (o.ma) parts.push(`${o.ma.type.toUpperCase()}${o.ma.length}`);
+  let label = parts.join(' · ');
+  if (label.length > 64) label = label.slice(0, 61) + '…';
+  return label;
+}
+
+/** Category bucket for an overlay-pickable kind. Wrapper kinds bucket via
+ *  their own `chartKindCategory`; concrete kinds bucket via their group. */
+export function overlayKindCategory(kind: ChartKind): ChartCategory | null {
+  // Flat (non-grouped) kinds — same buckets as chartKindCategory().
+  const direct = chartKindCategory(kind);
+  if (direct) return direct;
+  const grp = chartKindGroup(kind);
+  if (!grp) return null;
+  if (grp === 'AAVE V2' || grp === 'AAVE V3' || grp === 'AAVE V4' || grp === 'Morpho' || grp === 'Spark') return 'Lending';
+  if (grp === 'Uniswap V2' || grp === 'Uniswap V3' || grp === 'Uniswap V4'
+      || grp === 'Aerodrome CL' || grp === 'Aerodrome Basic') return 'DeX';
+  if (grp === 'GMX' || grp === 'Hyperliquid') return 'Perp';
+  if (grp === 'Lido') return 'Staking';
+  return null;
+}
 
 /** Builder for a one-click chart preset — given the page's defaults, returns
  *  a ready-to-add ChartInstance. */
