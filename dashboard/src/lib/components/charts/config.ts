@@ -830,16 +830,22 @@ export function isUniswapV2Kind(kind: ChartKind): boolean {
   );
 }
 
-/** Uniswap V4 chart kinds. V4 LP events lack amount0/amount1 — only
- *  liquidity_delta — so Amount mode on deposit/withdraw isn't meaningful
- *  (the data_server returns 0 for sum_amount0/1 on those events). The
- *  initialize kind is a pool-creation counter. */
+/** Uniswap V4 chart kinds exposed in the in-chart subkind picker. V4 LP
+ *  events lack amount0/amount1 — only liquidity_delta — so Amount mode
+ *  on deposit/withdraw isn't meaningful (the data_server returns 0 for
+ *  sum_amount0/1 on those events).
+ *
+ *  NOTE: 'uniswap_v4_initialize' is intentionally omitted. Pool init is
+ *  a one-shot event that fires at pool deployment and never again, so
+ *  filtered by a specific pool tuple (sym0, sym1, fee, ts, hooks) it's
+ *  guaranteed-empty for every window after creation — chart-of-zeros
+ *  by design. The underlying ChartKind + KIND_TO_EVENT entry stays so
+ *  saved layouts that reference it continue to load. */
 export const UNISWAP_V4_CHART_KINDS: ChartKind[] = [
   'uniswap_v4_swap',
   'uniswap_v4_deposit',
   'uniswap_v4_withdraw',
-  'uniswap_v4_net_liquidity',
-  'uniswap_v4_initialize'
+  'uniswap_v4_net_liquidity'
 ];
 export const UNISWAP_V4_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
   uniswap_v4_swap: 'swap',
