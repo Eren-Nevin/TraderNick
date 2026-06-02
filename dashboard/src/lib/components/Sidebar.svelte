@@ -7,9 +7,17 @@
 
   let collapsed = $state(false);
 
+  // Inline-edit state for page rename / create-then-name. When `editingId`
+  // matches a page, its row swaps the label for an <input> bound to
+  // `editingName`. `editingIsNew` distinguishes a rename from a fresh
+  // creation — cancelling a fresh creation discards the page entirely
+  // (so the user can back out without leaving a junk "Page 3" behind).
+  let editingId = $state<string | null>(null);
+  let editingName = $state('');
+  let editingIsNew = $state(false);
+
   // The Examples section is the static curated category pages — each
-  // hosts one consolidated picker for a single category. Order matches
-  // the previous flat sidebar.
+  // hosts one consolidated picker for a single category.
   type ExampleLink = { href: string; label: string; short: string };
   const examples: ExampleLink[] = [
     { href: '/trades',  label: 'Trades',  short: 'T' },
@@ -29,28 +37,63 @@
 
   function activePage(): string | null {
     // /dashboard/{id} – the active page is the path segment after /dashboard/.
-    // Used to highlight the matching sidebar entry and to pick a fallback
-    // navigation target on delete.
     const m = $page.url.pathname.match(/^\/dashboard\/([^/]+)/);
     return m ? m[1] : null;
   }
 
+  function startRename(id: string, current: string, ev: Event) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    editingId = id;
+    editingName = current;
+    editingIsNew = false;
+  }
+
   function addPage() {
-    const name = (typeof window !== 'undefined'
-      ? window.prompt('Page name', `Page ${pagesStore.pages.length + 1}`)
-      : null);
-    if (name === null) return; // user cancelled
-    const p = pagesStore.add(name);
+    // Create with a placeholder name and immediately enter edit mode for it.
+    // Cancelling (Escape / ×) will roll back the creation.
+    const p = pagesStore.add(`Page ${pagesStore.pages.length + 1}`);
+    editingId = p.id;
+    editingName = p.name;
+    editingIsNew = true;
     goto(`/dashboard/${p.id}`);
   }
 
-  function renamePage(id: string, current: string, ev: Event) {
-    ev.preventDefault();
-    ev.stopPropagation();
-    if (typeof window === 'undefined') return;
-    const name = window.prompt('Rename page', current);
-    if (name === null) return;
-    pagesStore.rename(id, name);
+  function commitEdit() {
+    if (!editingId) return;
+    const name = editingName.trim();
+    if (name) pagesStore.rename(editingId, name);
+    editingId = null;
+    editingName = '';
+    editingIsNew = false;
+  }
+
+  function cancelEdit() {
+    if (editingIsNew && editingId) {
+      // Discard the freshly-created page entirely. If it was the active
+      // route, fall back to the first remaining page.
+      const id = editingId;
+      const wasActive = activePage() === id;
+      pagesStore.remove(id);
+      if (wasActive && pagesStore.pages[0]) {
+        goto(`/dashboard/${pagesStore.pages[0].id}`);
+      }
+    }
+    editingId = null;
+    editingName = '';
+    editingIsNew = false;
+  }
+
+  function onEditKey(ev: KeyboardEvent) {
+    if (ev.key === 'Enter') { ev.preventDefault(); commitEdit(); }
+    else if (ev.key === 'Escape') { ev.preventDefault(); cancelEdit(); }
+  }
+
+  // Svelte action: focus + select the input when it mounts so the user can
+  // immediately overwrite the placeholder or current name.
+  function focusInput(node: HTMLInputElement) {
+    node.focus();
+    node.select();
   }
 
   function deletePage(id: string, name: string, ev: Event) {
@@ -61,7 +104,6 @@
     if (!window.confirm(`Delete page "${name}"?`)) return;
     const wasActive = activePage() === id;
     pagesStore.remove(id);
-    // If we just removed the active page, fall back to the first remaining.
     if (wasActive) {
       const first = pagesStore.pages[0];
       if (first) goto(`/dashboard/${first.id}`);
@@ -96,7 +138,6 @@
   <nav class="flex-1 px-2 py-3 space-y-1 overflow-y-auto">
     <!-- =========================================================
          User-created Dashboard pages.
-         Top section: a list of pages from pagesStore + Add button.
          ========================================================= -->
     {#if !collapsed}
       <div class="px-3 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 select-none">
@@ -106,6 +147,7 @@
 
     {#each pagesStore.pages as p (p.id)}
       {@const isActive = activePage() === p.id}
+      {@const isEditing = editingId === p.id}
       {#if collapsed}
         <a
           href={`/dashboard/${p.id}`}
@@ -114,10 +156,36 @@
             ? 'bg-zinc-800 text-zinc-50'
             : 'text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100'} px-0 py-2 text-center"
         >{p.name.slice(0, 1).toUpperCase()}</a>
+      {:else if isEditing}
+        <!-- Edit row: input + confirm/cancel buttons. Enter confirms,
+             Escape cancels. Inline check (✓) commits; × discards. -->
+        <div class="flex items-center gap-1 rounded bg-zinc-900 px-2 py-1">
+          <input
+            type="text"
+            bind:value={editingName}
+            onkeydown={onEditKey}
+            use:focusInput
+            class="flex-1 min-w-0 bg-transparent text-sm text-zinc-100 outline-none placeholder:text-zinc-600"
+            placeholder="Page name"
+            aria-label="Page name"
+          />
+          <button
+            type="button"
+            title="Save (Enter)"
+            onclick={commitEdit}
+            class="w-5 h-5 flex items-center justify-center rounded text-xs text-zinc-300 hover:text-emerald-300 hover:bg-zinc-800"
+            aria-label="Save page name"
+          >✓</button>
+          <button
+            type="button"
+            title="Cancel (Esc)"
+            onclick={cancelEdit}
+            class="w-5 h-5 flex items-center justify-center rounded text-xs text-zinc-400 hover:text-red-300 hover:bg-zinc-800"
+            aria-label="Cancel"
+          >×</button>
+        </div>
       {:else}
-        <!-- Page row: link + inline rename/delete buttons (visible on hover).
-             The buttons sit inside the same row but stop event propagation
-             so clicking them doesn't navigate. -->
+        <!-- Display row: link + inline rename/delete buttons (on hover). -->
         <div class="group relative">
           <a
             href={`/dashboard/${p.id}`}
@@ -132,7 +200,7 @@
             <button
               type="button"
               title="Rename page"
-              onclick={(e) => renamePage(p.id, p.name, e)}
+              onclick={(e) => startRename(p.id, p.name, e)}
               class="w-5 h-5 flex items-center justify-center rounded text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
               aria-label="Rename page"
             >✎</button>
@@ -150,7 +218,6 @@
       {/if}
     {/each}
 
-    <!-- Add page action. Same style as the page links so it sits in-line. -->
     <button
       type="button"
       onclick={addPage}
@@ -164,8 +231,6 @@
 
     <!-- =========================================================
          Separator + Examples section.
-         The static category pages used to be top-level entries; now
-         they're grouped under a single "Examples" heading.
          ========================================================= -->
     <div class="mx-2 my-2 border-t border-zinc-800"></div>
 
