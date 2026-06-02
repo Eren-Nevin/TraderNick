@@ -170,16 +170,23 @@ async def _fetch_chunk(
 async def _force_purge(chains, events, eth_markets, since, until):
     """Delete existing rows in the time range for every (chain, eth_market,
     event) combination this job will write to. Runs once at start when
-    args.force=true."""
+    args.force=true.
+
+    Non-ETH chains store eth_market='' — safe_ident() rejects the empty
+    string (it's designed for table/column identifiers), so we inline the
+    literal '' in that case rather than passing it through the validator."""
     ch = await async_client()
     for event in events:
         _, table, _, _ = AAVE_EVENTS[event]
         for chain in chains:
             markets = eth_markets if chain.upper() == "ETH" else [""]
             for market in markets:
+                eth_market_sql = (
+                    f"'{safe_ident(market)}'" if market else "''"
+                )
                 where = (
                     f"chain = '{safe_ident(chain)}'"
-                    f" AND eth_market = '{safe_ident(market)}'"
+                    f" AND eth_market = {eth_market_sql}"
                     f" AND time >= '{_sql_dt(since)}'"
                     f" AND time <  '{_sql_dt(until)}'"
                 )
@@ -219,12 +226,12 @@ async def main(job_id: str):
     log.info("job %s starting: chains=%s events=%s eth_markets=%s chunks=%d resumed_at=%d force=%s",
              job_id, chains, events, eth_markets, total, done, bool(args.get("force")))
 
-    if args.get("force") and done == 0:
-        await _force_purge(chains, events, eth_markets, since, until)
-        log.info("job %s force purge done", job_id)
-
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     try:
+        if args.get("force") and done == 0:
+            await _force_purge(chains, events, eth_markets, since, until)
+            log.info("job %s force purge done", job_id)
+
         for chain, market, event, cs, ce in chunks:
             if _stop:
                 args["completed_chunks"] = sorted(map(list, completed_set))

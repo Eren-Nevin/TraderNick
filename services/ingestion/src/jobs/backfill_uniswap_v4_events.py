@@ -97,7 +97,9 @@ async def main(job_id):
     if not config.DEFISTREAM_API_KEY: sys.exit(2)
     job = await _load_job(job_id)
     job_type, args, started_at = job["job_type"], job["args"], job["started_at"]
-    pools_arg = args.get("pools") or [[c,s0,s1,fee,ts,hk] for (c,s0,s1,fee,ts,hk) in config.UNI_V4_POOLS]
+    # Mirror live worker pool selection: UNI_V4_LIVE_POOLS or UNI_V4_POOLS.
+    live_default = config.UNI_V4_LIVE_POOLS or config.UNI_V4_POOLS
+    pools_arg = args.get("pools") or [[c,s0,s1,fee,ts,hk] for (c,s0,s1,fee,ts,hk) in live_default]
     pools = [(p[0],p[1],p[2],int(p[3]),int(p[4]),p[5]) for p in pools_arg]
     events = args.get("events") or list(UNISWAP_V4_EVENTS.keys())
     unknown = [e for e in events if e not in UNISWAP_V4_EVENTS]

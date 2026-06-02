@@ -133,8 +133,10 @@ async def main(job_id: str):
 
     job = await _load_job(job_id)
     job_type, args, started_at = job["job_type"], job["args"], job["started_at"]
+    # Mirror live worker pool selection: UNI_V2_LIVE_POOLS or UNI_V2_POOLS.
+    live_default = config.UNI_V2_LIVE_POOLS or config.UNI_V2_POOLS
     pools_arg = args.get("pools") or [
-        [c, s0, s1] for (c, s0, s1) in config.UNI_V2_POOLS
+        [c, s0, s1] for (c, s0, s1) in live_default
     ]
     pools = [(p[0], p[1], p[2]) for p in pools_arg]
     events = args.get("events", list(UNISWAP_V2_EVENTS.keys()))

@@ -21,18 +21,18 @@ JOB_TYPE_BACKFILL_EVM_NATIVE_TRANSFERS = "backfill_evm_native_transfers"
 JOB_TYPE_BACKFILL_BTC_TRANSFERS = "backfill_btc_transfers"
 JOB_TYPE_BACKFILL_TRON_NATIVE_TRANSFERS = "backfill_tron_native_transfers"
 JOB_TYPE_BACKFILL_TRON_TRC20_TRANSFERS = "backfill_tron_trc20_transfers"
-JOB_TYPE_BACKFILL_AAVE_EVENTS = "backfill_aave_events"
-JOB_TYPE_BACKFILL_UNISWAP_EVENTS = "backfill_uniswap_events"
+JOB_TYPE_BACKFILL_AAVE_EVENTS = "backfill_aave_v3_events"
+JOB_TYPE_BACKFILL_UNISWAP_EVENTS = "backfill_uniswap_v3_events"
 JOB_TYPE_BACKFILL_LIDO_EVENTS = "backfill_lido_events"
 JOB_TYPE_BACKFILL_AAVE_V2_EVENTS = "backfill_aave_v2_events"
 JOB_TYPE_BACKFILL_UNISWAP_V2_EVENTS = "backfill_uniswap_v2_events"
 JOB_TYPE_BACKFILL_UNISWAP_V4_EVENTS = "backfill_uniswap_v4_events"
-JOB_TYPE_BACKFILL_AERO_EVENTS = "backfill_aero_events"
+JOB_TYPE_BACKFILL_AERO_EVENTS = "backfill_aero_concentrated_events"
 JOB_TYPE_BACKFILL_AERO_BASIC_EVENTS = "backfill_aero_basic_events"
 JOB_TYPE_BACKFILL_AAVE_V4_EVENTS = "backfill_aave_v4_events"
 JOB_TYPE_BACKFILL_MORPHO_EVENTS = "backfill_morpho_events"
 JOB_TYPE_BACKFILL_SPARK_EVENTS = "backfill_spark_events"
-JOB_TYPE_BACKFILL_GMX_EVENTS = "backfill_gmx_events"
+JOB_TYPE_BACKFILL_GMX_EVENTS = "backfill_gmx_v2_events"
 JOB_TYPE_BACKFILL_HYPERLIQUID_EVENTS = "backfill_hyperliquid_events"
 JOB_MODULES = {
     JOB_TYPE_BACKFILL_OHLCV: "jobs.backfill_binance_ohlcv",
@@ -58,6 +58,12 @@ JOB_MODULES = {
     JOB_TYPE_BACKFILL_SPARK_EVENTS: "jobs.backfill_spark_events",
     JOB_TYPE_BACKFILL_GMX_EVENTS: "jobs.backfill_gmx_events",
     JOB_TYPE_BACKFILL_HYPERLIQUID_EVENTS: "jobs.backfill_hyperliquid_events",
+    # Legacy aliases — keep old job_type strings mapped to the same module
+    # so in-flight rows from before a rename can still be resumed.
+    "backfill_aave_events": "jobs.backfill_aave_events",
+    "backfill_uniswap_events": "jobs.backfill_uniswap_events",
+    "backfill_aero_events": "jobs.backfill_aero_events",
+    "backfill_gmx_events": "jobs.backfill_gmx_events",
 }
 
 

@@ -97,7 +97,9 @@ async def main(job_id):
     if not config.DEFISTREAM_API_KEY: sys.exit(2)
     job = await _load_job(job_id)
     job_type, args, started_at = job["job_type"], job["args"], job["started_at"]
-    pools_arg = args.get("pools") or [[c,s0,s1,ts] for (c,s0,s1,ts) in config.AERO_POOLS]
+    # Mirror live worker pool selection: AERO_LIVE_POOLS or AERO_POOLS.
+    live_default = config.AERO_LIVE_POOLS or config.AERO_POOLS
+    pools_arg = args.get("pools") or [[c,s0,s1,ts] for (c,s0,s1,ts) in live_default]
     pools = [(p[0],p[1],p[2],int(p[3])) for p in pools_arg]
     events = args.get("events") or list(AERO_CL_EVENTS.keys())
     unknown = [e for e in events if e not in AERO_CL_EVENTS]

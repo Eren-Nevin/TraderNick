@@ -157,8 +157,12 @@ async def main(job_id: str):
 
     job = await _load_job(job_id)
     job_type, args, started_at = job["job_type"], job["args"], job["started_at"]
+    # When `pools` isn't supplied, mirror the live worker's choice:
+    # UNI_V3_LIVE_POOLS (narrowed high-volume set) falls back to the full
+    # UNI_V3_POOLS catalogue. Explicit `pools` in args still overrides.
+    live_default = config.UNI_V3_LIVE_POOLS or config.UNI_V3_POOLS
     pools_arg = args.get("pools") or [
-        [c, s0, s1, fee] for (c, s0, s1, fee) in config.UNI_V3_POOLS
+        [c, s0, s1, fee] for (c, s0, s1, fee) in live_default
     ]
     pools = [(p[0], p[1], p[2], int(p[3])) for p in pools_arg]
     events = args.get("events", list(UNISWAP_EVENTS.keys()))

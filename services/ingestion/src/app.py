@@ -377,8 +377,8 @@ def _extract_aave_events(body):
     }
 
 
-@app.post("/jobs/backfill/aave_events")
-async def backfill_aave_events(request):
+@app.post("/jobs/backfill/aave_v3_events")
+async def backfill_aave_v3_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AAVE_EVENTS, _extract_aave_events)
 
 
@@ -387,8 +387,12 @@ _UNI_VALID_EVENTS = ("swap", "deposit", "withdraw", "collect")
 
 def _extract_uniswap_events(body):
     pools = body.get("pools")
-    if pools is None:
-        pools = [[c, s0, s1, fee] for (c, s0, s1, fee) in config.UNI_V3_POOLS]
+    if not pools:
+        # Match the live worker: UNI_V3_LIVE_POOLS narrows to a tight
+        # high-volume set, falling back to the full UNI_V3_POOLS catalogue.
+        # Caller can still supply explicit `pools` to override.
+        src = config.UNI_V3_LIVE_POOLS or config.UNI_V3_POOLS
+        pools = [[c, s0, s1, fee] for (c, s0, s1, fee) in src]
     if not pools or not isinstance(pools, list):
         return "missing pools (list of [chain, symbol0, symbol1, fee])", None
     norm: list[list] = []
@@ -410,8 +414,8 @@ def _extract_uniswap_events(body):
     return None, {"pools": norm, "events": list(events)}
 
 
-@app.post("/jobs/backfill/uniswap_events")
-async def backfill_uniswap_events(request):
+@app.post("/jobs/backfill/uniswap_v3_events")
+async def backfill_uniswap_v3_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_UNISWAP_EVENTS, _extract_uniswap_events)
 
 
@@ -468,8 +472,11 @@ _UNI_V2_VALID_EVENTS = ("swap", "deposit", "withdraw")
 
 def _extract_uniswap_v2_events(body):
     pools = body.get("pools")
-    if pools is None:
-        pools = [[c, s0, s1] for (c, s0, s1) in config.UNI_V2_POOLS]
+    if not pools:
+        # Match the live worker: UNI_V2_LIVE_POOLS narrows to high-volume,
+        # falling back to UNI_V2_POOLS.
+        src = config.UNI_V2_LIVE_POOLS or config.UNI_V2_POOLS
+        pools = [[c, s0, s1] for (c, s0, s1) in src]
     if not pools or not isinstance(pools, list):
         return "missing pools (list of [chain, symbol0, symbol1])", None
     norm: list[list] = []
@@ -497,8 +504,11 @@ _UNI_V4_VALID_EVENTS = ("swap", "deposit", "withdraw", "initialize")
 
 def _extract_uniswap_v4_events(body):
     pools = body.get("pools")
-    if pools is None:
-        pools = [[c, s0, s1, fee, ts, hk] for (c, s0, s1, fee, ts, hk) in config.UNI_V4_POOLS]
+    if not pools:
+        # Match the live worker: UNI_V4_LIVE_POOLS narrows to high-volume,
+        # falling back to UNI_V4_POOLS.
+        src = config.UNI_V4_LIVE_POOLS or config.UNI_V4_POOLS
+        pools = [[c, s0, s1, fee, ts, hk] for (c, s0, s1, fee, ts, hk) in src]
     if not pools or not isinstance(pools, list):
         return "missing pools (list of [chain, sym0, sym1, fee, tick_spacing, hooks])", None
     norm = []
@@ -529,8 +539,11 @@ _AERO_VALID_EVENTS = ("swap", "deposit", "withdraw", "collect")
 
 def _extract_aero_events(body):
     pools = body.get("pools")
-    if pools is None:
-        pools = [[c, s0, s1, ts] for (c, s0, s1, ts) in config.AERO_POOLS]
+    if not pools:
+        # Match the live worker: AERO_LIVE_POOLS narrows to high-volume,
+        # falling back to AERO_POOLS.
+        src = config.AERO_LIVE_POOLS or config.AERO_POOLS
+        pools = [[c, s0, s1, ts] for (c, s0, s1, ts) in src]
     if not pools or not isinstance(pools, list):
         return "missing pools (list of [chain, sym0, sym1, tick_spacing])", None
     norm = []
@@ -550,8 +563,8 @@ def _extract_aero_events(body):
     return None, {"pools": norm, "events": list(events)}
 
 
-@app.post("/jobs/backfill/aero_events")
-async def backfill_aero_events(request):
+@app.post("/jobs/backfill/aero_concentrated_events")
+async def backfill_aero_concentrated_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_AERO_EVENTS, _extract_aero_events)
 
 
@@ -560,8 +573,11 @@ _AERO_BASIC_VALID_EVENTS = ("swap", "deposit", "withdraw", "claim")
 
 def _extract_aero_basic_events(body):
     pools = body.get("pools")
-    if pools is None:
-        pools = [[c, s0, s1, st] for (c, s0, s1, st) in config.AERO_BASIC_POOLS]
+    if not pools:
+        # Match the live worker: AERO_BASIC_LIVE_POOLS narrows to high-volume,
+        # falling back to AERO_BASIC_POOLS.
+        src = config.AERO_BASIC_LIVE_POOLS or config.AERO_BASIC_POOLS
+        pools = [[c, s0, s1, st] for (c, s0, s1, st) in src]
     if not pools or not isinstance(pools, list):
         return "missing pools (list of [chain, sym0, sym1, stable])", None
     norm = []
@@ -669,8 +685,8 @@ def _extract_gmx_events(body):
     return None, {"chains": [str(c).upper() for c in chains], "events": list(events)}
 
 
-@app.post("/jobs/backfill/gmx_events")
-async def backfill_gmx_events(request):
+@app.post("/jobs/backfill/gmx_v2_events")
+async def backfill_gmx_v2_events(request):
     return await _create_transfer_backfill(request, JOB_TYPE_BACKFILL_GMX_EVENTS, _extract_gmx_events)
 
 
