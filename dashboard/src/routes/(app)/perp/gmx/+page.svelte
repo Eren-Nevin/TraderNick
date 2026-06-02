@@ -1,7 +1,6 @@
 <script lang="ts">
   import DynamicChartLayout from '$lib/components/DynamicChartLayout.svelte';
   import {
-    GMX_CHART_KINDS,
     newChartInstance,
     type ChartInstance as ChartInstanceT,
     type ChartKind
@@ -10,16 +9,19 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', ...GMX_CHART_KINDS];
+  // The general 'gmx_v2' wrapper exposes an in-chart event selector
+  // (Position Open / Position Close / Net Position / Liquidations /
+  // Swaps / LP Deposits / LP Withdrawals / Net LP), collapsing what
+  // used to be 8 separate kinds in the picker into one. OHLCV stays
+  // available as a price reference.
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'gmx_v2'];
   const PERP_DEFAULT_MARKET = 'BTC/USD [WBTC-USDC]';
 
   function defaultLayout(): ChartInstanceT[] {
-    return GMX_CHART_KINDS.map((kind) => {
-      const inst = newChartInstance(kind, { token: 'USDC', chain: 'ARB' });
-      inst.gmxMarket = PERP_DEFAULT_MARKET;
-      inst.interval = '4h';
-      return inst;
-    });
+    const inst = newChartInstance('gmx_v2', { token: 'USDC', chain: 'ARB' });
+    inst.gmxMarket = PERP_DEFAULT_MARKET;
+    inst.interval = '4h';
+    return [inst];
   }
 </script>
 

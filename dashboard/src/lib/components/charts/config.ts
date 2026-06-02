@@ -314,14 +314,15 @@ export type ChartKind =
   | 'spark_net_borrow'
   | 'spark_flashloan'
   | 'spark_liquidation'
-  | 'gmx_position_increase'
-  | 'gmx_position_decrease'
-  | 'gmx_net_position'
-  | 'gmx_liquidation'
-  | 'gmx_swap'
-  | 'gmx_deposit'
-  | 'gmx_withdraw'
-  | 'gmx_net_lp'
+  | 'gmx_v2'
+  | 'gmx_v2_position_increase'
+  | 'gmx_v2_position_decrease'
+  | 'gmx_v2_net_position'
+  | 'gmx_v2_liquidation'
+  | 'gmx_v2_swap'
+  | 'gmx_v2_deposit'
+  | 'gmx_v2_withdraw'
+  | 'gmx_v2_net_lp'
   | 'hl_pnl'
   | 'hl_unrealized_pnl'
   | 'hl_transfers'
@@ -437,14 +438,15 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   hl_vault_detail: 'HL Vault Detail',
   hl_top_traders: 'HL Top Traders',
   hl_top_positions: 'HL Top Positions',
-  gmx_position_increase: 'GMX Position Open',
-  gmx_position_decrease: 'GMX Position Close',
-  gmx_net_position: 'GMX Net Position Flow',
-  gmx_liquidation: 'GMX Liquidations',
-  gmx_swap: 'GMX Swaps',
-  gmx_deposit: 'GMX LP Deposits',
-  gmx_withdraw: 'GMX LP Withdrawals',
-  gmx_net_lp: 'GMX Net LP Flow',
+  gmx_v2: 'GMX',
+  gmx_v2_position_increase: 'GMX Position Open',
+  gmx_v2_position_decrease: 'GMX Position Close',
+  gmx_v2_net_position: 'GMX Net Position Flow',
+  gmx_v2_liquidation: 'GMX Liquidations',
+  gmx_v2_swap: 'GMX Swaps',
+  gmx_v2_deposit: 'GMX LP Deposits',
+  gmx_v2_withdraw: 'GMX LP Withdrawals',
+  gmx_v2_net_lp: 'GMX Net LP Flow',
   spark_liquidation: 'Spark Liquidations',
   uniswap_v2_swap: 'Uniswap V2 Swaps',
   uniswap_v2_deposit: 'Uniswap V2 Deposits',
@@ -671,50 +673,55 @@ export function isSparkKind(kind: ChartKind): boolean {
  *  Uniswap pools. Per-event value field is picked deliberately because the
  *  server returns `swap.amount_in` and `withdrawals.value_usd` in raw
  *  uint256 units (decoder bug, similar to the Morpho case before its fix). */
-export const GMX_CHART_KINDS: ChartKind[] = [
-  'gmx_position_increase',
-  'gmx_position_decrease',
-  'gmx_net_position',
-  'gmx_liquidation',
-  'gmx_swap',
-  'gmx_deposit',
-  'gmx_withdraw',
-  'gmx_net_lp'
+export const GMX_V2_CHART_KINDS: ChartKind[] = [
+  'gmx_v2_position_increase',
+  'gmx_v2_position_decrease',
+  'gmx_v2_net_position',
+  'gmx_v2_liquidation',
+  'gmx_v2_swap',
+  'gmx_v2_deposit',
+  'gmx_v2_withdraw',
+  'gmx_v2_net_lp'
 ];
-export const GMX_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
-  gmx_position_increase: 'position_increase',
-  gmx_position_decrease: 'position_decrease',
-  gmx_liquidation: 'liquidation',
-  gmx_swap: 'swap',
-  gmx_deposit: 'deposit',
-  gmx_withdraw: 'withdraw'
+export const GMX_V2_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
+  gmx_v2_position_increase: 'position_increase',
+  gmx_v2_position_decrease: 'position_decrease',
+  gmx_v2_liquidation: 'liquidation',
+  gmx_v2_swap: 'swap',
+  gmx_v2_deposit: 'deposit',
+  gmx_v2_withdraw: 'withdraw'
 };
-export const GMX_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
-  gmx_net_position: ['position_increase', 'position_decrease'],
-  gmx_net_lp: ['deposit', 'withdraw']
+export const GMX_V2_NET_KIND_TO_EVENTS: Partial<Record<ChartKind, [string, string]>> = {
+  gmx_v2_net_position: ['position_increase', 'position_decrease'],
+  gmx_v2_net_lp: ['deposit', 'withdraw']
 };
-export function isGmxKind(kind: ChartKind): boolean {
-  return GMX_KIND_TO_EVENT[kind] !== undefined || GMX_NET_KIND_TO_EVENTS[kind] !== undefined;
+/** True for any GMX V2 kind (single-event, net, or the general wrapper).
+ *  The 'gmx_v2' wrapper delegates to a concrete gmx_v2_* subkind via
+ *  instance.gmxV2Subkind. */
+export function isGmxV2Kind(kind: ChartKind): boolean {
+  if (kind === 'gmx_v2') return true;
+  return GMX_V2_KIND_TO_EVENT[kind] !== undefined || GMX_V2_NET_KIND_TO_EVENTS[kind] !== undefined;
 }
-/** Per-kind value-field picker. Each GMX kind defaults to either sum_amount
- *  (size_delta_usd / token-units) or sum_value_usd — chosen for whichever is
- *  the cleanest unit for that event class on the V1 dashboard. The choice
- *  takes precedence over the instance.valueMode toggle. */
-export const GMX_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_value_usd'>> = {
+/** Per-kind value-field picker. Each GMX V2 kind defaults to either
+ *  sum_amount (size_delta_usd / token-units) or sum_value_usd — chosen
+ *  for whichever is the cleanest unit for that event class on the V1
+ *  dashboard. The choice takes precedence over the instance.valueMode
+ *  toggle. */
+export const GMX_V2_PRIMARY_FIELD: Partial<Record<ChartKind, 'sum_amount' | 'sum_value_usd'>> = {
   // size_delta_usd (USD notional) — the real "position size" number
-  gmx_position_increase: 'sum_amount',
-  gmx_position_decrease: 'sum_amount',
-  gmx_net_position: 'sum_amount',
-  gmx_liquidation: 'sum_amount',
+  gmx_v2_position_increase: 'sum_amount',
+  gmx_v2_position_decrease: 'sum_amount',
+  gmx_v2_net_position: 'sum_amount',
+  gmx_v2_liquidation: 'sum_amount',
   // value_usd is correct here; amount_in is broken upstream
-  gmx_swap: 'sum_value_usd',
+  gmx_v2_swap: 'sum_value_usd',
   // long+short token-units — symmetric across deposit/withdraw so net_lp
   // subtracts apples-to-apples (deposit.value_usd is fine but
   // withdraw.value_usd is broken upstream, so we use token-units everywhere
   // in this family)
-  gmx_deposit: 'sum_amount',
-  gmx_withdraw: 'sum_amount',
-  gmx_net_lp: 'sum_amount'
+  gmx_v2_deposit: 'sum_amount',
+  gmx_v2_withdraw: 'sum_amount',
+  gmx_v2_net_lp: 'sum_amount'
 };
 
 /** Hyperliquid chart kinds (perp DEX, on-chain — every event carries a
@@ -971,7 +978,7 @@ export function chartKindGroup(kind: ChartKind): string | null {
   if (kind.startsWith('lido_')) return 'Lido';
   if (kind.startsWith('aero_basic_')) return 'Aerodrome Basic';
   if (kind.startsWith('aero_cl_')) return 'Aerodrome CL';
-  if (kind.startsWith('gmx_')) return 'GMX V2';
+  if (kind.startsWith('gmx_v2_')) return 'GMX V2';
   if (kind.startsWith('hl_')) return 'Hyperliquid';
   return null;
 }
@@ -1292,6 +1299,9 @@ export type ChartInstance = {
    *  event the chart currently shows. Switching between an L1 and an L2
    *  subkind also flips the chain selector — see ChartInstance.svelte. */
   lidoSubkind?: ChartKind;
+  /** General-GMX-V2 wrapper only (kind === 'gmx_v2'): which concrete
+   *  gmx_v2_* event the chart currently shows. */
+  gmxV2Subkind?: ChartKind;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */
@@ -1457,15 +1467,20 @@ export function newChartInstance(
       base.hlSelectedVault = '';
     }
   }
-  if (isGmxKind(kind)) {
+  if (isGmxV2Kind(kind)) {
     // GMX V2 is ARB-only (server-side AVAX is "not configured" in 2.14).
     // Default market = canonical BTC/USD pool; the chart's selector lists
     // every market /api/gmx/streams returns. valueMode is overridden per
-    // chart kind via GMX_PRIMARY_FIELD — the Sum-/MA-style fetch picks
+    // chart kind via GMX_V2_PRIMARY_FIELD — the Sum-/MA-style fetch picks
     // sum_amount or sum_value_usd directly off the response shape.
     base.chain = 'ARB';
     base.gmxMarket = 'BTC/USD [WBTC-USDC]';
     base.valueMode = 'usd';
+    if (kind === 'gmx_v2') {
+      // General wrapper — default to Position Open; the in-chart sub-kind
+      // selector flips between the 8 concrete gmx_v2_* event behaviors.
+      base.gmxV2Subkind = 'gmx_v2_position_increase';
+    }
   }
   if (kind === 'transfer') {
     base.chain = defaults.chain ?? 'ETH';

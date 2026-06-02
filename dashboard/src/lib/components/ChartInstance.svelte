@@ -65,10 +65,11 @@
     SPARK_KIND_TO_EVENT,
     SPARK_NET_KIND_TO_EVENTS,
     isSparkKind,
-    GMX_KIND_TO_EVENT,
-    GMX_NET_KIND_TO_EVENTS,
-    GMX_PRIMARY_FIELD,
-    isGmxKind,
+    GMX_V2_CHART_KINDS,
+    GMX_V2_KIND_TO_EVENT,
+    GMX_V2_NET_KIND_TO_EVENTS,
+    GMX_V2_PRIMARY_FIELD,
+    isGmxV2Kind,
     HL_KIND_TO_EVENT,
     HL_PRIMARY_FIELD,
     isHlKind,
@@ -197,6 +198,8 @@
       ? ((instance.aeroBasicSubkind ?? 'aero_basic_swap') as ChartInstanceT['kind'])
       : instance.kind === 'lido'
       ? ((instance.lidoSubkind ?? 'lido_deposit') as ChartInstanceT['kind'])
+      : instance.kind === 'gmx_v2'
+      ? ((instance.gmxV2Subkind ?? 'gmx_v2_position_increase') as ChartInstanceT['kind'])
       : instance.kind
   );
 
@@ -310,12 +313,12 @@
   // chain, market_name). For the selector we collapse to unique markets
   // ranked by total rows so the most-active perp floats to the top.
   let gmxMarketsForKind = $derived.by<{ market: string; rows: number }[]>(() => {
-    if (!isGmxKind(instance.kind)) return [];
+    if (!isGmxV2Kind(instance.kind)) return [];
     // Identify which underlying events the kind reads from.
     const evs: string[] = (() => {
-      const single = GMX_KIND_TO_EVENT[instance.kind];
+      const single = GMX_V2_KIND_TO_EVENT[effectiveKind];
       if (single) return [single];
-      const net = GMX_NET_KIND_TO_EVENTS[instance.kind];
+      const net = GMX_V2_NET_KIND_TO_EVENTS[effectiveKind];
       return net ? [net[0], net[1]] : [];
     })();
     const chain = instance.chain ?? 'ARB';
@@ -630,13 +633,14 @@
       const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
       return `${effectiveKind}|${cPart}|${tPart}|${instance.interval}`;
     }
-    if (isGmxKind(instance.kind)) {
+    if (isGmxV2Kind(instance.kind)) {
       // GMX charts depend on chain (ARB-only for now) + market_name selector.
       // Empty market = "all markets summed" — folded into the key so toggling
-      // busts the cache.
+      // busts the cache. effectiveKind so the 'gmx_v2' wrapper re-fetches
+      // when the in-chart subkind selector flips.
       const cPart = instance.chain ?? 'ARB';
       const mPart = instance.gmxMarket ? `m:${instance.gmxMarket}` : 'all';
-      return `${instance.kind}|${cPart}|${mPart}|${instance.interval}`;
+      return `${effectiveKind}|${cPart}|${mPart}|${instance.interval}`;
     }
     if (isHlKind(instance.kind)) {
       // HL: per-token + optional wallet OR wallet_category filter (mutually
@@ -838,7 +842,7 @@
         isAaveV4Kind(instance.kind) ||
         isMorphoKind(instance.kind) ||
         isSparkKind(instance.kind) ||
-        isGmxKind(instance.kind) ||
+        isGmxV2Kind(instance.kind) ||
         isHlKind(instance.kind) ||
         isUniswapV3Kind(instance.kind) ||
         isUniswapV2Kind(instance.kind) ||
@@ -1016,7 +1020,7 @@
       // The chart layer treats the chosen field as both `sum_amount` and
       // `sum_value_usd` on the rendered datum so the LineChart's USD/Amount
       // formatter falls back to USD-style labels by default.
-      if (isGmxKind(instance.kind)) {
+      if (isGmxV2Kind(instance.kind)) {
         const buildGmxQs = (event: string) => {
           const qs = new URLSearchParams({
             event,
@@ -1032,13 +1036,13 @@
           if (forceFresh) qs.set('fresh', '1');
           return qs;
         };
-        const primary = GMX_PRIMARY_FIELD[instance.kind] ?? 'sum_value_usd';
+        const primary = GMX_V2_PRIMARY_FIELD[effectiveKind] ?? 'sum_value_usd';
         // Normalise a server bucket onto a single value picked by primary.
         // Returned datum mirrors both fields so downstream code can keep
         // reading sum_amount / sum_value_usd uniformly.
         const pick = (r: Record<string, number>): number => Number(r[primary] ?? 0);
 
-        const netEvs = GMX_NET_KIND_TO_EVENTS[instance.kind];
+        const netEvs = GMX_V2_NET_KIND_TO_EVENTS[effectiveKind];
         if (netEvs) {
           const [posEvent, negEvent] = netEvs;
           const [posRes, negRes] = await Promise.all([
@@ -1073,7 +1077,7 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
-        const gmxEvent = GMX_KIND_TO_EVENT[instance.kind];
+        const gmxEvent = GMX_V2_KIND_TO_EVENT[effectiveKind];
         if (gmxEvent) {
           const res = await queuedFetch(`/api/gmx/aggregate?${buildGmxQs(gmxEvent)}`, { signal });
           if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -2411,7 +2415,7 @@
       // GMX_PRIMARY_FIELD); the running sum of that field is meaningful
       // — total position-open USD over the visible window, total swap USD,
       // etc.
-      || isGmxKind(instance.kind)
+      || isGmxV2Kind(instance.kind)
       // Uniswap: only when plotting a single USD line — amount mode is
       // dual-axis (token0 + token1) so the secondary axis is already taken
       // and there's no single "the amount" to sum.
@@ -2614,8 +2618,8 @@
             break;
           }
 
-          if (isGmxKind(instance.kind)) {
-            const field = GMX_PRIMARY_FIELD[instance.kind] ?? 'sum_value_usd';
+          if (isGmxV2Kind(instance.kind)) {
+            const field = GMX_V2_PRIMARY_FIELD[effectiveKind] ?? 'sum_value_usd';
             const a = maArray(rows.map((r) => r[field] ?? 0), ma.length, ma.type);
             out.push({
               key: `cum_gmx_${idx}`,
@@ -3365,12 +3369,25 @@
             </optgroup>
           {/if}
         </select>
-      {:else if isGmxKind(instance.kind)}
+      {:else if isGmxV2Kind(instance.kind)}
         <!-- GMX V2: ARB-only (server-side AVAX is "not configured" in 2.18).
              Static chain chip + market dropdown populated from /gmx/streams,
              sorted by row count so the busiest perp floats to the top.
              First option = "All markets" (empty string), meaning the
-             aggregate endpoint sums across every market. -->
+             aggregate endpoint sums across every market. The general
+             wrapper (instance.kind === 'gmx_v2') also surfaces an event
+             sub-kind selector. -->
+        {#if instance.kind === 'gmx_v2'}
+          <select
+            bind:value={instance.gmxV2Subkind}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="GMX V2 event to display"
+          >
+            {#each GMX_V2_CHART_KINDS as k (k)}
+              <option value={k}>{chartKindShortLabel(k)}</option>
+            {/each}
+          </select>
+        {/if}
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">ARB</span>
         <select
           value={instance.gmxMarket ?? ''}
@@ -4547,7 +4564,7 @@
         formatY={fmtUsdAxis}
         formatTooltip={fmtUsdTooltip}
       />
-    {:else if isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxKind(instance.kind) || isHlKind(instance.kind)}
+    {:else if isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxV2Kind(instance.kind) || isHlKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
         lines={aaveLinesD}
