@@ -87,13 +87,26 @@ async def aggregate(request):
         amount0_expr = "0"
         amount1_expr = "0"
 
+    # Pool-creation rows (table `uniswap_v4_initializes`) carry no
+    # value_usd column — they're a per-row event count, not a notional
+    # transfer. Without this carve-out the SQL referenced value_usd
+    # against the initialize table and CH errored with UNKNOWN_IDENTIFIER,
+    # surfacing in the chart as a 500. Swap / deposit / withdraw keep the
+    # existing sum(coalesce(value_usd,0)) shape so direct-API callers see
+    # whatever DeFiStream priced (may still be 0; pricing those properly
+    # is a separate item).
+    if event == "initialize":
+        value_usd_expr = "0"
+    else:
+        value_usd_expr = "sum(coalesce(value_usd, 0))"
+
     sql = f"""
         SELECT
             toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
             sum({amount_expr})           AS sum_amount,
             {amount0_expr}               AS sum_amount0,
             {amount1_expr}               AS sum_amount1,
-            sum(coalesce(value_usd, 0))  AS sum_value_usd,
+            {value_usd_expr}             AS sum_value_usd,
             count()                      AS count
         FROM {table} FINAL
         WHERE chain    = {{chain:String}}
