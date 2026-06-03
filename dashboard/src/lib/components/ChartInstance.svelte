@@ -4313,6 +4313,16 @@
           >×</button>
         </div>
       {/each}
+      <!-- Inline add-overlay shortcut after the last chip. Same dialog as
+           the chart-area FAB — just saves a hover-to-bottom-right when
+           the user is already looking at the chip row. -->
+      <button
+        type="button"
+        onclick={openOverlayAdd}
+        aria-label="Add overlay series"
+        title="Add overlay series"
+        class="text-zinc-400 hover:text-zinc-100 leading-none cursor-pointer flex items-center"
+      ><PlusCircle size={14} strokeWidth={1.75} /></button>
       {#if overlayLoading}
         <span class="text-zinc-500 text-[10px]">loading…</span>
       {/if}
