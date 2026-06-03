@@ -290,6 +290,15 @@
       formToken = 'USDC';
       formChain = 'ETH';
     }
+    // Apply any per-kind locks AFTER the family defaults so e.g. aave_v4
+    // (locked ETH) overrides any earlier branch and tt (locked binance)
+    // forces the exchange. Mirrors the standalone chart's auto-snap effect.
+    const lc = lockedChain(k);
+    if (lc) formChain = lc;
+    const lt = lockedToken(k);
+    if (lt) formToken = lt;
+    const le = lockedExchange(k);
+    if (le) formExchange = le;
   }
 
   function loadInitial(o: ChartOverlay) {
@@ -321,21 +330,81 @@
     else formMode = 'raw';
   }
 
+  // ── Lock helpers ────────────────────────────────────────────────────
+  // Mirror the standalone chart's per-kind constraints — a kind whose
+  // header pins a value to a static chip (rather than offering a select)
+  // gets the same treatment here. lockedX(kind) returns the pinned value
+  // or null when the field is user-selectable.
+  function lockedChain(k: ChartKind): string | null {
+    if (k.startsWith('aave_v4_')) return 'ETH';
+    if (k.startsWith('spark_'))   return 'ETH';
+    if (k.startsWith('aero_cl_') || k.startsWith('aero_basic_')) return 'BASE';
+    if (k.startsWith('gmx_'))     return 'ARB';
+    if (k.startsWith('hl_'))      return 'HL';
+    // Lido L1 kinds are ETH-only; the L2 family (lido_l2_*) keeps its
+    // selector.
+    if (k.startsWith('lido_') && !(k === 'lido_l2_deposit' || k === 'lido_l2_withdrawal_request' || k === 'lido_l2_net')) {
+      return 'ETH';
+    }
+    return null;
+  }
+  function lockedToken(k: ChartKind): string | null {
+    // Bridge/vault flows are USDC-only — no token dimension.
+    if (k === 'hl_transfers' || k === 'hl_vault_net') return 'USDC';
+    return null;
+  }
+  function lockedExchange(k: ChartKind): 'binance' | 'hl' | null {
+    // Top-trader L/S is a Binance-only product concept.
+    if (k === 'tt') return 'binance';
+    return null;
+  }
+  /** Dynamic exchange_flow constraint: with `exchangeFlowExchange = hyperliquid`,
+   *  the chain is forced to ARB and the token to USDC (matches the standalone
+   *  chart header's behaviour). */
+  let exchangeFlowHLLocked = $derived(
+    pickedKind === 'exchange_flow' && formExchangeFlowExchange === 'hyperliquid'
+  );
+
+  // Effective locks combine static (per-kind) + dynamic (exchange_flow → HL).
+  function effectiveLockedChain(k: ChartKind): string | null {
+    if (k === 'exchange_flow' && exchangeFlowHLLocked) return 'ARB';
+    return lockedChain(k);
+  }
+  function effectiveLockedToken(k: ChartKind): string | null {
+    if (k === 'exchange_flow' && exchangeFlowHLLocked) return 'USDC';
+    return lockedToken(k);
+  }
+
   // ── Field visibility helpers ────────────────────────────────────────
-  function showsTokenField(k: ChartKind): boolean {
+  // A field's selector renders only when the kind needs it AND its value
+  // isn't pinned. Pinned fields render as a small read-only chip instead
+  // (see the template below).
+  function tokenFieldKindUsesIt(k: ChartKind): boolean {
     return k === 'ohlcv' || k === 'oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'tt' || k === 'ls'
         || k === 'transfer' || k === 'exchange_flow'
         || k.startsWith('aave_') || k.startsWith('morpho_') || k.startsWith('spark_')
         || k === 'hl_pnl' || k === 'hl_unrealized_pnl';
   }
-  function showsChainField(k: ChartKind): boolean {
+  function chainFieldKindUsesIt(k: ChartKind): boolean {
     return k === 'transfer' || k === 'exchange_flow'
         || k.startsWith('aave_v2_') || k.startsWith('aave_v3_') || k.startsWith('aave_v4_')
         || k.startsWith('morpho_') || k.startsWith('spark_')
-        || k === 'lido_l2_deposit' || k === 'lido_l2_withdrawal_request' || k === 'lido_l2_net';
+        || k.startsWith('aero_') || k.startsWith('gmx_') || k.startsWith('hl_')
+        || k.startsWith('lido_') || k === 'lido'
+        || k.startsWith('uniswap_');
+  }
+  function exchangeFieldKindUsesIt(k: ChartKind): boolean {
+    return k === 'ohlcv' || k === 'oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'ls' || k === 'tt';
+  }
+  // Show the interactive widget only when (used AND not locked).
+  function showsTokenField(k: ChartKind): boolean {
+    return tokenFieldKindUsesIt(k) && effectiveLockedToken(k) === null;
+  }
+  function showsChainField(k: ChartKind): boolean {
+    return chainFieldKindUsesIt(k) && effectiveLockedChain(k) === null;
   }
   function showsExchangeField(k: ChartKind): boolean {
-    return k === 'ohlcv' || k === 'oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'ls';
+    return exchangeFieldKindUsesIt(k) && lockedExchange(k) === null;
   }
   function showsUniPool(k: ChartKind): boolean {
     return k.startsWith('uniswap_v2_') || k.startsWith('uniswap_v3_') || k === 'uniswap_v3_net_swap_flow';
@@ -344,13 +413,26 @@
   function showsAeroPool(k: ChartKind): boolean { return k.startsWith('aero_cl_'); }
   function showsAeroBasicPool(k: ChartKind): boolean { return k.startsWith('aero_basic_'); }
   function showsGmxMarket(k: ChartKind): boolean { return k.startsWith('gmx_'); }
-  function showsHlWallet(k: ChartKind): boolean { return k.startsWith('hl_pnl') || k === 'hl_unrealized_pnl'; }
+  function showsHlWallet(k: ChartKind): boolean { return k === 'hl_pnl' || k === 'hl_unrealized_pnl'; }
   function showsValueMode(k: ChartKind): boolean {
     return k === 'transfer' || k.startsWith('aave_') || k.startsWith('morpho_') || k.startsWith('spark_')
         || k.startsWith('uniswap_') || k.startsWith('aero_') || k.startsWith('gmx_')
         || k.startsWith('lido_') || k === 'lido' || k.startsWith('hl_');
   }
   function showsExchangeFlowExchange(k: ChartKind): boolean { return k === 'exchange_flow'; }
+
+  // Whenever exchange_flow swaps to/from hyperliquid, mirror the chart-
+  // header's auto-correct: pin chain=ARB, token=USDC under HL; restore
+  // sensible defaults otherwise. Without this the chip would still show
+  // the locked value but a stale formChain / formToken would persist
+  // through submit().
+  $effect(() => {
+    if (pickedKind !== 'exchange_flow') return;
+    if (formExchangeFlowExchange === 'hyperliquid') {
+      if (formChain !== 'ARB') formChain = 'ARB';
+      if (formToken !== 'USDC') formToken = 'USDC';
+    }
+  });
 
   // ── Per-kind dropdown sources ───────────────────────────────────────
   // Common chain set used by transfer / exchange_flow / AAVE V3 / Morpho /
@@ -521,9 +603,18 @@
     if (formMode === 'ma') {
       o.ma = { type: formMAType, length: Math.max(2, Math.floor(formMAWindow)) };
     }
-    if (showsTokenField(k)) o.token = formToken.trim().toUpperCase();
-    if (showsChainField(k)) o.chain = formChain.trim().toUpperCase();
-    if (showsExchangeField(k)) o.exchange = formExchange;
+    // Token / chain / exchange are written whether the field is interactive
+    // OR pinned via a lock helper — the locked value still has to land on
+    // the overlay's persisted state so the fetch issues the correct query.
+    const lt = effectiveLockedToken(k);
+    if (lt) o.token = lt;
+    else if (tokenFieldKindUsesIt(k)) o.token = formToken.trim().toUpperCase();
+    const lc = effectiveLockedChain(k);
+    if (lc) o.chain = lc;
+    else if (chainFieldKindUsesIt(k)) o.chain = formChain.trim().toUpperCase();
+    const le = lockedExchange(k);
+    if (le) o.exchange = le;
+    else if (exchangeFieldKindUsesIt(k)) o.exchange = formExchange;
     if (showsValueMode(k)) o.valueMode = formValueMode;
     if (showsGmxMarket(k)) o.gmxMarket = formGmxMarket.trim();
     if (showsHlWallet(k)) o.hlWallet = formHlWallet.trim().toLowerCase();
@@ -666,37 +757,58 @@
               </select>
             </label>
           {/if}
-          {#if pickedKind && showsTokenField(pickedKind)}
-            <label class="flex items-center gap-2">
-              <span class="w-32 text-zinc-400">Token</span>
-              <select bind:value={formToken} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
-                {#each tokenOptions() as t (t)}
-                  <option value={t}>{t}</option>
-                {/each}
-              </select>
-            </label>
+          {#if pickedKind && tokenFieldKindUsesIt(pickedKind)}
+            {#if effectiveLockedToken(pickedKind)}
+              <div class="flex items-center gap-2">
+                <span class="w-32 text-zinc-400">Token</span>
+                <span class="text-zinc-300 text-xs px-2 py-1 rounded bg-zinc-900 border border-zinc-700 font-mono">{effectiveLockedToken(pickedKind)}</span>
+              </div>
+            {:else}
+              <label class="flex items-center gap-2">
+                <span class="w-32 text-zinc-400">Token</span>
+                <select bind:value={formToken} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
+                  {#each tokenOptions() as t (t)}
+                    <option value={t}>{t}</option>
+                  {/each}
+                </select>
+              </label>
+            {/if}
           {/if}
-          {#if pickedKind && showsChainField(pickedKind)}
-            <label class="flex items-center gap-2">
-              <span class="w-32 text-zinc-400">Chain</span>
-              <select bind:value={formChain} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
-                {#each chainOptions(pickedKind) as c (c)}
-                  <option value={c}>{c}</option>
-                {/each}
-                {#if formChain && !chainOptions(pickedKind).includes(formChain)}
-                  <option value={formChain}>{formChain}</option>
-                {/if}
-              </select>
-            </label>
+          {#if pickedKind && chainFieldKindUsesIt(pickedKind)}
+            {#if effectiveLockedChain(pickedKind)}
+              <div class="flex items-center gap-2">
+                <span class="w-32 text-zinc-400">Chain</span>
+                <span class="text-zinc-300 text-xs px-2 py-1 rounded bg-zinc-900 border border-zinc-700 font-mono">{effectiveLockedChain(pickedKind)}</span>
+              </div>
+            {:else}
+              <label class="flex items-center gap-2">
+                <span class="w-32 text-zinc-400">Chain</span>
+                <select bind:value={formChain} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
+                  {#each chainOptions(pickedKind) as c (c)}
+                    <option value={c}>{c}</option>
+                  {/each}
+                  {#if formChain && !chainOptions(pickedKind).includes(formChain)}
+                    <option value={formChain}>{formChain}</option>
+                  {/if}
+                </select>
+              </label>
+            {/if}
           {/if}
-          {#if pickedKind && showsExchangeField(pickedKind)}
-            <label class="flex items-center gap-2">
-              <span class="w-32 text-zinc-400">Exchange</span>
-              <select bind:value={formExchange} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1">
-                <option value="binance">Binance</option>
-                <option value="hl">Hyperliquid</option>
-              </select>
-            </label>
+          {#if pickedKind && exchangeFieldKindUsesIt(pickedKind)}
+            {#if lockedExchange(pickedKind)}
+              <div class="flex items-center gap-2">
+                <span class="w-32 text-zinc-400">Exchange</span>
+                <span class="text-zinc-300 text-xs px-2 py-1 rounded bg-zinc-900 border border-zinc-700 font-mono">{lockedExchange(pickedKind) === 'hl' ? 'Hyperliquid' : 'Binance'}</span>
+              </div>
+            {:else}
+              <label class="flex items-center gap-2">
+                <span class="w-32 text-zinc-400">Exchange</span>
+                <select bind:value={formExchange} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1">
+                  <option value="binance">Binance</option>
+                  <option value="hl">Hyperliquid</option>
+                </select>
+              </label>
+            {/if}
           {/if}
           {#if pickedKind && showsExchangeFlowExchange(pickedKind)}
             <label class="flex items-center gap-2">
