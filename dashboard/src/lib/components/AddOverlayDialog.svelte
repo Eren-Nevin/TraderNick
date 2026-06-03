@@ -33,7 +33,7 @@
     type MAType,
     type UniPool
   } from './charts/config';
-  import type { UniswapStream, TransferStream, TokenGroup } from '$lib/api';
+  import type { UniswapStream, TransferStream, TokenGroup, ChainGroup } from '$lib/api';
 
   let {
     open = false,
@@ -41,6 +41,7 @@
     usedColors = [] as string[],
     tokens = [] as string[],
     tokenGroups = [] as TokenGroup[],
+    chainGroups = [] as ChainGroup[],
     transferStreams = [] as TransferStream[],
     uniPools = [] as UniswapStream[],
     lidoChains = [] as { event: string; chain: string; rows: number }[],
@@ -63,6 +64,11 @@
      *  overlays so the user can aggregate across a bundle in a single
      *  fetch — same as the standalone chart's token-group support. */
     tokenGroups?: TokenGroup[];
+    /** Server-defined compound-chain bundles (e.g. "EVM" = ETH+ARB+BASE+…).
+     *  Surfaced in the chain dropdown for kinds where the standalone chart
+     *  also exposes them (Token Flow, Exchange Flow non-HL, AAVE V2/V3,
+     *  Morpho, Lido L2). Same shape as `tokenGroups`. */
+    chainGroups?: ChainGroup[];
     /** Transfer-stream catalogue (chain, token, kind). Used to filter the
      *  token dropdown for the Token Flow / Exchange Flow kinds. */
     transferStreams?: TransferStream[];
@@ -314,7 +320,11 @@
     // decides which field to persist based on whether the selection
     // matches a known group name.
     formToken = o.tokenGroup ?? o.token ?? '';
-    formChain = o.chain ?? '';
+    // A stored chainGroup wins over `chain`: when present, the dropdown's
+    // selected value is the group name itself (e.g. "EVM"). submit()
+    // decides which field to persist based on whether the selection
+    // matches a known group name.
+    formChain = o.chainGroup ?? o.chain ?? '';
     formExchange = o.exchange ?? 'binance';
     formExchangeFlowExchange = o.exchangeFlowExchange ?? 'binance';
     formValueMode = o.valueMode ?? 'usd';
@@ -568,8 +578,12 @@
   }
 
   // Reload the available-tokens list whenever the kind or chain changes.
+  // When a chain GROUP is selected (e.g. "EVM"), don't hit any single-
+  // chain /streams endpoint — fall through to the static roster so the
+  // dropdown mirrors what the standalone chart shows.
   $effect(() => {
     if (!pickedKind || !showsTokenField(pickedKind)) { availableTokens = null; return; }
+    if (knownChainGroupNames.has(formChain)) { availableTokens = null; return; }
     const c = formChain.trim().toUpperCase();
     if (!c && (pickedKind.startsWith('aave_') || pickedKind.startsWith('morpho_')
                || pickedKind.startsWith('spark_') || pickedKind === 'transfer'
@@ -580,17 +594,45 @@
     loadAvailableTokens(pickedKind, c);
   });
 
-  /** Token-group names that apply to the current kind. Only Token Flow /
-   *  Exchange Flow honour `?token_group=...` on the server, and the
-   *  hyperliquid CeX path is USDC-only so groups are hidden there too. */
+  /** Token-group names that apply to the current kind. Mirrors the
+   *  standalone chart's token-dropdown: kinds whose chart header shows the
+   *  `Σ <group>` entries also get them in the overlay form. AAVE V4
+   *  hardcodes its token roster and shows no groups standalone, so it's
+   *  excluded here too. Hyperliquid CeX flows are USDC-only, so groups
+   *  are hidden under that path. */
   function applicableTokenGroups(k: ChartKind): TokenGroup[] {
-    if (k !== 'transfer' && k !== 'exchange_flow') return [];
     if (k === 'exchange_flow' && exchangeFlowHLLocked) return [];
+    const eligible =
+      k === 'transfer' || k === 'exchange_flow'
+      || k.startsWith('aave_v2_') || k.startsWith('aave_v3_')
+      || k.startsWith('morpho_')  || k.startsWith('spark_');
+    if (!eligible) return [];
     return tokenGroups;
+  }
+  /** Chain-group names that apply to the current kind. Same matrix as
+   *  the standalone chart: kinds whose chain dropdown shows `Σ <group>`
+   *  entries get them here too. Kinds that are chain-locked (AAVE V4,
+   *  Spark, GMX, Aero, HL, Lido L1, exchange_flow under HL) return [].
+   *  Pool-model DEX kinds also return [] — the standalone chart doesn't
+   *  group them. */
+  function applicableChainGroups(k: ChartKind): ChainGroup[] {
+    if (chainGroups.length === 0) return [];
+    if (effectiveLockedChain(k) !== null) return [];
+    const eligible =
+      k === 'transfer' || k === 'exchange_flow'
+      || k.startsWith('aave_v2_') || k.startsWith('aave_v3_')
+      || k.startsWith('morpho_')
+      || k === 'lido_l2_deposit' || k === 'lido_l2_withdrawal_request' || k === 'lido_l2_net';
+    if (!eligible) return [];
+    return chainGroups;
   }
   let knownGroupNames = $derived.by(() => {
     if (!pickedKind) return new Set<string>();
     return new Set(applicableTokenGroups(pickedKind).map((g) => g.name));
+  });
+  let knownChainGroupNames = $derived.by(() => {
+    if (!pickedKind) return new Set<string>();
+    return new Set(applicableChainGroups(pickedKind).map((g) => g.name));
   });
 
   /** Token list to surface in the dropdown.
@@ -652,8 +694,20 @@
       }
     }
     const lc = effectiveLockedChain(k);
-    if (lc) o.chain = lc;
-    else if (chainFieldKindUsesIt(k)) o.chain = formChain.trim().toUpperCase();
+    if (lc) {
+      o.chain = lc;
+    } else if (chainFieldKindUsesIt(k)) {
+      // When the selection matches a known server chain-group, persist as
+      // chainGroup (so the fetch sends ?chain_group=...); otherwise as a
+      // single chain symbol. Group names are server-defined and keep
+      // their original casing.
+      const sel = formChain.trim();
+      if (knownChainGroupNames.has(sel)) {
+        o.chainGroup = sel;
+      } else {
+        o.chain = sel.toUpperCase();
+      }
+    }
     const le = lockedExchange(k);
     if (le) o.exchange = le;
     else if (exchangeFieldKindUsesIt(k)) o.exchange = formExchange;
@@ -826,10 +880,23 @@
               <label class="flex items-center gap-2">
                 <span class="w-32 text-zinc-400">Chain</span>
                 <select bind:value={formChain} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
-                  {#each chainOptions(pickedKind) as c (c)}
-                    <option value={c}>{c}</option>
-                  {/each}
-                  {#if formChain && !chainOptions(pickedKind).includes(formChain)}
+                  {#if applicableChainGroups(pickedKind).length > 0}
+                    <optgroup label="Chain">
+                      {#each chainOptions(pickedKind) as c (c)}
+                        <option value={c}>{c}</option>
+                      {/each}
+                    </optgroup>
+                    <optgroup label="Chain group">
+                      {#each applicableChainGroups(pickedKind) as g (g.name)}
+                        <option value={g.name} title={g.description}>Σ {g.label}</option>
+                      {/each}
+                    </optgroup>
+                  {:else}
+                    {#each chainOptions(pickedKind) as c (c)}
+                      <option value={c}>{c}</option>
+                    {/each}
+                  {/if}
+                  {#if formChain && !chainOptions(pickedKind).includes(formChain) && !knownChainGroupNames.has(formChain)}
                     <option value={formChain}>{formChain}</option>
                   {/if}
                 </select>

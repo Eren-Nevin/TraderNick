@@ -148,6 +148,96 @@ async def aggregate(request):
     return response.json(body)
 
 
+@bp.get("/hyperliquid/realized_pnl_split")
+async def realized_pnl_split(request):
+    """Realized PnL bucketed by direction (long vs short).
+
+    Sourced from hl_fills (which carries `dir` and `closed_pnl` per fill)
+    rather than hl_trade_history (which only stores the net per-wallet
+    aggregate, losing the long/short split). Always filtered to
+    crossed=1 so each match is counted once on the taker side — the
+    same convention /hyperliquid/aggregate uses for the `fills` event.
+
+    Returns time, long_pnl, short_pnl, total_pnl per bucket. The frontend
+    picks which of those series to draw based on the user's "side"
+    selector on the HL Realized PnL chart.
+    """
+    token = request.args.get("token")
+    interval = request.args.get("interval", "1h")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    limit = int(request.args.get("limit", "10000"))
+    wallet = request.args.get("wallet")
+    wallet_category = request.args.get("wallet_category")
+
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    if not token:
+        # hl_fills ORDER BY starts with token — skipping the filter forces
+        # a full table scan that's prohibitive on multi-day ranges.
+        return response.json({"error": "missing token"}, status=400)
+
+    seconds = INTERVAL_SECONDS[interval]
+    since_dt = _parse_iso(since); until_dt = _parse_iso(until)
+
+    where_parts = [
+        "time >= {since:DateTime}",
+        "time <  {until:DateTime}",
+        "crossed = 1",
+        "token = {token:String}",
+    ]
+    params: dict = {
+        "seconds": seconds, "since": since_dt, "until": until_dt,
+        "limit": limit, "token": token,
+    }
+    if wallet:
+        where_parts.append("lower(wallet) = {wallet:String}")
+        params["wallet"] = wallet.lower()
+    elif wallet_category:
+        where_parts.append(
+            "has(dictGet('tradernick.wallet_labels', 'categories', lower(wallet)), {category:String})"
+        )
+        params["category"] = wallet_category
+
+    where_sql = " AND ".join(where_parts)
+    # 'Long > Short' fills both close a long AND open a short — the
+    # closed_pnl belongs to the long side. Same for 'Short > Long' on
+    # the short side. 'Open Long' / 'Open Short' carry closed_pnl=0 so
+    # they fall out of both branches naturally; we still sum them into
+    # total_pnl via the unconditional sum() for symmetry / robustness.
+    sql = f"""
+        SELECT
+            toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS bucket,
+            sumIf(closed_pnl, dir IN ('Close Long', 'Long > Short'))  AS long_pnl,
+            sumIf(closed_pnl, dir IN ('Close Short', 'Short > Long')) AS short_pnl,
+            sum(closed_pnl)                                           AS total_pnl,
+            count()                                                   AS count
+        FROM tradernick.hl_fills FINAL
+        WHERE {where_sql}
+        GROUP BY bucket
+        ORDER BY bucket
+        LIMIT {{limit:UInt32}}
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters=params)
+    series = [
+        {
+            "time": int(r[0]),
+            "long_pnl": float(r[1]),
+            "short_pnl": float(r[2]),
+            "total_pnl": float(r[3]),
+            "count": int(r[4]),
+        }
+        for r in rows.result_rows
+    ]
+    body = {"interval": interval, "token": token, "series": series}
+    if wallet: body["wallet"] = wallet
+    if wallet_category: body["wallet_category"] = wallet_category
+    return response.json(body)
+
+
 @bp.get("/hyperliquid/streams")
 async def streams(_request):
     """Distinct (event, token) tuples with row counts. Cached 60s.

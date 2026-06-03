@@ -168,12 +168,13 @@ async function fetchRawSeries(
   // ── Flows ────────────────────────────────────────────────────────────
   if (kind === 'transfer') {
     const qs = new URLSearchParams({
-      chain: o.chain ?? 'ETH',
       interval,
       since: sinceIso,
       until: untilIso,
       limit: '5000'
     });
+    if (o.chainGroup) qs.set('chain_group', o.chainGroup);
+    else qs.set('chain', o.chain ?? 'ETH');
     if (o.tokenGroup) qs.set('token_group', o.tokenGroup);
     else qs.set('token', o.token ?? 'USDC');
     const res = await queuedFetch(`/api/transfers/aggregate?${qs}`, { signal });
@@ -185,12 +186,21 @@ async function fetchRawSeries(
 
   if (kind === 'exchange_flow') {
     const ex = o.exchangeFlowExchange ?? 'binance';
-    const chain = ex === 'hyperliquid' ? 'ARB' : (o.chain ?? 'ETH');
     const buildQS = (direction: 'in' | 'out') => {
       const qs = new URLSearchParams({
-        direction, exchange: ex, chain,
+        direction, exchange: ex,
         interval, since: sinceIso, until: untilIso, limit: '10000'
       });
+      // HL CeX flows are pinned to ARB/USDC on chain — chain_group/
+      // token_group don't apply there. Other exchanges may use either
+      // the singleton chain or a server-side bundle (e.g. EVM).
+      if (ex === 'hyperliquid') {
+        qs.set('chain', 'ARB');
+      } else if (o.chainGroup) {
+        qs.set('chain_group', o.chainGroup);
+      } else {
+        qs.set('chain', o.chain ?? 'ETH');
+      }
       // Server-side compound bundle (e.g. USDC+USDT) when present;
       // otherwise the single token. Hyperliquid CeX flows are USDC-only,
       // so the token_group path doesn't apply there even if set.
@@ -258,9 +268,14 @@ async function fetchRawSeries(
   if (isLidoKind(kind)) {
     const ev = LIDO_KIND_TO_EVENT[kind];
     const netEvs = LIDO_NET_KIND_TO_EVENTS[kind];
-    const buildQS = (event: string) => new URLSearchParams({
-      event, chain: o.chain ?? 'ETH', interval, since: sinceIso, until: untilIso, limit: '5000'
-    });
+    const buildQS = (event: string) => {
+      const qs = new URLSearchParams({
+        event, interval, since: sinceIso, until: untilIso, limit: '5000'
+      });
+      if (o.chainGroup) qs.set('chain_group', o.chainGroup);
+      else qs.set('chain', o.chain ?? 'ETH');
+      return qs;
+    };
     if (netEvs) {
       const [posEv, negEv] = netEvs;
       const [posRes, negRes] = await Promise.all([
@@ -520,10 +535,16 @@ async function aggregateEventOrNet(
   untilIso: string,
   signal?: AbortSignal
 ): Promise<OverlayPoint[]> {
-  const buildQS = (event: string) => new URLSearchParams({
-    event, chain: o.chain ?? 'ETH', token: o.token ?? 'USDC',
-    interval, since: sinceIso, until: untilIso, limit: '5000'
-  });
+  const buildQS = (event: string) => {
+    const qs = new URLSearchParams({
+      event, interval, since: sinceIso, until: untilIso, limit: '5000'
+    });
+    if (o.chainGroup) qs.set('chain_group', o.chainGroup);
+    else qs.set('chain', o.chain ?? 'ETH');
+    if (o.tokenGroup) qs.set('token_group', o.tokenGroup);
+    else qs.set('token', o.token ?? 'USDC');
+    return qs;
+  };
   const netEvs = netMap[o.kind];
   if (netEvs) {
     const [pe, ne] = netEvs;

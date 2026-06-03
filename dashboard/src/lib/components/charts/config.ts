@@ -1381,6 +1381,11 @@ export type ChartInstance = {
    *  / 'all' (the four lines together). Default 'total' so the chart
    *  matches the original single-line behavior. */
   gmxLongShortDisplay?: 'long' | 'short' | 'total' | 'net' | 'all';
+  /** HL Realized PnL — which side(s) of realized PnL to plot.
+   *  'total' (default) keeps the original single net line sourced from
+   *  hl_trade_history. The other modes switch to /hyperliquid/realized_pnl_split
+   *  which sums hl_fills.closed_pnl bucketed by the position direction. */
+  hlPnlSide?: 'total' | 'long' | 'short' | 'both';
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */
@@ -1428,6 +1433,10 @@ export type ChartOverlay = {
    *  `token_group=` instead of `token=` so the server expands the bundle. */
   tokenGroup?: string;
   chain?: string;
+  /** Server-side compound-chain group name (e.g. "EVM"). Mutually exclusive
+   *  with `chain` — when set, overlay-fetch sends `chain_group=` instead of
+   *  `chain=` so the server expands the bundle. */
+  chainGroup?: string;
   exchange?: 'binance' | 'hl';
   frDisplay?: 'rate8h' | 'apr';
   valueMode?: 'usd' | 'amount';
@@ -1614,6 +1623,7 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
   if (typeof r.token === 'string') o.token = r.token;
   if (typeof r.tokenGroup === 'string' && r.tokenGroup.length > 0) o.tokenGroup = r.tokenGroup;
   if (typeof r.chain === 'string') o.chain = r.chain;
+  if (typeof r.chainGroup === 'string' && r.chainGroup.length > 0) o.chainGroup = r.chainGroup;
   if (r.exchange === 'binance' || r.exchange === 'hl') o.exchange = r.exchange;
   if (r.frDisplay === 'rate8h' || r.frDisplay === 'apr') o.frDisplay = r.frDisplay;
   if (r.valueMode === 'usd' || r.valueMode === 'amount') o.valueMode = r.valueMode;
@@ -1692,7 +1702,8 @@ export function overlayChipLabel(o: ChartOverlay): string {
   if (ex) parts.push(ex);
   if (o.tokenGroup) parts.push(`Σ ${o.tokenGroup}`);
   else if (o.token) parts.push(o.token);
-  if (o.chain && o.chain !== 'HL') parts.push(o.chain);
+  if (o.chainGroup) parts.push(`Σ ${o.chainGroup}`);
+  else if (o.chain && o.chain !== 'HL') parts.push(o.chain);
   if (o.gmxMarket) parts.push(o.gmxMarket);
   if (o.uniPool) parts.push(fmtUniPool(o.uniPool));
   else if (o.aeroPool) parts.push(`${o.aeroPool.symbol0}/${o.aeroPool.symbol1} ts${o.aeroPool.tick_spacing}`);

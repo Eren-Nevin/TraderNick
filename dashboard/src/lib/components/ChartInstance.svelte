@@ -665,7 +665,11 @@
         : (instance.hlWalletCategory ? `wc:${instance.hlWalletCategory}` : 'all');
       const sortPart = instance.kind === 'hl_top_vaults'
         ? `|sort:${instance.hlVaultSortBy ?? 'net'}` : '';
-      return `${instance.kind}|${instance.token}|${wPart}|${instance.interval}${sortPart}`;
+      // hl_pnl side flips the endpoint (trade_history aggregate vs
+      // realized_pnl_split from hl_fills) — must bust the cache.
+      const sidePart = instance.kind === 'hl_pnl'
+        ? `|side:${instance.hlPnlSide ?? 'total'}` : '';
+      return `${instance.kind}|${instance.token}|${wPart}|${instance.interval}${sortPart}${sidePart}`;
     }
     if (isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind)) {
       // Uniswap V2/V3 charts: pool keyed by (sym0, sym1, fee) — fee=0 marks V2.
@@ -1249,6 +1253,34 @@
           qs.set('wallet', instance.hlWallet);
         }
         const res = await queuedFetch(`/api/hyperliquid/unrealized_pnl?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = (body.series ?? []) as unknown as AnyDatum[];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // HL Realized PnL with a per-side selector — switch from the
+      // trade_history aggregate (which only carries net per-wallet) to
+      // the dedicated split endpoint sourced from hl_fills. 'total' falls
+      // through to the existing aggregate path so the default chart
+      // remains identical.
+      if (instance.kind === 'hl_pnl' && (instance.hlPnlSide ?? 'total') !== 'total') {
+        const qs = new URLSearchParams({
+          token: instance.token,
+          interval: instance.interval,
+          since: sinceIso,
+          until: untilIso,
+          limit: '5000'
+        });
+        if (instance.hlWallet && instance.hlWallet.length > 0) {
+          qs.set('wallet', instance.hlWallet);
+        } else if (instance.hlWalletCategory && instance.hlWalletCategory.length > 0) {
+          qs.set('wallet_category', instance.hlWalletCategory);
+        }
+        const res = await queuedFetch(`/api/hyperliquid/realized_pnl_split?${qs}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
         const body = await res.json();
         data = (body.series ?? []) as unknown as AnyDatum[];
@@ -2918,6 +2950,24 @@
     ...cumulativeLines
   ]);
 
+  // HL Realized PnL with side != 'total': one or two lines sourced from
+  // the {long_pnl, short_pnl, total_pnl} payload of /realized_pnl_split.
+  // 'total' falls through to aaveLinesD (sum_value_usd) so the default
+  // chart shape is unchanged. Same green/red color convention as
+  // hl_unrealized_pnl below.
+  let hlPnlSplitLinesD = $derived.by(() => {
+    if (!instance.showPoint) return [];
+    const side = instance.hlPnlSide ?? 'total';
+    const longL = { key: 'long',  label: 'Long Realized PnL',  color: '#22c55e',
+      compute: (d: Record<string, number>) => d.long_pnl ?? 0 };
+    const shortL = { key: 'short', label: 'Short Realized PnL', color: '#ef4444',
+      compute: (d: Record<string, number>) => d.short_pnl ?? 0 };
+    if (side === 'long')  return [longL];
+    if (side === 'short') return [shortL];
+    if (side === 'both')  return [longL, shortL];
+    return []; // 'total' handled by aaveLinesD
+  });
+
   // HL Unrealized PnL: three lines from the {long_pnl, short_pnl, net_pnl}
   // row shape the /hyperliquid/unrealized_pnl endpoint returns. Colors
   // mirror the buyer/seller convention used elsewhere on /hyperliquid:
@@ -3219,7 +3269,11 @@
   // can't host or be added as overlays — see overlayableKinds()).
   type OverlayLoad = { data: OverlayPoint[]; key: string };
   let overlayLoaded = $state<Map<string, OverlayLoad>>(new Map());
-  let overlayLoading = $state(false);
+  // Per-overlay loading flag — keyed by overlay.id. The chip itself shows
+  // the inline indicator while its id is in this set, so each overlay's
+  // load state is visible next to its own chip rather than as one global
+  // strip-level "loading…" text.
+  let overlayLoadingIds = $state<Set<string>>(new Set());
   let overlayDialogOpen = $state(false);
   let overlayEditing = $state<ChartOverlay | null>(null);
 
@@ -3236,7 +3290,9 @@
     // Hash the full config + interval + window so any field change re-fetches.
     return [
       o.kind, o.seriesKey, iv, sinceIso, untilIso,
-      o.token ?? '', o.chain ?? '', o.exchange ?? '', o.valueMode ?? '',
+      o.token ?? '', o.tokenGroup ?? '',
+      o.chain ?? '', o.chainGroup ?? '',
+      o.exchange ?? '', o.valueMode ?? '',
       o.gmxMarket ?? '', o.hlWallet ?? '', o.hlWalletCategory ?? '',
       o.exchangeFlowExchange ?? '',
       o.uniPool ? `${o.uniPool.symbol0}|${o.uniPool.symbol1}|${o.uniPool.fee}` : '',
@@ -3277,10 +3333,12 @@
       const next = new Map(overlayLoaded);
       let changed = false;
       const tasks: Promise<void>[] = [];
+      const loadingNow = new Set<string>(overlayLoadingIds);
       for (const o of overlays) {
         const k = overlayLoadKey(o, iv, sinceIso, untilIso);
         const cached = next.get(o.id);
         if (cached && cached.key === k) continue;
+        loadingNow.add(o.id);
         tasks.push((async () => {
           try {
             const points = await fetchOverlayData(o, iv, sinceD, untilD, ctl.signal);
@@ -3292,6 +3350,14 @@
               next.set(o.id, { data: [], key: k });
               changed = true;
             }
+          } finally {
+            if (!ctl.signal.aborted) {
+              // Per-id clear so other in-flight overlays keep showing
+              // their own spinner.
+              const after = new Set(overlayLoadingIds);
+              after.delete(o.id);
+              overlayLoadingIds = after;
+            }
           }
         })());
       }
@@ -3300,19 +3366,22 @@
       for (const id of [...next.keys()]) {
         if (!currentIds.has(id)) { next.delete(id); changed = true; }
       }
+      // Clean stale loading flags for removed overlays too.
+      for (const id of [...loadingNow]) {
+        if (!currentIds.has(id)) loadingNow.delete(id);
+      }
       if (tasks.length === 0) {
         // Only publish a new Map when content actually changed — otherwise
         // reassigning the same content would still flip the $state ref and
         // re-trigger any effect that *did* subscribe to overlayLoaded.
         if (changed) overlayLoaded = next;
-        overlayLoading = false;
+        if (loadingNow.size !== overlayLoadingIds.size) overlayLoadingIds = loadingNow;
         return;
       }
-      overlayLoading = true;
+      overlayLoadingIds = loadingNow;
       Promise.all(tasks).finally(() => {
         if (ctl.signal.aborted) return;
         if (changed) overlayLoaded = next;
-        overlayLoading = false;
       });
     });
   });
@@ -3502,6 +3571,7 @@
     else if (instance.kind === 'transfer') primaryLines = transferLinesD;
     else if (instance.kind === 'exchange_flow') primaryLines = exchangeFlowLinesD;
     else if (instance.kind === 'hl_unrealized_pnl') primaryLines = hlUnrealizedLinesD;
+    else if (instance.kind === 'hl_pnl' && (instance.hlPnlSide ?? 'total') !== 'total') primaryLines = hlPnlSplitLinesD as typeof aaveLinesD;
     else if (instance.kind === 'hl_vault_net') primaryLines = hlVaultFlowLinesD;
     else if (instance.kind === 'hl_transfers') primaryLines = hlBridgeFlowsLinesD;
     else if (isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind)
@@ -3566,6 +3636,7 @@
   let transferLinesM     = $derived(overlayLinesD.length === 0 ? transferLinesD : [...transferLinesD, ...overlayLinesD]);
   let exchangeFlowLinesM = $derived(overlayLinesD.length === 0 ? exchangeFlowLinesD : [...exchangeFlowLinesD, ...overlayLinesD]);
   let hlUnrealizedLinesM = $derived(overlayLinesD.length === 0 ? hlUnrealizedLinesD : [...hlUnrealizedLinesD, ...overlayLinesD]);
+  let hlPnlSplitLinesM   = $derived(overlayLinesD.length === 0 ? hlPnlSplitLinesD : [...hlPnlSplitLinesD, ...overlayLinesD]);
   let hlVaultFlowLinesM  = $derived(overlayLinesD.length === 0 ? hlVaultFlowLinesD : [...hlVaultFlowLinesD, ...overlayLinesD]);
   let hlBridgeFlowsLinesM= $derived(overlayLinesD.length === 0 ? hlBridgeFlowsLinesD : [...hlBridgeFlowsLinesD, ...overlayLinesD]);
   let gmxPositionLinesM  = $derived(overlayLinesD.length === 0 ? [...gmxPositionLinesD, ...cumulativeLines] : [...gmxPositionLinesD, ...cumulativeLines, ...overlayLinesD]);
@@ -3901,6 +3972,25 @@
             <option value="Deposit">Deposit</option>
             <option value="Hot-Wallet">Hot Wallet</option>
             <option value="Cold-Wallet">Cold Wallet</option>
+          </select>
+        {/if}
+        {#if instance.kind === 'hl_pnl'}
+          <!-- Realized PnL side selector. 'Total' (default) keeps the
+               original single net line sourced from hl_trade_history.
+               The other modes flip to the /realized_pnl_split endpoint
+               that bins hl_fills by Close Long / Close Short. -->
+          <select
+            value={instance.hlPnlSide ?? 'total'}
+            onchange={(e) =>
+              (instance.hlPnlSide = e.currentTarget.value as
+                'total' | 'long' | 'short' | 'both')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Which side(s) of realized PnL to plot"
+          >
+            <option value="total">Net</option>
+            <option value="long">Long</option>
+            <option value="short">Short</option>
+            <option value="both">Long + Short</option>
           </select>
         {/if}
       {:else if isAaveV4Kind(instance.kind)}
@@ -4377,6 +4467,9 @@
             style={o.hidden ? `border-color: ${o.color}` : `background: ${o.color}`}
           ></button>
           <span class={'truncate ' + (o.hidden ? 'text-zinc-500 line-through decoration-zinc-700' : 'text-zinc-200')}>{overlayChipLabel(o)}</span>
+          {#if overlayLoadingIds.has(o.id)}
+            <span class="text-zinc-500 text-[10px] leading-none">loading…</span>
+          {/if}
           <button
             type="button"
             onclick={() => openOverlayEdit(o)}
@@ -4403,9 +4496,6 @@
         title="Add overlay series"
         class="text-zinc-400 hover:text-zinc-100 leading-none cursor-pointer flex items-center"
       ><PlusCircle size={14} strokeWidth={1.75} /></button>
-      {#if overlayLoading}
-        <span class="text-zinc-500 text-[10px]">loading…</span>
-      {/if}
     </div>
   {/if}
 
@@ -5070,6 +5160,20 @@
         formatY={valueAxisFn}
         formatTooltip={valueTooltipFn}
       />
+    {:else if instance.kind === 'hl_pnl' && (instance.hlPnlSide ?? 'total') !== 'total'}
+      <LineChart
+        data={data as Array<{ time: number; long_pnl: number; short_pnl: number; total_pnl: number; count: number }>}
+        lines={hlPnlSplitLinesM}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={valueAxisFn}
+        formatTooltip={valueTooltipFn}
+      />
     {:else if isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isGmxV2Kind(instance.kind) || isHlKind(instance.kind)}
       <LineChart
         data={data as Array<{ time: number; sum_amount: number; sum_value_usd: number; count: number }>}
@@ -5140,6 +5244,7 @@
     usedColors={usedOverlayColors}
     {tokens}
     {tokenGroups}
+    {chainGroups}
     transferStreams={streams}
     {uniPools}
     {lidoChains}
