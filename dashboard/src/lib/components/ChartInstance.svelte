@@ -109,6 +109,7 @@
   } from '$lib/components/charts/config';
   import { fetchOverlayData, type OverlayPoint } from '$lib/components/charts/overlay-fetch';
   import AddOverlayDialog from '$lib/components/AddOverlayDialog.svelte';
+  import Pencil from '@lucide/svelte/icons/pencil';
   import type { View } from '$lib/chart-zoom';
   import { queuedFetch } from '$lib/fetch-queue';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
@@ -4280,17 +4281,12 @@
       class="px-3 py-1.5 border-b border-zinc-800/60 bg-zinc-950 flex flex-wrap items-center gap-1.5 text-[11px]">
       {#each (instance.overlays ?? []) as o (o.id)}
         <div
-          role="button"
-          tabindex="0"
-          onclick={() => openOverlayEdit(o)}
-          onkeydown={(ev) => { if (ev.key === 'Enter' || ev.key === ' ') { ev.preventDefault(); openOverlayEdit(o); } }}
-          title={o.hidden ? 'Hidden — click dot to show · click label to edit' : 'Click dot to hide · click label to edit'}
-          class={'overlay-chip inline-flex items-center gap-1.5 rounded-md border bg-zinc-900 px-1.5 py-0.5 max-w-[18rem] cursor-pointer ' +
-                 (o.hidden ? 'border-zinc-800 opacity-50 hover:opacity-80' : 'border-zinc-700 hover:border-zinc-500')}
+          class={'overlay-chip inline-flex items-center gap-1.5 rounded-md border bg-zinc-900 px-1.5 py-0.5 max-w-[18rem] ' +
+                 (o.hidden ? 'border-zinc-800 opacity-50' : 'border-zinc-700')}
         >
           <button
             type="button"
-            onclick={(e) => { e.stopPropagation(); toggleOverlayHidden(o.id); }}
+            onclick={() => toggleOverlayHidden(o.id)}
             aria-pressed={!o.hidden}
             aria-label={o.hidden ? 'Show series' : 'Hide series'}
             title={o.hidden ? 'Show series' : 'Hide series'}
@@ -4300,9 +4296,17 @@
           <span class={'truncate ' + (o.hidden ? 'text-zinc-500 line-through decoration-zinc-700' : 'text-zinc-200')}>{overlayChipLabel(o)}</span>
           <button
             type="button"
-            onclick={(e) => { e.stopPropagation(); removeOverlay(o.id); }}
+            onclick={() => openOverlayEdit(o)}
+            aria-label="Edit overlay"
+            title="Edit overlay"
+            class="text-zinc-500 hover:text-zinc-200 leading-none cursor-pointer flex items-center"
+          ><Pencil size={11} strokeWidth={1.75} /></button>
+          <button
+            type="button"
+            onclick={() => removeOverlay(o.id)}
             aria-label="Remove overlay"
-            class="text-zinc-500 hover:text-rose-400 leading-none"
+            title="Remove overlay"
+            class="text-zinc-500 hover:text-rose-400 leading-none cursor-pointer"
           >×</button>
         </div>
       {/each}
