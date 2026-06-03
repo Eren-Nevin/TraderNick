@@ -5048,6 +5048,10 @@
     open={overlayDialogOpen}
     initial={overlayEditing}
     usedColors={usedOverlayColors}
+    {tokens}
+    {uniPools}
+    {lidoChains}
+    {gmxMarkets}
     onSubmit={addOverlay}
     onClose={() => { overlayDialogOpen = false; overlayEditing = null; }}
   />

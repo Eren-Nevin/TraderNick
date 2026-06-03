@@ -24,18 +24,25 @@
     chartKindGroup,
     CHART_KIND_LABELS,
     chartKindShortLabel,
+    fmtUniPool,
     nextOverlayColor,
     sanitizeOverlay,
     type ChartOverlay,
     type ChartKind,
     type OverlaySeriesDef,
-    type MAType
+    type MAType,
+    type UniPool
   } from './charts/config';
+  import type { UniswapStream } from '$lib/api';
 
   let {
     open = false,
     initial = null as ChartOverlay | null,
     usedColors = [] as string[],
+    tokens = [] as string[],
+    uniPools = [] as UniswapStream[],
+    lidoChains = [] as { event: string; chain: string; rows: number }[],
+    gmxMarkets = [] as { event: string; chain: string; market: string; rows: number }[],
     onSubmit,
     onClose
   }: {
@@ -45,6 +52,13 @@
      *  locked — swap = remove + add). */
     initial: ChartOverlay | null;
     usedColors: string[];
+    /** Available tokens, chains, pools, markets — forwarded from the host
+     *  ChartInstance so the dialog can render the same selects the chart
+     *  header offers (instead of asking the user to type free-form). */
+    tokens?: string[];
+    uniPools?: UniswapStream[];
+    lidoChains?: { event: string; chain: string; rows: number }[];
+    gmxMarkets?: { event: string; chain: string; market: string; rows: number }[];
     onSubmit: (overlay: ChartOverlay) => void;
     onClose: () => void;
   } = $props();
@@ -334,6 +348,70 @@
   }
   function showsExchangeFlowExchange(k: ChartKind): boolean { return k === 'exchange_flow'; }
 
+  // ── Per-kind dropdown sources ───────────────────────────────────────
+  // Common chain set used by transfer / exchange_flow / AAVE V3 / Morpho /
+  // GMX / etc. The chart header offers the same options.
+  const COMMON_CHAINS = ['ETH', 'ARB', 'BASE', 'BSC', 'POLYGON', 'OPT', 'AVAX'];
+  function chainOptions(k: ChartKind): string[] {
+    if (k.startsWith('aave_v2_')) return ['ETH', 'POLYGON'];
+    if (k.startsWith('aave_v3_')) return ['ETH', 'ARB', 'BASE', 'OPT', 'POLYGON', 'AVAX'];
+    if (k.startsWith('aave_v4_')) return ['ETH'];
+    if (k.startsWith('morpho_'))  return ['ETH', 'BASE'];
+    if (k.startsWith('spark_'))   return ['ETH'];
+    if (k === 'lido_l2_deposit' || k === 'lido_l2_withdrawal_request' || k === 'lido_l2_net') {
+      const fromStreams = Array.from(new Set(lidoChains.filter((c) => c.chain !== 'ETH').map((c) => c.chain))).sort();
+      return fromStreams.length > 0 ? fromStreams : ['ARB', 'BASE', 'OPT'];
+    }
+    if (k.startsWith('uniswap_v2_') || k.startsWith('uniswap_v3_') || k === 'uniswap_v3_net_swap_flow'
+        || k.startsWith('uniswap_v4_')) {
+      const fromStreams = Array.from(new Set(uniPools.map((p) => p.chain))).sort();
+      return fromStreams.length > 0 ? fromStreams : ['ETH', 'ARB', 'BASE', 'BSC', 'POLYGON'];
+    }
+    if (k === 'transfer' || k === 'exchange_flow') return COMMON_CHAINS;
+    return COMMON_CHAINS;
+  }
+
+  /** Uniswap V2/V3 pools available on the currently picked chain, ordered
+   *  by total rows descending so the busiest pools surface first. */
+  let uniPoolsForChain = $derived.by((): UniPool[] => {
+    if (!pickedKind || !(pickedKind.startsWith('uniswap_v2_') || pickedKind.startsWith('uniswap_v3_') || pickedKind === 'uniswap_v3_net_swap_flow')) return [];
+    const wantChain = formChain.trim().toUpperCase();
+    if (!wantChain) return [];
+    const dedup = new Map<string, { pool: UniPool; rows: number }>();
+    for (const p of uniPools) {
+      if (p.chain !== wantChain) continue;
+      const key = `${p.symbol0}|${p.symbol1}|${p.fee_tier}`;
+      const prev = dedup.get(key);
+      const rows = (prev?.rows ?? 0) + p.rows;
+      dedup.set(key, { pool: { symbol0: p.symbol0, symbol1: p.symbol1, fee: p.fee_tier }, rows });
+    }
+    return Array.from(dedup.values()).sort((a, b) => b.rows - a.rows).map((x) => x.pool);
+  });
+
+  function poolKey(p: { symbol0: string; symbol1: string; fee: number }): string {
+    return `${p.symbol0}|${p.symbol1}|${p.fee}`;
+  }
+  let currentPoolKey = $derived(poolKey({ symbol0: formPoolSym0, symbol1: formPoolSym1, fee: formPoolFee }));
+  function onPoolPick(v: string) {
+    const [s0, s1, fee] = v.split('|');
+    formPoolSym0 = s0; formPoolSym1 = s1; formPoolFee = Number(fee);
+  }
+
+  /** GMX markets available for the kind's event family. */
+  let gmxMarketsForOverlay = $derived.by((): string[] => {
+    if (!pickedKind || !pickedKind.startsWith('gmx_')) return [];
+    return Array.from(new Set(gmxMarkets.map((m) => m.market))).sort();
+  });
+
+  /** Token list to surface in the dropdown. Falls back to a small known
+   *  set for kinds that don't propagate a `tokens` prop. The current
+   *  formToken is always available so a custom entry survives editing. */
+  function tokenOptions(): string[] {
+    const base = tokens.length > 0 ? tokens.slice() : ['BTC', 'ETH', 'USDC', 'USDT', 'DAI', 'WETH', 'WBTC'];
+    if (formToken && !base.includes(formToken)) base.push(formToken);
+    return base;
+  }
+
   // ── Submit ──────────────────────────────────────────────────────────
   function submit() {
     if (!pickedKind) return;
@@ -497,13 +575,24 @@
           {#if pickedKind && showsTokenField(pickedKind)}
             <label class="flex items-center gap-2">
               <span class="w-32 text-zinc-400">Token</span>
-              <input type="text" bind:value={formToken} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono uppercase" />
+              <select bind:value={formToken} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
+                {#each tokenOptions() as t (t)}
+                  <option value={t}>{t}</option>
+                {/each}
+              </select>
             </label>
           {/if}
           {#if pickedKind && showsChainField(pickedKind)}
             <label class="flex items-center gap-2">
               <span class="w-32 text-zinc-400">Chain</span>
-              <input type="text" bind:value={formChain} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono uppercase" />
+              <select bind:value={formChain} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
+                {#each chainOptions(pickedKind) as c (c)}
+                  <option value={c}>{c}</option>
+                {/each}
+                {#if formChain && !chainOptions(pickedKind).includes(formChain)}
+                  <option value={formChain}>{formChain}</option>
+                {/if}
+              </select>
             </label>
           {/if}
           {#if pickedKind && showsExchangeField(pickedKind)}
@@ -530,16 +619,31 @@
           {#if pickedKind && showsUniPool(pickedKind)}
             <div class="flex items-center gap-2">
               <span class="w-32 text-zinc-400">Pool</span>
-              <input type="text" bind:value={formPoolSym0} class="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono uppercase" placeholder="sym0" />
-              <span class="text-zinc-500">/</span>
-              <input type="text" bind:value={formPoolSym1} class="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono uppercase" placeholder="sym1" />
-              {#if !pickedKind.startsWith('uniswap_v2_')}
-                <select bind:value={formPoolFee} class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1">
-                  <option value={100}>0.01%</option>
-                  <option value={500}>0.05%</option>
-                  <option value={3000}>0.30%</option>
-                  <option value={10000}>1.00%</option>
+              {#if uniPoolsForChain.length > 0}
+                <select
+                  value={currentPoolKey}
+                  onchange={(e) => onPoolPick((e.target as HTMLSelectElement).value)}
+                  class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono"
+                >
+                  {#each uniPoolsForChain as p (poolKey(p))}
+                    <option value={poolKey(p)}>{fmtUniPool(p)}</option>
+                  {/each}
+                  {#if !uniPoolsForChain.some((p) => poolKey(p) === currentPoolKey)}
+                    <option value={currentPoolKey}>{fmtUniPool({ symbol0: formPoolSym0, symbol1: formPoolSym1, fee: formPoolFee })}</option>
+                  {/if}
                 </select>
+              {:else}
+                <input type="text" bind:value={formPoolSym0} class="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono uppercase" placeholder="sym0" />
+                <span class="text-zinc-500">/</span>
+                <input type="text" bind:value={formPoolSym1} class="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono uppercase" placeholder="sym1" />
+                {#if !pickedKind.startsWith('uniswap_v2_')}
+                  <select bind:value={formPoolFee} class="bg-zinc-900 border border-zinc-700 rounded px-2 py-1">
+                    <option value={100}>0.01%</option>
+                    <option value={500}>0.05%</option>
+                    <option value={3000}>0.30%</option>
+                    <option value={10000}>1.00%</option>
+                  </select>
+                {/if}
               {/if}
             </div>
           {/if}
@@ -576,7 +680,19 @@
           {#if pickedKind && showsGmxMarket(pickedKind)}
             <label class="flex items-center gap-2">
               <span class="w-32 text-zinc-400">Market</span>
-              <input type="text" bind:value={formGmxMarket} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono" />
+              {#if gmxMarketsForOverlay.length > 0}
+                <select bind:value={formGmxMarket} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
+                  <option value="">Σ All markets</option>
+                  {#each gmxMarketsForOverlay as m (m)}
+                    <option value={m}>{m}</option>
+                  {/each}
+                  {#if formGmxMarket && !gmxMarketsForOverlay.includes(formGmxMarket)}
+                    <option value={formGmxMarket}>{formGmxMarket}</option>
+                  {/if}
+                </select>
+              {:else}
+                <input type="text" bind:value={formGmxMarket} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono" />
+              {/if}
             </label>
           {/if}
           {#if pickedKind && showsHlWallet(pickedKind)}
