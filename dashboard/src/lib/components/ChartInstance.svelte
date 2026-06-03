@@ -4272,7 +4272,12 @@
   </div>
 
   {#if canHaveOverlays && (instance.overlays ?? []).length > 0}
-    <div class="px-3 py-1.5 border-b border-zinc-800/60 bg-zinc-950 flex flex-wrap items-center gap-1.5 text-[11px]">
+    <!-- use:stopDragEvents — without it the chips strip below the titlebar
+         counts as drag-grab area for svelte-dnd-action, so click-to-edit /
+         click-to-toggle on a chip starts a reorder drag instead. -->
+    <div
+      use:stopDragEvents
+      class="px-3 py-1.5 border-b border-zinc-800/60 bg-zinc-950 flex flex-wrap items-center gap-1.5 text-[11px]">
       {#each (instance.overlays ?? []) as o (o.id)}
         <div
           role="button"
@@ -4289,7 +4294,7 @@
             aria-pressed={!o.hidden}
             aria-label={o.hidden ? 'Show series' : 'Hide series'}
             title={o.hidden ? 'Show series' : 'Hide series'}
-            class={'inline-block w-2.5 h-2.5 rounded-full leading-none p-0 ' + (o.hidden ? 'border border-zinc-500 bg-transparent' : '')}
+            class={'inline-block w-2.5 h-2.5 rounded-full leading-none p-0 cursor-pointer ' + (o.hidden ? 'border border-zinc-500 bg-transparent' : '')}
             style={o.hidden ? `border-color: ${o.color}` : `background: ${o.color}`}
           ></button>
           <span class={'truncate ' + (o.hidden ? 'text-zinc-500 line-through decoration-zinc-700' : 'text-zinc-200')}>{overlayChipLabel(o)}</span>
