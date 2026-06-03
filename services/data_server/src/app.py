@@ -6,7 +6,7 @@ from routes.groups import bp as groups_bp
 from routes.ohlcv import bp as ohlcv_bp
 from routes.trade_volume import bp as trade_volume_bp
 from routes.transfers import bp as transfers_bp
-from routes.transfers_streams import bp as transfers_streams_bp
+from routes.transfers_streams import bp as transfers_streams_bp, warm_streams_cache
 from routes.uniswap import bp as uniswap_bp
 from routes.lido import bp as lido_bp
 from routes.aave_v2 import bp as aave_v2_bp
@@ -44,6 +44,13 @@ app.blueprint(spark_bp)
 app.blueprint(gmx_bp)
 app.blueprint(hyperliquid_bp)
 app.blueprint(exchange_flow_bp)
+
+
+@app.listener("before_server_start")
+async def _warm_caches(_app):
+    # Prime the transfers/streams catalogue cache before serving traffic
+    # so the first dashboard page-load skips the ~30s DISTINCT scan.
+    await warm_streams_cache()
 
 
 @app.get("/health")

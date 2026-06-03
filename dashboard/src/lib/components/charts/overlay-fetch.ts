@@ -91,6 +91,15 @@ async function fetchRawSeries(
       if (!res.ok) throw new Error(`overlay oi ${res.status}`);
       const body = await res.json();
       const rows = (body.series ?? []) as Array<Record<string, number>>;
+      if (o.seriesKey === 'long_to_short_oi') {
+        // Unitless ratio. Guard zero-short buckets (early-history HL markets
+        // where one side hadn't traded yet) — emit 0 instead of Infinity.
+        return rows.map((r) => {
+          const s = Number(r.short_oi_value ?? 0);
+          const l = Number(r.long_oi_value ?? 0);
+          return { time: r.time, value: s > 0 ? l / s : 0 };
+        });
+      }
       const key = o.seriesKey === 'long_oi_value' ? 'long_oi_value'
                 : o.seriesKey === 'short_oi_value' ? 'short_oi_value'
                 : 'total_oi_value';

@@ -38,6 +38,7 @@
     fmtUsdAxis,
     fmtUsdTooltip,
     fmtUsdCompact,
+    fmtRatio,
     lookbackWindow,
     maArray,
     sizeLines,
@@ -2589,10 +2590,11 @@
           const hlMode = (instance.exchange ?? 'binance') === 'hl'
             ? (instance.oiHlDisplay ?? 'total') : null;
           const pickField: (d: Record<string, number>) => number =
-            hlMode === 'long'       ? (d) => d.long_oi_value  ?? 0 :
-            hlMode === 'short'      ? (d) => d.short_oi_value ?? 0 :
-            hlMode === 'long_short' ? (d) => d.total_oi_value ?? 0 :
-                                      (d) => d.open_interest_value ?? 0;
+            hlMode === 'long'          ? (d) => d.long_oi_value  ?? 0 :
+            hlMode === 'short'         ? (d) => d.short_oi_value ?? 0 :
+            hlMode === 'long_short'    ? (d) => d.total_oi_value ?? 0 :
+            hlMode === 'long_to_short' ? hlLongShortRatio :
+                                         (d) => d.open_interest_value ?? 0;
           const arr = maArray(
             (data as Array<Record<string, number>>).map(pickField),
             ma.length,
@@ -3192,9 +3194,17 @@
     const mode = instance.oiHlDisplay ?? 'total';
     if (mode === 'long')  return { color: '#22c55e', field: 'long_oi_value',  label: 'Long OI' };
     if (mode === 'short') return { color: '#ef4444', field: 'short_oi_value', label: 'Short OI' };
-    if (mode === 'long_short') return null; // multi-line — different render path below
+    if (mode === 'long_short' || mode === 'long_to_short') return null; // multi-line or ratio — different render path below
     return { color: '#06b6d4', field: 'total_oi_value', label: 'OI (USD)' };
   });
+  // Long/Short ratio: guard against zero-short buckets (early-history HL
+  // markets where one side hadn't traded yet) — we emit 0 there instead of
+  // an Infinity that would ruin auto-axis scaling.
+  function hlLongShortRatio(d: Record<string, number>): number {
+    const s = d.short_oi_value ?? 0;
+    if (!isFinite(s) || s <= 0) return 0;
+    return (d.long_oi_value ?? 0) / s;
+  }
   let oiLinesD = $derived.by(() => {
     if (!instance.showPoint) return [...cumulativeLines];
     const ex = instance.exchange ?? 'binance';
@@ -3207,6 +3217,14 @@
           compute: (d: Record<string, number>) => d.long_oi_value ?? 0 },
         { key: 'oi_short', label: 'Short OI', color: '#ef4444',
           compute: (d: Record<string, number>) => d.short_oi_value ?? 0 },
+        ...cumulativeLines
+      ];
+    }
+    if (ex === 'hl' && mode === 'long_to_short') {
+      // Unitless ratio (long_oi / short_oi). >1 = long-heavy book.
+      return [
+        { key: 'oi_l2s', label: 'Long / Short OI', color: '#a855f7',
+          compute: hlLongShortRatio },
         ...cumulativeLines
       ];
     }
@@ -4569,7 +4587,7 @@
                single line summing every position). -->
           <select
             value={instance.oiHlDisplay ?? 'total'}
-            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short')}
+            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short' | 'long_to_short')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="Which side(s) of HL OI to plot"
           >
@@ -4577,6 +4595,7 @@
             <option value="long">Long</option>
             <option value="short">Short</option>
             <option value="long_short">Long + Short</option>
+            <option value="long_to_short">Long / Short</option>
           </select>
         {/if}
         <select
@@ -5142,6 +5161,10 @@
         formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`}
       />
     {:else if instance.kind === 'oi'}
+      <!-- HL Long/Short ratio is unitless (e.g. 1.03); every other OI mode
+           is a USD notional. Switch the axis + tooltip formatters so the
+           ratio line doesn't render as `$1.03`. -->
+      {@const oiIsRatio = (instance.exchange ?? 'binance') === 'hl' && (instance.oiHlDisplay ?? 'total') === 'long_to_short'}
       <LineChart
         data={data as OpenInterestRow[]}
         lines={oiLinesM}
@@ -5152,8 +5175,8 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={fmtUsdAxis}
-        formatTooltip={fmtUsdTooltip}
+        formatY={oiIsRatio ? fmtRatio : fmtUsdAxis}
+        formatTooltip={oiIsRatio ? fmtRatio : fmtUsdTooltip}
       />
     {:else if instance.kind === 'fr'}
       <SignedBarChart

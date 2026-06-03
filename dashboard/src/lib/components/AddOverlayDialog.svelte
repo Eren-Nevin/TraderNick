@@ -450,12 +450,14 @@
     pickedKind === 'exchange_flow' && formExchangeFlowExchange === 'hyperliquid'
   );
 
-  /** Dynamic OI constraint: long_oi_value / short_oi_value are only carried
-   *  by the HL OI table (Binance OI is total-only), so the exchange is
-   *  forced to HL whenever one of those series is picked. */
+  /** Dynamic OI constraint: long_oi_value / short_oi_value / long_to_short_oi
+   *  are only carried by the HL OI table (Binance OI is total-only), so the
+   *  exchange is forced to HL whenever one of those series is picked. */
   let oiHlLocked = $derived(
     pickedKind === 'oi'
-    && (formSeriesKey === 'long_oi_value' || formSeriesKey === 'short_oi_value')
+    && (formSeriesKey === 'long_oi_value'
+        || formSeriesKey === 'short_oi_value'
+        || formSeriesKey === 'long_to_short_oi')
   );
 
   // Effective locks combine static (per-kind) + dynamic (exchange_flow → HL,

@@ -387,7 +387,13 @@ async def oi_split(request):
                 wallet, side,
                 argMax(amount, time) AS latest_amount,
                 argMax(size,   time) AS latest_size
-            FROM tradernick.hl_position_history FINAL
+            -- No FINAL: argMax(*, time) inside the inner GROUP BY already
+            -- collapses duplicate (bucket, wallet, side) rows to the latest
+            -- snapshot. ReplacingMergeTree dedup happens on identical ORDER BY
+            -- tuples, which share the same (time, amount, size) anyway, so
+            -- argMax returns the same value with or without FINAL. Same lever
+            -- as /hyperliquid/unrealized_pnl — see commit 8e3c29d.
+            FROM tradernick.hl_position_history
             WHERE token = {token:String}
               AND time >= {since:DateTime}
               AND time <  {until:DateTime}

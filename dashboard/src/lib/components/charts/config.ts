@@ -117,6 +117,14 @@ export function fmtUsdCompact(v: number) {
   return `${v < 0 ? '-' : ''}$${_usdCompactFmt.format(Math.abs(v))}`;
 }
 
+/** Unitless ratio formatter — used by the HL OI Long/Short ratio mode and
+ *  any future ratio overlays. Two decimals is enough resolution for the
+ *  typical 0.3–3.0 range while staying compact on the axis. */
+export function fmtRatio(v: number) {
+  if (!isFinite(v)) return '—';
+  return v.toFixed(2);
+}
+
 /** Token-amount formatters — same K/M/B abbreviation as the USD ones but
  *  without the $ prefix. Used when an event-driven chart is toggled to
  *  amount mode (sum of raw token amount instead of USD value). */
@@ -1465,9 +1473,10 @@ export type ChartInstance = {
   hlSelectedVault?: string;
   /** oi chart only, HL exchange only: which side(s) of OI to render —
    *  'total' (default, matches the Binance behavior), 'long', 'short',
-   *  or 'long_short' (two lines: long + short, no total). Ignored when
-   *  exchange='binance'. */
-  oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short';
+   *  'long_short' (two lines: long + short, no total), or
+   *  'long_to_short' (one line: long / short ratio). Ignored when
+   *  exchange='binance' (the long/short split isn't available there). */
+  oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short' | 'long_to_short';
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -1625,10 +1634,12 @@ export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>>
   oi: [
     // The user picks long/short/total at add-time. For binance OI, only
     // 'total' is meaningful; the overlay-fetch helper falls back to the
-    // total series when long/short slots are unavailable.
-    { key: 'total_oi_value', label: 'Total OI' },
-    { key: 'long_oi_value',  label: 'Long OI' },
-    { key: 'short_oi_value', label: 'Short OI' }
+    // total series when long/short slots are unavailable. `long_to_short_oi`
+    // is HL-only (the AddOverlayDialog locks the exchange to HL on pick).
+    { key: 'total_oi_value',   label: 'Total OI' },
+    { key: 'long_oi_value',    label: 'Long OI' },
+    { key: 'short_oi_value',   label: 'Short OI' },
+    { key: 'long_to_short_oi', label: 'Long / Short OI' }
   ],
   fr: [ { key: 'rate_bps', label: 'Funding Rate' } ],
   bs: [
