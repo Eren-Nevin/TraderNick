@@ -4275,10 +4275,12 @@
   {#if canHaveOverlays && (instance.overlays ?? []).length > 0}
     <!-- use:stopDragEvents — without it the chips strip below the titlebar
          counts as drag-grab area for svelte-dnd-action, so click-to-edit /
-         click-to-toggle on a chip starts a reorder drag instead. -->
+         click-to-toggle on a chip starts a reorder drag instead.
+         cursor-default overrides the `cursor: grab` that svelte-dnd-action
+         applies to the whole card — chips aren't a drag handle. -->
     <div
       use:stopDragEvents
-      class="px-3 py-1.5 border-b border-zinc-800/60 bg-zinc-950 flex flex-wrap items-center gap-1.5 text-[11px]">
+      class="px-3 py-1.5 border-b border-zinc-800/60 bg-zinc-950 flex flex-wrap items-center gap-1.5 text-[11px] cursor-default">
       {#each (instance.overlays ?? []) as o (o.id)}
         <div
           class={'overlay-chip inline-flex items-center gap-1.5 rounded-md border bg-zinc-900 px-1.5 py-0.5 max-w-[18rem] ' +
