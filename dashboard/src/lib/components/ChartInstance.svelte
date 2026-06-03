@@ -3354,6 +3354,30 @@
     }
     return [lo, hi];
   }
+  /** Y range derived from a single numeric field across `src`. Used by host
+   *  kinds where the bars (not lines) define the primary axis range — FR /
+   *  BS / SZ — so overlays still have a sensible primary to remap into when
+   *  no MA / Sum line is enabled. */
+  function computePrimaryRangeFromField(
+    src: Record<string, number>[],
+    field: string,
+    signed: boolean
+  ): [number, number] {
+    let lo = Infinity, hi = -Infinity;
+    for (const d of src) {
+      const v = d[field];
+      if (Number.isFinite(v)) {
+        if (v < lo) lo = v;
+        if (v > hi) hi = v;
+      }
+    }
+    if (!Number.isFinite(lo) || !Number.isFinite(hi)) return [lo, hi];
+    if (signed) {
+      const span = Math.max(Math.abs(lo), Math.abs(hi)) || 1;
+      return [-span, span];
+    }
+    return [lo, hi];
+  }
 
   function buildOverlayLines(pRange: [number, number]): LineLike[] {
     const overlays = instance.overlays ?? [];
@@ -3408,6 +3432,16 @@
     if ((instance.overlays ?? []).length === 0) return [];
     if (instance.kind === 'ohlcv') {
       const range = computePrimaryRangeFromCandles(ohlcvCandles);
+      return buildOverlayLines(range);
+    }
+    // FR is rendered by SignedBarChart — its `lines` slot is empty unless
+    // the user enabled a cumulative MA, so we'd otherwise have no primary
+    // range to remap into. Use the bar values' symmetric range instead.
+    if (instance.kind === 'fr') {
+      const range = computePrimaryRangeFromField(
+        frBpsData as unknown as Record<string, number>[],
+        'rate_bps', true
+      );
       return buildOverlayLines(range);
     }
     // Pick the right per-kind primary-lines array. Falls through to an empty
