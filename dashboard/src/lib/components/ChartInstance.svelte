@@ -2589,12 +2589,13 @@
           // reading the same field.
           const hlMode = (instance.exchange ?? 'binance') === 'hl'
             ? (instance.oiHlDisplay ?? 'total') : null;
+          const useTok = (instance.oiUnit ?? 'usd') === 'token';
           const pickField: (d: Record<string, number>) => number =
-            hlMode === 'long'          ? (d) => d.long_oi_value  ?? 0 :
-            hlMode === 'short'         ? (d) => d.short_oi_value ?? 0 :
-            hlMode === 'long_short'    ? (d) => d.total_oi_value ?? 0 :
+            hlMode === 'long'          ? (d) => (useTok ? (d.long_oi  ?? 0) : (d.long_oi_value  ?? 0)) :
+            hlMode === 'short'         ? (d) => (useTok ? (d.short_oi ?? 0) : (d.short_oi_value ?? 0)) :
+            hlMode === 'long_short'    ? (d) => (useTok ? (d.total_oi ?? 0) : (d.total_oi_value ?? 0)) :
             hlMode === 'long_to_short' ? hlLongShortRatio :
-                                         (d) => d.open_interest_value ?? 0;
+                                         (d) => (useTok ? (d.open_interest ?? 0) : (d.open_interest_value ?? 0));
           const arr = maArray(
             (data as Array<Record<string, number>>).map(pickField),
             ma.length,
@@ -3188,18 +3189,24 @@
   );
   // OI lines: Binance is always the single total line. HL switches by
   // the oiHlDisplay selector — 'total' matches Binance shape exactly,
-  // 'long'/'short' shows just that side, 'all' shows three lines.
+  // 'long'/'short' shows just that side, 'long_short' shows two, and
+  // 'long_to_short' shows a unitless ratio. The oiUnit selector picks
+  // dollar notional (`*_oi_value` on HL, `open_interest_value` on Binance)
+  // vs token amount (`*_oi`, `open_interest`).
+  let oiIsToken = $derived((instance.oiUnit ?? 'usd') === 'token');
   let oiHlPrimary = $derived.by(() => {
     if ((instance.exchange ?? 'binance') !== 'hl') return null;
     const mode = instance.oiHlDisplay ?? 'total';
-    if (mode === 'long')  return { color: '#22c55e', field: 'long_oi_value',  label: 'Long OI' };
-    if (mode === 'short') return { color: '#ef4444', field: 'short_oi_value', label: 'Short OI' };
-    if (mode === 'long_short' || mode === 'long_to_short') return null; // multi-line or ratio — different render path below
-    return { color: '#06b6d4', field: 'total_oi_value', label: 'OI (USD)' };
+    const unitLabel = oiIsToken ? ` (${instance.token ?? ''})` : ' (USD)';
+    if (mode === 'long')  return { color: '#22c55e', field: oiIsToken ? 'long_oi'  : 'long_oi_value',  label: 'Long OI'  + unitLabel };
+    if (mode === 'short') return { color: '#ef4444', field: oiIsToken ? 'short_oi' : 'short_oi_value', label: 'Short OI' + unitLabel };
+    if (mode === 'long_short' || mode === 'long_to_short') return null;
+    return { color: '#06b6d4', field: oiIsToken ? 'total_oi' : 'total_oi_value', label: 'OI' + unitLabel };
   });
   // Long/Short ratio: guard against zero-short buckets (early-history HL
   // markets where one side hadn't traded yet) — we emit 0 there instead of
-  // an Infinity that would ruin auto-axis scaling.
+  // an Infinity that would ruin auto-axis scaling. Unit-independent: the
+  // mark price cancels out of the ratio.
   function hlLongShortRatio(d: Record<string, number>): number {
     const s = d.short_oi_value ?? 0;
     if (!isFinite(s) || s <= 0) return 0;
@@ -3210,18 +3217,15 @@
     const ex = instance.exchange ?? 'binance';
     const mode = instance.oiHlDisplay ?? 'total';
     if (ex === 'hl' && mode === 'long_short') {
-      // Two-line mode — useful for spotting long/short imbalance without
-      // the total line dominating the y-axis when totals dwarf each side.
       return [
         { key: 'oi_long',  label: 'Long OI',  color: '#22c55e',
-          compute: (d: Record<string, number>) => d.long_oi_value ?? 0 },
+          compute: (d: Record<string, number>) => (oiIsToken ? (d.long_oi ?? 0) : (d.long_oi_value ?? 0)) },
         { key: 'oi_short', label: 'Short OI', color: '#ef4444',
-          compute: (d: Record<string, number>) => d.short_oi_value ?? 0 },
+          compute: (d: Record<string, number>) => (oiIsToken ? (d.short_oi ?? 0) : (d.short_oi_value ?? 0)) },
         ...cumulativeLines
       ];
     }
     if (ex === 'hl' && mode === 'long_to_short') {
-      // Unitless ratio (long_oi / short_oi). >1 = long-heavy book.
       return [
         { key: 'oi_l2s', label: 'Long / Short OI', color: '#a855f7',
           compute: hlLongShortRatio },
@@ -3230,8 +3234,15 @@
     }
     if (oiHlPrimary) {
       return [
-        { key: 'oi_usd', label: oiHlPrimary.label, color: oiHlPrimary.color,
+        { key: 'oi_primary', label: oiHlPrimary.label, color: oiHlPrimary.color,
           compute: (d: Record<string, number>) => (d[oiHlPrimary.field] ?? 0) },
+        ...cumulativeLines
+      ];
+    }
+    if (ex !== 'hl' && oiIsToken) {
+      return [
+        { key: 'oi_token', label: `OI (${instance.token ?? ''})`, color: '#06b6d4',
+          compute: (d: Record<string, number>) => d.open_interest ?? 0 },
         ...cumulativeLines
       ];
     }
@@ -3549,6 +3560,16 @@
     }
     if (o.kind === 'ls' || o.kind === 'tt') {
       return (v: number) => v.toFixed(4);
+    }
+    // OI Long/Short ratio is unitless (1.03, not $1.03). Token-amount OI
+    // overlays render as the coin count (e.g. 19,154 BTC). USD overlays
+    // fall through to fmtUsdTooltip below.
+    if (o.kind === 'oi' && o.seriesKey === 'long_to_short_oi') {
+      return fmtRatio;
+    }
+    if (o.kind === 'oi'
+        && (o.seriesKey === 'total_oi' || o.seriesKey === 'long_oi' || o.seriesKey === 'short_oi')) {
+      return fmtAmountTooltip;
     }
     if (o.kind === 'ohlcv') {
       // Volume is USD when the host renders it that way; close/open/high/low
@@ -4598,6 +4619,19 @@
             <option value="long_to_short">Long / Short</option>
           </select>
         {/if}
+        {#if instance.kind === 'oi' && !((instance.exchange ?? 'binance') === 'hl' && (instance.oiHlDisplay ?? 'total') === 'long_to_short')}
+          <!-- USD vs token-amount unit selector for OI. Hidden in the Long/Short
+               ratio mode where the unit cancels out. -->
+          <select
+            value={instance.oiUnit ?? 'usd'}
+            onchange={(e) => (instance.oiUnit = e.currentTarget.value as 'usd' | 'token')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Display OI as dollar notional or token amount"
+          >
+            <option value="usd">USD</option>
+            <option value="token">{instance.token ?? 'Token'}</option>
+          </select>
+        {/if}
         <select
           value={instance.token}
           onchange={(e) => onTokenChange(instance.id, e.currentTarget.value)}
@@ -5161,10 +5195,10 @@
         formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`}
       />
     {:else if instance.kind === 'oi'}
-      <!-- HL Long/Short ratio is unitless (e.g. 1.03); every other OI mode
-           is a USD notional. Switch the axis + tooltip formatters so the
-           ratio line doesn't render as `$1.03`. -->
+      <!-- HL Long/Short ratio is unitless (1.03, not $1.03). Otherwise USD
+           or token amount based on the oiUnit selector. -->
       {@const oiIsRatio = (instance.exchange ?? 'binance') === 'hl' && (instance.oiHlDisplay ?? 'total') === 'long_to_short'}
+      {@const oiUseToken = (instance.oiUnit ?? 'usd') === 'token' && !oiIsRatio}
       <LineChart
         data={data as OpenInterestRow[]}
         lines={oiLinesM}
@@ -5175,8 +5209,8 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={oiIsRatio ? fmtRatio : fmtUsdAxis}
-        formatTooltip={oiIsRatio ? fmtRatio : fmtUsdTooltip}
+        formatY={oiIsRatio ? fmtRatio : (oiUseToken ? fmtAmountAxis : fmtUsdAxis)}
+        formatTooltip={oiIsRatio ? fmtRatio : (oiUseToken ? fmtAmountTooltip : fmtUsdTooltip)}
       />
     {:else if instance.kind === 'fr'}
       <SignedBarChart

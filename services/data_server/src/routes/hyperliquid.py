@@ -372,37 +372,67 @@ async def oi_split(request):
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since); until_dt = _parse_iso(until)
 
-    sql = """
-        SELECT
-            toUnixTimestamp(bucket)                AS bucket,
-            sumIf(latest_amount, side='long')      AS long_oi,
-            sumIf(latest_amount, side='short')     AS short_oi,
-            sum(latest_amount)                     AS total_oi,
-            sumIf(latest_size,   side='long')      AS long_oi_value,
-            sumIf(latest_size,   side='short')     AS short_oi_value,
-            sum(latest_size)                       AS total_oi_value
-        FROM (
+    # Pick the coarsest MV whose bucket divides the query interval — the
+    # smaller the source table, the cheaper the argMaxMerge. 1h MV for
+    # 1h/4h/1d, 15m MV for 15m/30m, raw for 1m/5m.
+    if seconds >= 3600 and seconds % 3600 == 0:
+        mv_table = "tradernick.hl_position_history_1h"
+    elif seconds >= 900 and seconds % 900 == 0:
+        mv_table = "tradernick.hl_position_history_15m"
+    else:
+        mv_table = None
+    if mv_table is not None:
+        sql = f"""
             SELECT
-                toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND) AS bucket,
-                wallet, side,
-                argMax(amount, time) AS latest_amount,
-                argMax(size,   time) AS latest_size
-            -- No FINAL: argMax(*, time) inside the inner GROUP BY already
-            -- collapses duplicate (bucket, wallet, side) rows to the latest
-            -- snapshot. ReplacingMergeTree dedup happens on identical ORDER BY
-            -- tuples, which share the same (time, amount, size) anyway, so
-            -- argMax returns the same value with or without FINAL. Same lever
-            -- as /hyperliquid/unrealized_pnl — see commit 8e3c29d.
-            FROM tradernick.hl_position_history
-            WHERE token = {token:String}
-              AND time >= {since:DateTime}
-              AND time <  {until:DateTime}
-            GROUP BY bucket, wallet, side
-        )
-        GROUP BY bucket
-        ORDER BY bucket
-        LIMIT {limit:UInt32}
-    """
+                toUnixTimestamp(bucket)                AS bucket,
+                sumIf(latest_amount, side='long')      AS long_oi,
+                sumIf(latest_amount, side='short')     AS short_oi,
+                sum(latest_amount)                     AS total_oi,
+                sumIf(latest_size,   side='long')      AS long_oi_value,
+                sumIf(latest_size,   side='short')     AS short_oi_value,
+                sum(latest_size)                       AS total_oi_value
+            FROM (
+                SELECT
+                    toStartOfInterval(bucket, INTERVAL {{seconds:UInt32}} SECOND) AS bucket,
+                    wallet, side,
+                    argMaxMerge(amount_state) AS latest_amount,
+                    argMaxMerge(size_state)   AS latest_size
+                FROM {mv_table}
+                WHERE token = {{token:String}}
+                  AND bucket >= {{since:DateTime}}
+                  AND bucket <  {{until:DateTime}}
+                GROUP BY bucket, wallet, side
+            )
+            GROUP BY bucket
+            ORDER BY bucket
+            LIMIT {{limit:UInt32}}
+        """
+    else:
+        sql = """
+            SELECT
+                toUnixTimestamp(bucket)                AS bucket,
+                sumIf(latest_amount, side='long')      AS long_oi,
+                sumIf(latest_amount, side='short')     AS short_oi,
+                sum(latest_amount)                     AS total_oi,
+                sumIf(latest_size,   side='long')      AS long_oi_value,
+                sumIf(latest_size,   side='short')     AS short_oi_value,
+                sum(latest_size)                       AS total_oi_value
+            FROM (
+                SELECT
+                    toStartOfInterval(time, INTERVAL {seconds:UInt32} SECOND) AS bucket,
+                    wallet, side,
+                    argMax(amount, time) AS latest_amount,
+                    argMax(size,   time) AS latest_size
+                FROM tradernick.hl_position_history
+                WHERE token = {token:String}
+                  AND time >= {since:DateTime}
+                  AND time <  {until:DateTime}
+                GROUP BY bucket, wallet, side
+            )
+            GROUP BY bucket
+            ORDER BY bucket
+            LIMIT {limit:UInt32}
+        """
     ch = await client()
     rows = await ch.query(sql, parameters={
         "seconds": seconds, "token": token,
@@ -1050,43 +1080,69 @@ async def unrealized_pnl(request):
         "seconds": seconds, "token": token,
         "since": since_dt, "until": until_dt, "limit": limit,
     }
+    # Same MV-selection logic as /oi_split: 1h MV for 1h/4h/1d, 15m MV for
+    # 15m/30m, raw for 1m/5m. MV time column is `bucket`, raw is `time`.
+    if seconds >= 3600 and seconds % 3600 == 0:
+        mv_table = "tradernick.hl_position_history_1h"
+    elif seconds >= 900 and seconds % 900 == 0:
+        mv_table = "tradernick.hl_position_history_15m"
+    else:
+        mv_table = None
+    time_col = "bucket" if mv_table is not None else "time"
     inner_where = [
         "token = {token:String}",
-        "time >= {since:DateTime}",
-        "time <  {until:DateTime}",
+        f"{time_col} >= {{since:DateTime}}",
+        f"{time_col} <  {{until:DateTime}}",
     ]
     if wallet:
         inner_where.append("lower(wallet) = {wallet:String}")
         params["wallet"] = wallet.lower()
     inner_where_sql = " AND ".join(inner_where)
 
-    # No FINAL: argMax(unrealized_pnl, time) inside the inner GROUP BY already
-    # collapses duplicate (bucket, wallet, side) rows to the latest snapshot in
-    # the bucket. FINAL would only matter if duplicates shared an identical
-    # `time` and we needed `ingested_at` as a tiebreaker — that's not the case
-    # for a state stream at fixed 5m cadence. FINAL on a 1B-row ReplacingMT
-    # forces a merge-on-read across parts and is the slowest part of the query.
-    sql = f"""
-        SELECT
-            toUnixTimestamp(bucket)         AS bucket,
-            sumIf(latest_pnl, side='long')  AS long_pnl,
-            sumIf(latest_pnl, side='short') AS short_pnl,
-            sum(latest_pnl)                 AS net_pnl,
-            countIf(side='long')            AS long_wallets,
-            countIf(side='short')           AS short_wallets
-        FROM (
+    if mv_table is not None:
+        sql = f"""
             SELECT
-                toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND) AS bucket,
-                wallet, side,
-                argMax(unrealized_pnl, time) AS latest_pnl
-            FROM tradernick.hl_position_history
-            WHERE {inner_where_sql}
-            GROUP BY bucket, wallet, side
-        )
-        GROUP BY bucket
-        ORDER BY bucket
-        LIMIT {{limit:UInt32}}
-    """
+                toUnixTimestamp(bucket)         AS bucket,
+                sumIf(latest_pnl, side='long')  AS long_pnl,
+                sumIf(latest_pnl, side='short') AS short_pnl,
+                sum(latest_pnl)                 AS net_pnl,
+                countIf(side='long')            AS long_wallets,
+                countIf(side='short')           AS short_wallets
+            FROM (
+                SELECT
+                    toStartOfInterval(bucket, INTERVAL {{seconds:UInt32}} SECOND) AS bucket,
+                    wallet, side,
+                    argMaxMerge(pnl_state) AS latest_pnl
+                FROM {mv_table}
+                WHERE {inner_where_sql}
+                GROUP BY bucket, wallet, side
+            )
+            GROUP BY bucket
+            ORDER BY bucket
+            LIMIT {{limit:UInt32}}
+        """
+    else:
+        sql = f"""
+            SELECT
+                toUnixTimestamp(bucket)         AS bucket,
+                sumIf(latest_pnl, side='long')  AS long_pnl,
+                sumIf(latest_pnl, side='short') AS short_pnl,
+                sum(latest_pnl)                 AS net_pnl,
+                countIf(side='long')            AS long_wallets,
+                countIf(side='short')           AS short_wallets
+            FROM (
+                SELECT
+                    toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND) AS bucket,
+                    wallet, side,
+                    argMax(unrealized_pnl, time) AS latest_pnl
+                FROM tradernick.hl_position_history
+                WHERE {inner_where_sql}
+                GROUP BY bucket, wallet, side
+            )
+            GROUP BY bucket
+            ORDER BY bucket
+            LIMIT {{limit:UInt32}}
+        """
 
     ch = await client()
     rows = await ch.query(sql, parameters=params)

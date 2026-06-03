@@ -1477,6 +1477,11 @@ export type ChartInstance = {
    *  'long_to_short' (one line: long / short ratio). Ignored when
    *  exchange='binance' (the long/short split isn't available there). */
   oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short' | 'long_to_short';
+  /** OI unit: 'usd' = dollar notional (default, matches Binance OI panel
+   *  conventions), 'token' = the underlying coin amount (e.g. BTC count).
+   *  The Long/Short ratio mode ignores this — it's mathematically the same
+   *  in either unit, since longs and shorts mark at the same price. */
+  oiUnit?: 'usd' | 'token';
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -1632,13 +1637,17 @@ export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>>
     { key: 'volume', label: 'Volume' }
   ],
   oi: [
-    // The user picks long/short/total at add-time. For binance OI, only
-    // 'total' is meaningful; the overlay-fetch helper falls back to the
-    // total series when long/short slots are unavailable. `long_to_short_oi`
-    // is HL-only (the AddOverlayDialog locks the exchange to HL on pick).
-    { key: 'total_oi_value',   label: 'Total OI' },
-    { key: 'long_oi_value',    label: 'Long OI' },
-    { key: 'short_oi_value',   label: 'Short OI' },
+    // The user picks long/short/total + unit (USD/token) at add-time. For
+    // binance OI only the 'total' series is meaningful; the overlay-fetch
+    // helper falls back to the total series when long/short slots are
+    // unavailable. `long_to_short_oi` is HL-only and unitless (the dialog
+    // locks the exchange to HL on pick).
+    { key: 'total_oi_value',   label: 'Total OI ($)' },
+    { key: 'long_oi_value',    label: 'Long OI ($)' },
+    { key: 'short_oi_value',   label: 'Short OI ($)' },
+    { key: 'total_oi',         label: 'Total OI (token)' },
+    { key: 'long_oi',          label: 'Long OI (token)' },
+    { key: 'short_oi',         label: 'Short OI (token)' },
     { key: 'long_to_short_oi', label: 'Long / Short OI' }
   ],
   fr: [ { key: 'rate_bps', label: 'Funding Rate' } ],
@@ -1953,6 +1962,7 @@ export function newChartInstance(
   if (kind === 'oi') {
     base.exchange = 'binance';
     base.oiHlDisplay = 'total';
+    base.oiUnit = 'usd';
   }
   if (kind === 'ls') {
     base.exchange = 'binance';

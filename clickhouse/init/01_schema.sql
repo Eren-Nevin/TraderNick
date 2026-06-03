@@ -1952,6 +1952,79 @@ PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, side, wallet)
 TTL toDateTime(time) + INTERVAL 30 DAY;
 
+-- 15-minute rollup of hl_position_history. Source emits a 5m carry-forward
+-- snapshot per (wallet, token, side); /oi_split and /unrealized_pnl both do
+-- argMax(*, time) per (bucket, wallet, side) then sumIf across wallets. The
+-- inner argMax is the slow part on a 1B-row table — this MV pre-computes it
+-- at 15m granularity. argMaxState is mergeable, so a 1h/4h/1d query reads N
+-- 15m states and argMaxMerge() across them returns the same "latest snapshot
+-- per wallet in the outer bucket" the raw query would. 5m and 1m fall back
+-- to the raw table (MV bucket > query bucket can't be reconstructed).
+--
+-- Sort key matches the downstream pattern: (token, bucket, side, wallet) —
+-- prefix-compatible with the source's (token, time, side, wallet), so the
+-- backfill INSERT can stream-aggregate in order (optimize_aggregation_in_order
+-- = 1) and the live MV trigger uses the same ordering.
+CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_15m
+(
+    bucket          DateTime       CODEC(DoubleDelta, ZSTD(3)),
+    token           LowCardinality(String),
+    side            LowCardinality(String),
+    wallet          String         CODEC(ZSTD(3)),
+    amount_state    AggregateFunction(argMax, Float64, DateTime64(3)),
+    size_state      AggregateFunction(argMax, Float64, DateTime64(3)),
+    pnl_state       AggregateFunction(argMax, Float64, DateTime64(3))
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(bucket)
+ORDER BY (token, bucket, side, wallet)
+TTL bucket + INTERVAL 30 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_15m_mv
+TO tradernick.hl_position_history_15m
+AS
+SELECT
+    toStartOfInterval(time, INTERVAL 15 MINUTE) AS bucket,
+    token, side, wallet,
+    argMaxState(amount,         time) AS amount_state,
+    argMaxState(size,           time) AS size_state,
+    argMaxState(unrealized_pnl, time) AS pnl_state
+FROM tradernick.hl_position_history
+GROUP BY bucket, token, side, wallet;
+
+-- 1-hour rollup of hl_position_history. Same argMaxState pattern as the
+-- 15m MV — idempotent under re-ingest (re-emitting the same row produces
+-- the same argMax value, so argMaxMerge collapses N states to the correct
+-- single value regardless of how many times a row was inserted). 4× fewer
+-- rows than the 15m MV, but the chart's most common window is 30d × 1h, so
+-- this is the right layer for that path. The 15m MV stays in place for
+-- 15m/30m queries; routes pick the coarsest MV whose bucket divides the
+-- query interval (see oi_split / unrealized_pnl).
+CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_1h
+(
+    bucket          DateTime       CODEC(DoubleDelta, ZSTD(3)),
+    token           LowCardinality(String),
+    side            LowCardinality(String),
+    wallet          String         CODEC(ZSTD(3)),
+    amount_state    AggregateFunction(argMax, Float64, DateTime64(3)),
+    size_state      AggregateFunction(argMax, Float64, DateTime64(3)),
+    pnl_state       AggregateFunction(argMax, Float64, DateTime64(3))
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(bucket)
+ORDER BY (token, bucket, side, wallet)
+TTL bucket + INTERVAL 30 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_1h_mv
+TO tradernick.hl_position_history_1h
+AS
+SELECT
+    toStartOfInterval(time, INTERVAL 1 HOUR) AS bucket,
+    token, side, wallet,
+    argMaxState(amount,         time) AS amount_state,
+    argMaxState(size,           time) AS size_state,
+    argMaxState(unrealized_pnl, time) AS pnl_state
+FROM tradernick.hl_position_history
+GROUP BY bucket, token, side, wallet;
+
 -- Pre-aggregated per-(wallet, token, bucket) trader performance. The right
 -- table for leaderboard queries — small + already summed. net_pnl = pnl - fees.
 CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history

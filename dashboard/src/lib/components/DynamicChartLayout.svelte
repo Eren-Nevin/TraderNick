@@ -767,8 +767,10 @@
         // display selector picks which side(s) to render — defaults to
         // 'total' so existing saved layouts (no field) keep their look.
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
-        inst.oiHlDisplay = (r.oiHlDisplay === 'long' || r.oiHlDisplay === 'short' || r.oiHlDisplay === 'long_short')
+        inst.oiHlDisplay = (r.oiHlDisplay === 'long' || r.oiHlDisplay === 'short'
+          || r.oiHlDisplay === 'long_short' || r.oiHlDisplay === 'long_to_short')
           ? r.oiHlDisplay : 'total';
+        inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
       }
       if (inst.kind === 'ls') {
         // L/S: Binance is the pre-aggregated source; HL is computed live

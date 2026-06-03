@@ -100,9 +100,11 @@ async function fetchRawSeries(
           return { time: r.time, value: s > 0 ? l / s : 0 };
         });
       }
-      const key = o.seriesKey === 'long_oi_value' ? 'long_oi_value'
-                : o.seriesKey === 'short_oi_value' ? 'short_oi_value'
-                : 'total_oi_value';
+      // HL response carries both unit shapes: `*_oi` (token) and `*_oi_value`
+      // ($). The seriesKey already names the exact field — just read it.
+      const hlKeys = ['long_oi_value', 'short_oi_value', 'total_oi_value',
+                      'long_oi', 'short_oi', 'total_oi'];
+      const key = hlKeys.includes(o.seriesKey) ? o.seriesKey : 'total_oi_value';
       return rows.map((r) => ({ time: r.time, value: Number(r[key] ?? 0) }));
     }
     const qs = new URLSearchParams({ token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '5000' });
@@ -110,9 +112,18 @@ async function fetchRawSeries(
     if (!res.ok) throw new Error(`overlay oi ${res.status}`);
     const body = await res.json();
     const rows = (body.series ?? []) as Array<Record<string, number>>;
-    // Binance OI: server emits `open_interest_value` (USD). Fall back to that
-    // even when the user picked 'total_oi_value' (the HL slot label).
-    return rows.map((r) => ({ time: r.time, value: Number(r.open_interest_value ?? r.total_oi_value ?? 0) }));
+    // Binance OI: server emits `open_interest` (token) and `open_interest_value`
+    // ($). Token-amount overlay keys (total_oi/long_oi/short_oi) map to the
+    // token field; USD keys (total_oi_value) map to the dollar field. Binance
+    // has no long/short split — long/short selections fall through to total.
+    const wantsToken = o.seriesKey === 'total_oi'
+      || o.seriesKey === 'long_oi' || o.seriesKey === 'short_oi';
+    return rows.map((r) => ({
+      time: r.time,
+      value: Number(wantsToken
+        ? (r.open_interest ?? 0)
+        : (r.open_interest_value ?? 0))
+    }));
   }
 
   if (kind === 'fr') {
