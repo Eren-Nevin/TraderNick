@@ -3379,6 +3379,30 @@
     return [lo, hi];
   }
 
+  /** Per-kind tooltip formatter used by overlay lines. Most kinds are USD-
+   *  denominated; FR is per-event rate (already converted client-side to
+   *  bps/8h or APR — see overlay-fetch); L/S + TT are pure ratios; OHLCV
+   *  volume varies with the host. */
+  function overlayValueFormatter(o: ChartOverlay): (v: number) => string {
+    if (o.kind === 'fr') {
+      const isApr = (o.frDisplay ?? 'rate8h') === 'apr';
+      return (v: number) => isApr ? `${v.toFixed(3)}% APR` : `${v.toFixed(3)} bps/8h`;
+    }
+    if (o.kind === 'ls' || o.kind === 'tt') {
+      return (v: number) => v.toFixed(4);
+    }
+    if (o.kind === 'ohlcv') {
+      // Volume is USD when the host renders it that way; close/open/high/low
+      // are price (USD for fiat-quoted markets). Both formatters round to
+      // a similar precision, so the USD compact form is fine for all.
+      return (v: number) => `$${v.toFixed(2)}`;
+    }
+    if (o.valueMode === 'amount') {
+      return (v: number) => v.toFixed(4);
+    }
+    return fmtUsdTooltip;
+  }
+
   function buildOverlayLines(pRange: [number, number]): LineLike[] {
     const overlays = instance.overlays ?? [];
     if (overlays.length === 0) return [];
@@ -3440,7 +3464,7 @@
           if (i < 0) return NaN;
           return sorted[i].value;
         },
-        rawFormat: fmtUsdTooltip
+        rawFormat: overlayValueFormatter(o)
       });
     }
     return out;
