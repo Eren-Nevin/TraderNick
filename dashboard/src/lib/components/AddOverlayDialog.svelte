@@ -38,6 +38,7 @@
   let {
     open = false,
     initial = null as ChartOverlay | null,
+    primaryToken = '',
     usedColors = [] as string[],
     tokens = [] as string[],
     tokenGroups = [] as TokenGroup[],
@@ -50,6 +51,14 @@
     onClose
   }: {
     open: boolean;
+    /** Token currently shown on the host chart. New overlays default to
+     *  this token when the picked kind is exchange-style (ohlcv/oi/fr/bs/
+     *  sz/tt/ls or any hl_*), so adding an OI overlay on an ETH OHLCV
+     *  chart starts with ETH selected — saves a click and matches user
+     *  intent. Kinds that conventionally pin to a different token
+     *  (transfer/exchange_flow → USDC; aave/morpho/spark/uniswap → USDC)
+     *  keep their existing defaults. */
+    primaryToken?: string;
     /** When set, the dialog opens directly to step 2 with these values
      *  pre-populated. Used for editing an existing overlay (kind is
      *  locked — swap = remove + add). */
@@ -352,10 +361,15 @@
     clearForm();
     const series = OVERLAY_KIND_SERIES[k] ?? [];
     formSeriesKey = series[0]?.key ?? 'sum_value_usd';
-    if (k.startsWith('hl_')) { formToken = 'BTC'; formChain = 'HL'; }
+    // Inherit the host chart's token when the overlay kind plots one of the
+    // same exchange-style series (HL families + ohlcv/oi/fr/bs/sz/tt/ls).
+    // Falls back to 'BTC' when the host chart doesn't have a token set
+    // (e.g. lending/transfer charts that pin to a stablecoin).
+    const inherit = primaryToken || 'BTC';
+    if (k.startsWith('hl_')) { formToken = inherit; formChain = 'HL'; }
     else if (k === 'transfer' || k === 'exchange_flow') { formToken = 'USDC'; formChain = 'ETH'; }
     else if (k === 'ohlcv' || k === 'oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'tt' || k === 'ls') {
-      formToken = 'BTC';
+      formToken = inherit;
     } else if (k.startsWith('gmx_')) {
       formChain = 'ARB'; formGmxMarket = 'BTC/USD [WBTC-USDC]';
     } else if (k.startsWith('aero_')) {
@@ -450,13 +464,16 @@
     pickedKind === 'exchange_flow' && formExchangeFlowExchange === 'hyperliquid'
   );
 
-  /** Dynamic OI constraint: long_oi_value / short_oi_value / long_to_short_oi
-   *  are only carried by the HL OI table (Binance OI is total-only), so the
-   *  exchange is forced to HL whenever one of those series is picked. */
+  /** Dynamic OI constraint: any long/short slot (USD or token) and the
+   *  long-to-short ratio are HL-only — Binance OI has no side split. The
+   *  total-OI series in either unit works for both exchanges and is left
+   *  unlocked. */
   let oiHlLocked = $derived(
     pickedKind === 'oi'
     && (formSeriesKey === 'long_oi_value'
         || formSeriesKey === 'short_oi_value'
+        || formSeriesKey === 'long_oi'
+        || formSeriesKey === 'short_oi'
         || formSeriesKey === 'long_to_short_oi')
   );
 

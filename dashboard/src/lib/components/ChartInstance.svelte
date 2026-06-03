@@ -5491,6 +5491,7 @@
   <AddOverlayDialog
     open={overlayDialogOpen}
     initial={overlayEditing}
+    primaryToken={instance.token ?? ''}
     usedColors={usedOverlayColors}
     {tokens}
     {tokenGroups}
