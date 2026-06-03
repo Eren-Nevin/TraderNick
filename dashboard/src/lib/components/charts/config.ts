@@ -1661,11 +1661,33 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
 /** Short human-readable label for a chip in the chart header. Keeps the
  *  pieces the user picked: kind label + (where applicable) token + chain
  *  + pool + series. Trims to ~50 chars to fit. */
+/** Short user-facing label for an exchange selector. Returned for kinds
+ *  where the value materially changes which dataset is being read (the
+ *  binance/HL toggle on OHLCV/OI/FR/BS/SZ/LS, and the CeX/HL exchange
+ *  picker on exchange_flow). */
+function overlayExchangeLabel(o: ChartOverlay): string | null {
+  if (o.kind === 'exchange_flow') {
+    const ex = o.exchangeFlowExchange;
+    if (!ex) return null;
+    return ex === 'hyperliquid' ? 'HL' : ex.charAt(0).toUpperCase() + ex.slice(1);
+  }
+  if (o.kind === 'ohlcv' || o.kind === 'oi' || o.kind === 'fr'
+      || o.kind === 'bs' || o.kind === 'sz' || o.kind === 'ls') {
+    const ex = o.exchange;
+    if (!ex) return null;
+    return ex === 'hl' ? 'HL' : 'Binance';
+  }
+  return null;
+}
+
 export function overlayChipLabel(o: ChartOverlay): string {
   const parts: string[] = [];
   parts.push(CHART_KIND_LABELS[o.kind] ?? o.kind);
+  const ex = overlayExchangeLabel(o);
+  if (ex) parts.push(ex);
   if (o.token) parts.push(o.token);
   if (o.chain && o.chain !== 'HL') parts.push(o.chain);
+  if (o.gmxMarket) parts.push(o.gmxMarket);
   if (o.uniPool) parts.push(fmtUniPool(o.uniPool));
   else if (o.aeroPool) parts.push(`${o.aeroPool.symbol0}/${o.aeroPool.symbol1} ts${o.aeroPool.tick_spacing}`);
   else if (o.aeroBasicPool) parts.push(`${o.aeroBasicPool.symbol0}/${o.aeroBasicPool.symbol1} ${o.aeroBasicPool.stable ? 'stable' : 'vAMM'}`);
