@@ -110,6 +110,7 @@
   import { fetchOverlayData, type OverlayPoint } from '$lib/components/charts/overlay-fetch';
   import AddOverlayDialog from '$lib/components/AddOverlayDialog.svelte';
   import Pencil from '@lucide/svelte/icons/pencil';
+  import PlusCircle from '@lucide/svelte/icons/plus-circle';
   import type { View } from '$lib/chart-zoom';
   import { queuedFetch } from '$lib/fetch-queue';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
@@ -5035,7 +5036,9 @@
       title="Add overlay series"
       aria-label="Add overlay series"
       class="overlay-fab"
-    >+</button>
+    >
+      <PlusCircle size={22} strokeWidth={1.75} />
+    </button>
   {/if}
   </div>
 </div>
@@ -5079,17 +5082,16 @@
      the chart canvas and only fades in while the chart card is hovered, so
      it stays out of the way at rest. Click opens the overlay dialog. */
   .overlay-fab {
+    /* The PlusCircle icon already paints its own circle, so the button
+       itself is transparent — no doubled-ring or off-centre glyph. */
     position: absolute;
     bottom: 0.5rem;
     right: 0.5rem;
-    width: 1.75rem;
-    height: 1.75rem;
-    border-radius: 999px;
-    background: rgb(24 24 27);
-    border: 1px solid rgb(82 82 91);
-    color: rgb(212 212 216);
-    font-size: 1rem;
-    line-height: 1;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: rgb(212 212 216);                       /* zinc-300 */
+    line-height: 0;
     display: flex;
     align-items: center;
     justify-content: center;
@@ -5099,7 +5101,7 @@
        which would block d3.zoom from seeing pan/zoom gestures that
        start there. */
     pointer-events: none;
-    transition: opacity 120ms ease-out, background-color 120ms ease-out, color 120ms ease-out;
+    transition: opacity 120ms ease-out, color 120ms ease-out, transform 120ms ease;
     z-index: 15;
     cursor: pointer;
   }
@@ -5109,7 +5111,10 @@
   }
   .overlay-fab:hover {
     opacity: 1 !important;
-    background: rgb(39 39 42);
-    color: rgb(244 244 245);
+    color: rgb(244 244 245);                       /* zinc-100 */
+    transform: translateY(-1px);
+  }
+  .overlay-fab:active {
+    transform: translateY(0);
   }
 </style>
