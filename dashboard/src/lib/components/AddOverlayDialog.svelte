@@ -123,6 +123,64 @@
     return items;
   });
 
+  /** Score one item against one query token. Returns the best score across
+   *  three strategies; 0 means "no match" and the token is dropped.
+   *  Higher = better. Tuned so word-boundary hits beat mid-word hits,
+   *  which beat fuzzy subsequence hits.
+   *
+   *  - Word-prefix:   token at the start of any whitespace-separated word
+   *                   in the search key (e.g. "bor" → "Borrow").  Score 1000+.
+   *  - Substring:     token appears anywhere else.                Score  500+.
+   *  - Subsequence:   token's chars appear in order with gaps     Score  100+.
+   *                   (e.g. "uniw3" → "Uniswap V3"). Score decays
+   *                   with the span of the match so tighter wins.
+   *
+   *  Each strategy adds a small bonus for an earlier match position so that
+   *  e.g. "aave" outranks items where it appears deep in the description.
+   */
+  function scoreToken(key: string, token: string): number {
+    if (!token) return 0;
+    // Word-prefix anywhere (start-of-string counts as a word boundary).
+    let i = key.indexOf(token);
+    while (i !== -1) {
+      const isWordStart = i === 0 || /[\s:/(-]/.test(key[i - 1]);
+      if (isWordStart) return 1000 + Math.max(0, 100 - i);
+      i = key.indexOf(token, i + 1);
+    }
+    // Plain substring.
+    const sub = key.indexOf(token);
+    if (sub !== -1) return 500 + Math.max(0, 100 - sub);
+    // Subsequence fallback.
+    let ki = 0, ti = 0, first = -1, last = -1;
+    while (ki < key.length && ti < token.length) {
+      if (key[ki] === token[ti]) {
+        if (first < 0) first = ki;
+        last = ki;
+        ti++;
+      }
+      ki++;
+    }
+    if (ti < token.length) return 0;
+    const span = last - first + 1;
+    // span === token.length is the tightest possible run; decay as it
+    // stretches over more of the key.
+    return 100 + Math.max(0, 80 - (span - token.length));
+  }
+
+  /** Multi-token AND scoring. Every whitespace-separated token in the
+   *  query must score > 0; the total is their sum. Returns 0 to drop the
+   *  item from results. */
+  function fuzzyScore(key: string, queryTokens: string[]): number {
+    if (queryTokens.length === 0) return 0;
+    let total = 0;
+    for (const tok of queryTokens) {
+      const s = scoreToken(key, tok);
+      if (s <= 0) return 0;
+      total += s;
+    }
+    return total;
+  }
+
   type DialogRow =
     | { type: 'header'; level: 1 | 2; key: string; label: string; expanded: boolean; count: number; scope: 'category' | 'provider' }
     | { type: 'leaf'; kind: ChartKind; label: string; indent: 0 | 1 | 2; group: string | null; showGroup: boolean };
@@ -130,16 +188,23 @@
   let dialogRows = $derived.by((): DialogRow[] => {
     const q = filterText.trim().toLowerCase();
     if (q) {
-      return flatItems
-        .filter((it) => it.searchKey.includes(q))
-        .map((it) => ({
-          type: 'leaf' as const,
-          kind: it.kind,
-          label: CHART_KIND_LABELS[it.kind] ?? it.label,
-          indent: 0,
-          group: it.provider,
-          showGroup: it.provider !== null
-        }));
+      // Token-AND fuzzy scoring — each whitespace-separated token of the
+      // query must match somewhere in searchKey (word-prefix > substring >
+      // subsequence). Results are ranked by total score, ties broken by
+      // alphabetical label so the order is stable.
+      const tokens = q.split(/\s+/).filter((t) => t.length > 0);
+      const scored = flatItems
+        .map((it) => ({ it, score: fuzzyScore(it.searchKey, tokens) }))
+        .filter((x) => x.score > 0)
+        .sort((a, b) => b.score - a.score || a.it.label.localeCompare(b.it.label));
+      return scored.map(({ it }) => ({
+        type: 'leaf' as const,
+        kind: it.kind,
+        label: CHART_KIND_LABELS[it.kind] ?? it.label,
+        indent: 0,
+        group: it.provider,
+        showGroup: it.provider !== null
+      }));
     }
     const byCat = new Map<string, FlatItem[]>();
     const order: string[] = [];
