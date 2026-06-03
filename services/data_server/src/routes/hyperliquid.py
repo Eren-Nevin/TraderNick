@@ -343,6 +343,201 @@ async def leaderboard(request):
     })
 
 
+@bp.get("/hyperliquid/smart_oi")
+async def smart_oi(request):
+    """Per-bucket HL OI restricted to the trailing-PnL leaderboard.
+
+    Returns the same series shape as /oi_split (long_oi, short_oi, total_oi
+    in token + USD) but filtered to wallets that were ranking on a rolling
+    leaderboard ENDING STRICTLY BEFORE each bucket — no future data leaks
+    into the ranking that's applied at a point in time. The leaderboard is
+    recomputed at daily granularity (one ranking per calendar day; buckets
+    within that day use the ranking built from the prior `lookback_days`).
+
+    Ranking rule per (day D, wallet):
+      - Sum net_pnl and volume over [D - lookback_days, D) — strictly past.
+      - Drop wallets with sum(net_pnl) < pnl_floor_usd.
+      - PnL% = sum(net_pnl) / sum(volume); rank desc; take top_n.
+      - Optionally scope to a single token (`leaderboard_scope=token`).
+
+    Query params:
+      token, interval, since, until, limit — same as /oi_split.
+      pnl_lookback_days (default 7), pnl_floor_usd (default 10000),
+      top_n (default 50), leaderboard_scope ('global' or 'token',
+      default 'global').
+    """
+    token = request.args.get("token")
+    interval = request.args.get("interval", "1h")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    limit = int(request.args.get("limit", "10000"))
+    pnl_lookback_days = int(request.args.get("pnl_lookback_days", "7"))
+    pnl_floor_usd = float(request.args.get("pnl_floor_usd", "10000"))
+    top_n = int(request.args.get("top_n", "50"))
+    leaderboard_scope = request.args.get("leaderboard_scope", "global")
+
+    if not token:
+        return response.json({"error": "missing token"}, status=400)
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    if leaderboard_scope not in ("global", "token"):
+        return response.json({"error": "leaderboard_scope must be 'global' or 'token'"}, status=400)
+    if pnl_lookback_days < 1 or pnl_lookback_days > 30:
+        return response.json({"error": "pnl_lookback_days must be 1..30"}, status=400)
+    if top_n < 1 or top_n > 500:
+        return response.json({"error": "top_n must be 1..500"}, status=400)
+
+    seconds = INTERVAL_SECONDS[interval]
+    since_dt = _parse_iso(since); until_dt = _parse_iso(until)
+
+    # OI sub-query reads from the same MV cascade as /oi_split, but adds
+    # toDate(bucket) so we can join the per-day leaderboard array. The
+    # JOIN's `has(l.wallets, p.wallet)` membership check is cheap: top_n
+    # ~ 50 → 50-element array per day → ~30 days × 50 = 1500-cell linear
+    # scan per row.
+    if seconds >= 3600 and seconds % 3600 == 0:
+        oi_source = "tradernick.hl_position_history_1h"
+        oi_time_col = "bucket"
+        oi_amount_expr = "argMaxMerge(amount_state)"
+        oi_size_expr   = "argMaxMerge(size_state)"
+    elif seconds >= 900 and seconds % 900 == 0:
+        oi_source = "tradernick.hl_position_history_15m"
+        oi_time_col = "bucket"
+        oi_amount_expr = "argMaxMerge(amount_state)"
+        oi_size_expr   = "argMaxMerge(size_state)"
+    else:
+        oi_source = "tradernick.hl_position_history"
+        oi_time_col = "time"
+        oi_amount_expr = "argMax(amount, time)"
+        oi_size_expr   = "argMax(size,   time)"
+
+    # The leaderboard is computed per-day for every day touched by the OI
+    # window. We need to include the lookback PADDING in trade_history
+    # scanning so day = `since` has a full window of past data.
+    leaderboard_token_filter = ""
+    params: dict = {
+        "seconds": seconds, "token": token,
+        "since": since_dt, "until": until_dt, "limit": limit,
+        "lookback_days": pnl_lookback_days,
+        "pnl_floor": pnl_floor_usd,
+        "top_n": top_n,
+    }
+    if leaderboard_scope == "token":
+        leaderboard_token_filter = "AND token = {token:String}"
+
+    sql = f"""
+        WITH
+        daily_per_wallet AS (
+            -- Aggregate trade_history to (day, wallet). Scan range includes
+            -- the lookback pad before `since` so the earliest target day has
+            -- a complete window of prior data.
+            SELECT
+                toDate(time) AS d,
+                wallet,
+                sum(net_pnl) AS daily_pnl,
+                sum(volume)  AS daily_vol
+            FROM tradernick.hl_trade_history
+            WHERE time >= {{since:DateTime}} - INTERVAL {{lookback_days:UInt32}} DAY
+              AND time <  {{until:DateTime}}
+              {leaderboard_token_filter}
+            GROUP BY d, wallet
+        ),
+        target_days AS (
+            -- One row per calendar day in the OI window. We need a leaderboard
+            -- for each of these days; the JOIN below pairs each target day
+            -- with all daily_per_wallet rows in its trailing window.
+            SELECT toDate({{since:DateTime}}) + number AS d
+            FROM numbers(0, dateDiff('day', toDate({{since:DateTime}}), toDate({{until:DateTime}})) + 1)
+        ),
+        trailing AS (
+            -- For each target day, sum the prior `lookback_days` of daily
+            -- aggregates per wallet (strictly before target.d to avoid leak).
+            -- CROSS JOIN + WHERE because INNER JOIN ... ON with no equality
+            -- predicate isn't supported in standard CH SQL.
+            SELECT
+                target.d AS day,
+                src.wallet AS wallet,
+                sum(src.daily_pnl) AS pnl,
+                sum(src.daily_vol) AS vol
+            FROM target_days target
+            CROSS JOIN daily_per_wallet src
+            WHERE src.d >= target.d - {{lookback_days:UInt32}}
+              AND src.d <  target.d
+            GROUP BY target.d, src.wallet
+        ),
+        ranked AS (
+            -- Filter by PnL floor + nonzero volume; rank per day by PnL%.
+            SELECT
+                day, wallet,
+                row_number() OVER (PARTITION BY day ORDER BY pnl / vol DESC) AS rk
+            FROM trailing
+            WHERE pnl >= {{pnl_floor:Float64}} AND vol > 0
+        ),
+        leaderboard AS (
+            -- Compact per-day to an array of top-N wallets.
+            SELECT day, groupArray(wallet) AS wallets
+            FROM ranked
+            WHERE rk <= {{top_n:UInt32}}
+            GROUP BY day
+        )
+        SELECT
+            toUnixTimestamp(bucket)                AS bucket,
+            sumIf(latest_amount, side='long')      AS long_oi,
+            sumIf(latest_amount, side='short')     AS short_oi,
+            sum(latest_amount)                     AS total_oi,
+            sumIf(latest_size,   side='long')      AS long_oi_value,
+            sumIf(latest_size,   side='short')     AS short_oi_value,
+            sum(latest_size)                       AS total_oi_value
+        FROM (
+            SELECT
+                toStartOfInterval({oi_time_col}, INTERVAL {{seconds:UInt32}} SECOND) AS bucket,
+                toDate({oi_time_col}) AS day,
+                wallet, side,
+                {oi_amount_expr} AS latest_amount,
+                {oi_size_expr}   AS latest_size
+            FROM {oi_source}
+            WHERE token = {{token:String}}
+              AND {oi_time_col} >= {{since:DateTime}}
+              AND {oi_time_col} <  {{until:DateTime}}
+            GROUP BY bucket, day, wallet, side
+        ) p
+        -- Equi-join on day; wallet membership check stays in WHERE because
+        -- has(l.wallets, p.wallet) mixes columns from both sides and CH
+        -- standard JOIN ON only accepts equi-joins.
+        INNER JOIN leaderboard l ON l.day = p.day
+        WHERE has(l.wallets, p.wallet)
+        GROUP BY bucket
+        ORDER BY bucket
+        LIMIT {{limit:UInt32}}
+    """
+
+    ch = await client()
+    rows = await ch.query(sql, parameters=params)
+    series = [
+        {
+            "time": int(r[0]),
+            "long_oi": float(r[1]),
+            "short_oi": float(r[2]),
+            "total_oi": float(r[3]),
+            "long_oi_value": float(r[4]),
+            "short_oi_value": float(r[5]),
+            "total_oi_value": float(r[6]),
+        }
+        for r in rows.result_rows
+    ]
+    return response.json({
+        "token": token,
+        "interval": interval,
+        "pnl_lookback_days": pnl_lookback_days,
+        "pnl_floor_usd": pnl_floor_usd,
+        "top_n": top_n,
+        "leaderboard_scope": leaderboard_scope,
+        "series": series,
+    })
+
+
 @bp.get("/hyperliquid/oi_split")
 async def oi_split(request):
     """Per-bucket Open Interest on HL, split into long / short / total.

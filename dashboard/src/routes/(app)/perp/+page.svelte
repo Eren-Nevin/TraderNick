@@ -33,6 +33,7 @@
       'fr',
       'hl_pnl',
       'hl_unrealized_pnl',
+      'hl_smart_oi',
       'hl_top_traders',
       'hl_top_positions',
       'hl_transfers',

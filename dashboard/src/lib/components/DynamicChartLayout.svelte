@@ -830,6 +830,24 @@
         if (inst.kind === 'hl_vault_detail') {
           inst.hlSelectedVault = typeof r.hlSelectedVault === 'string' ? r.hlSelectedVault : '';
         }
+        if (inst.kind === 'hl_smart_oi') {
+          // Mirror the oi-kind sanitizer for the shared OI selectors plus
+          // the four smart-money knobs. Clamp lookback/topN to valid ranges
+          // so corrupted persistence can't push a value the server rejects.
+          inst.exchange = 'hl';
+          inst.oiHlDisplay = (r.oiHlDisplay === 'long' || r.oiHlDisplay === 'short'
+            || r.oiHlDisplay === 'long_short' || r.oiHlDisplay === 'long_to_short'
+            || r.oiHlDisplay === 'net_pct')
+            ? r.oiHlDisplay : 'total';
+          inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
+          const lb = Number(r.smartPnlLookbackDays);
+          inst.smartPnlLookbackDays = Number.isFinite(lb) && lb >= 1 && lb <= 30 ? Math.round(lb) : 7;
+          const fl = Number(r.smartPnlFloorUsd);
+          inst.smartPnlFloorUsd = Number.isFinite(fl) && fl >= 0 ? fl : 10000;
+          const tn = Number(r.smartPnlTopN);
+          inst.smartPnlTopN = Number.isFinite(tn) && tn >= 1 && tn <= 500 ? Math.round(tn) : 50;
+          inst.smartLeaderboardScope = r.smartLeaderboardScope === 'token' ? 'token' : 'global';
+        }
       }
       // Lido chart kinds need a `chain` but no token / pool. L1 kinds are
       // ETH-pinned; L2 kinds default to ARB (highest wstETH bridge volume).

@@ -22,7 +22,7 @@
     'uniswap_v3', 'uniswap_v2', 'uniswap_v4', 'aero_cl', 'aero_basic',
     'uniswap_v3_top_wallets', 'uniswap_v2_top_wallets', 'uniswap_v4_top_wallets',
     'gmx_v2',
-    'hl_pnl', 'hl_unrealized_pnl', 'hl_transfers', 'hl_vault_net',
+    'hl_pnl', 'hl_unrealized_pnl', 'hl_smart_oi', 'hl_transfers', 'hl_vault_net',
     'hl_top_vaults', 'hl_top_vault_lps', 'hl_vault_detail',
     'hl_top_traders', 'hl_top_positions',
     'lido'

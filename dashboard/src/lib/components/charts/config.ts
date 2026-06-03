@@ -346,6 +346,7 @@ export type ChartKind =
   | 'hl_vault_detail'
   | 'hl_top_traders'
   | 'hl_top_positions'
+  | 'hl_smart_oi'
   | 'uniswap_v2_swap'
   | 'uniswap_v2_deposit'
   | 'uniswap_v2_withdraw'
@@ -458,6 +459,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   hl_vault_detail: 'HL Vault Detail',
   hl_top_traders: 'HL Top Traders',
   hl_top_positions: 'HL Top Positions',
+  hl_smart_oi: 'HL Smart-Money OI',
   gmx_v2: 'GMX',
   gmx_v2_position_increase: 'GMX Position Open',
   gmx_v2_position_decrease: 'GMX Position Close',
@@ -881,7 +883,8 @@ export const HL_CHART_KINDS: ChartKind[] = [
   'hl_top_vault_lps',
   'hl_vault_detail',
   'hl_top_traders',
-  'hl_top_positions'
+  'hl_top_positions',
+  'hl_smart_oi'
 ];
 /** Single-event HL kinds → server-side event slug. */
 export const HL_KIND_TO_EVENT: Partial<Record<ChartKind, string>> = {
@@ -1482,6 +1485,20 @@ export type ChartInstance = {
    *  The Long/Short ratio mode ignores this — it's mathematically the same
    *  in either unit, since longs and shorts mark at the same price. */
   oiUnit?: 'usd' | 'token';
+  /** hl_smart_oi only: rolling lookback window (days) over which each
+   *  bucket's leaderboard is computed. PnL ranking at bucket time t uses
+   *  [t - smartPnlLookbackDays, t) — strictly past data, no leakage. */
+  smartPnlLookbackDays?: number;
+  /** hl_smart_oi only: minimum trailing-window net PnL (USD) for a wallet
+   *  to qualify for the leaderboard. Filters out the long tail of low-stake
+   *  noise from the PnL% ranking. */
+  smartPnlFloorUsd?: number;
+  /** hl_smart_oi only: take the top-N PnL% wallets per day. */
+  smartPnlTopN?: number;
+  /** hl_smart_oi only: leaderboard PnL scope — 'global' sums PnL across all
+   *  HL tokens (default; ranks generally-profitable traders), 'token' ranks
+   *  only by PnL on the chart's token (ranks token-specialists). */
+  smartLeaderboardScope?: 'global' | 'token';
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -1729,10 +1746,13 @@ function _populateDefaultOverlaySeries() {
     if (!OVERLAY_KIND_SERIES[k]) OVERLAY_KIND_SERIES[k] = valueOrAmount;
   }
   // Wrapper kinds are not picker entries (we expose concrete kinds instead).
-  // Table kinds are explicitly empty so they get filtered out.
+  // Table kinds are explicitly empty so they get filtered out. hl_smart_oi
+  // is excluded too — its leaderboard knobs would need their own overlay
+  // form, not worth the complexity for v1.
   const tabular: ChartKind[] = [
     'hl_top_vaults','hl_top_vault_lps','hl_vault_detail',
-    'hl_top_traders','hl_top_positions'
+    'hl_top_traders','hl_top_positions',
+    'hl_smart_oi'
   ];
   for (const k of tabular) OVERLAY_KIND_SERIES[k] = [];
   void valueOnly;
@@ -1964,6 +1984,15 @@ export function newChartInstance(
     base.exchange = 'binance';
     base.oiHlDisplay = 'total';
     base.oiUnit = 'usd';
+  }
+  if (kind === 'hl_smart_oi') {
+    base.exchange = 'hl';
+    base.oiHlDisplay = 'total';
+    base.oiUnit = 'usd';
+    base.smartPnlLookbackDays = 7;
+    base.smartPnlFloorUsd = 10000;
+    base.smartPnlTopN = 50;
+    base.smartLeaderboardScope = 'global';
   }
   if (kind === 'ls') {
     base.exchange = 'binance';

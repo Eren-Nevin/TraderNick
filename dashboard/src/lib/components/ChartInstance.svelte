@@ -743,6 +743,15 @@
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
     }
+    if (instance.kind === 'hl_smart_oi') {
+      // The smart-money OI series materially changes when any leaderboard
+      // knob moves — fold them all into the cache key so changes refetch.
+      return `${instance.kind}|${instance.token}|${instance.interval}`
+        + `|lb${instance.smartPnlLookbackDays ?? 7}`
+        + `|fl${instance.smartPnlFloorUsd ?? 10000}`
+        + `|n${instance.smartPnlTopN ?? 50}`
+        + `|s${instance.smartLeaderboardScope ?? 'global'}`;
+    }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
 
@@ -2315,6 +2324,26 @@
             pickArr = (b) => (b.series ?? []) as AnyDatum[];
           }
           break;
+        case 'hl_smart_oi': {
+          // Same payload shape as /oi_split (long/short/total in token + USD)
+          // but filtered to the rolling-PnL leaderboard. Smart-money params
+          // ride as extra query string entries.
+          const sQs = new URLSearchParams(baseQS);
+          sQs.set('pnl_lookback_days', String(instance.smartPnlLookbackDays ?? 7));
+          sQs.set('pnl_floor_usd',     String(instance.smartPnlFloorUsd ?? 10000));
+          sQs.set('top_n',             String(instance.smartPnlTopN ?? 50));
+          sQs.set('leaderboard_scope', instance.smartLeaderboardScope ?? 'global');
+          url = `/api/hyperliquid/smart_oi?${sQs}`;
+          pickArr = (b) => {
+            const rows = (b.series ?? []) as Array<Record<string, number>>;
+            return rows.map((r) => ({
+              ...r,
+              open_interest: r.total_oi ?? 0,
+              open_interest_value: r.total_oi_value ?? 0
+            })) as unknown as AnyDatum[];
+          };
+          break;
+        }
         case 'fr': {
           // Same Binance / HL exchange selector pattern as the ohlcv kind.
           const frQs = new URLSearchParams(baseQS);
@@ -3693,7 +3722,7 @@
     // Pick the right per-kind primary-lines array. Falls through to an empty
     // range when no primary lines exist (overlay will render flat-centered).
     let primaryLines: typeof aaveLinesD = [];
-    if (instance.kind === 'oi') primaryLines = oiLinesD;
+    if (instance.kind === 'oi' || instance.kind === 'hl_smart_oi') primaryLines = oiLinesD;
     else if (instance.kind === 'fr') primaryLines = frLinesD;
     else if (instance.kind === 'tt') primaryLines = ttLinesD;
     else if (instance.kind === 'ls') primaryLines = lsLinesD;
@@ -4042,7 +4071,7 @@
             <option value="all">All</option>
           </select>
         {/if}
-      {:else if isHlKind(instance.kind)}
+      {:else if isHlKind(instance.kind) && instance.kind !== 'hl_smart_oi'}
         <!-- Hyperliquid: static HL chip + token dropdown from the binance
              roster + optional wallet filter (free-text EVM address OR
              wallet-label category dropdown — mutually exclusive). The
@@ -4050,7 +4079,10 @@
              wallets by definition. The top_positions kind adds an
              "All tokens" option (empty string) since its leaderboard
              can rank wallets either per-token or by aggregate exposure.
-             hl_transfers (bridge flows) is USDC-only — no token select. -->
+             hl_transfers (bridge flows) is USDC-only — no token select.
+             hl_smart_oi falls through to the generic OI branch below so
+             it can reuse the long/short/total/long_to_short/net_pct +
+             USD/token selectors that the `oi` kind already exposes. -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL</span>
         {#if instance.kind === 'hl_transfers' || instance.kind === 'hl_vault_net' || instance.kind === 'hl_top_vaults' || instance.kind === 'hl_top_vault_lps' || instance.kind === 'hl_vault_detail'}
           <!-- These kinds have no token dimension — show a static USDC chip. -->
@@ -4621,11 +4653,11 @@
             <option value="hl">Hyperliquid</option>
           </select>
         {/if}
-        {#if instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl'}
+        {#if (instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl') || instance.kind === 'hl_smart_oi'}
           <!-- HL-only display selector. position_history carries per-wallet
                sides so we can split OI into long/short or show all three on
-               one chart. Default 'total' matches the Binance shape (a
-               single line summing every position). -->
+               one chart. Same selector for hl_smart_oi which is HL-only by
+               construction. -->
           <select
             value={instance.oiHlDisplay ?? 'total'}
             onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short' | 'long_to_short' | 'net_pct')}
@@ -4640,7 +4672,7 @@
             <option value="net_pct">Net OI %</option>
           </select>
         {/if}
-        {#if instance.kind === 'oi' && !((instance.exchange ?? 'binance') === 'hl' && ((instance.oiHlDisplay ?? 'total') === 'long_to_short' || (instance.oiHlDisplay ?? 'total') === 'net_pct'))}
+        {#if (instance.kind === 'oi' || instance.kind === 'hl_smart_oi') && !((instance.kind === 'hl_smart_oi' || (instance.exchange ?? 'binance') === 'hl') && ((instance.oiHlDisplay ?? 'total') === 'long_to_short' || (instance.oiHlDisplay ?? 'total') === 'net_pct'))}
           <!-- USD vs token-amount unit selector for OI. Hidden in the Long/Short
                ratio mode where the unit cancels out. -->
           <select
@@ -4837,6 +4869,48 @@
         <button
           type="button"
           onclick={applySzThresholds}
+          class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+        >Apply</button>
+        <span class="w-px h-4 bg-zinc-800"></span>
+      {/if}
+      {#if instance.kind === 'hl_smart_oi'}
+        <!-- Smart-money OI knobs. The leaderboard recomputes per-bucket
+             over (bucket - Lookback, bucket) — strictly past data so the
+             chart can't peek at future PnL when picking wallets. PnL floor
+             trims low-stake noise from the PnL% ranking. -->
+        <span class="text-zinc-500">Lookback (d)</span>
+        <input
+          bind:value={instance.smartPnlLookbackDays}
+          type="number"
+          step="1" min="1" max="30"
+          class="w-16 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+        />
+        <span class="text-zinc-500">PnL ≥ $</span>
+        <input
+          bind:value={instance.smartPnlFloorUsd}
+          type="number"
+          step="1000" min="0"
+          class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+        />
+        <span class="text-zinc-500">Top N</span>
+        <input
+          bind:value={instance.smartPnlTopN}
+          type="number"
+          step="10" min="1" max="500"
+          class="w-16 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+        />
+        <span class="text-zinc-500">Scope</span>
+        <select
+          bind:value={instance.smartLeaderboardScope}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Global = rank by trailing PnL across all HL tokens; Token = rank only by PnL on this chart's token"
+        >
+          <option value="global">Global</option>
+          <option value="token">Token</option>
+        </select>
+        <button
+          type="button"
+          onclick={() => reload()}
           class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
         >Apply</button>
         <span class="w-px h-4 bg-zinc-800"></span>
@@ -5215,9 +5289,10 @@
         formatY={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
         formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`}
       />
-    {:else if instance.kind === 'oi'}
+    {:else if instance.kind === 'oi' || instance.kind === 'hl_smart_oi'}
       <!-- HL Long/Short ratio is unitless (1.03, not $1.03). Otherwise USD
-           or token amount based on the oiUnit selector. -->
+           or token amount based on the oiUnit selector. hl_smart_oi reuses
+           the same rendering — its payload shape matches /oi_split. -->
       {@const oiHlMode = (instance.exchange ?? 'binance') === 'hl' ? (instance.oiHlDisplay ?? 'total') : null}
       {@const oiIsRatio = oiHlMode === 'long_to_short'}
       {@const oiIsPct = oiHlMode === 'net_pct'}
