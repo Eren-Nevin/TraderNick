@@ -33,13 +33,14 @@
     type MAType,
     type UniPool
   } from './charts/config';
-  import type { UniswapStream } from '$lib/api';
+  import type { UniswapStream, TransferStream } from '$lib/api';
 
   let {
     open = false,
     initial = null as ChartOverlay | null,
     usedColors = [] as string[],
     tokens = [] as string[],
+    transferStreams = [] as TransferStream[],
     uniPools = [] as UniswapStream[],
     lidoChains = [] as { event: string; chain: string; rows: number }[],
     gmxMarkets = [] as { event: string; chain: string; market: string; rows: number }[],
@@ -56,6 +57,9 @@
      *  ChartInstance so the dialog can render the same selects the chart
      *  header offers (instead of asking the user to type free-form). */
     tokens?: string[];
+    /** Transfer-stream catalogue (chain, token, kind). Used to filter the
+     *  token dropdown for the Token Flow / Exchange Flow kinds. */
+    transferStreams?: TransferStream[];
     uniPools?: UniswapStream[];
     lidoChains?: { event: string; chain: string; rows: number }[];
     gmxMarkets?: { event: string; chain: string; market: string; rows: number }[];
@@ -403,11 +407,101 @@
     return Array.from(new Set(gmxMarkets.map((m) => m.market))).sort();
   });
 
-  /** Token list to surface in the dropdown. Falls back to a small known
-   *  set for kinds that don't propagate a `tokens` prop. The current
-   *  formToken is always available so a custom entry survives editing. */
+  // ── Stream-filtered token list ──────────────────────────────────────
+  // Some protocols only have data for a handful of tokens on a given
+  // chain — picking "ETH" on AAVE V3 returns an empty series because
+  // every AAVE position is denominated in WETH, not native ETH. The
+  // chart header gets away with showing every token because the user
+  // sees the empty chart and switches; in the dialog we'd rather show
+  // only what's loadable. We lazy-fetch the per-protocol `/streams`
+  // catalogue when a kind+chain combo is picked and cache per (kind,
+  // chain). Falls back to the host-page `tokens` list when no
+  // protocol-specific endpoint exists (Binance/HL kinds, etc.).
+  const _streamTokenCache = new Map<string, string[]>();
+  let availableTokens = $state<string[] | null>(null);
+
+  function streamsEndpointFor(k: ChartKind): string | null {
+    if (k.startsWith('aave_v2_')) return '/api/aave_v2/streams';
+    if (k.startsWith('aave_v4_')) return '/api/aave_v4/streams';
+    if (k.startsWith('aave_v3_')) return '/api/aave/streams';
+    if (k.startsWith('morpho_'))  return '/api/morpho/streams';
+    if (k.startsWith('spark_'))   return '/api/spark/streams';
+    return null;
+  }
+
+  async function loadAvailableTokens(k: ChartKind, chain: string) {
+    if (k === 'transfer' || k === 'exchange_flow') {
+      // Use the host-passed transferStreams catalogue — no extra fetch.
+      const set = new Set<string>();
+      for (const s of transferStreams) {
+        if (s.chain !== chain) continue;
+        if (typeof s.token === 'string' && s.token.length > 0 && !s.token.startsWith('0x')) {
+          set.add(s.token.toUpperCase());
+        }
+      }
+      const arr = Array.from(set).sort();
+      availableTokens = arr.length > 0 ? arr : null;
+      return;
+    }
+    const endpoint = streamsEndpointFor(k);
+    if (!endpoint) { availableTokens = null; return; }
+    const cacheKey = `${endpoint}|${chain}`;
+    if (_streamTokenCache.has(cacheKey)) {
+      const arr = _streamTokenCache.get(cacheKey)!;
+      availableTokens = arr.length > 0 ? arr : null;
+      return;
+    }
+    try {
+      const res = await fetch(endpoint);
+      if (!res.ok) { availableTokens = null; return; }
+      const body = await res.json();
+      const streams = (body.streams ?? []) as Array<{ chain?: string; token?: string }>;
+      const set = new Set<string>();
+      for (const s of streams) {
+        if (s.chain && s.chain !== chain) continue;
+        // Skip raw contract addresses (some protocols return them when
+        // the symbol couldn't be resolved). The dropdown shows symbols
+        // only — if a user really wants an address they can edit the
+        // chart's token field directly.
+        if (typeof s.token === 'string' && s.token.length > 0 && !s.token.startsWith('0x')) {
+          set.add(s.token.toUpperCase());
+        }
+      }
+      const arr = Array.from(set).sort();
+      _streamTokenCache.set(cacheKey, arr);
+      availableTokens = arr.length > 0 ? arr : null;
+    } catch {
+      availableTokens = null;
+    }
+  }
+
+  // Reload the available-tokens list whenever the kind or chain changes.
+  $effect(() => {
+    if (!pickedKind || !showsTokenField(pickedKind)) { availableTokens = null; return; }
+    const c = formChain.trim().toUpperCase();
+    if (!c && (pickedKind.startsWith('aave_') || pickedKind.startsWith('morpho_')
+               || pickedKind.startsWith('spark_') || pickedKind === 'transfer'
+               || pickedKind === 'exchange_flow')) {
+      availableTokens = null;
+      return;
+    }
+    loadAvailableTokens(pickedKind, c);
+  });
+
+  /** Token list to surface in the dropdown.
+   *
+   *  Preference order:
+   *   1. Stream-derived tokens (real data on this chain) when available.
+   *   2. Host-page `tokens` prop (binance roster for Exchange/HL kinds).
+   *   3. Small built-in fallback so the dropdown is never empty.
+   *
+   *  The current formToken is always appended so a custom entry survives
+   *  edit-mode even if it's not in any catalogue. */
   function tokenOptions(): string[] {
-    const base = tokens.length > 0 ? tokens.slice() : ['BTC', 'ETH', 'USDC', 'USDT', 'DAI', 'WETH', 'WBTC'];
+    let base: string[];
+    if (availableTokens && availableTokens.length > 0) base = availableTokens.slice();
+    else if (tokens.length > 0) base = tokens.slice();
+    else base = ['BTC', 'ETH', 'USDC', 'USDT', 'DAI', 'WETH', 'WBTC'];
     if (formToken && !base.includes(formToken)) base.push(formToken);
     return base;
   }

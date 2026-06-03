@@ -5049,6 +5049,7 @@
     initial={overlayEditing}
     usedColors={usedOverlayColors}
     {tokens}
+    transferStreams={streams}
     {uniPools}
     {lidoChains}
     {gmxMarkets}
