@@ -397,17 +397,40 @@ _EXCHANGE_FLOW_STATE: dict = {
 async def _refresh_exchange_flow_worker(ch=None) -> dict:
     """Rebuild tradernick.exchange_flow_minute from the current state of
     tradernick.transfers + its materialized category/entity columns. Called
-    automatically after every rematerialize (so the rollup is consistent with
-    the freshly-rewritten wallet labels) and exposed as
-    POST /admin/exchange-flow/refresh for manual runs.
+    automatically after every rematerialize, on a 15-min self-heal tick from
+    ingestion startup, and exposed as POST /admin/exchange-flow/refresh.
 
-    Strategy: TRUNCATE the rollup then INSERT SELECT. The live mv_exchange_flow
-    keeps firing on incoming transfers during the ~50s reinsert; their
-    contributions may collide with the SELECT scan and be summed twice for
-    buckets in the current minute, but that's a sub-promille noise floor at
-    chart scale and avoids the bigger risk of dropping the MV mid-flight.
+    Strategy: build into a staging table then atomically EXCHANGE TABLES,
+    so the chart never sees an empty rollup mid-rebuild. The earlier
+    TRUNCATE-then-INSERT path was simpler but blanked the chart for the
+    full INSERT window (~5 min on a hot source with unmerged duplicates).
+
+      1. DROP IF EXISTS + CREATE staging table with the same schema.
+      2. INSERT INTO staging SELECT … FROM transfers FINAL — runs while
+         the live MV (`mv_exchange_flow`) keeps populating the still-named
+         original. Both tables are real and writable; the chart serves
+         from the original throughout.
+      3. EXCHANGE TABLES — atomic swap. After this, the original name
+         points at the clean rebuild and the MV writes there going
+         forward. The (renamed) staging now holds the pre-rebuild
+         over-counted data plus whatever live trickle landed during the
+         rebuild window.
+      4. Copy back the live trickle: INSERT … FROM staging WHERE
+         time >= rebuild_cutoff. The rebuild's own SELECT excluded
+         time >= cutoff (so it never reads the still-moving recent
+         minute), so this restores those few minutes without double-
+         counting older buckets.
+      5. DROP the staging.
+
+    Worst case during the swap: a single minute's bucket may be summed
+    twice if the live MV happens to write to both the old name (pre-
+    EXCHANGE) and the new name (post-EXCHANGE) for the same minute.
+    SummingMergeTree merges them additively, so the per-minute sum
+    equals all events that occurred in that minute — correct, just
+    distributed across two rows that get merged in the background.
     """
     import asyncio as _asyncio
+    from datetime import datetime as _dt, timezone as _tz, timedelta as _td
     if _EXCHANGE_FLOW_STATE["running"]:
         log.info("exchange_flow refresh: already running, skipping")
         return {"ok": False, "reason": "already_running"}
@@ -420,14 +443,53 @@ async def _refresh_exchange_flow_worker(ch=None) -> dict:
         error=None,
     )
     t0 = _asyncio.get_event_loop().time()
+    # Cutoff: the rebuild's SELECT skips time >= cutoff so it doesn't
+    # collide with the live MV on the current minute. The recovery step
+    # uses the same cutoff to copy back what got buffered into the old
+    # (now-staging) table during the rebuild window.
+    cutoff_dt = _dt.now(_tz.utc) - _td(minutes=5)
+    cutoff_sql = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
+    staging = "tradernick.exchange_flow_minute_staging"
+    target = "tradernick.exchange_flow_minute"
+    # Run the canonical rebuild SELECT against the staging table.
+    staging_insert_sql = _EXCHANGE_FLOW_REFRESH_SQL.replace(
+        "INSERT INTO tradernick.exchange_flow_minute",
+        f"INSERT INTO {staging}",
+        1,
+    ).replace(
+        "(now() - INTERVAL 5 MINUTE)",
+        f"toDateTime('{cutoff_sql}')",
+        1,
+    )
     try:
         if ch is None:
             ch = await async_client()
-        log.info("exchange_flow refresh: TRUNCATE tradernick.exchange_flow_minute")
-        await ch.command("TRUNCATE TABLE tradernick.exchange_flow_minute")
-        log.info("exchange_flow refresh: INSERT SELECT (30d backfill)")
-        await ch.command(_EXCHANGE_FLOW_REFRESH_SQL)
-        rows = await ch.query("SELECT count() FROM tradernick.exchange_flow_minute")
+        log.info("exchange_flow refresh: prepare staging table %s", staging)
+        await ch.command(f"DROP TABLE IF EXISTS {staging}")
+        # `CREATE … AS …` (without a SELECT) clones schema + engine + ORDER BY
+        # + TTL but leaves the table empty. Confirmed in CH 24.8.
+        await ch.command(f"CREATE TABLE {staging} AS {target}")
+
+        log.info("exchange_flow refresh: INSERT into staging (30d FINAL, cutoff=%s)", cutoff_sql)
+        await ch.command(staging_insert_sql)
+
+        log.info("exchange_flow refresh: EXCHANGE TABLES (atomic swap)")
+        await ch.command(f"EXCHANGE TABLES {target} AND {staging}")
+
+        # After EXCHANGE, the MV is now writing to the just-rebuilt clean
+        # table (whatever has the original name). The staging name now
+        # holds: pre-rebuild over-counted data + live trickle that landed
+        # while the rebuild ran. Recover only the trickle.
+        log.info("exchange_flow refresh: recover live trickle (time >= %s)", cutoff_sql)
+        await ch.command(
+            f"INSERT INTO {target} "
+            f"SELECT * FROM {staging} WHERE time >= toDateTime('{cutoff_sql}')"
+        )
+
+        log.info("exchange_flow refresh: drop staging")
+        await ch.command(f"DROP TABLE IF EXISTS {staging}")
+
+        rows = await ch.query(f"SELECT count() FROM {target}")
         n = int(rows.result_rows[0][0]) if rows.result_rows else 0
         dt = _asyncio.get_event_loop().time() - t0
         _EXCHANGE_FLOW_STATE.update(
@@ -439,6 +501,13 @@ async def _refresh_exchange_flow_worker(ch=None) -> dict:
         log.info("exchange_flow refresh: done in %.1fs, %d rows", dt, n)
         return {"ok": True, "rows_after": n, "duration_s": dt}
     except Exception as exc:
+        # Best-effort cleanup so a failed run doesn't leave the staging
+        # table hanging around to confuse the next attempt.
+        try:
+            if ch is not None:
+                await ch.command(f"DROP TABLE IF EXISTS {staging}")
+        except Exception:
+            pass
         _EXCHANGE_FLOW_STATE.update(
             running=False,
             finished_at=_asyncio.get_event_loop().time(),
