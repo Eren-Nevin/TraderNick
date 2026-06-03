@@ -119,9 +119,16 @@ async function fetchRawSeries(
     if (!res.ok) throw new Error(`overlay fr ${res.status}`);
     const body = await res.json();
     const rows = (body.series ?? []) as Array<Record<string, number>>;
-    // The frDisplay toggle (rate8h vs apr) is a render-time choice; for
-    // overlays we just emit rate_bps and let the chip label disambiguate.
-    return rows.map((r) => ({ time: r.time, value: Number(r.rate_bps ?? 0) }));
+    // The server emits `rate` (raw per-event decimal — Binance per-8h,
+    // HL per-1h). The dashboard's primary FR chart normalizes client-
+    // side; the overlay has to do the same or every bucket reads as 0
+    // (the bps/APR field never exists on the response).
+    const hoursPerEvent = (o.exchange ?? 'binance') === 'hl' ? 1 : 8;
+    const isApr = (o.frDisplay ?? 'rate8h') === 'apr';
+    const factor = isApr
+      ? (24 / hoursPerEvent) * 365 * 100      // → annualized %
+      : (8 / hoursPerEvent) * 10000;          // → bps per 8h (Coinglass)
+    return rows.map((r) => ({ time: r.time, value: Number(r.rate ?? 0) * factor }));
   }
 
   if (kind === 'ls' || kind === 'tt') {
