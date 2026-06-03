@@ -169,12 +169,13 @@ async function fetchRawSeries(
   if (kind === 'transfer') {
     const qs = new URLSearchParams({
       chain: o.chain ?? 'ETH',
-      token: o.token ?? 'USDC',
       interval,
       since: sinceIso,
       until: untilIso,
       limit: '5000'
     });
+    if (o.tokenGroup) qs.set('token_group', o.tokenGroup);
+    else qs.set('token', o.token ?? 'USDC');
     const res = await queuedFetch(`/api/transfers/aggregate?${qs}`, { signal });
     if (!res.ok) throw new Error(`overlay transfer ${res.status}`);
     const body = await res.json();
@@ -185,10 +186,18 @@ async function fetchRawSeries(
   if (kind === 'exchange_flow') {
     const ex = o.exchangeFlowExchange ?? 'binance';
     const chain = ex === 'hyperliquid' ? 'ARB' : (o.chain ?? 'ETH');
-    const buildQS = (direction: 'in' | 'out') => new URLSearchParams({
-      direction, exchange: ex, chain, token: o.token ?? 'USDC',
-      interval, since: sinceIso, until: untilIso, limit: '10000'
-    });
+    const buildQS = (direction: 'in' | 'out') => {
+      const qs = new URLSearchParams({
+        direction, exchange: ex, chain,
+        interval, since: sinceIso, until: untilIso, limit: '10000'
+      });
+      // Server-side compound bundle (e.g. USDC+USDT) when present;
+      // otherwise the single token. Hyperliquid CeX flows are USDC-only,
+      // so the token_group path doesn't apply there even if set.
+      if (o.tokenGroup && ex !== 'hyperliquid') qs.set('token_group', o.tokenGroup);
+      else qs.set('token', o.token ?? 'USDC');
+      return qs;
+    };
     // Only fetch the side(s) we need.
     if (o.seriesKey === 'inflow') {
       const res = await queuedFetch(`/api/exchange_flow/aggregate?${buildQS('in')}`, { signal });

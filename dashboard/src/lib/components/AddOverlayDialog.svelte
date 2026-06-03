@@ -33,13 +33,14 @@
     type MAType,
     type UniPool
   } from './charts/config';
-  import type { UniswapStream, TransferStream } from '$lib/api';
+  import type { UniswapStream, TransferStream, TokenGroup } from '$lib/api';
 
   let {
     open = false,
     initial = null as ChartOverlay | null,
     usedColors = [] as string[],
     tokens = [] as string[],
+    tokenGroups = [] as TokenGroup[],
     transferStreams = [] as TransferStream[],
     uniPools = [] as UniswapStream[],
     lidoChains = [] as { event: string; chain: string; rows: number }[],
@@ -57,6 +58,11 @@
      *  ChartInstance so the dialog can render the same selects the chart
      *  header offers (instead of asking the user to type free-form). */
     tokens?: string[];
+    /** Server-defined compound-token bundles (e.g. "USDC+USDT", "Stables").
+     *  Surfaced in the token dropdown for Token Flow and Exchange Flow
+     *  overlays so the user can aggregate across a bundle in a single
+     *  fetch — same as the standalone chart's token-group support. */
+    tokenGroups?: TokenGroup[];
     /** Transfer-stream catalogue (chain, token, kind). Used to filter the
      *  token dropdown for the Token Flow / Exchange Flow kinds. */
     transferStreams?: TransferStream[];
@@ -303,7 +309,11 @@
 
   function loadInitial(o: ChartOverlay) {
     formSeriesKey = o.seriesKey;
-    formToken = o.token ?? '';
+    // A stored tokenGroup wins over `token`: when present, the dropdown's
+    // selected value is the group name itself (e.g. "USDC+USDT"). submit()
+    // decides which field to persist based on whether the selection
+    // matches a known group name.
+    formToken = o.tokenGroup ?? o.token ?? '';
     formChain = o.chain ?? '';
     formExchange = o.exchange ?? 'binance';
     formExchangeFlowExchange = o.exchangeFlowExchange ?? 'binance';
@@ -570,6 +580,19 @@
     loadAvailableTokens(pickedKind, c);
   });
 
+  /** Token-group names that apply to the current kind. Only Token Flow /
+   *  Exchange Flow honour `?token_group=...` on the server, and the
+   *  hyperliquid CeX path is USDC-only so groups are hidden there too. */
+  function applicableTokenGroups(k: ChartKind): TokenGroup[] {
+    if (k !== 'transfer' && k !== 'exchange_flow') return [];
+    if (k === 'exchange_flow' && exchangeFlowHLLocked) return [];
+    return tokenGroups;
+  }
+  let knownGroupNames = $derived.by(() => {
+    if (!pickedKind) return new Set<string>();
+    return new Set(applicableTokenGroups(pickedKind).map((g) => g.name));
+  });
+
   /** Token list to surface in the dropdown.
    *
    *  Preference order:
@@ -578,14 +601,22 @@
    *   3. Small built-in fallback so the dropdown is never empty.
    *
    *  The current formToken is always appended so a custom entry survives
-   *  edit-mode even if it's not in any catalogue. */
-  function tokenOptions(): string[] {
+   *  edit-mode even if it's not in any catalogue. Server-defined token
+   *  groups (USDC+USDT, Stables, …) appear at the bottom for the kinds
+   *  that support them. */
+  function tokenOptions(): { kind: 'token' | 'group'; value: string; label: string }[] {
     let base: string[];
     if (availableTokens && availableTokens.length > 0) base = availableTokens.slice();
     else if (tokens.length > 0) base = tokens.slice();
     else base = ['BTC', 'ETH', 'USDC', 'USDT', 'DAI', 'WETH', 'WBTC'];
-    if (formToken && !base.includes(formToken)) base.push(formToken);
-    return base;
+    if (formToken && !base.includes(formToken) && !knownGroupNames.has(formToken)) base.push(formToken);
+    const out: { kind: 'token' | 'group'; value: string; label: string }[] = base.map((t) => ({ kind: 'token', value: t, label: t }));
+    if (pickedKind) {
+      for (const g of applicableTokenGroups(pickedKind)) {
+        out.push({ kind: 'group', value: g.name, label: `Σ ${g.label}` });
+      }
+    }
+    return out;
   }
 
   // ── Submit ──────────────────────────────────────────────────────────
@@ -607,8 +638,19 @@
     // OR pinned via a lock helper — the locked value still has to land on
     // the overlay's persisted state so the fetch issues the correct query.
     const lt = effectiveLockedToken(k);
-    if (lt) o.token = lt;
-    else if (tokenFieldKindUsesIt(k)) o.token = formToken.trim().toUpperCase();
+    if (lt) {
+      o.token = lt;
+    } else if (tokenFieldKindUsesIt(k)) {
+      // When the selection matches a known server token-group, persist as
+      // tokenGroup (so the fetch sends ?token_group=...); otherwise as
+      // a single token symbol.
+      const sel = formToken.trim();
+      if (knownGroupNames.has(sel)) {
+        o.tokenGroup = sel;
+      } else {
+        o.token = sel.toUpperCase();
+      }
+    }
     const lc = effectiveLockedChain(k);
     if (lc) o.chain = lc;
     else if (chainFieldKindUsesIt(k)) o.chain = formChain.trim().toUpperCase();
@@ -767,8 +809,8 @@
               <label class="flex items-center gap-2">
                 <span class="w-32 text-zinc-400">Token</span>
                 <select bind:value={formToken} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
-                  {#each tokenOptions() as t (t)}
-                    <option value={t}>{t}</option>
+                  {#each tokenOptions() as opt (opt.value + ':' + opt.kind)}
+                    <option value={opt.value}>{opt.label}</option>
                   {/each}
                 </select>
               </label>

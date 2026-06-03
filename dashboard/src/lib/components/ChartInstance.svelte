@@ -5139,6 +5139,7 @@
     initial={overlayEditing}
     usedColors={usedOverlayColors}
     {tokens}
+    {tokenGroups}
     transferStreams={streams}
     {uniPools}
     {lidoChains}

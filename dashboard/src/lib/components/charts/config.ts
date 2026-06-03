@@ -1423,6 +1423,10 @@ export type ChartOverlay = {
    *  carrying only the dimensions the chosen `kind` reads. Validated
    *  through `sanitizeOverlay()`. */
   token?: string;
+  /** Server-side compound-token group name (e.g. "USDC+USDT", "Stables").
+   *  Mutually exclusive with `token` — when set, overlay-fetch sends
+   *  `token_group=` instead of `token=` so the server expands the bundle. */
+  tokenGroup?: string;
   chain?: string;
   exchange?: 'binance' | 'hl';
   frDisplay?: 'rate8h' | 'apr';
@@ -1608,6 +1612,7 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
   }
   // Per-kind config fields. Copy through whatever the kind actually reads.
   if (typeof r.token === 'string') o.token = r.token;
+  if (typeof r.tokenGroup === 'string' && r.tokenGroup.length > 0) o.tokenGroup = r.tokenGroup;
   if (typeof r.chain === 'string') o.chain = r.chain;
   if (r.exchange === 'binance' || r.exchange === 'hl') o.exchange = r.exchange;
   if (r.frDisplay === 'rate8h' || r.frDisplay === 'apr') o.frDisplay = r.frDisplay;
@@ -1685,7 +1690,8 @@ export function overlayChipLabel(o: ChartOverlay): string {
   parts.push(CHART_KIND_LABELS[o.kind] ?? o.kind);
   const ex = overlayExchangeLabel(o);
   if (ex) parts.push(ex);
-  if (o.token) parts.push(o.token);
+  if (o.tokenGroup) parts.push(`Σ ${o.tokenGroup}`);
+  else if (o.token) parts.push(o.token);
   if (o.chain && o.chain !== 'HL') parts.push(o.chain);
   if (o.gmxMarket) parts.push(o.gmxMarket);
   if (o.uniPool) parts.push(fmtUniPool(o.uniPool));
