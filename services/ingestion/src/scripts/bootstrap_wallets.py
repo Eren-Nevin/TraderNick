@@ -343,6 +343,14 @@ async def rematerialize_status(*, table: str = "tradernick.transfers") -> dict:
 # clickhouse/init/01_schema.sql). Kept inline so the worker has no dependency
 # on the data_server service; the schema file is the single source of truth
 # but rebuild-by-INSERT-SELECT needs to repeat the predicate here.
+#
+# CRITICAL: reads `tradernick.transfers FINAL`. The source is a
+# ReplacingMergeTree, but the MV target downstream is SummingMergeTree —
+# any unmerged duplicates (from live-stream retries, backfill re-runs,
+# or partial completion replays) get summed N times if FINAL is omitted,
+# producing inflated rollups (verified once at ~5× for hyperliquid). The
+# extra FINAL pass costs ~20-30s on the 30d window but is run as a
+# background task so latency to the chart layer is unaffected.
 _EXCHANGE_FLOW_REFRESH_SQL = """
 INSERT INTO tradernick.exchange_flow_minute
 SELECT
@@ -356,7 +364,7 @@ SELECT
            amount,
            coalesce(value_usd, 0.0))) AS sum_value_usd,
     count() AS count
-FROM tradernick.transfers
+FROM tradernick.transfers FINAL
 ARRAY JOIN arrayConcat(
     if(has(receiver_categories, 'binance-deposit')     AND NOT has(sender_categories, 'cex'),  [('in', 'binance')],     CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
     if(has(receiver_categories, 'coinbase-deposit')    AND NOT has(sender_categories, 'cex'),  [('in', 'coinbase')],    CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),

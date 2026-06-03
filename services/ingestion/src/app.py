@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from sanic import Sanic, response
 
 from scripts.bootstrap_wallets import (
+    _refresh_exchange_flow_worker,
     exchange_flow_refresh_status,
     load_into_clickhouse,
     refresh_exchange_flow,
@@ -95,6 +96,32 @@ async def startup(app_, _loop):
         await app_.ctx.jobs.resume_inflight()
     except Exception:
         log.exception("resume_inflight failed (continuing)")
+    # Self-healing tick for exchange_flow_minute. The push MV
+    # (mv_exchange_flow) compounds whenever the source `transfers` table
+    # has unmerged duplicates (live-stream retries / backfill re-runs /
+    # crashed-mid-chunk replays). The push MV stays in place so the chart
+    # is real-time accurate between ticks; this background rebuild runs
+    # FROM transfers FINAL on a 15-minute cadence so any drift heals on
+    # its own. One run = one TRUNCATE + ~30-50s 30d-window INSERT.
+    app_.add_task(_exchange_flow_refresh_loop())
+
+
+async def _exchange_flow_refresh_loop():
+    """Periodically rebuild tradernick.exchange_flow_minute from
+    `transfers FINAL`. Single-flight: the existing helper short-circuits
+    when a refresh is already running (e.g. after a wallet rematerialize).
+    Cadence is generous — drift accumulates slowly, and the rebuild itself
+    touches the entire 30-day window so we don't want to run it too often."""
+    import asyncio
+    # Initial delay so it doesn't fight startup work — supervisor + jobs
+    # resume usually wraps in < 30s.
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await _refresh_exchange_flow_worker()
+        except Exception:
+            log.exception("exchange_flow refresh tick failed (continuing)")
+        await asyncio.sleep(15 * 60)
 
 
 @app.get("/health")
