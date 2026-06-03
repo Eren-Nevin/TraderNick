@@ -18,7 +18,10 @@
     'uniswap_v2',
     'uniswap_v4',
     'aero_cl',
-    'aero_basic'
+    'aero_basic',
+    'uniswap_v3_top_wallets',
+    'uniswap_v2_top_wallets',
+    'uniswap_v4_top_wallets'
   ];
 
   function defaultLayout(): ChartInstanceT[] {

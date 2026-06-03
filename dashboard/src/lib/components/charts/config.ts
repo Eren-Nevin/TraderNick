@@ -296,6 +296,12 @@ export type ChartKind =
   | 'aave_v4_repay'
   | 'aave_v4_net_borrow'
   | 'aave_v4_liquidation'
+  | 'aave_v2_top_wallets'
+  | 'aave_v3_top_wallets'
+  | 'aave_v4_top_wallets'
+  | 'uniswap_v2_top_wallets'
+  | 'uniswap_v3_top_wallets'
+  | 'uniswap_v4_top_wallets'
   | 'morpho_supply'
   | 'morpho_withdraw'
   | 'morpho_net_supply'
@@ -410,6 +416,12 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   aave_v4_repay: 'AAVE V4 Repays',
   aave_v4_net_borrow: 'AAVE V4 Net Borrow',
   aave_v4_liquidation: 'AAVE V4 Liquidations',
+  aave_v2_top_wallets: 'AAVE V2 Top Wallets',
+  aave_v3_top_wallets: 'AAVE V3 Top Wallets',
+  aave_v4_top_wallets: 'AAVE V4 Top Wallets',
+  uniswap_v2_top_wallets: 'Uniswap V2 Top Wallets',
+  uniswap_v3_top_wallets: 'Uniswap V3 Top Wallets',
+  uniswap_v4_top_wallets: 'Uniswap V4 Top Wallets',
   morpho: 'Morpho',
   morpho_supply: 'Morpho Supplies',
   morpho_withdraw: 'Morpho Withdrawals',
@@ -489,6 +501,127 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   lido_l2_withdrawal_request: 'Lido L2 Withdrawal Requests',
   lido_l2_net: 'Lido L2 Net'
 };
+
+/** Top-wallets leaderboard kind config — the single extension seam for
+ *  this feature. Adding a new protocol's leaderboard is one entry here,
+ *  one backend route, and one availableKinds registration. The metric
+ *  array drives the table's column set (so a protocol without liquidation
+ *  just passes a shorter list). */
+export type LeaderboardMetric =
+  | 'deposit' | 'withdraw' | 'net_deposit'
+  | 'borrow'  | 'repay'    | 'net_borrow'
+  | 'liquidation'
+  | 'swap' | 'collect' | 'net_lp';
+
+export type LeaderboardColumn = {
+  key: LeaderboardMetric;
+  /** Label shown in the toolbar selector and the column header. */
+  label: string;
+  /** Sub-fields on each row, in the order they should render in the cell.
+   *  `usd` is the headline number; `count` is the smaller event-count
+   *  shown beneath it. */
+  usdField: string;
+  countField: string;
+};
+
+export const AAVE_LEADERBOARD_METRICS: ReadonlyArray<LeaderboardColumn> = [
+  { key: 'deposit',     label: 'Deposit',     usdField: 'deposit_usd',     countField: 'deposit_count' },
+  { key: 'withdraw',    label: 'Withdraw',    usdField: 'withdraw_usd',    countField: 'withdraw_count' },
+  { key: 'net_deposit', label: 'Net Deposit', usdField: 'net_deposit_usd', countField: '' },
+  { key: 'borrow',      label: 'Borrow',      usdField: 'borrow_usd',      countField: 'borrow_count' },
+  { key: 'repay',       label: 'Repay',       usdField: 'repay_usd',       countField: 'repay_count' },
+  { key: 'net_borrow',  label: 'Net Borrow',  usdField: 'net_borrow_usd',  countField: '' },
+  { key: 'liquidation', label: 'Liquidation', usdField: 'liquidation_usd', countField: 'liquidation_count' },
+];
+
+/** Uniswap V2: pool-scoped (no fee tier, no collect — V2 auto-compounds fees). */
+export const UNISWAP_V2_LEADERBOARD_METRICS: ReadonlyArray<LeaderboardColumn> = [
+  { key: 'swap',     label: 'Swap',     usdField: 'swap_usd',     countField: 'swap_count' },
+  { key: 'deposit',  label: 'LP Add',   usdField: 'deposit_usd',  countField: 'deposit_count' },
+  { key: 'withdraw', label: 'LP Remove',usdField: 'withdraw_usd', countField: 'withdraw_count' },
+  { key: 'net_lp',   label: 'Net LP',   usdField: 'net_lp_usd',   countField: '' },
+];
+
+/** Uniswap V3: adds Collect (fee harvesting) on top of the V2 set. */
+export const UNISWAP_V3_LEADERBOARD_METRICS: ReadonlyArray<LeaderboardColumn> = [
+  { key: 'swap',     label: 'Swap',     usdField: 'swap_usd',     countField: 'swap_count' },
+  { key: 'deposit',  label: 'LP Add',   usdField: 'deposit_usd',  countField: 'deposit_count' },
+  { key: 'withdraw', label: 'LP Remove',usdField: 'withdraw_usd', countField: 'withdraw_count' },
+  { key: 'net_lp',   label: 'Net LP',   usdField: 'net_lp_usd',   countField: '' },
+  { key: 'collect',  label: 'Collect',  usdField: 'collect_usd',  countField: 'collect_count' },
+];
+
+/** Uniswap V4: same as V2 (no collect event in the indexed tables). */
+export const UNISWAP_V4_LEADERBOARD_METRICS: ReadonlyArray<LeaderboardColumn> = [
+  { key: 'swap',     label: 'Swap',     usdField: 'swap_usd',     countField: 'swap_count' },
+  { key: 'deposit',  label: 'LP Add',   usdField: 'deposit_usd',  countField: 'deposit_count' },
+  { key: 'withdraw', label: 'LP Remove',usdField: 'withdraw_usd', countField: 'withdraw_count' },
+  { key: 'net_lp',   label: 'Net LP',   usdField: 'net_lp_usd',   countField: '' },
+];
+
+/** `paramShape` selects how ChartInstance builds the request querystring for
+ *  this leaderboard. AAVE keeps (chain, token) + optional groups + eth_market;
+ *  Uniswap kinds key by pool tuple (sym0/sym1/fee/...). */
+export type LeaderboardParamShape =
+  | 'aave' | 'uniswap_v2' | 'uniswap_v3' | 'uniswap_v4';
+
+export type LeaderboardKindConfig = {
+  endpoint: string;
+  metrics: ReadonlyArray<LeaderboardColumn>;
+  protocolLabel: string;
+  paramShape: LeaderboardParamShape;
+  /** Default metric to sort by when a fresh instance of this kind is added. */
+  defaultMetric: LeaderboardMetric;
+};
+
+export const LEADERBOARD_KIND_CONFIG: Partial<Record<ChartKind, LeaderboardKindConfig>> = {
+  aave_v2_top_wallets: {
+    endpoint: '/api/aave_v2/wallets/leaderboard',
+    metrics: AAVE_LEADERBOARD_METRICS,
+    protocolLabel: 'AAVE V2',
+    paramShape: 'aave',
+    defaultMetric: 'deposit'
+  },
+  aave_v3_top_wallets: {
+    endpoint: '/api/aave/wallets/leaderboard',
+    metrics: AAVE_LEADERBOARD_METRICS,
+    protocolLabel: 'AAVE V3',
+    paramShape: 'aave',
+    defaultMetric: 'deposit'
+  },
+  aave_v4_top_wallets: {
+    endpoint: '/api/aave_v4/wallets/leaderboard',
+    metrics: AAVE_LEADERBOARD_METRICS,
+    protocolLabel: 'AAVE V4',
+    paramShape: 'aave',
+    defaultMetric: 'deposit'
+  },
+  uniswap_v2_top_wallets: {
+    endpoint: '/api/uniswap_v2/wallets/leaderboard',
+    metrics: UNISWAP_V2_LEADERBOARD_METRICS,
+    protocolLabel: 'Uniswap V2',
+    paramShape: 'uniswap_v2',
+    defaultMetric: 'swap'
+  },
+  uniswap_v3_top_wallets: {
+    endpoint: '/api/uniswap/wallets/leaderboard',
+    metrics: UNISWAP_V3_LEADERBOARD_METRICS,
+    protocolLabel: 'Uniswap V3',
+    paramShape: 'uniswap_v3',
+    defaultMetric: 'swap'
+  },
+  uniswap_v4_top_wallets: {
+    endpoint: '/api/uniswap_v4/wallets/leaderboard',
+    metrics: UNISWAP_V4_LEADERBOARD_METRICS,
+    protocolLabel: 'Uniswap V4',
+    paramShape: 'uniswap_v4',
+    defaultMetric: 'swap'
+  }
+};
+
+export function isLeaderboardKind(kind: ChartKind): boolean {
+  return LEADERBOARD_KIND_CONFIG[kind] !== undefined;
+}
 
 /** AAVE chart kinds collected for convenience (loop over them on the
  *  lending page + share helpers). Order matters — used as the default
@@ -1005,14 +1138,18 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Flows — on-chain token transfers + exchange-flow wrapper.
   if (kind === 'transfer' || kind === 'exchange_flow') return 'Flows';
   // Lending — AAVE V2/V3/V4, Morpho, Spark wrappers (sub-events live in
-  // each wrapper's in-chart event picker).
+  // each wrapper's in-chart event picker), plus the per-protocol top-wallet
+  // leaderboard tableviews.
   if (kind === 'aave_v2' || kind === 'aave_v3' || kind === 'aave_v4'
-      || kind === 'morpho' || kind === 'spark') {
+      || kind === 'morpho' || kind === 'spark'
+      || kind === 'aave_v2_top_wallets' || kind === 'aave_v3_top_wallets' || kind === 'aave_v4_top_wallets') {
     return 'Lending';
   }
-  // DeX — Uniswap V2/V3/V4, Aerodrome CL + Basic wrappers.
+  // DeX — Uniswap V2/V3/V4, Aerodrome CL + Basic wrappers, plus per-protocol
+  // top-wallet leaderboard tableviews.
   if (kind === 'uniswap_v2' || kind === 'uniswap_v3' || kind === 'uniswap_v4'
-      || kind === 'aero_cl' || kind === 'aero_basic') {
+      || kind === 'aero_cl' || kind === 'aero_basic'
+      || kind === 'uniswap_v2_top_wallets' || kind === 'uniswap_v3_top_wallets' || kind === 'uniswap_v4_top_wallets') {
     return 'DeX';
   }
   // Perp — GMX V2 + Hyperliquid family.
@@ -1035,9 +1172,15 @@ export function chartKindProvider(kind: ChartKind): { provider: string; variant:
   if (kind === 'aave_v2') return { provider: 'AAVE',      variant: 'V2' };
   if (kind === 'aave_v3') return { provider: 'AAVE',      variant: 'V3' };
   if (kind === 'aave_v4') return { provider: 'AAVE',      variant: 'V4' };
+  if (kind === 'aave_v2_top_wallets') return { provider: 'AAVE', variant: 'V2 Top Wallets' };
+  if (kind === 'aave_v3_top_wallets') return { provider: 'AAVE', variant: 'V3 Top Wallets' };
+  if (kind === 'aave_v4_top_wallets') return { provider: 'AAVE', variant: 'V4 Top Wallets' };
   if (kind === 'uniswap_v2') return { provider: 'Uniswap', variant: 'V2' };
   if (kind === 'uniswap_v3') return { provider: 'Uniswap', variant: 'V3' };
   if (kind === 'uniswap_v4') return { provider: 'Uniswap', variant: 'V4' };
+  if (kind === 'uniswap_v2_top_wallets') return { provider: 'Uniswap', variant: 'V2 Top Wallets' };
+  if (kind === 'uniswap_v3_top_wallets') return { provider: 'Uniswap', variant: 'V3 Top Wallets' };
+  if (kind === 'uniswap_v4_top_wallets') return { provider: 'Uniswap', variant: 'V4 Top Wallets' };
   if (kind === 'aero_cl')    return { provider: 'Aerodrome', variant: 'CL' };
   if (kind === 'aero_basic') return { provider: 'Aerodrome', variant: 'Basic' };
   // Hyperliquid: every hl_* kind nests under one Hyperliquid sub-menu.
@@ -1386,6 +1529,13 @@ export type ChartInstance = {
    *  hl_trade_history. The other modes switch to /hyperliquid/realized_pnl_split
    *  which sums hl_fills.closed_pnl bucketed by the position direction. */
   hlPnlSide?: 'total' | 'long' | 'short' | 'both';
+  /** Top-wallets leaderboard kinds (aave_v2_top_wallets / aave_v3_top_wallets
+   *  / aave_v4_top_wallets): which metric column ranks the rows. The table
+   *  always renders every metric column — this only changes the server-side
+   *  ORDER BY (so the *set* of top-N wallets shifts when you flip it). */
+  leaderboardMetric?: LeaderboardMetric;
+  /** Top-wallets leaderboard kinds: how many rows to return. Default 10. */
+  leaderboardTopN?: number;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */
@@ -1477,8 +1627,8 @@ export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>>
     // 'total' is meaningful; the overlay-fetch helper falls back to the
     // total series when long/short slots are unavailable.
     { key: 'total_oi_value', label: 'Total OI' },
-    { key: 'long_oi_value',  label: 'Long OI (HL only)' },
-    { key: 'short_oi_value', label: 'Short OI (HL only)' }
+    { key: 'long_oi_value',  label: 'Long OI' },
+    { key: 'short_oi_value', label: 'Short OI' }
   ],
   fr: [ { key: 'rate_bps', label: 'Funding Rate' } ],
   bs: [
@@ -1806,6 +1956,34 @@ export function newChartInstance(
   if (kind === 'pc') {
     base.overlayTokens = [];
     base.exchange = 'binance';
+  }
+  if (isLeaderboardKind(kind)) {
+    // Top-wallets leaderboards. Defaults vary by paramShape — AAVE keys by
+    // (chain, token), Uniswap keys by pool. Each kind's config carries its
+    // own default-metric so swap-first protocols (Uniswap) don't default
+    // to AAVE's deposit ranking.
+    const cfg = LEADERBOARD_KIND_CONFIG[kind]!;
+    base.chain = defaults.chain ?? 'ETH';
+    base.token = defaults.token ?? 'USDC';
+    base.valueMode = 'usd';
+    base.leaderboardMetric = cfg.defaultMetric;
+    base.leaderboardTopN = 10;
+    base.height = 3;
+    base.width = 3;
+    // Pool defaults for the Uniswap leaderboards — mirror the per-protocol
+    // chart-kind defaults (USDC/WETH on ETH). V4 also needs fee/tick_spacing
+    // /hooks; placeholder values get replaced by /uniswap_v4/streams once
+    // available, same flow as the V4 chart kinds.
+    if (cfg.paramShape === 'uniswap_v2') {
+      base.uniPool = { symbol0: 'USDC', symbol1: 'WETH', fee: 0 };
+    } else if (cfg.paramShape === 'uniswap_v3') {
+      base.uniPool = { symbol0: 'USDC', symbol1: 'WETH', fee: 500 };
+    } else if (cfg.paramShape === 'uniswap_v4') {
+      base.uniV4Pool = {
+        symbol0: 'USDC', symbol1: 'WETH', fee: 500, tick_spacing: 10,
+        hooks: '0x0000000000000000000000000000000000000000'
+      };
+    }
   }
   if (isAaveV3Kind(kind)) {
     // AAVE V3 charts (single-event + net) behave like transfer charts —

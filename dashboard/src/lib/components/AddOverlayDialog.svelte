@@ -450,7 +450,16 @@
     pickedKind === 'exchange_flow' && formExchangeFlowExchange === 'hyperliquid'
   );
 
-  // Effective locks combine static (per-kind) + dynamic (exchange_flow → HL).
+  /** Dynamic OI constraint: long_oi_value / short_oi_value are only carried
+   *  by the HL OI table (Binance OI is total-only), so the exchange is
+   *  forced to HL whenever one of those series is picked. */
+  let oiHlLocked = $derived(
+    pickedKind === 'oi'
+    && (formSeriesKey === 'long_oi_value' || formSeriesKey === 'short_oi_value')
+  );
+
+  // Effective locks combine static (per-kind) + dynamic (exchange_flow → HL,
+  // oi long/short → HL).
   function effectiveLockedChain(k: ChartKind): string | null {
     if (k === 'exchange_flow' && exchangeFlowHLLocked) return 'ARB';
     return lockedChain(k);
@@ -458,6 +467,10 @@
   function effectiveLockedToken(k: ChartKind): string | null {
     if (k === 'exchange_flow' && exchangeFlowHLLocked) return 'USDC';
     return lockedToken(k);
+  }
+  function effectiveLockedExchange(k: ChartKind): 'binance' | 'hl' | null {
+    if (k === 'oi' && oiHlLocked) return 'hl';
+    return lockedExchange(k);
   }
 
   // ── Field visibility helpers ────────────────────────────────────────
@@ -489,7 +502,7 @@
     return chainFieldKindUsesIt(k) && effectiveLockedChain(k) === null;
   }
   function showsExchangeField(k: ChartKind): boolean {
-    return exchangeFieldKindUsesIt(k) && lockedExchange(k) === null;
+    return exchangeFieldKindUsesIt(k) && effectiveLockedExchange(k) === null;
   }
   function showsUniPool(k: ChartKind): boolean {
     return k.startsWith('uniswap_v2_') || k.startsWith('uniswap_v3_') || k === 'uniswap_v3_net_swap_flow';
@@ -517,6 +530,14 @@
       if (formChain !== 'ARB') formChain = 'ARB';
       if (formToken !== 'USDC') formToken = 'USDC';
     }
+  });
+
+  // OI long/short series only exist on the HL table — snap the picked
+  // exchange to 'hl' so submit() captures it even if Binance was the prior
+  // selection. The chip rendered in place of the exchange selector reads
+  // the same effectiveLockedExchange() so the UI stays consistent.
+  $effect(() => {
+    if (oiHlLocked && formExchange !== 'hl') formExchange = 'hl';
   });
 
   // ── Per-kind dropdown sources ───────────────────────────────────────
@@ -969,10 +990,10 @@
             {/if}
           {/if}
           {#if pickedKind && exchangeFieldKindUsesIt(pickedKind)}
-            {#if lockedExchange(pickedKind)}
+            {#if effectiveLockedExchange(pickedKind)}
               <div class="flex items-center gap-2">
                 <span class="w-32 text-zinc-400">Exchange</span>
-                <span class="text-zinc-300 text-xs px-2 py-1 rounded bg-zinc-900 border border-zinc-700 font-mono">{lockedExchange(pickedKind) === 'hl' ? 'Hyperliquid' : 'Binance'}</span>
+                <span class="text-zinc-300 text-xs px-2 py-1 rounded bg-zinc-900 border border-zinc-700 font-mono">{effectiveLockedExchange(pickedKind) === 'hl' ? 'Hyperliquid' : 'Binance'}</span>
               </div>
             {:else}
               <label class="flex items-center gap-2">

@@ -122,6 +122,126 @@ async def aggregate(request):
     })
 
 
+# Top-wallets leaderboard for Uniswap V2 pools. Pool-keyed (chain, symbol0,
+# symbol1) — no fee_tier axis on V2.
+#
+# Wallet semantics per event:
+#   swap     → recipient (real user; `swapper` is usually the router/aggregator)
+#   deposit  → sender    (V2 mint event has no owner column)
+#   withdraw → owner     (LP burner)
+_LEADERBOARD_EVENTS_V2 = [
+    ("tradernick.uniswap_v2_swaps",       "recipient", "swap"),
+    ("tradernick.uniswap_v2_deposits",    "sender",    "deposit"),
+    ("tradernick.uniswap_v2_withdrawals", "owner",     "withdraw"),
+]
+_LEADERBOARD_ORDER_COLS_V2 = {
+    "swap":     "swap_usd",
+    "deposit":  "deposit_usd",
+    "withdraw": "withdraw_usd",
+    "net_lp":   "net_lp_usd",
+}
+
+
+@bp.get("/uniswap_v2/wallets/leaderboard")
+async def leaderboard(request):
+    chain = request.args.get("chain")
+    symbol0 = request.args.get("symbol0")
+    symbol1 = request.args.get("symbol1")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    order_by = request.args.get("order_by", "swap")
+    limit = int(request.args.get("limit", "10"))
+
+    if order_by not in _LEADERBOARD_ORDER_COLS_V2:
+        return response.json(
+            {"error": f"order_by must be one of {list(_LEADERBOARD_ORDER_COLS_V2)}"},
+            status=400,
+        )
+    if not (chain and symbol0 and symbol1):
+        return response.json({"error": "missing chain/symbol0/symbol1"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    if limit < 1 or limit > 200:
+        return response.json({"error": "limit must be in [1, 200]"}, status=400)
+
+    sym0_u, sym1_u = symbol0.upper(), symbol1.upper()
+    if sym0_u > sym1_u:
+        return response.json(
+            {"error": f"symbol0/symbol1 not in canonical order; expected {sym1_u}/{sym0_u}"},
+            status=400,
+        )
+
+    since_dt = _parse_iso(since)
+    until_dt = _parse_iso(until)
+
+    legs = []
+    for table, wallet_col, ev_label in _LEADERBOARD_EVENTS_V2:
+        legs.append(f"""
+            SELECT {wallet_col} AS wallet, coalesce(value_usd, 0) AS value_usd, '{ev_label}' AS ev
+            FROM {table} FINAL
+            WHERE chain   = {{chain:String}}
+              AND symbol0 = {{symbol0:String}}
+              AND symbol1 = {{symbol1:String}}
+              AND time >= {{since:DateTime}}
+              AND time <  {{until:DateTime}}
+        """)
+    union = "\nUNION ALL\n".join(legs)
+    order_col = _LEADERBOARD_ORDER_COLS_V2[order_by]
+
+    sql = f"""
+        WITH events AS (
+            {union}
+        )
+        SELECT
+            wallet,
+            arrayStringConcat(dictGet('tradernick.wallet_labels', 'categories', lower(wallet)), ',') AS labels,
+            sumIf(value_usd, ev = 'swap')                                          AS swap_usd,
+            countIf(ev = 'swap')                                                   AS swap_count,
+            sumIf(value_usd, ev = 'deposit')                                       AS deposit_usd,
+            countIf(ev = 'deposit')                                                AS deposit_count,
+            sumIf(value_usd, ev = 'withdraw')                                      AS withdraw_usd,
+            countIf(ev = 'withdraw')                                               AS withdraw_count,
+            sumIf(value_usd, ev = 'deposit') - sumIf(value_usd, ev = 'withdraw')   AS net_lp_usd
+        FROM events
+        WHERE wallet != ''
+        GROUP BY wallet
+        ORDER BY {order_col} DESC
+        LIMIT {{limit:UInt32}}
+    """
+
+    ch = await client()
+    rows = await ch.query(sql, parameters={
+        "chain": chain.upper(),
+        "symbol0": sym0_u,
+        "symbol1": sym1_u,
+        "since": since_dt,
+        "until": until_dt,
+        "limit": limit,
+    })
+    leaders = []
+    for rank, r in enumerate(rows.result_rows, start=1):
+        (wallet, labels,
+         sw_usd, sw_n, dep_usd, dep_n, wd_usd, wd_n, nlp_usd) = r
+        leaders.append({
+            "rank": rank,
+            "wallet": wallet,
+            "labels": labels or "",
+            "swap_usd": float(sw_usd),         "swap_count": int(sw_n),
+            "deposit_usd": float(dep_usd),     "deposit_count": int(dep_n),
+            "withdraw_usd": float(wd_usd),     "withdraw_count": int(wd_n),
+            "net_lp_usd": float(nlp_usd),
+        })
+
+    return response.json({
+        "order_by": order_by,
+        "limit": limit,
+        "since": since, "until": until,
+        "chain": chain.upper(),
+        "symbol0": sym0_u, "symbol1": sym1_u,
+        "leaders": leaders,
+    })
+
+
 @bp.get("/uniswap_v2/streams")
 async def streams(_request):
     now = time.monotonic()

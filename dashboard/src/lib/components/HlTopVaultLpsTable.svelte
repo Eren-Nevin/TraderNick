@@ -33,6 +33,7 @@
     return n.toFixed(0);
   }
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
+  import { onAuxClickArkham, onMouseDownSuppressMiddle } from '$lib/arkham';
 
   let copiedAddr = $state('');
   async function copyAddr(addr: string) {
@@ -68,7 +69,9 @@
             <td class="px-3 py-1 text-zinc-500">{l.rank}</td>
             <td class="px-3 py-1">
               <button type="button" onclick={() => copyAddr(l.wallet)}
-                      title={l.wallet + ' — click to copy'}
+                      onauxclick={onAuxClickArkham(l.wallet)}
+                      onmousedown={onMouseDownSuppressMiddle}
+                      title={l.wallet + ' — click to copy · middle-click to open in Arkham'}
                       class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer">
                 {copiedAddr === l.wallet ? '✓ copied' : truncate(l.wallet)}
               </button>

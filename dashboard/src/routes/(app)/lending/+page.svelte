@@ -18,6 +18,9 @@
     'aave_v3',
     'aave_v2',
     'aave_v4',
+    'aave_v3_top_wallets',
+    'aave_v2_top_wallets',
+    'aave_v4_top_wallets',
     'morpho',
     'spark'
   ];

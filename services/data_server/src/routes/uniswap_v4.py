@@ -150,6 +150,140 @@ async def aggregate(request):
     })
 
 
+# Top-wallets leaderboard for Uniswap V4 pools. Pool-keyed (chain, symbol0,
+# symbol1, fee, tick_spacing, hooks).
+#
+# Wallet semantics per event: V4 only stores `sender` (no separate
+# owner/recipient column on the LP or swap tables), so every event uses
+# `sender` — same caveat as the V2/V3 swap leg (routers/aggregators may be
+# overrepresented, but it's the only attribution column V4 exposes).
+_LEADERBOARD_EVENTS_V4 = [
+    ("tradernick.uniswap_v4_swaps",       "sender", "swap"),
+    ("tradernick.uniswap_v4_deposits",    "sender", "deposit"),
+    ("tradernick.uniswap_v4_withdrawals", "sender", "withdraw"),
+]
+_LEADERBOARD_ORDER_COLS_V4 = {
+    "swap":     "swap_usd",
+    "deposit":  "deposit_usd",
+    "withdraw": "withdraw_usd",
+    "net_lp":   "net_lp_usd",
+}
+
+
+@bp.get("/uniswap_v4/wallets/leaderboard")
+async def leaderboard(request):
+    chain = request.args.get("chain")
+    symbol0 = request.args.get("symbol0")
+    symbol1 = request.args.get("symbol1")
+    fee = request.args.get("fee")
+    tick_spacing = request.args.get("tick_spacing")
+    hooks = request.args.get("hooks", "0x0000000000000000000000000000000000000000")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    order_by = request.args.get("order_by", "swap")
+    limit = int(request.args.get("limit", "10"))
+
+    if order_by not in _LEADERBOARD_ORDER_COLS_V4:
+        return response.json(
+            {"error": f"order_by must be one of {list(_LEADERBOARD_ORDER_COLS_V4)}"},
+            status=400,
+        )
+    if not (chain and symbol0 and symbol1 and fee and tick_spacing):
+        return response.json({"error": "missing chain/symbol0/symbol1/fee/tick_spacing"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    if limit < 1 or limit > 200:
+        return response.json({"error": "limit must be in [1, 200]"}, status=400)
+    try:
+        fee_int = int(fee); ts_int = int(tick_spacing)
+    except ValueError:
+        return response.json({"error": "fee + tick_spacing must be ints"}, status=400)
+
+    sym0_u, sym1_u = symbol0.upper(), symbol1.upper()
+    if sym0_u > sym1_u:
+        return response.json(
+            {"error": f"symbol0/symbol1 not canonical; expected {sym1_u}/{sym0_u}"},
+            status=400,
+        )
+
+    since_dt = _parse_iso(since)
+    until_dt = _parse_iso(until)
+
+    legs = []
+    for table, wallet_col, ev_label in _LEADERBOARD_EVENTS_V4:
+        legs.append(f"""
+            SELECT {wallet_col} AS wallet, coalesce(value_usd, 0) AS value_usd, '{ev_label}' AS ev
+            FROM {table} FINAL
+            WHERE chain        = {{chain:String}}
+              AND symbol0      = {{symbol0:String}}
+              AND symbol1      = {{symbol1:String}}
+              AND fee          = {{fee:UInt32}}
+              AND tick_spacing = {{ts:UInt32}}
+              AND hooks        = {{hooks:String}}
+              AND time >= {{since:DateTime}}
+              AND time <  {{until:DateTime}}
+        """)
+    union = "\nUNION ALL\n".join(legs)
+    order_col = _LEADERBOARD_ORDER_COLS_V4[order_by]
+
+    sql = f"""
+        WITH events AS (
+            {union}
+        )
+        SELECT
+            wallet,
+            arrayStringConcat(dictGet('tradernick.wallet_labels', 'categories', lower(wallet)), ',') AS labels,
+            sumIf(value_usd, ev = 'swap')                                          AS swap_usd,
+            countIf(ev = 'swap')                                                   AS swap_count,
+            sumIf(value_usd, ev = 'deposit')                                       AS deposit_usd,
+            countIf(ev = 'deposit')                                                AS deposit_count,
+            sumIf(value_usd, ev = 'withdraw')                                      AS withdraw_usd,
+            countIf(ev = 'withdraw')                                               AS withdraw_count,
+            sumIf(value_usd, ev = 'deposit') - sumIf(value_usd, ev = 'withdraw')   AS net_lp_usd
+        FROM events
+        WHERE wallet != ''
+        GROUP BY wallet
+        ORDER BY {order_col} DESC
+        LIMIT {{limit:UInt32}}
+    """
+
+    ch = await client()
+    rows = await ch.query(sql, parameters={
+        "chain": chain.upper(),
+        "symbol0": sym0_u,
+        "symbol1": sym1_u,
+        "fee": fee_int,
+        "ts": ts_int,
+        "hooks": hooks,
+        "since": since_dt,
+        "until": until_dt,
+        "limit": limit,
+    })
+    leaders = []
+    for rank, r in enumerate(rows.result_rows, start=1):
+        (wallet, labels,
+         sw_usd, sw_n, dep_usd, dep_n, wd_usd, wd_n, nlp_usd) = r
+        leaders.append({
+            "rank": rank,
+            "wallet": wallet,
+            "labels": labels or "",
+            "swap_usd": float(sw_usd),         "swap_count": int(sw_n),
+            "deposit_usd": float(dep_usd),     "deposit_count": int(dep_n),
+            "withdraw_usd": float(wd_usd),     "withdraw_count": int(wd_n),
+            "net_lp_usd": float(nlp_usd),
+        })
+
+    return response.json({
+        "order_by": order_by,
+        "limit": limit,
+        "since": since, "until": until,
+        "chain": chain.upper(),
+        "symbol0": sym0_u, "symbol1": sym1_u,
+        "fee": fee_int, "tick_spacing": ts_int, "hooks": hooks,
+        "leaders": leaders,
+    })
+
+
 @bp.get("/uniswap_v4/streams")
 async def streams(_request):
     now = time.monotonic()

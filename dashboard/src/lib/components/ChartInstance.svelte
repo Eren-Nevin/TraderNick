@@ -7,6 +7,7 @@
   import HlTopVaultsTable from '$lib/components/HlTopVaultsTable.svelte';
   import HlTopVaultLpsTable from '$lib/components/HlTopVaultLpsTable.svelte';
   import HlVaultDetailChart from '$lib/components/HlVaultDetailChart.svelte';
+  import WalletLeaderboardTable from '$lib/components/WalletLeaderboardTable.svelte';
   import SignedBarChart from '$lib/components/SignedBarChart.svelte';
   import { onMount, untrack } from 'svelte';
   import {
@@ -99,6 +100,9 @@
     LIDO_NET_KIND_TO_EVENTS,
     LIDO_L1_KINDS,
     isLidoKind,
+    isLeaderboardKind,
+    LEADERBOARD_KIND_CONFIG,
+    type LeaderboardMetric,
     overlayChipLabel,
     nextOverlayColor,
     OVERLAY_KIND_SERIES,
@@ -246,8 +250,10 @@
   });
   let uniPoolsForChain = $derived(uniPoolsByChain.get(instance.chain ?? '') ?? []);
   // Auto-snap pool when the chain narrows and the current pool isn't on it.
+  // Applies to V3 charts AND the V3 leaderboard kind (both use the same
+  // (chain, sym0, sym1, fee) pool selector).
   $effect(() => {
-    if (!isUniswapV3Kind(instance.kind)) return;
+    if (!isUniswapV3Kind(instance.kind) && instance.kind !== 'uniswap_v3_top_wallets') return;
     const list = uniPoolsForChain;
     if (list.length === 0) return;
     const current = instance.uniPool;
@@ -634,6 +640,26 @@
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}|ov:${ov}`;
     }
+    if (isLeaderboardKind(instance.kind)) {
+      // Top-wallets leaderboards: AAVE kinds key on (chain, token); Uniswap
+      // kinds key on the pool tuple. Metric + top-N always included. No
+      // interval — it's a single-shot rollup.
+      const cfg = LEADERBOARD_KIND_CONFIG[instance.kind]!;
+      const m = instance.leaderboardMetric ?? cfg.defaultMetric;
+      const n = instance.leaderboardTopN ?? 10;
+      let scope = '';
+      if (cfg.paramShape === 'aave') {
+        const cPart = activeChainGroup ? `cg:${activeChainGroup.name}` : (instance.chain ?? '');
+        const tPart = activeTokenGroup !== null ? `tg:${activeTokenGroup}` : instance.token;
+        scope = `${cPart}|${tPart}`;
+      } else if (cfg.paramShape === 'uniswap_v3' || cfg.paramShape === 'uniswap_v2') {
+        scope = `${instance.chain ?? ''}|${uniPoolKey(instance.uniPool)}`;
+      } else if (cfg.paramShape === 'uniswap_v4') {
+        const p = instance.uniV4Pool;
+        scope = `${instance.chain ?? ''}|${p ? `${p.symbol0}|${p.symbol1}|${p.fee}|${p.tick_spacing}|${p.hooks}` : ''}`;
+      }
+      return `${instance.kind}|${scope}|m:${m}|n:${n}`;
+    }
     if (isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind)) {
       // AAVE charts (single-event + net) depend on chain + token (event_type
       // derived from kind). Either axis may be a group name — fold the
@@ -866,7 +892,8 @@
         isUniswapV4Kind(instance.kind) ||
         isAeroClKind(instance.kind) ||
         isAeroBasicKind(instance.kind) ||
-        isLidoKind(instance.kind);
+        isLidoKind(instance.kind) ||
+        isLeaderboardKind(instance.kind);
       if (isWideWindowKind) {
         const now = new Date();
         const tu = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
@@ -1358,6 +1385,50 @@
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
         const body = await res.json();
         data = [{ wallets: body.wallets ?? [], as_of: body.as_of } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Top-wallets leaderboard kinds (aave_v*_top_wallets). One JSON fetch
+      // per render — server-side GROUP BY wallet across all 5 events. Carries
+      // the leader rows as a single AnyDatum payload (same shape trick as
+      // hl_top_traders above).
+      if (isLeaderboardKind(instance.kind)) {
+        const cfg = LEADERBOARD_KIND_CONFIG[instance.kind]!;
+        const qs = new URLSearchParams({
+          since: sinceIso,
+          until: untilIso,
+          order_by: instance.leaderboardMetric ?? cfg.defaultMetric,
+          limit: String(Math.max(1, Math.min(200, instance.leaderboardTopN ?? 10)))
+        });
+        if (cfg.paramShape === 'aave') {
+          if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
+          else qs.set('chain', instance.chain ?? 'ETH');
+          if (activeTokenGroup !== null) qs.set('token_group', activeTokenGroup);
+          else qs.set('token', instance.token);
+        } else if (cfg.paramShape === 'uniswap_v3' || cfg.paramShape === 'uniswap_v2') {
+          const pool = instance.uniPool;
+          if (!pool) throw new Error(`${instance.kind} missing pool selection`);
+          qs.set('chain', instance.chain ?? 'ETH');
+          qs.set('symbol0', pool.symbol0);
+          qs.set('symbol1', pool.symbol1);
+          if (cfg.paramShape === 'uniswap_v3') qs.set('fee_tier', String(pool.fee));
+        } else if (cfg.paramShape === 'uniswap_v4') {
+          const pool = instance.uniV4Pool;
+          if (!pool) throw new Error(`${instance.kind} missing pool selection`);
+          qs.set('chain', instance.chain ?? 'ETH');
+          qs.set('symbol0', pool.symbol0);
+          qs.set('symbol1', pool.symbol1);
+          qs.set('fee', String(pool.fee));
+          qs.set('tick_spacing', String(pool.tick_spacing));
+          qs.set('hooks', pool.hooks);
+        }
+        const res = await queuedFetch(`${cfg.endpoint}?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = [{ leaders: body.leaders ?? [] } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
@@ -3284,6 +3355,7 @@
     && instance.kind !== 'hl_top_vaults'
     && instance.kind !== 'hl_top_vault_lps'
     && instance.kind !== 'hl_vault_detail'
+    && !isLeaderboardKind(instance.kind)
   );
 
   function overlayLoadKey(o: ChartOverlay, iv: Interval, sinceIso: string, untilIso: string): string {
@@ -3993,6 +4065,113 @@
             <option value="both">Long + Short</option>
           </select>
         {/if}
+      {:else if isLeaderboardKind(instance.kind)}
+        <!-- Top-wallets leaderboards: filter selectors depend on paramShape
+             (AAVE → chain+token with groups; Uniswap → pool tuple). The
+             metric selector + Top N input live inside the table toolbar —
+             see WalletLeaderboardTable. No interval selector (single-shot
+             rollup, not a bucketed series). -->
+        {#if LEADERBOARD_KIND_CONFIG[instance.kind]!.paramShape === 'aave'}
+          <select
+            bind:value={instance.chain}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          >
+            {#if chainGroups.length > 0}
+              <optgroup label="Chain">
+                {#each ['ETH','ARB','BASE','BSC','POLYGON'] as c (c)}
+                  <option value={c}>{c}</option>
+                {/each}
+              </optgroup>
+              <optgroup label="Chain group">
+                {#each chainGroups as g (g.name)}
+                  <option value={g.name} title={g.description}>Σ {g.label}</option>
+                {/each}
+              </optgroup>
+            {:else}
+              {#each ['ETH','ARB','BASE','BSC','POLYGON'] as c (c)}
+                <option value={c}>{c}</option>
+              {/each}
+            {/if}
+          </select>
+          <select
+            value={instance.token}
+            onchange={(e) => (instance.token = e.currentTarget.value)}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          >
+            <optgroup label="Tokens">
+              {#each ['USDC','USDT','DAI','USDE','USDS','GHO','WETH','WBTC','WSTETH','CBBTC','LINK','RLUSD','PYUSD','EURC'] as t (t)}
+                <option value={t}>{t}</option>
+              {/each}
+              {#if instance.token && !['USDC','USDT','DAI','USDE','USDS','GHO','WETH','WBTC','WSTETH','CBBTC','LINK','RLUSD','PYUSD','EURC'].includes(instance.token) && !tokenGroups.some((g) => g.name === instance.token)}
+                <option value={instance.token}>{instance.token}</option>
+              {/if}
+            </optgroup>
+            {#if tokenGroups.length > 0}
+              <optgroup label="Token group">
+                {#each tokenGroups as g (g.name)}
+                  <option value={g.name} title={g.description}>Σ {g.label}</option>
+                {/each}
+              </optgroup>
+            {/if}
+          </select>
+        {:else if LEADERBOARD_KIND_CONFIG[instance.kind]!.paramShape === 'uniswap_v3'}
+          <!-- Pool selector reuses the V3 chart's dropdown — chain narrows
+               the pool list, pool dropdown picks (sym0/sym1/fee). -->
+          <select
+            bind:value={instance.chain}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          >
+            {#each (uniChains.length > 0 ? uniChains : ['ETH','ARB','BASE','BSC','POLYGON']) as c (c)}
+              <option value={c}>{c}</option>
+            {/each}
+          </select>
+          <select
+            value={currentUniPoolKey}
+            onchange={(e) => onUniPoolChange(e.currentTarget.value)}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500 min-w-[10rem]"
+          >
+            {#if uniPoolsForChain.length === 0}
+              {#if instance.uniPool}
+                <option value={uniPoolKey(instance.uniPool)}>{fmtUniPool(instance.uniPool)}</option>
+              {:else}
+                <option value="">(no pools)</option>
+              {/if}
+            {:else}
+              {#each uniPoolsForChain as p ((p.symbol0 + '|' + p.symbol1 + '|' + p.fee))}
+                <option value={p.symbol0 + '|' + p.symbol1 + '|' + p.fee}>{fmtUniPool(p)}</option>
+              {/each}
+            {/if}
+          </select>
+        {:else if LEADERBOARD_KIND_CONFIG[instance.kind]!.paramShape === 'uniswap_v2'}
+          <select
+            bind:value={instance.chain}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          >
+            {#each ['ETH','ARB','BASE','BSC','POLYGON'] as c (c)}
+              <option value={c}>{c}</option>
+            {/each}
+          </select>
+          {#if instance.uniPool}
+            <span class="text-zinc-100 text-xs font-medium px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">
+              {instance.uniPool.symbol0}/{instance.uniPool.symbol1}
+            </span>
+          {/if}
+        {:else if LEADERBOARD_KIND_CONFIG[instance.kind]!.paramShape === 'uniswap_v4'}
+          <select
+            bind:value={instance.chain}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          >
+            {#each ['ETH','ARB','BASE','BSC','POLYGON'] as c (c)}
+              <option value={c}>{c}</option>
+            {/each}
+          </select>
+          {#if instance.uniV4Pool}
+            <span class="text-zinc-100 text-xs font-medium px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">
+              {instance.uniV4Pool.symbol0}/{instance.uniV4Pool.symbol1}
+              <span class="text-zinc-500 ml-1">{(instance.uniV4Pool.fee / 10000).toFixed(2)}% · ts={instance.uniV4Pool.tick_spacing}</span>
+            </span>
+          {/if}
+        {/if}
       {:else if isAaveV4Kind(instance.kind)}
         <!-- AAVE V4: ETH-only (V4 is mainnet-only currently). Static
              chain chip + the same token selector as V2/V3. The general
@@ -4410,14 +4589,16 @@
           {/each}
         </select>
       {/if}
-      <select
-        bind:value={instance.interval}
-        class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-      >
-        {#each INTERVALS as iv (iv)}
-          <option value={iv}>{iv}</option>
-        {/each}
-      </select>
+      {#if !isLeaderboardKind(instance.kind)}
+        <select
+          bind:value={instance.interval}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        >
+          {#each INTERVALS as iv (iv)}
+            <option value={iv}>{iv}</option>
+          {/each}
+        </select>
+      {/if}
       <button
         type="button"
         onclick={reload}
@@ -5079,6 +5260,18 @@
       />
     {:else if instance.kind === 'hl_top_traders'}
       <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />
+    {:else if isLeaderboardKind(instance.kind)}
+      <WalletLeaderboardTable
+        rows={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) as unknown as import('$lib/components/WalletLeaderboardTable.svelte').LeaderboardRow[] : []}
+        columns={LEADERBOARD_KIND_CONFIG[instance.kind]!.metrics}
+        orderBy={(instance.leaderboardMetric ?? 'deposit') as LeaderboardMetric}
+        topN={instance.leaderboardTopN ?? 10}
+        onChangeOrderBy={(m) => (instance.leaderboardMetric = m)}
+        onChangeTopN={(n) => (instance.leaderboardTopN = n)}
+        loading={loading}
+        error={error}
+        protocolLabel={LEADERBOARD_KIND_CONFIG[instance.kind]!.protocolLabel}
+      />
     {:else if instance.kind === 'hl_top_positions'}
       <HlTopPositionsChart
         wallets={data.length > 0 ? ((data[0] as unknown as {wallets?: unknown[]}).wallets ?? []) : []}

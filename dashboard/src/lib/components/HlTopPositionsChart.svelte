@@ -97,6 +97,7 @@
   }
 
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
+  import { onAuxClickArkham, onMouseDownSuppressMiddle } from '$lib/arkham';
 
   let copied = $state(false);
   async function copyAddr() {
@@ -190,7 +191,9 @@
     <button
       type="button"
       onclick={copyAddr}
-      title="Copy full address"
+      onauxclick={onAuxClickArkham(effectiveSelected ?? '')}
+      onmousedown={onMouseDownSuppressMiddle}
+      title="Click to copy full address · middle-click to open in Arkham"
       disabled={!effectiveSelected}
       class="px-2 py-1 rounded-md border border-zinc-700 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 disabled:opacity-40 disabled:cursor-not-allowed"
     >{copied ? '✓ copied' : 'Copy'}</button>

@@ -53,6 +53,7 @@
   }
 
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
+  import { onAuxClickArkham, onMouseDownSuppressMiddle } from '$lib/arkham';
 
   // Sortable columns. Default '' = server order (net_pnl DESC).
   type SortKey = '' | 'net_pnl' | 'volume' | 'trade_count';
@@ -103,8 +104,10 @@
               <button
                 type="button"
                 onclick={() => copy(l.wallet as string)}
+                onauxclick={onAuxClickArkham(l.wallet as string)}
+                onmousedown={onMouseDownSuppressMiddle}
                 class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer"
-                title={l.wallet as string}
+                title={(l.wallet as string) + ' — click to copy · middle-click to open in Arkham'}
               >{copiedAddr === l.wallet ? '✓ copied' : truncate(l.wallet as string)}</button>
             </td>
             <td class="px-3 py-1 text-right font-mono"

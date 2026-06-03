@@ -55,6 +55,7 @@
     return n.toFixed(0);
   }
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
+  import { onAuxClickArkham, onMouseDownSuppressMiddle } from '$lib/arkham';
 
   // Click-to-copy + transient "✓ copied" feedback
   let copiedAddr = $state('');
@@ -139,7 +140,9 @@
               <td class="px-3 py-1 text-zinc-500">{sortKey ? idx + 1 : v.rank}</td>
               <td class="px-3 py-1">
                 <button type="button" onclick={() => copyAddr(v.vault)}
-                        title={v.vault + ' — click to copy'}
+                        onauxclick={onAuxClickArkham(v.vault)}
+                        onmousedown={onMouseDownSuppressMiddle}
+                        title={v.vault + ' — click to copy · middle-click to open in Arkham'}
                         class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer">
                   {copiedAddr === v.vault ? '✓ copied' : truncate(v.vault)}
                 </button>

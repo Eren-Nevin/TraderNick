@@ -186,6 +186,147 @@ async def aggregate(request):
     })
 
 
+# Top-wallets leaderboard for Uniswap V3 pools. Pool-keyed (chain, symbol0,
+# symbol1, fee_tier) — same as the chart kinds. UNION ALL one leg per event,
+# GROUP BY wallet, sumIf/countIf to collapse into one row per wallet with
+# every metric column. ORDER BY is a whitelisted column name (no SQL
+# interpolation of user input).
+#
+# Wallet semantics per event (V3 contract event sigs):
+#   swap     → recipient (actual user; `swapper` is usually the router/aggregator)
+#   deposit  → owner     (LP position owner)
+#   withdraw → owner
+#   collect  → owner
+_LEADERBOARD_EVENTS_V3 = [
+    # (table, wallet_col, ev_label)
+    ("tradernick.uniswap_swaps",       "recipient", "swap"),
+    ("tradernick.uniswap_deposits",    "owner",     "deposit"),
+    ("tradernick.uniswap_withdrawals", "owner",     "withdraw"),
+    ("tradernick.uniswap_collects",    "owner",     "collect"),
+]
+_LEADERBOARD_ORDER_COLS_V3 = {
+    "swap":     "swap_usd",
+    "deposit":  "deposit_usd",
+    "withdraw": "withdraw_usd",
+    "net_lp":   "net_lp_usd",
+    "collect":  "collect_usd",
+}
+
+
+@bp.get("/uniswap/wallets/leaderboard")
+async def leaderboard(request):
+    chain = request.args.get("chain")
+    symbol0 = request.args.get("symbol0")
+    symbol1 = request.args.get("symbol1")
+    fee_tier = request.args.get("fee_tier")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    order_by = request.args.get("order_by", "swap")
+    limit = int(request.args.get("limit", "10"))
+
+    if order_by not in _LEADERBOARD_ORDER_COLS_V3:
+        return response.json(
+            {"error": f"order_by must be one of {list(_LEADERBOARD_ORDER_COLS_V3)}"},
+            status=400,
+        )
+    if not (chain and symbol0 and symbol1 and fee_tier):
+        return response.json({"error": "missing chain/symbol0/symbol1/fee_tier"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    if limit < 1 or limit > 200:
+        return response.json({"error": "limit must be in [1, 200]"}, status=400)
+    try:
+        fee_tier_int = int(fee_tier)
+    except ValueError:
+        return response.json({"error": "fee_tier must be an int"}, status=400)
+
+    sym0_u, sym1_u = symbol0.upper(), symbol1.upper()
+    if sym0_u > sym1_u:
+        return response.json(
+            {"error": f"symbol0/symbol1 not in canonical order; expected {sym1_u}/{sym0_u}"},
+            status=400,
+        )
+
+    since_dt = _parse_iso(since)
+    until_dt = _parse_iso(until)
+
+    # Build one SELECT per event, UNION ALL them. Pool identity (chain,
+    # symbol0, symbol1, fee_tier) prunes against the table's order key.
+    legs = []
+    for table, wallet_col, ev_label in _LEADERBOARD_EVENTS_V3:
+        legs.append(f"""
+            SELECT {wallet_col} AS wallet, coalesce(value_usd, 0) AS value_usd, '{ev_label}' AS ev
+            FROM {table} FINAL
+            WHERE chain    = {{chain:String}}
+              AND symbol0  = {{symbol0:String}}
+              AND symbol1  = {{symbol1:String}}
+              AND fee_tier = {{fee_tier:UInt32}}
+              AND time >= {{since:DateTime}}
+              AND time <  {{until:DateTime}}
+        """)
+    union = "\nUNION ALL\n".join(legs)
+    order_col = _LEADERBOARD_ORDER_COLS_V3[order_by]
+
+    sql = f"""
+        WITH events AS (
+            {union}
+        )
+        SELECT
+            wallet,
+            arrayStringConcat(dictGet('tradernick.wallet_labels', 'categories', lower(wallet)), ',') AS labels,
+            sumIf(value_usd, ev = 'swap')                                          AS swap_usd,
+            countIf(ev = 'swap')                                                   AS swap_count,
+            sumIf(value_usd, ev = 'deposit')                                       AS deposit_usd,
+            countIf(ev = 'deposit')                                                AS deposit_count,
+            sumIf(value_usd, ev = 'withdraw')                                      AS withdraw_usd,
+            countIf(ev = 'withdraw')                                               AS withdraw_count,
+            sumIf(value_usd, ev = 'deposit') - sumIf(value_usd, ev = 'withdraw')   AS net_lp_usd,
+            sumIf(value_usd, ev = 'collect')                                       AS collect_usd,
+            countIf(ev = 'collect')                                                AS collect_count
+        FROM events
+        WHERE wallet != ''
+        GROUP BY wallet
+        ORDER BY {order_col} DESC
+        LIMIT {{limit:UInt32}}
+    """
+
+    ch = await client()
+    rows = await ch.query(sql, parameters={
+        "chain": chain.upper(),
+        "symbol0": sym0_u,
+        "symbol1": sym1_u,
+        "fee_tier": fee_tier_int,
+        "since": since_dt,
+        "until": until_dt,
+        "limit": limit,
+    })
+    leaders = []
+    for rank, r in enumerate(rows.result_rows, start=1):
+        (wallet, labels,
+         sw_usd, sw_n, dep_usd, dep_n, wd_usd, wd_n, nlp_usd,
+         co_usd, co_n) = r
+        leaders.append({
+            "rank": rank,
+            "wallet": wallet,
+            "labels": labels or "",
+            "swap_usd": float(sw_usd),         "swap_count": int(sw_n),
+            "deposit_usd": float(dep_usd),     "deposit_count": int(dep_n),
+            "withdraw_usd": float(wd_usd),     "withdraw_count": int(wd_n),
+            "net_lp_usd": float(nlp_usd),
+            "collect_usd": float(co_usd),      "collect_count": int(co_n),
+        })
+
+    return response.json({
+        "order_by": order_by,
+        "limit": limit,
+        "since": since, "until": until,
+        "chain": chain.upper(),
+        "symbol0": sym0_u, "symbol1": sym1_u,
+        "fee_tier": fee_tier_int,
+        "leaders": leaders,
+    })
+
+
 @bp.get("/uniswap/streams")
 async def streams(_request):
     """Distinct (event, chain, symbol0, symbol1, fee_tier) tuples with row

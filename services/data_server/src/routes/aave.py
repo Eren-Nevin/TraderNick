@@ -188,6 +188,184 @@ async def aggregate(request):
     return response.json(resp_body)
 
 
+# Top-wallets leaderboard. One CTE per event, UNION ALL'd into a single
+# wallet-column with an `ev` tag; GROUP BY wallet + sumIf/countIf collapses
+# into one row per wallet with all 7 metrics. ORDER BY is whitelisted on a
+# fixed column-name map so user input never reaches SQL untrusted.
+#
+# Wallet semantics per event (V3 — matches the V3 contract event sigs):
+#   deposit     → on_behalf_of  (beneficiary; user is the depositor)
+#   withdraw    → user          (no on_behalf_of; user is position-holder)
+#   borrow      → on_behalf_of  (whose debt actually increased)
+#   repay       → user          (the borrower; `repayer` is the executor)
+#   liquidation → owner         (the liquidated party)
+_LEADERBOARD_EVENTS_V3 = [
+    # (table, wallet_col, token_col, ev_label)
+    ("tradernick.aave_deposits",     "on_behalf_of", "token",      "deposit"),
+    ("tradernick.aave_withdrawals",  "user",         "token",      "withdraw"),
+    ("tradernick.aave_borrows",      "on_behalf_of", "token",      "borrow"),
+    ("tradernick.aave_repays",       "user",         "token",      "repay"),
+    ("tradernick.aave_liquidations", "owner",        "debt_token", "liquidation"),
+]
+_LEADERBOARD_ORDER_COLS = {
+    "deposit":     "deposit_usd",
+    "withdraw":    "withdraw_usd",
+    "net_deposit": "net_deposit_usd",
+    "borrow":      "borrow_usd",
+    "repay":       "repay_usd",
+    "net_borrow":  "net_borrow_usd",
+    "liquidation": "liquidation_usd",
+}
+
+
+def _q(s: str) -> str:
+    return "'" + s.replace("'", "''") + "'"
+
+
+def _build_ckt_where(chains: list[str], tokens: list[str], token_col: str) -> str:
+    """(chain, token_col) IN (...) predicate — pure literals, both inputs come
+    from the validated chain/token group resolution, never from raw query
+    strings."""
+    pairs = [(c, t) for c in chains for t in tokens]
+    tup = ", ".join(f"({_q(c)}, {_q(t)})" for (c, t) in pairs)
+    return f"(chain, {token_col}) IN ({tup})"
+
+
+@bp.get("/aave/wallets/leaderboard")
+async def leaderboard(request):
+    chain = request.args.get("chain")
+    token = request.args.get("token")
+    chain_group = request.args.get("chain_group")
+    token_group = request.args.get("token_group")
+    eth_markets = _parse_csv(request.args.get("eth_markets"))
+    since = request.args.get("since")
+    until = request.args.get("until")
+    order_by = request.args.get("order_by", "deposit")
+    limit = int(request.args.get("limit", "10"))
+
+    if order_by not in _LEADERBOARD_ORDER_COLS:
+        return response.json(
+            {"error": f"order_by must be one of {list(_LEADERBOARD_ORDER_COLS)}"},
+            status=400,
+        )
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    if limit < 1 or limit > 200:
+        return response.json({"error": "limit must be in [1, 200]"}, status=400)
+
+    if chain_group:
+        if not is_chain_group(chain_group):
+            return response.json({"error": f"unknown chain_group {chain_group!r}"}, status=400)
+        chains = await resolve_chain_group(chain_group)
+    elif chain:
+        chains = [chain]
+    else:
+        return response.json({"error": "missing chain (or chain_group)"}, status=400)
+    if token_group:
+        if not is_token_group(token_group):
+            return response.json({"error": f"unknown token_group {token_group!r}"}, status=400)
+        tokens = resolve_token_group(token_group)
+    elif token:
+        tokens = [token]
+    else:
+        return response.json({"error": "missing token (or token_group)"}, status=400)
+
+    since_dt = _parse_iso(since)
+    until_dt = _parse_iso(until)
+
+    eth_markets = [m for m in eth_markets if m in _ETH_MARKETS]
+    chain_set = {c.upper() for c in chains}
+    market_where = ""
+    if "ETH" in chain_set and eth_markets:
+        markets_sql = ", ".join(_q(m) for m in eth_markets)
+        market_where = f" AND eth_market IN ({markets_sql})"
+
+    # Build one SELECT per event, UNION ALL them. All five share the same
+    # time window + market filter; only the table, wallet column, and
+    # token column vary. Chain/token tuples are baked into _build_ckt_where.
+    legs = []
+    for table, wallet_col, token_col, ev_label in _LEADERBOARD_EVENTS_V3:
+        ckt = _build_ckt_where(chains, tokens, token_col)
+        legs.append(f"""
+            SELECT {wallet_col} AS wallet, coalesce(value_usd, 0) AS value_usd, '{ev_label}' AS ev
+            FROM {table} FINAL
+            WHERE {ckt}
+              AND time >= {{since:DateTime}}
+              AND time <  {{until:DateTime}}
+              {market_where}
+        """)
+    union = "\nUNION ALL\n".join(legs)
+    order_col = _LEADERBOARD_ORDER_COLS[order_by]
+
+    sql = f"""
+        WITH events AS (
+            {union}
+        )
+        SELECT
+            wallet,
+            arrayStringConcat(dictGet('tradernick.wallet_labels', 'categories', lower(wallet)), ',') AS labels,
+            sumIf(value_usd, ev = 'deposit')                                              AS deposit_usd,
+            countIf(ev = 'deposit')                                                       AS deposit_count,
+            sumIf(value_usd, ev = 'withdraw')                                             AS withdraw_usd,
+            countIf(ev = 'withdraw')                                                      AS withdraw_count,
+            sumIf(value_usd, ev = 'deposit') - sumIf(value_usd, ev = 'withdraw')          AS net_deposit_usd,
+            sumIf(value_usd, ev = 'borrow')                                               AS borrow_usd,
+            countIf(ev = 'borrow')                                                        AS borrow_count,
+            sumIf(value_usd, ev = 'repay')                                                AS repay_usd,
+            countIf(ev = 'repay')                                                         AS repay_count,
+            sumIf(value_usd, ev = 'borrow') - sumIf(value_usd, ev = 'repay')              AS net_borrow_usd,
+            sumIf(value_usd, ev = 'liquidation')                                          AS liquidation_usd,
+            countIf(ev = 'liquidation')                                                   AS liquidation_count
+        FROM events
+        WHERE wallet != ''
+        GROUP BY wallet
+        ORDER BY {order_col} DESC
+        LIMIT {{limit:UInt32}}
+    """
+
+    ch = await client()
+    rows = await ch.query(sql, parameters={
+        "since": since_dt, "until": until_dt, "limit": limit,
+    })
+    leaders = []
+    for rank, r in enumerate(rows.result_rows, start=1):
+        (wallet, labels,
+         dep_usd, dep_n, wd_usd, wd_n, nd_usd,
+         br_usd, br_n, rp_usd, rp_n, nb_usd,
+         lq_usd, lq_n) = r
+        leaders.append({
+            "rank": rank,
+            "wallet": wallet,
+            "labels": labels or "",
+            "deposit_usd": float(dep_usd),     "deposit_count":     int(dep_n),
+            "withdraw_usd": float(wd_usd),     "withdraw_count":    int(wd_n),
+            "net_deposit_usd": float(nd_usd),
+            "borrow_usd": float(br_usd),       "borrow_count":      int(br_n),
+            "repay_usd": float(rp_usd),        "repay_count":       int(rp_n),
+            "net_borrow_usd": float(nb_usd),
+            "liquidation_usd": float(lq_usd),  "liquidation_count": int(lq_n),
+        })
+
+    body = {
+        "order_by": order_by,
+        "limit": limit,
+        "since": since, "until": until,
+        "eth_markets": eth_markets,
+        "leaders": leaders,
+    }
+    if chain_group:
+        body["chain_group"] = chain_group
+        body["chains"] = chains
+    else:
+        body["chain"] = chain
+    if token_group:
+        body["token_group"] = token_group
+        body["tokens"] = tokens
+    else:
+        body["token"] = token
+    return response.json(body)
+
+
 @bp.get("/aave/streams")
 async def streams(_request):
     """Distinct (event, chain, token) tuples + which eth_markets each has.
