@@ -3,7 +3,7 @@ services:
     image: clickhouse/clickhouse-server:24.8
     volumes:
       - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
-      - clickhouse-data:/var/lib/clickhouse
+      - /mnt/viper/tradernick/clickhouse:/var/lib/clickhouse
     environment:
       CLICKHOUSE_DB: tradernick
       CLICKHOUSE_USER: tradernick
@@ -67,6 +67,3 @@ services:
     ports:
       - "10000:3000"
     restart: unless-stopped
-
-volumes:
-  clickhouse-data:
