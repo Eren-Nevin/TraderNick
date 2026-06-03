@@ -100,6 +100,16 @@ async function fetchRawSeries(
           return { time: r.time, value: s > 0 ? l / s : 0 };
         });
       }
+      if (o.seriesKey === 'net_oi_pct') {
+        // (long - short) / total, in [-1, 1]. Unitless: the mark price
+        // cancels, so the value is the same in token or USD space.
+        return rows.map((r) => {
+          const t = Number(r.total_oi_value ?? 0);
+          if (!(t > 0)) return { time: r.time, value: 0 };
+          return { time: r.time,
+            value: (Number(r.long_oi_value ?? 0) - Number(r.short_oi_value ?? 0)) / t };
+        });
+      }
       // HL response carries both unit shapes: `*_oi` (token) and `*_oi_value`
       // ($). The seriesKey already names the exact field — just read it.
       const hlKeys = ['long_oi_value', 'short_oi_value', 'total_oi_value',

@@ -1476,7 +1476,7 @@ export type ChartInstance = {
    *  'long_short' (two lines: long + short, no total), or
    *  'long_to_short' (one line: long / short ratio). Ignored when
    *  exchange='binance' (the long/short split isn't available there). */
-  oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short' | 'long_to_short';
+  oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short' | 'long_to_short' | 'net_pct';
   /** OI unit: 'usd' = dollar notional (default, matches Binance OI panel
    *  conventions), 'token' = the underlying coin amount (e.g. BTC count).
    *  The Long/Short ratio mode ignores this — it's mathematically the same
@@ -1648,6 +1648,7 @@ export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>>
     { key: 'total_oi',         label: 'Total OI (token)' },
     { key: 'long_oi',          label: 'Long OI (token)' },
     { key: 'short_oi',         label: 'Short OI (token)' },
+    { key: 'net_oi_pct',       label: 'Net OI %' },
     { key: 'long_to_short_oi', label: 'Long / Short OI' }
   ],
   fr: [ { key: 'rate_bps', label: 'Funding Rate' } ],

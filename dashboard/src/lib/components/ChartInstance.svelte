@@ -2595,6 +2595,7 @@
             hlMode === 'short'         ? (d) => (useTok ? (d.short_oi ?? 0) : (d.short_oi_value ?? 0)) :
             hlMode === 'long_short'    ? (d) => (useTok ? (d.total_oi ?? 0) : (d.total_oi_value ?? 0)) :
             hlMode === 'long_to_short' ? hlLongShortRatio :
+            hlMode === 'net_pct'       ? hlNetOiPct :
                                          (d) => (useTok ? (d.open_interest ?? 0) : (d.open_interest_value ?? 0));
           const arr = maArray(
             (data as Array<Record<string, number>>).map(pickField),
@@ -3200,7 +3201,7 @@
     const unitLabel = oiIsToken ? ` (${instance.token ?? ''})` : ' (USD)';
     if (mode === 'long')  return { color: '#22c55e', field: oiIsToken ? 'long_oi'  : 'long_oi_value',  label: 'Long OI'  + unitLabel };
     if (mode === 'short') return { color: '#ef4444', field: oiIsToken ? 'short_oi' : 'short_oi_value', label: 'Short OI' + unitLabel };
-    if (mode === 'long_short' || mode === 'long_to_short') return null;
+    if (mode === 'long_short' || mode === 'long_to_short' || mode === 'net_pct') return null;
     return { color: '#06b6d4', field: oiIsToken ? 'total_oi' : 'total_oi_value', label: 'OI' + unitLabel };
   });
   // Long/Short ratio: guard against zero-short buckets (early-history HL
@@ -3211,6 +3212,15 @@
     const s = d.short_oi_value ?? 0;
     if (!isFinite(s) || s <= 0) return 0;
     return (d.long_oi_value ?? 0) / s;
+  }
+  // Net OI percentage: (long - short) / total. Unitless, bounded to [-1, 1].
+  // Positive = long-skewed book, negative = short-skewed, 0 = balanced.
+  // Same value whether computed from token amounts or USD — mark price
+  // cancels in numerator and denominator.
+  function hlNetOiPct(d: Record<string, number>): number {
+    const t = d.total_oi_value ?? 0;
+    if (!isFinite(t) || t <= 0) return 0;
+    return ((d.long_oi_value ?? 0) - (d.short_oi_value ?? 0)) / t;
   }
   let oiLinesD = $derived.by(() => {
     if (!instance.showPoint) return [...cumulativeLines];
@@ -3229,6 +3239,13 @@
       return [
         { key: 'oi_l2s', label: 'Long / Short OI', color: '#a855f7',
           compute: hlLongShortRatio },
+        ...cumulativeLines
+      ];
+    }
+    if (ex === 'hl' && mode === 'net_pct') {
+      return [
+        { key: 'oi_net_pct', label: 'Net OI %', color: '#f59e0b',
+          compute: hlNetOiPct },
         ...cumulativeLines
       ];
     }
@@ -3566,6 +3583,9 @@
     // fall through to fmtUsdTooltip below.
     if (o.kind === 'oi' && o.seriesKey === 'long_to_short_oi') {
       return fmtRatio;
+    }
+    if (o.kind === 'oi' && o.seriesKey === 'net_oi_pct') {
+      return (v: number) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`;
     }
     if (o.kind === 'oi'
         && (o.seriesKey === 'total_oi' || o.seriesKey === 'long_oi' || o.seriesKey === 'short_oi')) {
@@ -4608,7 +4628,7 @@
                single line summing every position). -->
           <select
             value={instance.oiHlDisplay ?? 'total'}
-            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short' | 'long_to_short')}
+            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short' | 'long_to_short' | 'net_pct')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="Which side(s) of HL OI to plot"
           >
@@ -4617,9 +4637,10 @@
             <option value="short">Short</option>
             <option value="long_short">Long + Short</option>
             <option value="long_to_short">Long / Short</option>
+            <option value="net_pct">Net OI %</option>
           </select>
         {/if}
-        {#if instance.kind === 'oi' && !((instance.exchange ?? 'binance') === 'hl' && (instance.oiHlDisplay ?? 'total') === 'long_to_short')}
+        {#if instance.kind === 'oi' && !((instance.exchange ?? 'binance') === 'hl' && ((instance.oiHlDisplay ?? 'total') === 'long_to_short' || (instance.oiHlDisplay ?? 'total') === 'net_pct'))}
           <!-- USD vs token-amount unit selector for OI. Hidden in the Long/Short
                ratio mode where the unit cancels out. -->
           <select
@@ -5197,8 +5218,10 @@
     {:else if instance.kind === 'oi'}
       <!-- HL Long/Short ratio is unitless (1.03, not $1.03). Otherwise USD
            or token amount based on the oiUnit selector. -->
-      {@const oiIsRatio = (instance.exchange ?? 'binance') === 'hl' && (instance.oiHlDisplay ?? 'total') === 'long_to_short'}
-      {@const oiUseToken = (instance.oiUnit ?? 'usd') === 'token' && !oiIsRatio}
+      {@const oiHlMode = (instance.exchange ?? 'binance') === 'hl' ? (instance.oiHlDisplay ?? 'total') : null}
+      {@const oiIsRatio = oiHlMode === 'long_to_short'}
+      {@const oiIsPct = oiHlMode === 'net_pct'}
+      {@const oiUseToken = (instance.oiUnit ?? 'usd') === 'token' && !oiIsRatio && !oiIsPct}
       <LineChart
         data={data as OpenInterestRow[]}
         lines={oiLinesM}
@@ -5209,8 +5232,12 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={oiIsRatio ? fmtRatio : (oiUseToken ? fmtAmountAxis : fmtUsdAxis)}
-        formatTooltip={oiIsRatio ? fmtRatio : (oiUseToken ? fmtAmountTooltip : fmtUsdTooltip)}
+        formatY={oiIsRatio ? fmtRatio
+                 : oiIsPct ? ((v: number) => `${(v >= 0 ? '+' : '')}${(v * 100).toFixed(1)}%`)
+                 : (oiUseToken ? fmtAmountAxis : fmtUsdAxis)}
+        formatTooltip={oiIsRatio ? fmtRatio
+                 : oiIsPct ? ((v: number) => `${(v >= 0 ? '+' : '')}${(v * 100).toFixed(2)}%`)
+                 : (oiUseToken ? fmtAmountTooltip : fmtUsdTooltip)}
       />
     {:else if instance.kind === 'fr'}
       <SignedBarChart

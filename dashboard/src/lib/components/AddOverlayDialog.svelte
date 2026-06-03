@@ -474,7 +474,8 @@
         || formSeriesKey === 'short_oi_value'
         || formSeriesKey === 'long_oi'
         || formSeriesKey === 'short_oi'
-        || formSeriesKey === 'long_to_short_oi')
+        || formSeriesKey === 'long_to_short_oi'
+        || formSeriesKey === 'net_oi_pct')
   );
 
   // Effective locks combine static (per-kind) + dynamic (exchange_flow → HL,

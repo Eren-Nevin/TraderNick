@@ -768,7 +768,8 @@
         // 'total' so existing saved layouts (no field) keep their look.
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
         inst.oiHlDisplay = (r.oiHlDisplay === 'long' || r.oiHlDisplay === 'short'
-          || r.oiHlDisplay === 'long_short' || r.oiHlDisplay === 'long_to_short')
+          || r.oiHlDisplay === 'long_short' || r.oiHlDisplay === 'long_to_short'
+          || r.oiHlDisplay === 'net_pct')
           ? r.oiHlDisplay : 'total';
         inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
       }
