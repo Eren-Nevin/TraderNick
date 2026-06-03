@@ -10,7 +10,7 @@
   import { page } from '$app/state';
   import { getContext } from 'svelte';
   import { PROVIDERS, providerSlug, jobProvider } from '$lib/admin/providers';
-  import { lifecycle, ADMIN_CTX_KEY, type AdminContext } from '$lib/admin/types';
+  import { lifecycle, hasCurrentError, ADMIN_CTX_KEY, type AdminContext } from '$lib/admin/types';
 
   const ctx = getContext<AdminContext>(ADMIN_CTX_KEY);
 
@@ -35,7 +35,7 @@
       bucket.total++;
       const lc = lifecycle(s);
       if (lc === 'RUNNING' || lc === 'ON') bucket.running++;
-      if (s.status?.last_error) bucket.errors++;
+      if (hasCurrentError(s)) bucket.errors++;
     }
     return m;
   });

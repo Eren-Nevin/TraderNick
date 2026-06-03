@@ -7,7 +7,7 @@
   // Sort + collapse state are scoped to this instance — different groups
   // sort independently, and the state lives with the table itself.
 
-  import { lifecycle, type StreamRow, type StreamAction } from '$lib/admin/types';
+  import { lifecycle, hasCurrentError, type StreamRow, type StreamAction } from '$lib/admin/types';
   import { ageMs, fmtAge, fmtCadence, fmtDurations, fmtTime } from '$lib/admin/fmt';
 
   type Props = {
@@ -69,7 +69,9 @@
   let aggCrashes = $derived(rows.reduce(
     (acc, s) => acc + (s.status?.crash_count ?? s.crash_count ?? 0), 0,
   ));
-  let errorRows = $derived(rows.filter((s) => s.status?.last_error));
+  // Only flag streams whose error is still *current* — stale errors from
+  // before a successful recovery tick shouldn't count toward the red badge.
+  let errorRows = $derived(rows.filter((s) => hasCurrentError(s)));
 
   const COLS: [StreamSortKey, string][] = [
     ['name', 'Name'],
@@ -198,8 +200,19 @@
               <td class="px-2 py-1 text-right tabular-nums"
                 class:text-amber-400={(r.status?.crash_count ?? r.crash_count) > 0}
               >{r.status?.crash_count ?? r.crash_count}</td>
-              <td class="px-2 py-1 text-red-300 max-w-md truncate" title={r.status?.last_error ?? ''}>
-                {r.status?.last_error ?? ''}
+              <td
+                class="px-2 py-1 max-w-md truncate"
+                class:text-red-300={hasCurrentError(r)}
+                class:text-zinc-600={!hasCurrentError(r) && r.status?.last_error}
+                title={r.status?.last_error
+                  ? (hasCurrentError(r) ? r.status.last_error : `previous error (recovered): ${r.status.last_error}`)
+                  : ''}
+              >
+                {#if hasCurrentError(r)}
+                  {r.status?.last_error}
+                {:else if r.status?.last_error}
+                  <span class="italic">prev: {r.status.last_error}</span>
+                {/if}
               </td>
               <td class="px-2 py-1 text-right whitespace-nowrap">
                 {#if r.running}

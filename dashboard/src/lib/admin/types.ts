@@ -56,6 +56,28 @@ export function lifecycle(r: StreamRow): Lifecycle {
   return r.status?.tick_in_progress ? 'RUNNING' : 'ON';
 }
 
+/** True iff the stream's `last_error` reflects the *most recent* tick.
+ *  The ingestion service never clears `last_error` on a successful tick
+ *  (see ch_status.py write_tick_end); it just overwrites on a new error.
+ *  So after a transient blip (cold-start DNS race, upstream 500) the
+ *  error text lingers indefinitely even though the stream recovered.
+ *
+ *  Treat the error as *stale* once `last_success_at` is newer than
+ *  `last_error_at` — at that point the row has had a successful tick
+ *  since the error and shouldn't be flagged red. */
+export function hasCurrentError(r: StreamRow): boolean {
+  const s = r.status;
+  if (!s?.last_error) return false;
+  const errAt = s.last_error_at ?? '';
+  const sucAt = s.last_success_at ?? '';
+  // String compare on ISO-8601 is the same as date compare. Either-absent
+  // semantics: no errAt → no error to compare; no sucAt + an error means
+  // the stream has never succeeded since restart, so it's current.
+  if (!errAt) return false;
+  if (!sucAt) return true;
+  return errAt > sucAt;
+}
+
 export type StreamAction = 'start' | 'stop' | 'restart';
 
 // Object passed via Svelte context. Layout owns the state + polling loop;
