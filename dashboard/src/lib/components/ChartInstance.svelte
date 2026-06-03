@@ -3391,33 +3391,55 @@
       const load = overlayLoaded.get(o.id);
       const data = load?.data ?? [];
       if (data.length === 0) continue;
+
+      // Sorted copy + range stats. We keep the sorted list because the
+      // host's bucket grid often doesn't align 1:1 with the overlay's:
+      // a 4h OHLCV chart hosting an 8h-spaced funding-rate overlay would
+      // otherwise see NaN at every other bucket and d3.line's .defined()
+      // would render nothing (single defined points can't form a path).
+      // The forward-fill (binary-search latest overlay point with
+      // time <= d.time) is also semantically right for step-style data
+      // like funding rate, where the value is constant between updates.
+      const sorted = data.filter((p) => Number.isFinite(p.value)).slice().sort((a, b) => a.time - b.time);
+      if (sorted.length === 0) continue;
       let omin = Infinity, omax = -Infinity;
-      for (const p of data) {
-        if (Number.isFinite(p.value)) {
-          if (p.value < omin) omin = p.value;
-          if (p.value > omax) omax = p.value;
-        }
+      for (const p of sorted) {
+        if (p.value < omin) omin = p.value;
+        if (p.value > omax) omax = p.value;
       }
-      const rawByTime = new Map<number, number>();
-      const mappedByTime = new Map<number, number>();
       const oRange = omax - omin;
-      for (const p of data) {
-        if (!Number.isFinite(p.value)) continue;
-        rawByTime.set(p.time, p.value);
-        if (usable && oRange !== 0) {
-          mappedByTime.set(p.time, pmin + ((p.value - omin) * pspan) / oRange);
-        } else if (usable) {
-          // overlay is flat — pin to mid-range so the line still shows.
-          mappedByTime.set(p.time, (pmin + pmax) / 2);
+      const remap = (raw: number): number => {
+        if (!usable) return NaN;
+        if (oRange === 0) return (pmin + pmax) / 2;
+        return pmin + ((raw - omin) * pspan) / oRange;
+      };
+      // Binary search: largest index where sorted[i].time <= t. -1 = no
+      // such point (host timestamps before the overlay's earliest sample,
+      // line stays undefined there — d3 correctly omits leading gap).
+      function findLE(t: number): number {
+        let lo = 0, hi = sorted.length - 1, found = -1;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          if (sorted[mid].time <= t) { found = mid; lo = mid + 1; }
+          else hi = mid - 1;
         }
+        return found;
       }
       out.push({
         key: 'ovl-' + o.id,
         label: overlayChipLabel(o),
         color: o.color,
         axis: 'primary',
-        compute: (d) => mappedByTime.get(d.time) ?? NaN,
-        rawValue: (d) => rawByTime.get(d.time) ?? NaN,
+        compute: (d) => {
+          const i = findLE(d.time);
+          if (i < 0) return NaN;
+          return remap(sorted[i].value);
+        },
+        rawValue: (d) => {
+          const i = findLE(d.time);
+          if (i < 0) return NaN;
+          return sorted[i].value;
+        },
         rawFormat: fmtUsdTooltip
       });
     }
