@@ -132,6 +132,12 @@ class SmartCriterion:
     # or 'token' here overrides per-criterion — lets the user mix scopes
     # (e.g. "global PnL ≥ 50K AND token-specific volume ≥ 1M").
     scope: str | None = None
+    # Soft-disable: the criterion stays in the list but its min/max bounds
+    # don't filter and its source CTE isn't materialised (unless something
+    # else references it). Lets the user A/B different criteria without
+    # losing the saved values. Sort scope still honours a disabled
+    # criterion's scope field if it's the sort metric.
+    disabled: bool = False
 
 
 @dataclass
@@ -188,11 +194,15 @@ class SmartSelector:
             cscope = c.get("scope")
             if cscope is not None and cscope not in ("global", "token"):
                 raise ValueError(f"selector.criteria[{i}].scope must be 'global', 'token', or null")
+            cdisabled = c.get("disabled", False)
+            if not isinstance(cdisabled, bool):
+                raise ValueError(f"selector.criteria[{i}].disabled must be a boolean")
             criteria.append(SmartCriterion(
                 metric=metric,
                 min=float(cmin) if cmin is not None else None,
                 max=float(cmax) if cmax is not None else None,
                 scope=cscope,
+                disabled=cdisabled,
             ))
 
         return cls(
@@ -221,14 +231,16 @@ class SmartSelector:
 
     def _needs(self) -> dict[tuple[str, str], bool]:
         """Map of (source, scope) → True for every combo any active metric
-        references. Used to decide which projections to emit."""
+        references. Disabled criteria don't pull their source in (the
+        ranked CTE skips their WHERE clause too); the sort metric always
+        counts regardless of any criterion's disabled state."""
         needs: dict[tuple[str, str], bool] = {}
-        # Sort metric
         ss = self._sort_scope()
         for src in METRIC_REGISTRY[self.sort_by].requires:
             needs[(src, ss)] = True
-        # Criteria
         for c in self.criteria:
+            if c.disabled:
+                continue
             eff = self._effective_scope(c.scope)
             for src in METRIC_REGISTRY[c.metric].requires:
                 needs[(src, eff)] = True
@@ -494,6 +506,8 @@ class SmartSelector:
         # ── ranked ──────────────────────────────────────────────────
         where_clauses: list[str] = []
         for i, c in enumerate(self.criteria):
+            if c.disabled:
+                continue
             if c.min is None and c.max is None:
                 continue
             expr = self._metric_expr(c.metric, self._effective_scope(c.scope))
@@ -537,6 +551,8 @@ class SmartSelector:
                 raise ValueError("a criterion or the overall scope is 'token' but no token was provided")
             params["sel_token"] = self.token
         for i, c in enumerate(self.criteria):
+            if c.disabled:
+                continue
             if c.min is not None:
                 params[f"sel_crit_min_{i}"] = c.min
             if c.max is not None:
@@ -551,7 +567,13 @@ class SmartSelector:
             "scope": self.scope,
             "sort_by": self.sort_by,
             "criteria": [
-                {"metric": c.metric, "min": c.min, "max": c.max, "scope": c.scope}
+                {
+                    "metric": c.metric,
+                    "min": c.min,
+                    "max": c.max,
+                    "scope": c.scope,
+                    "disabled": c.disabled,
+                }
                 for c in self.criteria
             ],
         }

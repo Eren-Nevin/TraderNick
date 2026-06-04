@@ -105,7 +105,15 @@
 
   <div class="space-y-1">
     {#each value.criteria as c, i (i)}
-      <div class="flex items-center gap-1.5 flex-wrap">
+      <div class={'flex items-center gap-1.5 flex-wrap ' + ((c.disabled ?? false) ? 'opacity-50' : '')}>
+        <input
+          type="checkbox"
+          checked={!(c.disabled ?? false)}
+          onchange={(e) => setCriterion(i, { disabled: !(e.target as HTMLInputElement).checked })}
+          class="accent-zinc-300"
+          title="Toggle this criterion on/off without removing it"
+          aria-label="Enable criterion"
+        />
         <select
           value={c.metric}
           onchange={(e) => setCriterion(i, { metric: (e.target as HTMLSelectElement).value as SmartMetricKey })}

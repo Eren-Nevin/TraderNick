@@ -4913,6 +4913,32 @@
           <input type="checkbox" bind:checked={instance.smartShowWalletCount} class="accent-zinc-400" />
           Show wallet count
         </label>
+        <!-- Same instance.oiUnit field as the toolbar dropdown — duplicated
+             here so the display-unit choice sits with the other smart-OI
+             chart controls. Hidden in long_to_short / net_pct where the
+             unit is mathematically meaningless. -->
+        {#if (instance.oiHlDisplay ?? 'total') !== 'long_to_short' && (instance.oiHlDisplay ?? 'total') !== 'net_pct'}
+          <span class="w-px h-4 bg-zinc-800"></span>
+          <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Unit</span>
+          <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
+            <button
+              type="button"
+              onclick={() => (instance.oiUnit = 'usd')}
+              class={'px-2 py-0.5 text-[11px] ' + ((instance.oiUnit ?? 'usd') === 'usd'
+                ? 'bg-zinc-800 text-zinc-100'
+                : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+              title="Plot OI as dollar notional"
+            >USD</button>
+            <button
+              type="button"
+              onclick={() => (instance.oiUnit = 'token')}
+              class={'px-2 py-0.5 text-[11px] border-l border-zinc-700 ' + ((instance.oiUnit) === 'token'
+                ? 'bg-zinc-800 text-zinc-100'
+                : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+              title="Plot OI as raw token amount (e.g. BTC count)"
+            >{instance.token ?? 'Token'}</button>
+          </div>
+        {/if}
       {/if}
       <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
         <input type="checkbox" bind:checked={instance.showPoint} class="accent-zinc-400" />
