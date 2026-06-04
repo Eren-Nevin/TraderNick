@@ -10,14 +10,15 @@ import {
 } from '$lib/api';
 import type { PageServerLoad } from './$types';
 
+// Match the rest of the dashboard: show every row we have (60-day TTL).
 const DEFAULT_LOOKBACK_DAYS: Record<Interval, number> = {
-  '1m': 1,
-  '5m': 3,
-  '15m': 7,
-  '30m': 14,
-  '1h': 14,
-  '4h': 30,
-  '1d': 30
+  '1m': 60,
+  '5m': 60,
+  '15m': 60,
+  '30m': 60,
+  '1h': 60,
+  '4h': 60,
+  '1d': 60
 };
 
 export const load: PageServerLoad = async ({ url, fetch }) => {

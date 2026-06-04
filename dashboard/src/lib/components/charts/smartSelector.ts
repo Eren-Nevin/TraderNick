@@ -12,6 +12,7 @@
 
 export type SmartMetricKey =
   | 'pnl_pct'
+  | 'unrealized_pnl_pct'
   | 'realized_pnl'
   | 'unrealized_pnl'
   | 'total_pnl'
@@ -36,16 +37,17 @@ export interface SmartMetricDef {
 }
 
 export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
-  { key: 'pnl_pct',        label: 'PnL %',             kind: 'pct' },
-  { key: 'realized_pnl',   label: 'Realized PnL ($)',  kind: 'usd', defaultMin: 10000 },
-  { key: 'unrealized_pnl', label: 'Unrealized PnL ($)',kind: 'usd' },
-  { key: 'total_pnl',      label: 'Total PnL ($)',     kind: 'usd' },
-  { key: 'total_pnl_pct',  label: 'Total PnL %',       kind: 'pct' },
-  { key: 'volume',         label: 'Volume ($)',        kind: 'usd', defaultMin: 1_000_000 },
-  { key: 'trade_count',    label: 'Trade count',       kind: 'count' },
-  { key: 'long_pnl',       label: 'Long PnL ($)',      kind: 'usd' },
-  { key: 'short_pnl',      label: 'Short PnL ($)',     kind: 'usd' },
-  { key: 'sharpe',         label: 'Sharpe ratio',      kind: 'ratio' },
+  { key: 'pnl_pct',            label: 'Realized PnL / Volume %',   kind: 'pct' },
+  { key: 'unrealized_pnl_pct', label: 'Unrealized PnL / Volume %', kind: 'pct' },
+  { key: 'realized_pnl',       label: 'Realized PnL ($)',          kind: 'usd', defaultMin: 10000 },
+  { key: 'unrealized_pnl',     label: 'Unrealized PnL ($)',        kind: 'usd' },
+  { key: 'total_pnl',          label: 'Total PnL ($)',             kind: 'usd' },
+  { key: 'total_pnl_pct',      label: 'Total PnL %',               kind: 'pct' },
+  { key: 'volume',             label: 'Volume ($)',                kind: 'usd', defaultMin: 1_000_000 },
+  { key: 'trade_count',        label: 'Trade count',               kind: 'count' },
+  { key: 'long_pnl',           label: 'Long PnL ($)',              kind: 'usd' },
+  { key: 'short_pnl',          label: 'Short PnL ($)',             kind: 'usd' },
+  { key: 'sharpe',             label: 'Sharpe ratio',              kind: 'ratio' },
 ];
 
 export function metricDef(key: string): SmartMetricDef | undefined {
@@ -60,6 +62,11 @@ export interface SmartCriterionState {
   metric: SmartMetricKey;
   min?: number;
   max?: number;
+  /** Per-criterion scope override. When unset, the criterion inherits the
+   *  selector's overall scope (saved as the active scope at add-time, so
+   *  it's always explicit in persisted state — see defaultSmartSelector
+   *  and the add-criterion handler in SmartWalletSelector). */
+  scope?: 'global' | 'token';
 }
 
 export interface SmartSelectorState {
@@ -76,7 +83,7 @@ export function defaultSmartSelectorState(): SmartSelectorState {
     top_n: 50,
     scope: 'global',
     sort_by: 'pnl_pct',
-    criteria: [{ metric: 'realized_pnl', min: 10000 }],
+    criteria: [{ metric: 'realized_pnl', min: 10000, scope: 'global' }],
   };
 }
 
@@ -104,6 +111,8 @@ export function sanitizeSmartSelectorState(raw: unknown): SmartSelectorState {
       const item: SmartCriterionState = { metric: cc.metric };
       if (typeof cc.min === 'number' && isFinite(cc.min)) item.min = cc.min;
       if (typeof cc.max === 'number' && isFinite(cc.max)) item.max = cc.max;
+      if (cc.scope === 'global' || cc.scope === 'token') item.scope = cc.scope;
+      else item.scope = out.scope;  // inherit from overall when missing/invalid
       out.criteria.push(item);
     }
   }
@@ -121,7 +130,8 @@ export function smartSelectorCacheKey(s: SmartSelectorState): string {
     criteria: s.criteria.map((c) => ({
       metric: c.metric,
       min: c.min ?? null,
-      max: c.max ?? null
+      max: c.max ?? null,
+      scope: c.scope ?? null
     })),
   };
   return JSON.stringify(norm);

@@ -36,7 +36,10 @@
     // every metric is taken (unlikely; the UI can show duplicates).
     const used = new Set(value.criteria.map((c) => c.metric));
     const next = METRIC_CATALOGUE.find((m) => !used.has(m.key)) ?? METRIC_CATALOGUE[0];
-    const fresh: SmartCriterionState = { metric: next.key as SmartMetricKey };
+    // New criteria default to the overall selector scope — matches the
+    // user's mental model ("set them the same as the overall scope by
+    // default"). They can override per-row afterwards.
+    const fresh: SmartCriterionState = { metric: next.key as SmartMetricKey, scope: value.scope };
     if (next.defaultMin !== undefined) fresh.min = next.defaultMin;
     onChange({ ...value, criteria: [...value.criteria, fresh] });
   }
@@ -44,10 +47,11 @@
     // Convenience: clicking the "sort" radio also makes sure that metric
     // is somewhere in the criteria list (with no min/max — it's just a
     // ranking hint). Otherwise picking, say, "sharpe" sort wouldn't show
-    // anywhere in the criteria UI.
+    // anywhere in the criteria UI. The auto-added criterion inherits the
+    // overall scope so the sort's effective scope is well-defined.
     let criteria = value.criteria;
     if (!criteria.some((c) => c.metric === metric)) {
-      criteria = [...criteria, { metric }];
+      criteria = [...criteria, { metric, scope: value.scope }];
     }
     onChange({ ...value, sort_by: metric, criteria });
   }
@@ -127,6 +131,15 @@
           onchange={(e) => setCriterion(i, { max: numOrUndef((e.target as HTMLInputElement).value) })}
           class="w-24 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 text-right"
         />
+        <select
+          value={c.scope ?? value.scope}
+          onchange={(e) => setCriterion(i, { scope: (e.target as HTMLSelectElement).value as 'global' | 'token' })}
+          class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 ml-1"
+          title="Compute this metric across all HL tokens (global) or filtered to this chart's token only"
+        >
+          <option value="global">Global</option>
+          <option value="token">{tokenLabel ? `Token (${tokenLabel})` : 'Token'}</option>
+        </select>
         <label class="flex items-center gap-1 cursor-pointer ml-1">
           <input
             type="radio"

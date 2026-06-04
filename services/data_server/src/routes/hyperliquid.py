@@ -415,7 +415,12 @@ async def smart_oi(request):
             sum(latest_amount)                     AS total_oi,
             sumIf(latest_size,   side='long')      AS long_oi_value,
             sumIf(latest_size,   side='short')     AS short_oi_value,
-            sum(latest_size)                       AS total_oi_value
+            sum(latest_size)                       AS total_oi_value,
+            -- Count of unique wallets that survived the criteria for the
+            -- day this bucket falls into. Same value for every bucket in
+            -- a day (the leaderboard is daily-granular). Surfaced so the
+            -- chart can plot it as a "did the filter over-narrow" line.
+            toUInt32(any(length(l.wallets)))       AS wallet_count
         FROM (
             SELECT
                 toStartOfInterval({oi_time_col}, INTERVAL {{seconds:UInt32}} SECOND) AS bucket,
@@ -450,6 +455,7 @@ async def smart_oi(request):
             "long_oi_value": float(r[4]),
             "short_oi_value": float(r[5]),
             "total_oi_value": float(r[6]),
+            "wallet_count": int(r[7]),
         }
         for r in rows.result_rows
     ]

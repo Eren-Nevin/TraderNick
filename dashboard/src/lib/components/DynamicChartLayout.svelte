@@ -843,6 +843,7 @@
             ? r.oiHlDisplay : 'total';
           inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
           inst.smartSelector = sanitizeSmartSelectorState(r.smartSelector);
+          inst.smartShowWalletCount = r.smartShowWalletCount === true;
         }
       }
       // Lido chart kinds need a `chain` but no token / pool. L1 kinds are

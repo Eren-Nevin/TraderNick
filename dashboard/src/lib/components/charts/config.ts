@@ -9,14 +9,17 @@ import { defaultSmartSelectorState, sanitizeSmartSelectorState } from './smartSe
 
 export type MAType = 'sma' | 'ema' | 'wma';
 
+// Default chart window per interval — the full ClickHouse TTL (60 days)
+// so every chart shows every row we have. Users zoom in if they want
+// finer detail; we don't pre-truncate.
 export const LOOKBACK_DAYS: Record<Interval, number> = {
-  '1m': 1,
-  '5m': 7,
-  '15m': 30,
-  '30m': 30,
-  '1h': 30,
-  '4h': 30,
-  '1d': 30
+  '1m': 60,
+  '5m': 60,
+  '15m': 60,
+  '30m': 60,
+  '1h': 60,
+  '4h': 60,
+  '1d': 60
 };
 
 export function lookbackWindow(iv: Interval): { since: Date; until: Date } {
@@ -1491,6 +1494,11 @@ export type ChartInstance = {
    *  the `selector` JSON the backend expects 1:1. See
    *  $lib/components/charts/smartSelector for the schema and defaults. */
   smartSelector?: import('./smartSelector').SmartSelectorState;
+  /** hl_smart_oi only: when true, overlay a secondary-axis line showing
+   *  the number of wallets that passed the selector each day. Lets the
+   *  user spot over-filtering (counts hitting 0 or hovering far below
+   *  the top_n cap) without leaving the chart. */
+  smartShowWalletCount?: boolean;
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */

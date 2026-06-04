@@ -74,7 +74,7 @@ async function fetchRawSeries(
       interval,
       since: sinceIso,
       until: untilIso,
-      limit: '5000',
+      limit: '200000',
       exchange: o.exchange ?? 'binance'
     });
     const res = await queuedFetch(`/api/ohlcv?${qs}`, { signal });
@@ -88,7 +88,7 @@ async function fetchRawSeries(
     // Same response shape as /oi_split; the wallet-selection state rides
     // as one JSON-encoded `selector` param defined in smartSelector.ts.
     const qs = new URLSearchParams({
-      token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '5000',
+      token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '200000',
       selector: JSON.stringify(o.smartSelector ?? defaultSmartSelectorState())
     });
     const res = await queuedFetch(`/api/hyperliquid/smart_oi?${qs}`, { signal });
@@ -119,7 +119,7 @@ async function fetchRawSeries(
   if (kind === 'oi') {
     const exchange = o.exchange ?? 'binance';
     if (exchange === 'hl') {
-      const qs = new URLSearchParams({ token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '5000' });
+      const qs = new URLSearchParams({ token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '200000' });
       const res = await queuedFetch(`/api/hyperliquid/oi_split?${qs}`, { signal });
       if (!res.ok) throw new Error(`overlay oi ${res.status}`);
       const body = await res.json();
@@ -150,7 +150,7 @@ async function fetchRawSeries(
       const key = hlKeys.includes(o.seriesKey) ? o.seriesKey : 'total_oi_value';
       return rows.map((r) => ({ time: r.time, value: Number(r[key] ?? 0) }));
     }
-    const qs = new URLSearchParams({ token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '5000' });
+    const qs = new URLSearchParams({ token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '200000' });
     const res = await queuedFetch(`/api/open_interest?${qs}`, { signal });
     if (!res.ok) throw new Error(`overlay oi ${res.status}`);
     const body = await res.json();
@@ -175,7 +175,7 @@ async function fetchRawSeries(
       interval,
       since: sinceIso,
       until: untilIso,
-      limit: '5000',
+      limit: '200000',
       exchange: o.exchange ?? 'binance'
     });
     const res = await queuedFetch(`/api/funding_rate?${qs}`, { signal });
@@ -200,7 +200,7 @@ async function fetchRawSeries(
       interval,
       since: sinceIso,
       until: untilIso,
-      limit: '5000',
+      limit: '200000',
       exchange: o.exchange ?? 'binance'
     });
     const res = await queuedFetch(`/api/long_short_ratios?${qs}`, { signal });
@@ -216,7 +216,7 @@ async function fetchRawSeries(
       interval,
       since: sinceIso,
       until: untilIso,
-      limit: '5000',
+      limit: '200000',
       exchange: o.exchange ?? 'binance',
       under: String(o.under ?? 10000),
       over: String(o.over ?? 100000)
@@ -234,7 +234,7 @@ async function fetchRawSeries(
       interval,
       since: sinceIso,
       until: untilIso,
-      limit: '5000'
+      limit: '200000'
     });
     if (o.chainGroup) qs.set('chain_group', o.chainGroup);
     else qs.set('chain', o.chain ?? 'ETH');
@@ -333,7 +333,7 @@ async function fetchRawSeries(
     const netEvs = LIDO_NET_KIND_TO_EVENTS[kind];
     const buildQS = (event: string) => {
       const qs = new URLSearchParams({
-        event, interval, since: sinceIso, until: untilIso, limit: '5000'
+        event, interval, since: sinceIso, until: untilIso, limit: '200000'
       });
       if (o.chainGroup) qs.set('chain_group', o.chainGroup);
       else qs.set('chain', o.chain ?? 'ETH');
@@ -364,7 +364,7 @@ async function fetchRawSeries(
     const buildQS = (event: string) => new URLSearchParams({
       event, chain: o.chain ?? 'ETH',
       symbol0: pool.symbol0, symbol1: pool.symbol1,
-      interval, since: sinceIso, until: untilIso, limit: '5000'
+      interval, since: sinceIso, until: untilIso, limit: '200000'
     });
     const ev = UNISWAP_V2_KIND_TO_EVENT[kind];
     const netEvs = UNISWAP_V2_NET_KIND_TO_EVENTS[kind];
@@ -391,7 +391,7 @@ async function fetchRawSeries(
     const buildQS = (event: string) => new URLSearchParams({
       event, chain: o.chain ?? 'ETH',
       symbol0: pool.symbol0, symbol1: pool.symbol1, fee_tier: String(pool.fee),
-      interval, since: sinceIso, until: untilIso, limit: '5000'
+      interval, since: sinceIso, until: untilIso, limit: '200000'
     });
     if (kind === 'uniswap_v3_net_swap_flow') {
       const res = await queuedFetch(`/api/uniswap/aggregate?${buildQS('swap')}`, { signal });
@@ -426,7 +426,7 @@ async function fetchRawSeries(
       event, chain: o.chain ?? 'ETH',
       symbol0: pool.symbol0, symbol1: pool.symbol1,
       fee: String(pool.fee), tick_spacing: String(pool.tick_spacing), hooks: pool.hooks,
-      interval, since: sinceIso, until: untilIso, limit: '5000'
+      interval, since: sinceIso, until: untilIso, limit: '200000'
     });
     const ev = UNISWAP_V4_KIND_TO_EVENT[kind];
     const netEvs = UNISWAP_V4_NET_KIND_TO_EVENTS[kind];
@@ -455,7 +455,7 @@ async function fetchRawSeries(
     const buildQS = (event: string) => new URLSearchParams({
       event, chain: 'BASE',
       symbol0: pool.symbol0, symbol1: pool.symbol1, tick_spacing: String(pool.tick_spacing),
-      interval, since: sinceIso, until: untilIso, limit: '5000'
+      interval, since: sinceIso, until: untilIso, limit: '200000'
     });
     const ev = AERO_CL_KIND_TO_EVENT[kind];
     const netEvs = AERO_CL_NET_KIND_TO_EVENTS[kind];
@@ -482,7 +482,7 @@ async function fetchRawSeries(
     const buildQS = (event: string) => new URLSearchParams({
       event, chain: 'BASE',
       symbol0: pool.symbol0, symbol1: pool.symbol1, stable: pool.stable ? '1' : '0',
-      interval, since: sinceIso, until: untilIso, limit: '5000'
+      interval, since: sinceIso, until: untilIso, limit: '200000'
     });
     const ev = AERO_BASIC_KIND_TO_EVENT[kind];
     const netEvs = AERO_BASIC_NET_KIND_TO_EVENTS[kind];
@@ -508,7 +508,7 @@ async function fetchRawSeries(
   if (isGmxV2Kind(kind)) {
     const buildQS = (event: string) => {
       const qs = new URLSearchParams({
-        event, chain: o.chain ?? 'ARB', interval, since: sinceIso, until: untilIso, limit: '5000'
+        event, chain: o.chain ?? 'ARB', interval, since: sinceIso, until: untilIso, limit: '200000'
       });
       if (o.gmxMarket && o.gmxMarket.length > 0) qs.set('market', o.gmxMarket);
       return qs;
@@ -537,7 +537,7 @@ async function fetchRawSeries(
 
   // ── Perp: Hyperliquid ────────────────────────────────────────────────
   if (kind === 'hl_transfers') {
-    const qs = new URLSearchParams({ interval, since: sinceIso, until: untilIso, limit: '5000' });
+    const qs = new URLSearchParams({ interval, since: sinceIso, until: untilIso, limit: '200000' });
     const res = await queuedFetch(`/api/hyperliquid/bridge_flows?${qs}`, { signal });
     if (!res.ok) throw new Error(`overlay hl_transfers ${res.status}`);
     const body = await res.json();
@@ -545,7 +545,7 @@ async function fetchRawSeries(
     return rows.map((r) => ({ time: r.time, value: Number(r[o.seriesKey] ?? 0) }));
   }
   if (kind === 'hl_vault_net') {
-    const qs = new URLSearchParams({ interval, since: sinceIso, until: untilIso, limit: '5000' });
+    const qs = new URLSearchParams({ interval, since: sinceIso, until: untilIso, limit: '200000' });
     const res = await queuedFetch(`/api/hyperliquid/vault_flow?${qs}`, { signal });
     if (!res.ok) throw new Error(`overlay hl_vault_net ${res.status}`);
     const body = await res.json();
@@ -554,7 +554,7 @@ async function fetchRawSeries(
   }
   if (kind === 'hl_unrealized_pnl') {
     const qs = new URLSearchParams({
-      token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '5000'
+      token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '200000'
     });
     if (o.hlWallet && o.hlWallet.length > 0) qs.set('wallet', o.hlWallet);
     const res = await queuedFetch(`/api/hyperliquid/unrealized_pnl?${qs}`, { signal });
@@ -567,7 +567,7 @@ async function fetchRawSeries(
     const event = HL_KIND_TO_EVENT[kind];
     if (event) {
       const qs = new URLSearchParams({
-        event, token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '5000'
+        event, token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '200000'
       });
       if (o.hlWallet && o.hlWallet.length > 0) qs.set('wallet', o.hlWallet);
       else if (o.hlWalletCategory && o.hlWalletCategory.length > 0) qs.set('wallet_category', o.hlWalletCategory);
@@ -600,7 +600,7 @@ async function aggregateEventOrNet(
 ): Promise<OverlayPoint[]> {
   const buildQS = (event: string) => {
     const qs = new URLSearchParams({
-      event, interval, since: sinceIso, until: untilIso, limit: '5000'
+      event, interval, since: sinceIso, until: untilIso, limit: '200000'
     });
     if (o.chainGroup) qs.set('chain_group', o.chainGroup);
     else qs.set('chain', o.chain ?? 'ETH');

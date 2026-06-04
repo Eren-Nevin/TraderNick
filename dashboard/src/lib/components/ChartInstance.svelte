@@ -789,7 +789,7 @@
       interval: instance.interval,
       since: sinceIso,
       until: untilIso,
-      limit: '10000'
+      limit: '200000'
     });
     if (activeChainGroup) {
       qs.set('chain_group', activeChainGroup.name);
@@ -924,7 +924,7 @@
         interval: instance.interval,
         since: sinceIso,
         until: untilIso,
-        limit: '5000'
+        limit: '200000'
       };
 
       let url = '';
@@ -939,7 +939,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
           else qs.set('chain', instance.chain ?? 'ETH');
@@ -1008,7 +1008,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
           else qs.set('chain', instance.chain ?? 'ETH');
@@ -1086,7 +1086,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (instance.gmxMarket && instance.gmxMarket.length > 0) {
             qs.set('market', instance.gmxMarket);
@@ -1188,7 +1188,7 @@
           interval: instance.interval,
           since: sinceIso,
           until: untilIso,
-          limit: '5000'
+          limit: '200000'
         });
         const res = await queuedFetch(`/api/hyperliquid/vault_flow?${qs}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -1265,7 +1265,7 @@
           interval: instance.interval,
           since: sinceIso,
           until: untilIso,
-          limit: '5000'
+          limit: '200000'
         });
         const res = await queuedFetch(`/api/hyperliquid/bridge_flows?${qs}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -1288,7 +1288,7 @@
           interval: instance.interval,
           since: sinceIso,
           until: untilIso,
-          limit: '5000'
+          limit: '200000'
         });
         if (instance.hlWallet && instance.hlWallet.length > 0) {
           qs.set('wallet', instance.hlWallet);
@@ -1314,7 +1314,7 @@
           interval: instance.interval,
           since: sinceIso,
           until: untilIso,
-          limit: '5000'
+          limit: '200000'
         });
         if (instance.hlWallet && instance.hlWallet.length > 0) {
           qs.set('wallet', instance.hlWallet);
@@ -1340,7 +1340,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (instance.hlWallet && instance.hlWallet.length > 0) {
             qs.set('wallet', instance.hlWallet);
@@ -1458,7 +1458,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
           else qs.set('chain', instance.chain ?? 'ETH');
@@ -1527,7 +1527,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
           else qs.set('chain', instance.chain ?? 'ETH');
@@ -1601,7 +1601,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
           else qs.set('chain', instance.chain ?? 'ETH');
@@ -1671,7 +1671,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           // L2 kinds can select a chain group (EVM / All) which the server
           // expands to a `chain IN (...)` predicate. L1 kinds stay ETH-pinned
@@ -1766,7 +1766,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (forceFresh) qs.set('fresh', '1');
           return qs;
@@ -1844,7 +1844,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (forceFresh) qs.set('fresh', '1');
           return qs;
@@ -1933,7 +1933,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (forceFresh) qs.set('fresh', '1');
           return qs;
@@ -2024,7 +2024,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (forceFresh) qs.set('fresh', '1');
           return qs;
@@ -2123,7 +2123,7 @@
             interval: instance.interval,
             since: sinceIso,
             until: untilIso,
-            limit: '5000'
+            limit: '200000'
           });
           if (forceFresh) qs.set('fresh', '1');
           return qs;
@@ -2231,7 +2231,7 @@
           interval: instance.interval,
           since: sinceIso,
           until: untilIso,
-          limit: '5000'
+          limit: '200000'
         });
         if (activeChainGroup) {
           qs.set('chain_group', activeChainGroup.name);
@@ -2424,7 +2424,7 @@
               interval: instance.interval,
               since: sinceIso,
               until: untilIso,
-              limit: '10000'
+              limit: '200000'
             });
             if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
             else qs.set('chain', instance.chain ?? 'ETH');
@@ -3258,44 +3258,53 @@
     if (!instance.showPoint) return [...cumulativeLines];
     const ex = instance.exchange ?? 'binance';
     const mode = instance.oiHlDisplay ?? 'total';
+    let base: typeof cumulativeLines;
     if (ex === 'hl' && mode === 'long_short') {
-      return [
+      base = [
         { key: 'oi_long',  label: 'Long OI',  color: '#22c55e',
           compute: (d: Record<string, number>) => (oiIsToken ? (d.long_oi ?? 0) : (d.long_oi_value ?? 0)) },
         { key: 'oi_short', label: 'Short OI', color: '#ef4444',
           compute: (d: Record<string, number>) => (oiIsToken ? (d.short_oi ?? 0) : (d.short_oi_value ?? 0)) },
         ...cumulativeLines
       ];
-    }
-    if (ex === 'hl' && mode === 'long_to_short') {
-      return [
+    } else if (ex === 'hl' && mode === 'long_to_short') {
+      base = [
         { key: 'oi_l2s', label: 'Long / Short OI', color: '#a855f7',
           compute: hlLongShortRatio },
         ...cumulativeLines
       ];
-    }
-    if (ex === 'hl' && mode === 'net_pct') {
-      return [
+    } else if (ex === 'hl' && mode === 'net_pct') {
+      base = [
         { key: 'oi_net_pct', label: 'Net OI %', color: '#f59e0b',
           compute: hlNetOiPct },
         ...cumulativeLines
       ];
-    }
-    if (oiHlPrimary) {
-      return [
+    } else if (oiHlPrimary) {
+      base = [
         { key: 'oi_primary', label: oiHlPrimary.label, color: oiHlPrimary.color,
           compute: (d: Record<string, number>) => (d[oiHlPrimary.field] ?? 0) },
         ...cumulativeLines
       ];
-    }
-    if (ex !== 'hl' && oiIsToken) {
-      return [
+    } else if (ex !== 'hl' && oiIsToken) {
+      base = [
         { key: 'oi_token', label: `OI (${instance.token ?? ''})`, color: '#06b6d4',
           compute: (d: Record<string, number>) => d.open_interest ?? 0 },
         ...cumulativeLines
       ];
+    } else {
+      base = [...OI_LINES, ...cumulativeLines];
     }
-    return [...OI_LINES, ...cumulativeLines];
+    // Smart-money OI: optional "wallets passing filter" line on the
+    // secondary (right-side) axis. Independent scale so it doesn't fight
+    // the OI line for vertical space. Integer formatter via formatY2.
+    if (instance.kind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)) {
+      base.push({
+        key: 'wallet_count', label: 'Wallets', color: '#fbbf24',
+        axis: 'secondary',
+        compute: (d: Record<string, number>) => d.wallet_count ?? 0,
+      });
+    }
+    return base;
   });
   let ttLinesD = $derived([
     ...(instance.showPoint ? TOP_TRADERS_LINES : []),
@@ -4897,6 +4906,13 @@
             class="self-start mt-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-md px-3 py-1 text-xs text-zinc-100"
           >Apply</button>
         </div>
+        <label
+          class="flex items-center gap-1.5 text-zinc-300 cursor-pointer"
+          title="Overlay a secondary-axis line showing how many wallets pass the criteria each day — spot over-filtering before it surprises you."
+        >
+          <input type="checkbox" bind:checked={instance.smartShowWalletCount} class="accent-zinc-400" />
+          Show wallet count
+        </label>
       {/if}
       <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
         <input type="checkbox" bind:checked={instance.showPoint} class="accent-zinc-400" />
@@ -5280,6 +5296,7 @@
       {@const oiIsRatio = oiHlMode === 'long_to_short'}
       {@const oiIsPct = oiHlMode === 'net_pct'}
       {@const oiUseToken = (instance.oiUnit ?? 'usd') === 'token' && !oiIsRatio && !oiIsPct}
+      {@const showWalletCount = instance.kind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)}
       <LineChart
         data={data as OpenInterestRow[]}
         lines={oiLinesM}
@@ -5296,6 +5313,8 @@
         formatTooltip={oiIsRatio ? fmtRatio
                  : oiIsPct ? ((v: number) => `${(v >= 0 ? '+' : '')}${(v * 100).toFixed(2)}%`)
                  : (oiUseToken ? fmtAmountTooltip : fmtUsdTooltip)}
+        formatY2={showWalletCount ? ((v: number) => Math.round(v).toString()) : undefined}
+        formatTooltip2={showWalletCount ? ((v: number) => `${Math.round(v)} wallets`) : undefined}
       />
     {:else if instance.kind === 'fr'}
       <SignedBarChart
