@@ -4878,15 +4878,24 @@
       {/if}
       {#if instance.kind === 'hl_smart_oi'}
         <!-- Wallet-selection knobs live in their own widget so any future
-             smart-wallet chart can drop the same component in. Changes
-             flow through the cache key and trigger a refetch automatically
-             — no Apply button required. -->
-        <div class="basis-full">
-          <SmartWalletSelector
-            value={instance.smartSelector ?? defaultSmartSelectorState()}
-            onChange={(v) => (instance.smartSelector = v)}
-            tokenLabel={instance.token ?? ''}
-          />
+             smart-wallet chart can drop the same component in. The Apply
+             button explicitly triggers a refetch so the user can compose
+             a multi-criterion query without hitting the server on every
+             keystroke (number inputs that lose focus already cost a
+             rebuild — Apply gates the actual chart update). -->
+        <div class="basis-full flex items-start gap-2">
+          <div class="flex-1">
+            <SmartWalletSelector
+              value={instance.smartSelector ?? defaultSmartSelectorState()}
+              onChange={(v) => (instance.smartSelector = v)}
+              tokenLabel={instance.token ?? ''}
+            />
+          </div>
+          <button
+            type="button"
+            onclick={() => reload()}
+            class="self-start mt-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-md px-3 py-1 text-xs text-zinc-100"
+          >Apply</button>
         </div>
       {/if}
       <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
