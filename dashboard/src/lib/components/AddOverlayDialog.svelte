@@ -344,6 +344,12 @@
   let formMode = $state<'raw' | 'ma'>('raw');
   let formMAType = $state<MAType>('sma');
   let formMAWindow = $state(21);
+  // hl_smart_oi leaderboard knobs. Mirror the host chart's ChartInstance
+  // fields so each overlay can carry its own leaderboard shape.
+  let formSmartPnlLookbackDays = $state(7);
+  let formSmartPnlFloorUsd = $state(10000);
+  let formSmartPnlTopN = $state(50);
+  let formSmartLeaderboardScope = $state<'global' | 'token'>('global');
 
   function clearForm() {
     formSeriesKey = '';
@@ -355,6 +361,10 @@
     formPoolSym0 = 'USDC'; formPoolSym1 = 'WETH'; formPoolFee = 500;
     formPoolTickSpacing = 10; formPoolStable = false;
     formMode = 'raw'; formMAType = 'sma'; formMAWindow = 21;
+    formSmartPnlLookbackDays = 7;
+    formSmartPnlFloorUsd = 10000;
+    formSmartPnlTopN = 50;
+    formSmartLeaderboardScope = 'global';
   }
 
   function initDefaultsForKind(k: ChartKind) {
@@ -427,6 +437,10 @@
     }
     if (o.ma) { formMode = 'ma'; formMAType = o.ma.type; formMAWindow = o.ma.length; }
     else formMode = 'raw';
+    formSmartPnlLookbackDays = o.smartPnlLookbackDays ?? 7;
+    formSmartPnlFloorUsd     = o.smartPnlFloorUsd     ?? 10000;
+    formSmartPnlTopN         = o.smartPnlTopN         ?? 50;
+    formSmartLeaderboardScope = o.smartLeaderboardScope ?? 'global';
   }
 
   // ── Lock helpers ────────────────────────────────────────────────────
@@ -455,6 +469,9 @@
   function lockedExchange(k: ChartKind): 'binance' | 'hl' | null {
     // Top-trader L/S is a Binance-only product concept.
     if (k === 'tt') return 'binance';
+    // hl_smart_oi is HL-only by construction — the leaderboard rides on
+    // hl_trade_history and the OI source is hl_position_history.
+    if (k === 'hl_smart_oi') return 'hl';
     return null;
   }
   /** Dynamic exchange_flow constraint: with `exchangeFlowExchange = hyperliquid`,
@@ -851,6 +868,12 @@
         stable: !!formPoolStable
       };
     }
+    if (k === 'hl_smart_oi') {
+      o.smartPnlLookbackDays    = Number(formSmartPnlLookbackDays);
+      o.smartPnlFloorUsd        = Number(formSmartPnlFloorUsd);
+      o.smartPnlTopN            = Number(formSmartPnlTopN);
+      o.smartLeaderboardScope   = formSmartLeaderboardScope;
+    }
     const clean = sanitizeOverlay(o);
     if (clean) onSubmit(clean);
   }
@@ -1128,6 +1151,34 @@
               <select bind:value={formValueMode} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1">
                 <option value="usd">USD</option>
                 <option value="amount">Amount (token)</option>
+              </select>
+            </label>
+          {/if}
+          {#if pickedKind === 'hl_smart_oi'}
+            <!-- Smart-money OI overlay leaderboard knobs. Same semantics as
+                 the host chart's panel: per-bucket trailing leaderboard,
+                 PnL floor + top-N filter, scope picks global vs token-only
+                 PnL ranking. -->
+            <label class="flex items-center gap-2">
+              <span class="w-32 text-zinc-400">Lookback (days)</span>
+              <input type="number" min="1" max="30" step="1" bind:value={formSmartPnlLookbackDays}
+                class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="w-32 text-zinc-400">PnL floor ($)</span>
+              <input type="number" min="0" step="1000" bind:value={formSmartPnlFloorUsd}
+                class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="w-32 text-zinc-400">Top N</span>
+              <input type="number" min="1" max="500" step="10" bind:value={formSmartPnlTopN}
+                class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1" />
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="w-32 text-zinc-400">Scope</span>
+              <select bind:value={formSmartLeaderboardScope} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1">
+                <option value="global">Global (across all HL tokens)</option>
+                <option value="token">Token (only this token's PnL)</option>
               </select>
             </label>
           {/if}

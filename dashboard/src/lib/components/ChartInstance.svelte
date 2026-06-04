@@ -3610,13 +3610,13 @@
     // OI Long/Short ratio is unitless (1.03, not $1.03). Token-amount OI
     // overlays render as the coin count (e.g. 19,154 BTC). USD overlays
     // fall through to fmtUsdTooltip below.
-    if (o.kind === 'oi' && o.seriesKey === 'long_to_short_oi') {
+    if ((o.kind === 'oi' || o.kind === 'hl_smart_oi') && o.seriesKey === 'long_to_short_oi') {
       return fmtRatio;
     }
-    if (o.kind === 'oi' && o.seriesKey === 'net_oi_pct') {
+    if ((o.kind === 'oi' || o.kind === 'hl_smart_oi') && o.seriesKey === 'net_oi_pct') {
       return (v: number) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`;
     }
-    if (o.kind === 'oi'
+    if ((o.kind === 'oi' || o.kind === 'hl_smart_oi')
         && (o.seriesKey === 'total_oi' || o.seriesKey === 'long_oi' || o.seriesKey === 'short_oi')) {
       return fmtAmountTooltip;
     }

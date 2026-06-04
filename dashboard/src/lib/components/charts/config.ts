@@ -1631,6 +1631,14 @@ export type ChartOverlay = {
   hlWallet?: string;
   hlWalletCategory?: string;
   exchangeFlowExchange?: 'binance' | 'coinbase' | 'okx' | 'bybit' | 'hyperliquid';
+  /** hl_smart_oi overlay only: same four leaderboard knobs as the host
+   *  ChartInstance fields, carried per-overlay so each overlay can pick
+   *  its own leaderboard shape (e.g. a chart can overlay a 7-day Top 50
+   *  AND a 30-day Top 10). Sanitized + clamped on persistence. */
+  smartPnlLookbackDays?: number;
+  smartPnlFloorUsd?: number;
+  smartPnlTopN?: number;
+  smartLeaderboardScope?: 'global' | 'token';
 };
 
 /** One addable series exposed by a chart kind. Single-series kinds list one
@@ -1667,6 +1675,21 @@ export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>>
     { key: 'short_oi',         label: 'Short OI (token)' },
     { key: 'net_oi_pct',       label: 'Net OI %' },
     { key: 'long_to_short_oi', label: 'Long / Short OI' }
+  ],
+  // hl_smart_oi response shape is identical to /oi_split (same long/short/
+  // total in token + USD), so the overlay-fetch projection reuses the
+  // same field-key mapping. The leaderboard knobs ride as overlay-level
+  // config fields (smartPnlLookbackDays etc.) so each overlay can carry
+  // its own leaderboard shape independent of the host chart.
+  hl_smart_oi: [
+    { key: 'total_oi_value',   label: 'Smart Total OI ($)' },
+    { key: 'long_oi_value',    label: 'Smart Long OI ($)' },
+    { key: 'short_oi_value',   label: 'Smart Short OI ($)' },
+    { key: 'total_oi',         label: 'Smart Total OI (token)' },
+    { key: 'long_oi',          label: 'Smart Long OI (token)' },
+    { key: 'short_oi',         label: 'Smart Short OI (token)' },
+    { key: 'net_oi_pct',       label: 'Smart Net OI %' },
+    { key: 'long_to_short_oi', label: 'Smart Long / Short OI' }
   ],
   fr: [ { key: 'rate_bps', label: 'Funding Rate' } ],
   bs: [
@@ -1746,13 +1769,10 @@ function _populateDefaultOverlaySeries() {
     if (!OVERLAY_KIND_SERIES[k]) OVERLAY_KIND_SERIES[k] = valueOrAmount;
   }
   // Wrapper kinds are not picker entries (we expose concrete kinds instead).
-  // Table kinds are explicitly empty so they get filtered out. hl_smart_oi
-  // is excluded too — its leaderboard knobs would need their own overlay
-  // form, not worth the complexity for v1.
+  // Table kinds are explicitly empty so they get filtered out.
   const tabular: ChartKind[] = [
     'hl_top_vaults','hl_top_vault_lps','hl_vault_detail',
-    'hl_top_traders','hl_top_positions',
-    'hl_smart_oi'
+    'hl_top_traders','hl_top_positions'
   ];
   for (const k of tabular) OVERLAY_KIND_SERIES[k] = [];
   void valueOnly;
@@ -1826,6 +1846,20 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
   if (typeof r.exchangeFlowExchange === 'string'
       && ['binance','coinbase','okx','bybit','hyperliquid'].includes(r.exchangeFlowExchange)) {
     o.exchangeFlowExchange = r.exchangeFlowExchange as ChartOverlay['exchangeFlowExchange'];
+  }
+  if (typeof r.smartPnlLookbackDays === 'number'
+      && r.smartPnlLookbackDays >= 1 && r.smartPnlLookbackDays <= 30) {
+    o.smartPnlLookbackDays = Math.round(r.smartPnlLookbackDays);
+  }
+  if (typeof r.smartPnlFloorUsd === 'number' && r.smartPnlFloorUsd >= 0) {
+    o.smartPnlFloorUsd = r.smartPnlFloorUsd;
+  }
+  if (typeof r.smartPnlTopN === 'number'
+      && r.smartPnlTopN >= 1 && r.smartPnlTopN <= 500) {
+    o.smartPnlTopN = Math.round(r.smartPnlTopN);
+  }
+  if (r.smartLeaderboardScope === 'global' || r.smartLeaderboardScope === 'token') {
+    o.smartLeaderboardScope = r.smartLeaderboardScope;
   }
   const rp = r.uniPool as Record<string, unknown> | undefined;
   if (rp && typeof rp.symbol0 === 'string' && typeof rp.symbol1 === 'string' && typeof rp.fee === 'number') {

@@ -83,6 +83,41 @@ async function fetchRawSeries(
     return candles.map((c) => ({ time: c.time, value: numAt(c, o.seriesKey, 'close') }));
   }
 
+  if (kind === 'hl_smart_oi') {
+    // Same response shape as /oi_split; the leaderboard knobs ride as
+    // extra query params from the overlay's own persisted fields.
+    const qs = new URLSearchParams({
+      token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '5000',
+      pnl_lookback_days: String(o.smartPnlLookbackDays ?? 7),
+      pnl_floor_usd:     String(o.smartPnlFloorUsd ?? 10000),
+      top_n:             String(o.smartPnlTopN ?? 50),
+      leaderboard_scope: o.smartLeaderboardScope ?? 'global'
+    });
+    const res = await queuedFetch(`/api/hyperliquid/smart_oi?${qs}`, { signal });
+    if (!res.ok) throw new Error(`overlay smart_oi ${res.status}`);
+    const body = await res.json();
+    const rows = (body.series ?? []) as Array<Record<string, number>>;
+    if (o.seriesKey === 'long_to_short_oi') {
+      return rows.map((r) => {
+        const s = Number(r.short_oi_value ?? 0);
+        const l = Number(r.long_oi_value ?? 0);
+        return { time: r.time, value: s > 0 ? l / s : 0 };
+      });
+    }
+    if (o.seriesKey === 'net_oi_pct') {
+      return rows.map((r) => {
+        const t = Number(r.total_oi_value ?? 0);
+        if (!(t > 0)) return { time: r.time, value: 0 };
+        return { time: r.time,
+          value: (Number(r.long_oi_value ?? 0) - Number(r.short_oi_value ?? 0)) / t };
+      });
+    }
+    const hlKeys = ['long_oi_value', 'short_oi_value', 'total_oi_value',
+                    'long_oi', 'short_oi', 'total_oi'];
+    const key = hlKeys.includes(o.seriesKey) ? o.seriesKey : 'total_oi_value';
+    return rows.map((r) => ({ time: r.time, value: Number(r[key] ?? 0) }));
+  }
+
   if (kind === 'oi') {
     const exchange = o.exchange ?? 'binance';
     if (exchange === 'hl') {
