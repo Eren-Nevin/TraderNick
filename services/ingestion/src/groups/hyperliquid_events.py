@@ -81,6 +81,12 @@ async def _fetch_and_insert(ds, *, event, tokens, since, until) -> int:
             await asyncio.sleep(delay)
         try:
             b = getattr(ds.exchange.hyperliquid, method)()
+            # Pin to perp explicitly so a future DeFiStream default change
+            # (e.g. expanding to include spot rows) can't silently start
+            # polluting our tables. Every HL table we ingest is perp-scoped
+            # by construction — there's no spot variant the chart code
+            # would know how to render.
+            b = b.market_type("perp")
             # Only pass token filter for endpoints that need / use it; the
             # others would just silently ignore but it's cleaner to omit.
             if event in _TOKEN_REQUIRED:

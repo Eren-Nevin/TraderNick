@@ -126,6 +126,12 @@ async def _fetch_chunk(ds, *, event, tokens, since, until):
             await asyncio.sleep(delay)
         try:
             b = getattr(ds.exchange.hyperliquid, method)()
+            # Pin to perp explicitly so a future DeFiStream default change
+            # (e.g. expanding to include spot rows) can't silently start
+            # polluting our tables. Mirrors the same lock in
+            # groups/hyperliquid_events.py — every HL table we ingest is
+            # perp-scoped by construction.
+            b = b.market_type("perp")
             if event in _TOKEN_REQUIRED or event in _PER_TOKEN_TABLE:
                 b = b.token(*tokens)
             b = b.date_range(_iso_z(since), _iso_z(until))
