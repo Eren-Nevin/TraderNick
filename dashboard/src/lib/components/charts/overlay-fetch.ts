@@ -31,6 +31,7 @@ import {
   maArray,
   type ChartOverlay
 } from './config';
+import { defaultSmartSelectorState } from './smartSelector';
 
 export type OverlayPoint = { time: number; value: number };
 
@@ -84,15 +85,11 @@ async function fetchRawSeries(
   }
 
   if (kind === 'hl_smart_oi') {
-    // Same response shape as /oi_split; the leaderboard knobs ride as
-    // extra query params from the overlay's own persisted fields.
+    // Same response shape as /oi_split; the wallet-selection state rides
+    // as one JSON-encoded `selector` param defined in smartSelector.ts.
     const qs = new URLSearchParams({
       token: o.token ?? 'BTC', interval, since: sinceIso, until: untilIso, limit: '5000',
-      pnl_lookback_days: String(o.smartPnlLookbackDays ?? 7),
-      pnl_floor_usd:     String(o.smartPnlFloorUsd ?? 10000),
-      top_n:             String(o.smartPnlTopN ?? 50),
-      leaderboard_scope: o.smartLeaderboardScope ?? 'global',
-      pnl_filter:        o.smartPnlFilter ?? 'realized'
+      selector: JSON.stringify(o.smartSelector ?? defaultSmartSelectorState())
     });
     const res = await queuedFetch(`/api/hyperliquid/smart_oi?${qs}`, { signal });
     if (!res.ok) throw new Error(`overlay smart_oi ${res.status}`);

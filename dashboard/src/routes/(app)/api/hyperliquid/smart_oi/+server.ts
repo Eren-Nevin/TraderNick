@@ -4,7 +4,11 @@ import type { RequestHandler } from './$types';
 
 const PASSTHROUGH = [
   'token', 'interval', 'since', 'until', 'limit',
-  'pnl_lookback_days', 'pnl_floor_usd', 'top_n', 'leaderboard_scope', 'pnl_filter'
+  // Wallet selection — one JSON-encoded blob defined by smart_selector.py.
+  // The legacy per-knob params (pnl_lookback_days, pnl_floor_usd, top_n,
+  // leaderboard_scope, pnl_filter) were dropped along with the route's
+  // backward-compat layer.
+  'selector'
 ];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {

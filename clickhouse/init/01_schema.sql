@@ -2059,6 +2059,55 @@ SELECT
 FROM tradernick.hl_position_history
 GROUP BY day, wallet, token, side;
 
+-- Sided realized PnL per (day, wallet, side) derived from hl_fills'
+-- closed_pnl. Used by the smart-wallet selector when a criterion targets
+-- a specific side (long_pnl / short_pnl) — direct hl_fills scans would
+-- cost 5-15s; this MV brings sided queries to ~50ms.
+--
+-- Side mapping from hl_fills.dir:
+--   'Close Long'   → 'long'   (long position closed)
+--   'Long > Short' → 'long'   (long-side fill of a position flip)
+--   'Close Short'  → 'short'
+--   'Short > Long' → 'short'
+-- Opens carry zero realized PnL (closed_pnl is only populated on the
+-- closing side of a fill pair) and Net Child Vaults aren't trading PnL,
+-- so both are excluded from the MV's filter.
+--
+-- sumState idempotency caveat: re-ingest of a (token, time, tid, wallet)
+-- fill is rare but possible (DeFiStream sweep loop). The underlying
+-- hl_fills ReplacingMergeTree dedups on its ORDER BY tuple in the
+-- background, so by the time the MV's source query runs a dup is
+-- already collapsed. Periodic ReplacingMT merge keeps drift bounded;
+-- if it ever becomes a problem the same self-heal-rebuild pattern
+-- (exchange_flow_rollup_self_heal) applies.
+CREATE TABLE IF NOT EXISTS tradernick.hl_fills_pnl_daily
+(
+    day       Date           CODEC(DoubleDelta, ZSTD(3)),
+    wallet    String         CODEC(ZSTD(3)),
+    token     LowCardinality(String),
+    side      LowCardinality(String),
+    pnl_state AggregateFunction(sum, Float64)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (day, wallet, token, side)
+TTL day + INTERVAL 60 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_fills_pnl_daily_mv
+TO tradernick.hl_fills_pnl_daily
+AS
+SELECT
+    toDate(time) AS day,
+    wallet, token,
+    multiIf(
+        dir IN ('Close Long',  'Long > Short'), 'long',
+        dir IN ('Close Short', 'Short > Long'), 'short',
+        ''
+    ) AS side,
+    sumState(closed_pnl) AS pnl_state
+FROM tradernick.hl_fills
+WHERE dir IN ('Close Long', 'Close Short', 'Long > Short', 'Short > Long')
+GROUP BY day, wallet, token, side;
+
 -- Pre-aggregated per-(wallet, token, bucket) trader performance. The right
 -- table for leaderboard queries — small + already summed. net_pnl = pnl - fees.
 CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history

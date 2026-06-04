@@ -1,0 +1,128 @@
+/**
+ * Frontend twin of services/data_server/src/wallets/smart_selector.py.
+ *
+ * The metric catalogue here is the source of truth for the criteria UI —
+ * a row in the picker is one entry here. Backend and frontend must stay in
+ * sync on `key` values (those go on the wire inside the `selector` JSON);
+ * labels are display-only and free to differ between layers.
+ *
+ * The state shape is the literal JSON the server expects, so the URL
+ * builder is just `JSON.stringify(state)`.
+ */
+
+export type SmartMetricKey =
+  | 'pnl_pct'
+  | 'realized_pnl'
+  | 'unrealized_pnl'
+  | 'total_pnl'
+  | 'total_pnl_pct'
+  | 'volume'
+  | 'trade_count'
+  | 'long_pnl'
+  | 'short_pnl'
+  | 'sharpe';
+
+export type SmartMetricKind = 'usd' | 'pct' | 'ratio' | 'count';
+
+export interface SmartMetricDef {
+  key: SmartMetricKey;
+  label: string;
+  /** What the value represents — drives the UI's min/max placeholder text
+   *  and the formatter used to display sample numbers in the toolbar. */
+  kind: SmartMetricKind;
+  /** Sensible default `min` for the picker when the user first adds this
+   *  metric as a criterion. `undefined` means "no default — leave blank". */
+  defaultMin?: number;
+}
+
+export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
+  { key: 'pnl_pct',        label: 'PnL %',             kind: 'pct' },
+  { key: 'realized_pnl',   label: 'Realized PnL ($)',  kind: 'usd', defaultMin: 10000 },
+  { key: 'unrealized_pnl', label: 'Unrealized PnL ($)',kind: 'usd' },
+  { key: 'total_pnl',      label: 'Total PnL ($)',     kind: 'usd' },
+  { key: 'total_pnl_pct',  label: 'Total PnL %',       kind: 'pct' },
+  { key: 'volume',         label: 'Volume ($)',        kind: 'usd', defaultMin: 1_000_000 },
+  { key: 'trade_count',    label: 'Trade count',       kind: 'count' },
+  { key: 'long_pnl',       label: 'Long PnL ($)',      kind: 'usd' },
+  { key: 'short_pnl',      label: 'Short PnL ($)',     kind: 'usd' },
+  { key: 'sharpe',         label: 'Sharpe ratio',      kind: 'ratio' },
+];
+
+export function metricDef(key: string): SmartMetricDef | undefined {
+  return METRIC_CATALOGUE.find((m) => m.key === key);
+}
+
+export function isMetricKey(s: unknown): s is SmartMetricKey {
+  return typeof s === 'string' && METRIC_CATALOGUE.some((m) => m.key === s);
+}
+
+export interface SmartCriterionState {
+  metric: SmartMetricKey;
+  min?: number;
+  max?: number;
+}
+
+export interface SmartSelectorState {
+  lookback: number;          // 1..60
+  top_n: number;             // 1..500
+  scope: 'global' | 'token';
+  sort_by: SmartMetricKey;
+  criteria: SmartCriterionState[];
+}
+
+export function defaultSmartSelectorState(): SmartSelectorState {
+  return {
+    lookback: 7,
+    top_n: 50,
+    scope: 'global',
+    sort_by: 'pnl_pct',
+    criteria: [{ metric: 'realized_pnl', min: 10000 }],
+  };
+}
+
+/** Sanitize anything the persistence layer hands us into a valid state
+ *  object. Garbage in → defaults out. */
+export function sanitizeSmartSelectorState(raw: unknown): SmartSelectorState {
+  const d = defaultSmartSelectorState();
+  if (!raw || typeof raw !== 'object') return d;
+  const r = raw as Record<string, unknown>;
+  const out: SmartSelectorState = { ...d };
+  if (typeof r.lookback === 'number' && r.lookback >= 1 && r.lookback <= 60) {
+    out.lookback = Math.round(r.lookback);
+  }
+  if (typeof r.top_n === 'number' && r.top_n >= 1 && r.top_n <= 500) {
+    out.top_n = Math.round(r.top_n);
+  }
+  if (r.scope === 'global' || r.scope === 'token') out.scope = r.scope;
+  if (isMetricKey(r.sort_by)) out.sort_by = r.sort_by;
+  if (Array.isArray(r.criteria)) {
+    out.criteria = [];
+    for (const c of r.criteria) {
+      if (!c || typeof c !== 'object') continue;
+      const cc = c as Record<string, unknown>;
+      if (!isMetricKey(cc.metric)) continue;
+      const item: SmartCriterionState = { metric: cc.metric };
+      if (typeof cc.min === 'number' && isFinite(cc.min)) item.min = cc.min;
+      if (typeof cc.max === 'number' && isFinite(cc.max)) item.max = cc.max;
+      out.criteria.push(item);
+    }
+  }
+  return out;
+}
+
+/** Cache key suffix folding all selector knobs in. Two selectors that
+ *  produce different leaderboards return different keys; identical
+ *  selectors return identical keys. */
+export function smartSelectorCacheKey(s: SmartSelectorState): string {
+  // Stable stringify — keep field order deterministic to avoid
+  // semantically-equal-but-string-different keys.
+  const norm = {
+    lookback: s.lookback, top_n: s.top_n, scope: s.scope, sort_by: s.sort_by,
+    criteria: s.criteria.map((c) => ({
+      metric: c.metric,
+      min: c.min ?? null,
+      max: c.max ?? null
+    })),
+  };
+  return JSON.stringify(norm);
+}

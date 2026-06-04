@@ -5,6 +5,7 @@ import type {
   OpenInterestRow,
   VolumeBucket
 } from '$lib/api';
+import { defaultSmartSelectorState, sanitizeSmartSelectorState } from './smartSelector';
 
 export type MAType = 'sma' | 'ema' | 'wma';
 
@@ -1485,28 +1486,11 @@ export type ChartInstance = {
    *  The Long/Short ratio mode ignores this — it's mathematically the same
    *  in either unit, since longs and shorts mark at the same price. */
   oiUnit?: 'usd' | 'token';
-  /** hl_smart_oi only: rolling lookback window (days) over which each
-   *  bucket's leaderboard is computed. PnL ranking at bucket time t uses
-   *  [t - smartPnlLookbackDays, t) — strictly past data, no leakage. */
-  smartPnlLookbackDays?: number;
-  /** hl_smart_oi only: minimum trailing-window net PnL (USD) for a wallet
-   *  to qualify for the leaderboard. Filters out the long tail of low-stake
-   *  noise from the PnL% ranking. */
-  smartPnlFloorUsd?: number;
-  /** hl_smart_oi only: take the top-N PnL% wallets per day. */
-  smartPnlTopN?: number;
-  /** hl_smart_oi only: leaderboard PnL scope — 'global' sums PnL across all
-   *  HL tokens (default; ranks generally-profitable traders), 'token' ranks
-   *  only by PnL on the chart's token (ranks token-specialists). */
-  smartLeaderboardScope?: 'global' | 'token';
-  /** hl_smart_oi only: which PnL signal feeds the ranking.
-   *    'realized'   = trailing sum(net_pnl) from closed trades (default,
-   *                   ignores currently-open positions)
-   *    'unrealized' = end-of-prior-day mark-to-market snapshot of open
-   *                   positions (catches HODLer-style smart money)
-   *    'sum'        = realized + unrealized (total return view).
-   *  The PnL floor and ranking always apply to the chosen signal. */
-  smartPnlFilter?: 'realized' | 'unrealized' | 'sum';
+  /** hl_smart_oi only: full wallet-selection state — lookback + top_n +
+   *  scope + sort metric + list of (metric, min, max) criteria. Mirrors
+   *  the `selector` JSON the backend expects 1:1. See
+   *  $lib/components/charts/smartSelector for the schema and defaults. */
+  smartSelector?: import('./smartSelector').SmartSelectorState;
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -1639,15 +1623,12 @@ export type ChartOverlay = {
   hlWallet?: string;
   hlWalletCategory?: string;
   exchangeFlowExchange?: 'binance' | 'coinbase' | 'okx' | 'bybit' | 'hyperliquid';
-  /** hl_smart_oi overlay only: same four leaderboard knobs as the host
-   *  ChartInstance fields, carried per-overlay so each overlay can pick
-   *  its own leaderboard shape (e.g. a chart can overlay a 7-day Top 50
-   *  AND a 30-day Top 10). Sanitized + clamped on persistence. */
-  smartPnlLookbackDays?: number;
-  smartPnlFloorUsd?: number;
-  smartPnlTopN?: number;
-  smartLeaderboardScope?: 'global' | 'token';
-  smartPnlFilter?: 'realized' | 'unrealized' | 'sum';
+  /** hl_smart_oi overlay only: full wallet-selection state, carried
+   *  per-overlay so each overlay can pick its own leaderboard shape
+   *  (e.g. a chart can overlay a 7-day Top 50 PnL% leaderboard AND a
+   *  30-day Top 10 Sharpe leaderboard simultaneously). Mirrors the
+   *  `selector` JSON the backend expects. */
+  smartSelector?: import('./smartSelector').SmartSelectorState;
 };
 
 /** One addable series exposed by a chart kind. Single-series kinds list one
@@ -1856,22 +1837,11 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
       && ['binance','coinbase','okx','bybit','hyperliquid'].includes(r.exchangeFlowExchange)) {
     o.exchangeFlowExchange = r.exchangeFlowExchange as ChartOverlay['exchangeFlowExchange'];
   }
-  if (typeof r.smartPnlLookbackDays === 'number'
-      && r.smartPnlLookbackDays >= 1 && r.smartPnlLookbackDays <= 60) {
-    o.smartPnlLookbackDays = Math.round(r.smartPnlLookbackDays);
-  }
-  if (typeof r.smartPnlFloorUsd === 'number' && r.smartPnlFloorUsd >= 0) {
-    o.smartPnlFloorUsd = r.smartPnlFloorUsd;
-  }
-  if (typeof r.smartPnlTopN === 'number'
-      && r.smartPnlTopN >= 1 && r.smartPnlTopN <= 500) {
-    o.smartPnlTopN = Math.round(r.smartPnlTopN);
-  }
-  if (r.smartLeaderboardScope === 'global' || r.smartLeaderboardScope === 'token') {
-    o.smartLeaderboardScope = r.smartLeaderboardScope;
-  }
-  if (r.smartPnlFilter === 'realized' || r.smartPnlFilter === 'unrealized' || r.smartPnlFilter === 'sum') {
-    o.smartPnlFilter = r.smartPnlFilter;
+  // Smart-wallet selector — legacy smartPnl* fields are dropped on load
+  // (hard cut). sanitizeSmartSelectorState handles missing / invalid
+  // shapes by substituting defaults.
+  if (r.smartSelector !== undefined) {
+    o.smartSelector = sanitizeSmartSelectorState(r.smartSelector);
   }
   const rp = r.uniPool as Record<string, unknown> | undefined;
   if (rp && typeof rp.symbol0 === 'string' && typeof rp.symbol1 === 'string' && typeof rp.fee === 'number') {
@@ -2035,11 +2005,7 @@ export function newChartInstance(
     base.exchange = 'hl';
     base.oiHlDisplay = 'total';
     base.oiUnit = 'usd';
-    base.smartPnlLookbackDays = 7;
-    base.smartPnlFloorUsd = 10000;
-    base.smartPnlTopN = 50;
-    base.smartLeaderboardScope = 'global';
-    base.smartPnlFilter = 'realized';
+    base.smartSelector = defaultSmartSelectorState();
   }
   if (kind === 'ls') {
     base.exchange = 'binance';

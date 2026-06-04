@@ -18,6 +18,7 @@ from sanic import Blueprint, response
 
 from clickhouse import client
 from routes.ohlcv import INTERVAL_SECONDS
+from wallets.smart_selector import SmartSelector
 
 bp = Blueprint("hyperliquid")
 
@@ -345,41 +346,25 @@ async def leaderboard(request):
 
 @bp.get("/hyperliquid/smart_oi")
 async def smart_oi(request):
-    """Per-bucket HL OI restricted to the trailing-PnL leaderboard.
+    """Per-bucket HL OI restricted to a smart-wallet leaderboard.
 
     Returns the same series shape as /oi_split (long_oi, short_oi, total_oi
-    in token + USD) but filtered to wallets that were ranking on a rolling
-    leaderboard ENDING STRICTLY BEFORE each bucket — no future data leaks
-    into the ranking that's applied at a point in time. The leaderboard is
-    recomputed at daily granularity (one ranking per calendar day; buckets
-    within that day use the ranking built from the prior `lookback_days`).
-
-    Ranking rule per (day D, wallet):
-      - Sum net_pnl and volume over [D - lookback_days, D) — strictly past.
-      - Drop wallets with sum(net_pnl) < pnl_floor_usd.
-      - PnL% = sum(net_pnl) / sum(volume); rank desc; take top_n.
-      - Optionally scope to a single token (`leaderboard_scope=token`).
+    in token + USD) but filtered to wallets the SmartSelector picks each
+    day. The selector takes a JSON `selector` param documented in
+    services/data_server/src/wallets/smart_selector.py — criteria-based,
+    one sort metric, rolling lookback. The selector module materialises
+    a `smart_wallets` CTE that this route joins against per-day.
 
     Query params:
       token, interval, since, until, limit — same as /oi_split.
-      pnl_lookback_days (default 7), pnl_floor_usd (default 10000),
-      top_n (default 50), leaderboard_scope ('global' or 'token',
-      default 'global').
+      selector — JSON {lookback,top_n,scope,sort_by,criteria:[…]}.
     """
     token = request.args.get("token")
     interval = request.args.get("interval", "1h")
     since = request.args.get("since")
     until = request.args.get("until")
     limit = int(request.args.get("limit", "10000"))
-    pnl_lookback_days = int(request.args.get("pnl_lookback_days", "7"))
-    pnl_floor_usd = float(request.args.get("pnl_floor_usd", "10000"))
-    top_n = int(request.args.get("top_n", "50"))
-    leaderboard_scope = request.args.get("leaderboard_scope", "global")
-    # PnL signal used to rank: 'realized' = trailing sum(net_pnl) from
-    # hl_trade_history (closed-trade P&L); 'unrealized' = end-of-prior-day
-    # snapshot of sum(unrealized_pnl) across open positions from the 1h MV;
-    # 'sum' = realized + unrealized (a "total return" view).
-    pnl_filter = request.args.get("pnl_filter", "realized")
+    selector_raw = request.args.get("selector")
 
     if not token:
         return response.json({"error": "missing token"}, status=400)
@@ -387,23 +372,17 @@ async def smart_oi(request):
         return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
     if not since or not until:
         return response.json({"error": "missing since/until"}, status=400)
-    if leaderboard_scope not in ("global", "token"):
-        return response.json({"error": "leaderboard_scope must be 'global' or 'token'"}, status=400)
-    if pnl_lookback_days < 1 or pnl_lookback_days > 60:
-        return response.json({"error": "pnl_lookback_days must be 1..60"}, status=400)
-    if top_n < 1 or top_n > 500:
-        return response.json({"error": "top_n must be 1..500"}, status=400)
-    if pnl_filter not in ("realized", "unrealized", "sum"):
-        return response.json({"error": "pnl_filter must be one of: realized, unrealized, sum"}, status=400)
+    try:
+        selector = SmartSelector.from_json(selector_raw, token=token)
+    except ValueError as e:
+        return response.json({"error": str(e)}, status=400)
 
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since); until_dt = _parse_iso(until)
 
-    # OI sub-query reads from the same MV cascade as /oi_split, but adds
-    # toDate(bucket) so we can join the per-day leaderboard array. The
-    # JOIN's `has(l.wallets, p.wallet)` membership check is cheap: top_n
-    # ~ 50 → 50-element array per day → ~30 days × 50 = 1500-cell linear
-    # scan per row.
+    # Same MV cascade as /oi_split — 1h MV for hourly+, 15m MV for 15m/30m,
+    # raw table otherwise. Adds toDate(bucket) so we can join the per-day
+    # `smart_wallets` array from the selector.
     if seconds >= 3600 and seconds % 3600 == 0:
         oi_source = "tradernick.hl_position_history_1h"
         oi_time_col = "bucket"
@@ -420,156 +399,15 @@ async def smart_oi(request):
         oi_amount_expr = "argMax(amount, time)"
         oi_size_expr   = "argMax(size,   time)"
 
-    # The leaderboard is computed per-day for every day touched by the OI
-    # window. We need to include the lookback PADDING in trade_history
-    # scanning so day = `since` has a full window of past data.
-    leaderboard_token_filter = ""
+    selector_cte_sql, smart_cte_name, selector_params = selector.build_cte(since_dt, until_dt)
     params: dict = {
         "seconds": seconds, "token": token,
         "since": since_dt, "until": until_dt, "limit": limit,
-        "lookback_days": pnl_lookback_days,
-        "pnl_floor": pnl_floor_usd,
-        "top_n": top_n,
+        **selector_params,
     }
-    if leaderboard_scope == "token":
-        leaderboard_token_filter = "AND token = {token:String}"
-
-    # Metric expression that the ranker filters by and orders on. The volume
-    # denominator is always the trailing-window traded volume — even in
-    # 'unrealized' mode wallets need active trades to be considered "smart
-    # money" rather than passive holders. Wallets with vol=0 are dropped.
-    metric_expr_sql = {
-        "realized":   "realized_pnl",
-        "unrealized": "unrealized_pnl",
-        "sum":        "(realized_pnl + unrealized_pnl)",
-    }[pnl_filter]
-
-    # Unrealized snapshot CTE is only materialized when the metric needs it,
-    # because it scans hl_position_history_1h (much bigger than trade_history).
-    needs_unrealized = pnl_filter in ("unrealized", "sum")
-    unrealized_cte_sql = ""
-    unrealized_join_sql = "0 AS unrealized_pnl"
-    # When the leaderboard is scoped to a single token, we can also restrict
-    # the EOD scan to that token. For global scope we read all tokens since
-    # unrealized PnL is wallet-level (a wallet's BTC P&L counts toward their
-    # global PnL even when the chart shows ETH).
-    eod_token_filter = ""
-    if leaderboard_scope == "token":
-        eod_token_filter = "AND token = {token:String}"
-    if needs_unrealized:
-        unrealized_cte_sql = f"""
-        unrealized_eod AS (
-            -- End-of-day per-wallet unrealized PnL from the day-grained EOD
-            -- MV (hl_position_history_eod_wallet). One row per (day, wallet,
-            -- token, side) in the MV; argMaxMerge per group gives the EOD
-            -- snapshot value; the outer sum collapses to wallet-level total.
-            -- The snapshot taken at end of day D keys against target.d = D+1
-            -- — the day whose leaderboard relies on "what positions did the
-            -- wallet end yesterday with".
-            SELECT
-                snap_day + INTERVAL 1 DAY AS day,
-                wallet,
-                sum(eod_pnl) AS unrealized_eod
-            FROM (
-                SELECT
-                    day AS snap_day, wallet, token, side,
-                    argMaxMerge(pnl_state) AS eod_pnl
-                FROM tradernick.hl_position_history_eod_wallet
-                WHERE day >= toDate({{since:DateTime}}) - INTERVAL 1 DAY
-                  AND day <  toDate({{until:DateTime}})
-                  {eod_token_filter}
-                GROUP BY snap_day, wallet, token, side
-            )
-            GROUP BY day, wallet
-        ),"""
-        unrealized_join_sql = "coalesce(u.unrealized_eod, 0) AS unrealized_pnl"
-    unrealized_join_clause = ""
-    if needs_unrealized:
-        unrealized_join_clause = "LEFT JOIN unrealized_eod u ON u.day = r.day AND u.wallet = r.wallet"
 
     sql = f"""
-        WITH
-        daily_per_wallet AS (
-            -- Aggregate trade_history to (day, wallet). Scan range includes
-            -- the lookback pad before `since` so the earliest target day has
-            -- a complete window of prior data.
-            SELECT
-                toDate(time) AS d,
-                wallet,
-                sum(net_pnl) AS daily_pnl,
-                sum(volume)  AS daily_vol
-            FROM tradernick.hl_trade_history
-            WHERE time >= {{since:DateTime}} - INTERVAL {{lookback_days:UInt32}} DAY
-              AND time <  {{until:DateTime}}
-              {leaderboard_token_filter}
-            GROUP BY d, wallet
-        ),
-        data_min AS (
-            -- Earliest available trade_history date for the leaderboard's
-            -- scope. Used to drop chart days whose trailing window would
-            -- extend before any data — those days otherwise produce a
-            -- partial-coverage leaderboard that confuses the chart with a
-            -- truncated wallet set. With the gate they just render as a gap.
-            SELECT toDate(min(time)) AS min_d
-            FROM tradernick.hl_trade_history
-            WHERE 1=1 {leaderboard_token_filter}
-        ),
-        target_days AS (
-            -- Calendar days in the OI window — minus any day whose trailing
-            -- window starts before our earliest trade_history row.
-            SELECT d_set.d AS d
-            FROM (
-                SELECT toDate({{since:DateTime}}) + number AS d
-                FROM numbers(0, dateDiff('day', toDate({{since:DateTime}}), toDate({{until:DateTime}})) + 1)
-            ) d_set
-            CROSS JOIN data_min
-            WHERE d_set.d - {{lookback_days:UInt32}} >= data_min.min_d
-        ),
-        trailing AS (
-            -- For each target day, sum the prior `lookback_days` of daily
-            -- aggregates per wallet (strictly before target.d to avoid leak).
-            -- CROSS JOIN + WHERE because INNER JOIN ... ON with no equality
-            -- predicate isn't supported in standard CH SQL.
-            SELECT
-                target.d AS day,
-                src.wallet AS wallet,
-                sum(src.daily_pnl) AS realized_pnl,
-                sum(src.daily_vol) AS vol
-            FROM target_days target
-            CROSS JOIN daily_per_wallet src
-            WHERE src.d >= target.d - {{lookback_days:UInt32}}
-              AND src.d <  target.d
-            GROUP BY target.d, src.wallet
-        ),{unrealized_cte_sql}
-        combined AS (
-            -- Join the chosen PnL signals so the ranker has both available
-            -- in one row. Unrealized is 0 for wallets that ended the prior
-            -- day with no open positions (LEFT JOIN miss → coalesce).
-            SELECT
-                r.day AS day,
-                r.wallet AS wallet,
-                r.realized_pnl AS realized_pnl,
-                {unrealized_join_sql},
-                r.vol AS vol
-            FROM trailing r
-            {unrealized_join_clause}
-        ),
-        ranked AS (
-            -- Filter by PnL floor + nonzero volume; rank per day by PnL%
-            -- against the chosen metric.
-            SELECT
-                day, wallet,
-                row_number() OVER (PARTITION BY day ORDER BY ({metric_expr_sql}) / vol DESC) AS rk
-            FROM combined
-            WHERE ({metric_expr_sql}) >= {{pnl_floor:Float64}} AND vol > 0
-        ),
-        leaderboard AS (
-            -- Compact per-day to an array of top-N wallets.
-            SELECT day, groupArray(wallet) AS wallets
-            FROM ranked
-            WHERE rk <= {{top_n:UInt32}}
-            GROUP BY day
-        )
+        {selector_cte_sql}
         SELECT
             toUnixTimestamp(bucket)                AS bucket,
             sumIf(latest_amount, side='long')      AS long_oi,
@@ -592,9 +430,9 @@ async def smart_oi(request):
             GROUP BY bucket, day, wallet, side
         ) p
         -- Equi-join on day; wallet membership check stays in WHERE because
-        -- has(l.wallets, p.wallet) mixes columns from both sides and CH
+        -- has(wallets, p.wallet) mixes columns from both sides and CH
         -- standard JOIN ON only accepts equi-joins.
-        INNER JOIN leaderboard l ON l.day = p.day
+        INNER JOIN {smart_cte_name} l ON l.day = p.day
         WHERE has(l.wallets, p.wallet)
         GROUP BY bucket
         ORDER BY bucket
@@ -618,11 +456,7 @@ async def smart_oi(request):
     return response.json({
         "token": token,
         "interval": interval,
-        "pnl_lookback_days": pnl_lookback_days,
-        "pnl_floor_usd": pnl_floor_usd,
-        "top_n": top_n,
-        "leaderboard_scope": leaderboard_scope,
-        "pnl_filter": pnl_filter,
+        "selector": selector.summary(),
         "series": series,
     })
 

@@ -33,6 +33,12 @@
     type MAType,
     type UniPool
   } from './charts/config';
+  import {
+    defaultSmartSelectorState,
+    sanitizeSmartSelectorState,
+    type SmartSelectorState
+  } from './charts/smartSelector';
+  import SmartWalletSelector from './SmartWalletSelector.svelte';
   import type { UniswapStream, TransferStream, TokenGroup, ChainGroup } from '$lib/api';
 
   let {
@@ -344,13 +350,10 @@
   let formMode = $state<'raw' | 'ma'>('raw');
   let formMAType = $state<MAType>('sma');
   let formMAWindow = $state(21);
-  // hl_smart_oi leaderboard knobs. Mirror the host chart's ChartInstance
-  // fields so each overlay can carry its own leaderboard shape.
-  let formSmartPnlLookbackDays = $state(7);
-  let formSmartPnlFloorUsd = $state(10000);
-  let formSmartPnlTopN = $state(50);
-  let formSmartLeaderboardScope = $state<'global' | 'token'>('global');
-  let formSmartPnlFilter = $state<'realized' | 'unrealized' | 'sum'>('realized');
+  // hl_smart_oi wallet-selection state. Mirror the host chart's
+  // ChartInstance.smartSelector so each overlay can carry its own
+  // leaderboard shape independent of the host chart.
+  let formSmartSelector = $state<SmartSelectorState>(defaultSmartSelectorState());
 
   function clearForm() {
     formSeriesKey = '';
@@ -362,11 +365,7 @@
     formPoolSym0 = 'USDC'; formPoolSym1 = 'WETH'; formPoolFee = 500;
     formPoolTickSpacing = 10; formPoolStable = false;
     formMode = 'raw'; formMAType = 'sma'; formMAWindow = 21;
-    formSmartPnlLookbackDays = 7;
-    formSmartPnlFloorUsd = 10000;
-    formSmartPnlTopN = 50;
-    formSmartLeaderboardScope = 'global';
-    formSmartPnlFilter = 'realized';
+    formSmartSelector = defaultSmartSelectorState();
   }
 
   function initDefaultsForKind(k: ChartKind) {
@@ -439,11 +438,7 @@
     }
     if (o.ma) { formMode = 'ma'; formMAType = o.ma.type; formMAWindow = o.ma.length; }
     else formMode = 'raw';
-    formSmartPnlLookbackDays = o.smartPnlLookbackDays ?? 7;
-    formSmartPnlFloorUsd     = o.smartPnlFloorUsd     ?? 10000;
-    formSmartPnlTopN         = o.smartPnlTopN         ?? 50;
-    formSmartLeaderboardScope = o.smartLeaderboardScope ?? 'global';
-    formSmartPnlFilter       = o.smartPnlFilter       ?? 'realized';
+    formSmartSelector = sanitizeSmartSelectorState(o.smartSelector);
   }
 
   // ── Lock helpers ────────────────────────────────────────────────────
@@ -872,11 +867,7 @@
       };
     }
     if (k === 'hl_smart_oi') {
-      o.smartPnlLookbackDays    = Number(formSmartPnlLookbackDays);
-      o.smartPnlFloorUsd        = Number(formSmartPnlFloorUsd);
-      o.smartPnlTopN            = Number(formSmartPnlTopN);
-      o.smartLeaderboardScope   = formSmartLeaderboardScope;
-      o.smartPnlFilter          = formSmartPnlFilter;
+      o.smartSelector = formSmartSelector;
     }
     const clean = sanitizeOverlay(o);
     if (clean) onSubmit(clean);
@@ -1159,40 +1150,15 @@
             </label>
           {/if}
           {#if pickedKind === 'hl_smart_oi'}
-            <!-- Smart-money OI overlay leaderboard knobs. Same semantics as
-                 the host chart's panel: per-bucket trailing leaderboard,
-                 PnL floor + top-N filter, scope picks global vs token-only
-                 PnL ranking. -->
-            <label class="flex items-center gap-2">
-              <span class="w-32 text-zinc-400">Lookback (days)</span>
-              <input type="number" min="1" max="60" step="1" bind:value={formSmartPnlLookbackDays}
-                class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1" />
-            </label>
-            <label class="flex items-center gap-2">
-              <span class="w-32 text-zinc-400">PnL floor ($)</span>
-              <input type="number" min="0" step="1000" bind:value={formSmartPnlFloorUsd}
-                class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1" />
-            </label>
-            <label class="flex items-center gap-2">
-              <span class="w-32 text-zinc-400">Top N</span>
-              <input type="number" min="1" max="500" step="10" bind:value={formSmartPnlTopN}
-                class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1" />
-            </label>
-            <label class="flex items-center gap-2">
-              <span class="w-32 text-zinc-400">Scope</span>
-              <select bind:value={formSmartLeaderboardScope} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1">
-                <option value="global">Global (across all HL tokens)</option>
-                <option value="token">Token (only this token's PnL)</option>
-              </select>
-            </label>
-            <label class="flex items-center gap-2">
-              <span class="w-32 text-zinc-400">PnL filter</span>
-              <select bind:value={formSmartPnlFilter} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1">
-                <option value="realized">Realized (closed trades)</option>
-                <option value="unrealized">Unrealized (open positions)</option>
-                <option value="sum">Sum (realized + unrealized)</option>
-              </select>
-            </label>
+            <!-- Multi-criterion wallet selector — same widget the standalone
+                 chart's settings panel uses. Per-overlay state means a chart
+                 can host several smart-OI overlays with different selectors
+                 (e.g. PnL-pct leaders + Sharpe leaders side-by-side). -->
+            <SmartWalletSelector
+              value={formSmartSelector}
+              onChange={(v) => (formSmartSelector = v)}
+              tokenLabel={formToken}
+            />
           {/if}
 
           <div class="border-t border-zinc-800 my-2"></div>

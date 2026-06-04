@@ -114,6 +114,11 @@
   } from '$lib/components/charts/config';
   import { fetchOverlayData, type OverlayPoint } from '$lib/components/charts/overlay-fetch';
   import AddOverlayDialog from '$lib/components/AddOverlayDialog.svelte';
+  import SmartWalletSelector from '$lib/components/SmartWalletSelector.svelte';
+  import {
+    defaultSmartSelectorState,
+    smartSelectorCacheKey
+  } from '$lib/components/charts/smartSelector';
   import Pencil from '@lucide/svelte/icons/pencil';
   import PlusCircle from '@lucide/svelte/icons/plus-circle';
   import type { View } from '$lib/chart-zoom';
@@ -744,14 +749,12 @@
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
     }
     if (instance.kind === 'hl_smart_oi') {
-      // The smart-money OI series materially changes when any leaderboard
-      // knob moves — fold them all into the cache key so changes refetch.
-      return `${instance.kind}|${instance.token}|${instance.interval}`
-        + `|lb${instance.smartPnlLookbackDays ?? 7}`
-        + `|fl${instance.smartPnlFloorUsd ?? 10000}`
-        + `|n${instance.smartPnlTopN ?? 50}`
-        + `|s${instance.smartLeaderboardScope ?? 'global'}`
-        + `|f${instance.smartPnlFilter ?? 'realized'}`;
+      // The smart-money OI series materially changes when any selector
+      // knob moves — fold the full selector state into the cache key.
+      const selKey = smartSelectorCacheKey(
+        instance.smartSelector ?? defaultSmartSelectorState()
+      );
+      return `${instance.kind}|${instance.token}|${instance.interval}|${selKey}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -2330,11 +2333,9 @@
           // but filtered to the rolling-PnL leaderboard. Smart-money params
           // ride as extra query string entries.
           const sQs = new URLSearchParams(baseQS);
-          sQs.set('pnl_lookback_days', String(instance.smartPnlLookbackDays ?? 7));
-          sQs.set('pnl_floor_usd',     String(instance.smartPnlFloorUsd ?? 10000));
-          sQs.set('top_n',             String(instance.smartPnlTopN ?? 50));
-          sQs.set('leaderboard_scope', instance.smartLeaderboardScope ?? 'global');
-          sQs.set('pnl_filter',        instance.smartPnlFilter ?? 'realized');
+          sQs.set('selector', JSON.stringify(
+            instance.smartSelector ?? defaultSmartSelectorState()
+          ));
           url = `/api/hyperliquid/smart_oi?${sQs}`;
           pickArr = (b) => {
             const rows = (b.series ?? []) as Array<Record<string, number>>;
@@ -4876,56 +4877,17 @@
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
       {#if instance.kind === 'hl_smart_oi'}
-        <!-- Smart-money OI knobs. The leaderboard recomputes per-bucket
-             over (bucket - Lookback, bucket) — strictly past data so the
-             chart can't peek at future PnL when picking wallets. PnL floor
-             trims low-stake noise from the PnL% ranking. -->
-        <span class="text-zinc-500">Lookback (d)</span>
-        <input
-          bind:value={instance.smartPnlLookbackDays}
-          type="number"
-          step="1" min="1" max="60"
-          class="w-16 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-        />
-        <span class="text-zinc-500">PnL ≥ $</span>
-        <input
-          bind:value={instance.smartPnlFloorUsd}
-          type="number"
-          step="1000" min="0"
-          class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-        />
-        <span class="text-zinc-500">Top N</span>
-        <input
-          bind:value={instance.smartPnlTopN}
-          type="number"
-          step="10" min="1" max="500"
-          class="w-16 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-        />
-        <span class="text-zinc-500">Scope</span>
-        <select
-          bind:value={instance.smartLeaderboardScope}
-          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          title="Global = rank by trailing PnL across all HL tokens; Token = rank only by PnL on this chart's token"
-        >
-          <option value="global">Global</option>
-          <option value="token">Token</option>
-        </select>
-        <span class="text-zinc-500">PnL</span>
-        <select
-          bind:value={instance.smartPnlFilter}
-          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          title="Which PnL signal feeds the ranking: realized (closed trades only), unrealized (open positions only), or sum of both"
-        >
-          <option value="realized">Realized</option>
-          <option value="unrealized">Unrealized</option>
-          <option value="sum">Sum</option>
-        </select>
-        <button
-          type="button"
-          onclick={() => reload()}
-          class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-        >Apply</button>
-        <span class="w-px h-4 bg-zinc-800"></span>
+        <!-- Wallet-selection knobs live in their own widget so any future
+             smart-wallet chart can drop the same component in. Changes
+             flow through the cache key and trigger a refetch automatically
+             — no Apply button required. -->
+        <div class="basis-full">
+          <SmartWalletSelector
+            value={instance.smartSelector ?? defaultSmartSelectorState()}
+            onChange={(v) => (instance.smartSelector = v)}
+            tokenLabel={instance.token ?? ''}
+          />
+        </div>
       {/if}
       <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
         <input type="checkbox" bind:checked={instance.showPoint} class="accent-zinc-400" />
