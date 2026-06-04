@@ -1499,6 +1499,14 @@ export type ChartInstance = {
    *  HL tokens (default; ranks generally-profitable traders), 'token' ranks
    *  only by PnL on the chart's token (ranks token-specialists). */
   smartLeaderboardScope?: 'global' | 'token';
+  /** hl_smart_oi only: which PnL signal feeds the ranking.
+   *    'realized'   = trailing sum(net_pnl) from closed trades (default,
+   *                   ignores currently-open positions)
+   *    'unrealized' = end-of-prior-day mark-to-market snapshot of open
+   *                   positions (catches HODLer-style smart money)
+   *    'sum'        = realized + unrealized (total return view).
+   *  The PnL floor and ranking always apply to the chosen signal. */
+  smartPnlFilter?: 'realized' | 'unrealized' | 'sum';
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
@@ -1639,6 +1647,7 @@ export type ChartOverlay = {
   smartPnlFloorUsd?: number;
   smartPnlTopN?: number;
   smartLeaderboardScope?: 'global' | 'token';
+  smartPnlFilter?: 'realized' | 'unrealized' | 'sum';
 };
 
 /** One addable series exposed by a chart kind. Single-series kinds list one
@@ -1848,7 +1857,7 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
     o.exchangeFlowExchange = r.exchangeFlowExchange as ChartOverlay['exchangeFlowExchange'];
   }
   if (typeof r.smartPnlLookbackDays === 'number'
-      && r.smartPnlLookbackDays >= 1 && r.smartPnlLookbackDays <= 30) {
+      && r.smartPnlLookbackDays >= 1 && r.smartPnlLookbackDays <= 60) {
     o.smartPnlLookbackDays = Math.round(r.smartPnlLookbackDays);
   }
   if (typeof r.smartPnlFloorUsd === 'number' && r.smartPnlFloorUsd >= 0) {
@@ -1860,6 +1869,9 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
   }
   if (r.smartLeaderboardScope === 'global' || r.smartLeaderboardScope === 'token') {
     o.smartLeaderboardScope = r.smartLeaderboardScope;
+  }
+  if (r.smartPnlFilter === 'realized' || r.smartPnlFilter === 'unrealized' || r.smartPnlFilter === 'sum') {
+    o.smartPnlFilter = r.smartPnlFilter;
   }
   const rp = r.uniPool as Record<string, unknown> | undefined;
   if (rp && typeof rp.symbol0 === 'string' && typeof rp.symbol1 === 'string' && typeof rp.fee === 'number') {
@@ -2027,6 +2039,7 @@ export function newChartInstance(
     base.smartPnlFloorUsd = 10000;
     base.smartPnlTopN = 50;
     base.smartLeaderboardScope = 'global';
+    base.smartPnlFilter = 'realized';
   }
   if (kind === 'ls') {
     base.exchange = 'binance';

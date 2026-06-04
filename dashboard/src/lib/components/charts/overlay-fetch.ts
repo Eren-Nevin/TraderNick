@@ -91,7 +91,8 @@ async function fetchRawSeries(
       pnl_lookback_days: String(o.smartPnlLookbackDays ?? 7),
       pnl_floor_usd:     String(o.smartPnlFloorUsd ?? 10000),
       top_n:             String(o.smartPnlTopN ?? 50),
-      leaderboard_scope: o.smartLeaderboardScope ?? 'global'
+      leaderboard_scope: o.smartLeaderboardScope ?? 'global',
+      pnl_filter:        o.smartPnlFilter ?? 'realized'
     });
     const res = await queuedFetch(`/api/hyperliquid/smart_oi?${qs}`, { signal });
     if (!res.ok) throw new Error(`overlay smart_oi ${res.status}`);

@@ -841,12 +841,14 @@
             ? r.oiHlDisplay : 'total';
           inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
           const lb = Number(r.smartPnlLookbackDays);
-          inst.smartPnlLookbackDays = Number.isFinite(lb) && lb >= 1 && lb <= 30 ? Math.round(lb) : 7;
+          inst.smartPnlLookbackDays = Number.isFinite(lb) && lb >= 1 && lb <= 60 ? Math.round(lb) : 7;
           const fl = Number(r.smartPnlFloorUsd);
           inst.smartPnlFloorUsd = Number.isFinite(fl) && fl >= 0 ? fl : 10000;
           const tn = Number(r.smartPnlTopN);
           inst.smartPnlTopN = Number.isFinite(tn) && tn >= 1 && tn <= 500 ? Math.round(tn) : 50;
           inst.smartLeaderboardScope = r.smartLeaderboardScope === 'token' ? 'token' : 'global';
+          inst.smartPnlFilter = (r.smartPnlFilter === 'unrealized' || r.smartPnlFilter === 'sum')
+            ? r.smartPnlFilter : 'realized';
         }
       }
       // Lido chart kinds need a `chain` but no token / pool. L1 kinds are

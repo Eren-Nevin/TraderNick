@@ -2025,6 +2025,40 @@ SELECT
 FROM tradernick.hl_position_history
 GROUP BY bucket, token, side, wallet;
 
+-- End-of-day per-(wallet, token, side) unrealized PnL snapshot. Same
+-- argMaxState pattern as the 15m / 1h MVs but bucketed at day granularity
+-- — argMaxState picks the latest snapshot per (day, wallet, token, side)
+-- which by construction is the wallet's position state at end-of-day for
+-- that token/side. Read pattern sums across (token, side) per (day,
+-- wallet) to get the wallet's total EOD unrealized — what /smart_oi's
+-- 'unrealized' and 'sum' modes need for daily leaderboard ranking.
+--
+-- Idempotent under re-ingest: argMaxMerge across N replays of the same
+-- (day, wallet, token, side, time) row picks the max-time entry, which
+-- is identical regardless of replay count. Re-emission from DeFiStream
+-- sweep loops doesn't drift this MV. Same lever as the 15m / 1h MVs.
+CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_eod_wallet
+(
+    day         Date           CODEC(DoubleDelta, ZSTD(3)),
+    wallet      String         CODEC(ZSTD(3)),
+    token       LowCardinality(String),
+    side        LowCardinality(String),
+    pnl_state   AggregateFunction(argMax, Float64, DateTime64(3))
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (day, wallet, token, side)
+TTL day + INTERVAL 60 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_eod_wallet_mv
+TO tradernick.hl_position_history_eod_wallet
+AS
+SELECT
+    toDate(time) AS day,
+    wallet, token, side,
+    argMaxState(unrealized_pnl, time) AS pnl_state
+FROM tradernick.hl_position_history
+GROUP BY day, wallet, token, side;
+
 -- Pre-aggregated per-(wallet, token, bucket) trader performance. The right
 -- table for leaderboard queries — small + already summed. net_pnl = pnl - fees.
 CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history

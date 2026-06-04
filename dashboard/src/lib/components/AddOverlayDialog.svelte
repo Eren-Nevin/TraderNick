@@ -350,6 +350,7 @@
   let formSmartPnlFloorUsd = $state(10000);
   let formSmartPnlTopN = $state(50);
   let formSmartLeaderboardScope = $state<'global' | 'token'>('global');
+  let formSmartPnlFilter = $state<'realized' | 'unrealized' | 'sum'>('realized');
 
   function clearForm() {
     formSeriesKey = '';
@@ -365,6 +366,7 @@
     formSmartPnlFloorUsd = 10000;
     formSmartPnlTopN = 50;
     formSmartLeaderboardScope = 'global';
+    formSmartPnlFilter = 'realized';
   }
 
   function initDefaultsForKind(k: ChartKind) {
@@ -441,6 +443,7 @@
     formSmartPnlFloorUsd     = o.smartPnlFloorUsd     ?? 10000;
     formSmartPnlTopN         = o.smartPnlTopN         ?? 50;
     formSmartLeaderboardScope = o.smartLeaderboardScope ?? 'global';
+    formSmartPnlFilter       = o.smartPnlFilter       ?? 'realized';
   }
 
   // ── Lock helpers ────────────────────────────────────────────────────
@@ -873,6 +876,7 @@
       o.smartPnlFloorUsd        = Number(formSmartPnlFloorUsd);
       o.smartPnlTopN            = Number(formSmartPnlTopN);
       o.smartLeaderboardScope   = formSmartLeaderboardScope;
+      o.smartPnlFilter          = formSmartPnlFilter;
     }
     const clean = sanitizeOverlay(o);
     if (clean) onSubmit(clean);
@@ -1161,7 +1165,7 @@
                  PnL ranking. -->
             <label class="flex items-center gap-2">
               <span class="w-32 text-zinc-400">Lookback (days)</span>
-              <input type="number" min="1" max="30" step="1" bind:value={formSmartPnlLookbackDays}
+              <input type="number" min="1" max="60" step="1" bind:value={formSmartPnlLookbackDays}
                 class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1" />
             </label>
             <label class="flex items-center gap-2">
@@ -1179,6 +1183,14 @@
               <select bind:value={formSmartLeaderboardScope} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1">
                 <option value="global">Global (across all HL tokens)</option>
                 <option value="token">Token (only this token's PnL)</option>
+              </select>
+            </label>
+            <label class="flex items-center gap-2">
+              <span class="w-32 text-zinc-400">PnL filter</span>
+              <select bind:value={formSmartPnlFilter} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1">
+                <option value="realized">Realized (closed trades)</option>
+                <option value="unrealized">Unrealized (open positions)</option>
+                <option value="sum">Sum (realized + unrealized)</option>
               </select>
             </label>
           {/if}

@@ -375,6 +375,11 @@ async def smart_oi(request):
     pnl_floor_usd = float(request.args.get("pnl_floor_usd", "10000"))
     top_n = int(request.args.get("top_n", "50"))
     leaderboard_scope = request.args.get("leaderboard_scope", "global")
+    # PnL signal used to rank: 'realized' = trailing sum(net_pnl) from
+    # hl_trade_history (closed-trade P&L); 'unrealized' = end-of-prior-day
+    # snapshot of sum(unrealized_pnl) across open positions from the 1h MV;
+    # 'sum' = realized + unrealized (a "total return" view).
+    pnl_filter = request.args.get("pnl_filter", "realized")
 
     if not token:
         return response.json({"error": "missing token"}, status=400)
@@ -384,10 +389,12 @@ async def smart_oi(request):
         return response.json({"error": "missing since/until"}, status=400)
     if leaderboard_scope not in ("global", "token"):
         return response.json({"error": "leaderboard_scope must be 'global' or 'token'"}, status=400)
-    if pnl_lookback_days < 1 or pnl_lookback_days > 30:
-        return response.json({"error": "pnl_lookback_days must be 1..30"}, status=400)
+    if pnl_lookback_days < 1 or pnl_lookback_days > 60:
+        return response.json({"error": "pnl_lookback_days must be 1..60"}, status=400)
     if top_n < 1 or top_n > 500:
         return response.json({"error": "top_n must be 1..500"}, status=400)
+    if pnl_filter not in ("realized", "unrealized", "sum"):
+        return response.json({"error": "pnl_filter must be one of: realized, unrealized, sum"}, status=400)
 
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since); until_dt = _parse_iso(until)
@@ -427,6 +434,59 @@ async def smart_oi(request):
     if leaderboard_scope == "token":
         leaderboard_token_filter = "AND token = {token:String}"
 
+    # Metric expression that the ranker filters by and orders on. The volume
+    # denominator is always the trailing-window traded volume — even in
+    # 'unrealized' mode wallets need active trades to be considered "smart
+    # money" rather than passive holders. Wallets with vol=0 are dropped.
+    metric_expr_sql = {
+        "realized":   "realized_pnl",
+        "unrealized": "unrealized_pnl",
+        "sum":        "(realized_pnl + unrealized_pnl)",
+    }[pnl_filter]
+
+    # Unrealized snapshot CTE is only materialized when the metric needs it,
+    # because it scans hl_position_history_1h (much bigger than trade_history).
+    needs_unrealized = pnl_filter in ("unrealized", "sum")
+    unrealized_cte_sql = ""
+    unrealized_join_sql = "0 AS unrealized_pnl"
+    # When the leaderboard is scoped to a single token, we can also restrict
+    # the EOD scan to that token. For global scope we read all tokens since
+    # unrealized PnL is wallet-level (a wallet's BTC P&L counts toward their
+    # global PnL even when the chart shows ETH).
+    eod_token_filter = ""
+    if leaderboard_scope == "token":
+        eod_token_filter = "AND token = {token:String}"
+    if needs_unrealized:
+        unrealized_cte_sql = f"""
+        unrealized_eod AS (
+            -- End-of-day per-wallet unrealized PnL from the day-grained EOD
+            -- MV (hl_position_history_eod_wallet). One row per (day, wallet,
+            -- token, side) in the MV; argMaxMerge per group gives the EOD
+            -- snapshot value; the outer sum collapses to wallet-level total.
+            -- The snapshot taken at end of day D keys against target.d = D+1
+            -- — the day whose leaderboard relies on "what positions did the
+            -- wallet end yesterday with".
+            SELECT
+                snap_day + INTERVAL 1 DAY AS day,
+                wallet,
+                sum(eod_pnl) AS unrealized_eod
+            FROM (
+                SELECT
+                    day AS snap_day, wallet, token, side,
+                    argMaxMerge(pnl_state) AS eod_pnl
+                FROM tradernick.hl_position_history_eod_wallet
+                WHERE day >= toDate({{since:DateTime}}) - INTERVAL 1 DAY
+                  AND day <  toDate({{until:DateTime}})
+                  {eod_token_filter}
+                GROUP BY snap_day, wallet, token, side
+            )
+            GROUP BY day, wallet
+        ),"""
+        unrealized_join_sql = "coalesce(u.unrealized_eod, 0) AS unrealized_pnl"
+    unrealized_join_clause = ""
+    if needs_unrealized:
+        unrealized_join_clause = "LEFT JOIN unrealized_eod u ON u.day = r.day AND u.wallet = r.wallet"
+
     sql = f"""
         WITH
         daily_per_wallet AS (
@@ -444,12 +504,26 @@ async def smart_oi(request):
               {leaderboard_token_filter}
             GROUP BY d, wallet
         ),
+        data_min AS (
+            -- Earliest available trade_history date for the leaderboard's
+            -- scope. Used to drop chart days whose trailing window would
+            -- extend before any data — those days otherwise produce a
+            -- partial-coverage leaderboard that confuses the chart with a
+            -- truncated wallet set. With the gate they just render as a gap.
+            SELECT toDate(min(time)) AS min_d
+            FROM tradernick.hl_trade_history
+            WHERE 1=1 {leaderboard_token_filter}
+        ),
         target_days AS (
-            -- One row per calendar day in the OI window. We need a leaderboard
-            -- for each of these days; the JOIN below pairs each target day
-            -- with all daily_per_wallet rows in its trailing window.
-            SELECT toDate({{since:DateTime}}) + number AS d
-            FROM numbers(0, dateDiff('day', toDate({{since:DateTime}}), toDate({{until:DateTime}})) + 1)
+            -- Calendar days in the OI window — minus any day whose trailing
+            -- window starts before our earliest trade_history row.
+            SELECT d_set.d AS d
+            FROM (
+                SELECT toDate({{since:DateTime}}) + number AS d
+                FROM numbers(0, dateDiff('day', toDate({{since:DateTime}}), toDate({{until:DateTime}})) + 1)
+            ) d_set
+            CROSS JOIN data_min
+            WHERE d_set.d - {{lookback_days:UInt32}} >= data_min.min_d
         ),
         trailing AS (
             -- For each target day, sum the prior `lookback_days` of daily
@@ -459,21 +533,35 @@ async def smart_oi(request):
             SELECT
                 target.d AS day,
                 src.wallet AS wallet,
-                sum(src.daily_pnl) AS pnl,
+                sum(src.daily_pnl) AS realized_pnl,
                 sum(src.daily_vol) AS vol
             FROM target_days target
             CROSS JOIN daily_per_wallet src
             WHERE src.d >= target.d - {{lookback_days:UInt32}}
               AND src.d <  target.d
             GROUP BY target.d, src.wallet
+        ),{unrealized_cte_sql}
+        combined AS (
+            -- Join the chosen PnL signals so the ranker has both available
+            -- in one row. Unrealized is 0 for wallets that ended the prior
+            -- day with no open positions (LEFT JOIN miss → coalesce).
+            SELECT
+                r.day AS day,
+                r.wallet AS wallet,
+                r.realized_pnl AS realized_pnl,
+                {unrealized_join_sql},
+                r.vol AS vol
+            FROM trailing r
+            {unrealized_join_clause}
         ),
         ranked AS (
-            -- Filter by PnL floor + nonzero volume; rank per day by PnL%.
+            -- Filter by PnL floor + nonzero volume; rank per day by PnL%
+            -- against the chosen metric.
             SELECT
                 day, wallet,
-                row_number() OVER (PARTITION BY day ORDER BY pnl / vol DESC) AS rk
-            FROM trailing
-            WHERE pnl >= {{pnl_floor:Float64}} AND vol > 0
+                row_number() OVER (PARTITION BY day ORDER BY ({metric_expr_sql}) / vol DESC) AS rk
+            FROM combined
+            WHERE ({metric_expr_sql}) >= {{pnl_floor:Float64}} AND vol > 0
         ),
         leaderboard AS (
             -- Compact per-day to an array of top-N wallets.
@@ -534,6 +622,7 @@ async def smart_oi(request):
         "pnl_floor_usd": pnl_floor_usd,
         "top_n": top_n,
         "leaderboard_scope": leaderboard_scope,
+        "pnl_filter": pnl_filter,
         "series": series,
     })
 

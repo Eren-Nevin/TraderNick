@@ -750,7 +750,8 @@
         + `|lb${instance.smartPnlLookbackDays ?? 7}`
         + `|fl${instance.smartPnlFloorUsd ?? 10000}`
         + `|n${instance.smartPnlTopN ?? 50}`
-        + `|s${instance.smartLeaderboardScope ?? 'global'}`;
+        + `|s${instance.smartLeaderboardScope ?? 'global'}`
+        + `|f${instance.smartPnlFilter ?? 'realized'}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -2333,6 +2334,7 @@
           sQs.set('pnl_floor_usd',     String(instance.smartPnlFloorUsd ?? 10000));
           sQs.set('top_n',             String(instance.smartPnlTopN ?? 50));
           sQs.set('leaderboard_scope', instance.smartLeaderboardScope ?? 'global');
+          sQs.set('pnl_filter',        instance.smartPnlFilter ?? 'realized');
           url = `/api/hyperliquid/smart_oi?${sQs}`;
           pickArr = (b) => {
             const rows = (b.series ?? []) as Array<Record<string, number>>;
@@ -4882,7 +4884,7 @@
         <input
           bind:value={instance.smartPnlLookbackDays}
           type="number"
-          step="1" min="1" max="30"
+          step="1" min="1" max="60"
           class="w-16 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
         />
         <span class="text-zinc-500">PnL ≥ $</span>
@@ -4907,6 +4909,16 @@
         >
           <option value="global">Global</option>
           <option value="token">Token</option>
+        </select>
+        <span class="text-zinc-500">PnL</span>
+        <select
+          bind:value={instance.smartPnlFilter}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Which PnL signal feeds the ranking: realized (closed trades only), unrealized (open positions only), or sum of both"
+        >
+          <option value="realized">Realized</option>
+          <option value="unrealized">Unrealized</option>
+          <option value="sum">Sum</option>
         </select>
         <button
           type="button"
