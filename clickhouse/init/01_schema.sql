@@ -2047,7 +2047,13 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_eod_wallet
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (day, wallet, token, side)
-TTL day + INTERVAL 60 DAY;
+-- 61 not 60: TTL with `day + INTERVAL N DAY` is Date-typed and expires
+-- at the resulting date's MIDNIGHT (00:00:00), so on the day a row hits
+-- its 60-day mark anything written that day before midnight passes was
+-- already eligible for the next TTL merge — the eod MV silently lost its
+-- youngest row on every backfill. One extra day of padding sidesteps the
+-- date/datetime granularity mismatch without further code changes.
+TTL day + INTERVAL 61 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_eod_wallet_mv
 TO tradernick.hl_position_history_eod_wallet
@@ -2090,7 +2096,13 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_fills_pnl_daily
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (day, wallet, token, side)
-TTL day + INTERVAL 60 DAY;
+-- 61 not 60: TTL with `day + INTERVAL N DAY` is Date-typed and expires
+-- at the resulting date's MIDNIGHT (00:00:00), so on the day a row hits
+-- its 60-day mark anything written that day before midnight passes was
+-- already eligible for the next TTL merge — the eod MV silently lost its
+-- youngest row on every backfill. One extra day of padding sidesteps the
+-- date/datetime granularity mismatch without further code changes.
+TTL day + INTERVAL 61 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_fills_pnl_daily_mv
 TO tradernick.hl_fills_pnl_daily
