@@ -2591,6 +2591,10 @@
       // and there's no single "the amount" to sum.
       || ((isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind) || effectiveKind === 'uniswap_v4_swap')
             && (instance.valueMode ?? 'usd') === 'usd')
+      // HL Bridge Flows: net deposits over a window is the canonical
+      // "where did HL TVL move" read. Uses the windowed-sum variant
+      // (instance.sumWindow) so the user can pick a rolling horizon.
+      || instance.kind === 'hl_transfers'
   );
 
   let cumulativeLines = $derived.by(() => {
@@ -2815,6 +2819,32 @@
             break;
           }
 
+          if (instance.kind === 'hl_transfers') {
+            // Same shape as the exchange_flow branch but the HL bridge
+            // payload uses {deposit, withdrawal, net} field names and is
+            // USDC-only (no token/USD toggle needed). Emit one MA per
+            // visible series so the legend matches the primary lines.
+            const t = instance.exchangeFlowType ?? 'netflow';
+            const pushFlow = (key: string, line: string, field: string, dash: string) => {
+              const a = maArray(rows.map((r) => r[field] ?? 0), ma.length, ma.type);
+              out.push({
+                key: `cum_${key}_${idx}`,
+                label: `${line} ${tag}`,
+                color, dash,
+                compute: (_d: unknown, i: number) => a[i]
+              });
+            };
+            if (t === 'inflow')  pushFlow('in',  'Inflow',  'deposit',    SUB_DASH[0]);
+            else if (t === 'outflow') pushFlow('out', 'Outflow', 'withdrawal', SUB_DASH[0]);
+            else if (t === 'netflow') pushFlow('net', 'Netflow', 'net',        SUB_DASH[0]);
+            else {
+              pushFlow('in',  'Inflow',  'deposit',    SUB_DASH[0]);
+              pushFlow('out', 'Outflow', 'withdrawal', SUB_DASH[1]);
+              pushFlow('net', 'Netflow', 'net',        SUB_DASH[2]);
+            }
+            break;
+          }
+
           if (isGmxV2Kind(instance.kind)) {
             const field = GMX_V2_PRIMARY_FIELD[effectiveKind] ?? 'sum_value_usd';
             const a = maArray(rows.map((r) => r[field] ?? 0), ma.length, ma.type);
@@ -2884,23 +2914,61 @@
     // bucket flow against the running total inside the visible window.
     // The y-axis label is purposely terse ("Σ") so the legend stays clean.
     if (canSum && instance.showSum) {
-      const useUsd = (instance.valueMode ?? 'usd') === 'usd';
-      const valLabel = useUsd ? 'USD' : 'Amount';
-      // Source array: every applicable kind exposes the same shape
-      // ({sum_value_usd, sum_amount}) on each row.
-      const src = (data as unknown as Record<string, number>[]).map(
-        (d) => (useUsd ? d.sum_value_usd : d.sum_amount) ?? 0
-      );
-      const running: number[] = new Array(src.length);
-      let acc = 0;
-      for (let i = 0; i < src.length; i++) { acc += src[i] || 0; running[i] = acc; }
-      out.push({
-        key: 'cum_sum',
-        label: `Σ ${valLabel}`,
-        color: '#a78bfa',                 // violet-400 — distinct from MA palette
-        axis: 'secondary' as const,
-        compute: (_d: unknown, i: number) => running[i]
-      });
+      // HL Bridge Flows special-case: payload uses {deposit, withdrawal,
+      // net} fields instead of {sum_value_usd, sum_amount}, and the sum
+      // tracks whichever direction the user selected in the flow-type
+      // toggle. Also honours a sliding window via instance.sumWindow (0
+      // or unset = strict running total from the first loaded bucket).
+      if (instance.kind === 'hl_transfers') {
+        const t = instance.exchangeFlowType ?? 'netflow';
+        const field = t === 'inflow' ? 'deposit'
+                    : t === 'outflow' ? 'withdrawal'
+                    : 'net'; // 'netflow' and 'all' both anchor on net
+        const lineLabel = t === 'inflow' ? 'Inflow'
+                       : t === 'outflow' ? 'Outflow'
+                       : 'Netflow';
+        const win = Math.max(0, Math.floor(instance.sumWindow ?? 0));
+        const src = (data as unknown as Record<string, number>[]).map(
+          (d) => Number(d[field] ?? 0)
+        );
+        const running: number[] = new Array(src.length);
+        let acc = 0;
+        if (win === 0) {
+          for (let i = 0; i < src.length; i++) { acc += src[i] || 0; running[i] = acc; }
+        } else {
+          for (let i = 0; i < src.length; i++) {
+            acc += src[i] || 0;
+            if (i >= win) acc -= src[i - win] || 0;
+            running[i] = acc;
+          }
+        }
+        const winLabel = win > 0 ? ` (last ${win})` : '';
+        out.push({
+          key: 'cum_sum',
+          label: `Σ ${lineLabel}${winLabel}`,
+          color: '#a78bfa',
+          axis: 'secondary' as const,
+          compute: (_d: unknown, i: number) => running[i]
+        });
+      } else {
+        const useUsd = (instance.valueMode ?? 'usd') === 'usd';
+        const valLabel = useUsd ? 'USD' : 'Amount';
+        // Source array: every applicable kind exposes the same shape
+        // ({sum_value_usd, sum_amount}) on each row.
+        const src = (data as unknown as Record<string, number>[]).map(
+          (d) => (useUsd ? d.sum_value_usd : d.sum_amount) ?? 0
+        );
+        const running: number[] = new Array(src.length);
+        let acc = 0;
+        for (let i = 0; i < src.length; i++) { acc += src[i] || 0; running[i] = acc; }
+        out.push({
+          key: 'cum_sum',
+          label: `Σ ${valLabel}`,
+          color: '#a78bfa',                 // violet-400 — distinct from MA palette
+          axis: 'secondary' as const,
+          compute: (_d: unknown, i: number) => running[i]
+        });
+      }
     }
     return out;
   });
@@ -3132,23 +3200,27 @@
       : []
   );
 
-  // HL Bridge Flows: directional USDC bridge view. Deposit (capital in)
-  // and withdrawal (capital out) are both rendered as POSITIVE magnitudes
-  // so the operator can compare absolute flow sizes side-by-side. Net is
-  // signed (deposit - withdrawal) and floats through zero to show the
-  // directional bias.
-  let hlBridgeFlowsLinesD = $derived(
-    instance.showPoint
-      ? [
-          { key: 'deposit',    label: 'Deposit',    color: '#22c55e',
-            compute: (d: Record<string, number>) => d.deposit ?? 0 },
-          { key: 'withdrawal', label: 'Withdrawal', color: '#ef4444',
-            compute: (d: Record<string, number>) => d.withdrawal ?? 0 },
-          { key: 'net',        label: 'Net',        color: '#06b6d4',
-            compute: (d: Record<string, number>) => d.net ?? 0 }
-        ]
-      : []
-  );
+  // HL Bridge Flows: directional USDC bridge view. Inflow (deposits to HL)
+  // and outflow (withdrawals from HL) are both rendered as POSITIVE
+  // magnitudes so the operator can compare absolute flow sizes side-by-
+  // side. Netflow is signed (deposit - withdrawal) and floats through zero
+  // to show directional bias. Reuses the same `exchangeFlowType` toggle as
+  // the CeX Exchange Flow chart — same semantic (inflow/outflow/netflow/
+  // all), no need for a parallel field on ChartInstance.
+  let hlBridgeFlowsLinesD = $derived.by(() => {
+    if (!instance.showPoint) return [...cumulativeLines];
+    const t = instance.exchangeFlowType ?? 'netflow';
+    const inLine = { key: 'in', label: 'Inflow', color: '#22c55e',
+      compute: (d: Record<string, number>) => d.deposit ?? 0 };
+    const outLine = { key: 'out', label: 'Outflow', color: '#ef4444',
+      compute: (d: Record<string, number>) => d.withdrawal ?? 0 };
+    const netLine = { key: 'net', label: 'Netflow', color: '#06b6d4',
+      compute: (d: Record<string, number>) => d.net ?? 0 };
+    if (t === 'inflow')  return [inLine, ...cumulativeLines];
+    if (t === 'outflow') return [outLine, ...cumulativeLines];
+    if (t === 'netflow') return [netLine, ...cumulativeLines];
+    return [inLine, outLine, netLine, ...cumulativeLines]; // 'all'
+  });
 
   // Uniswap chart lines. USD mode (default): one cyan sum_value_usd line.
   // Amount mode: two lines (token0 on primary axis, token1 on secondary
@@ -3837,6 +3909,38 @@
     overlayDialogOpen = true;
   }
   let usedOverlayColors = $derived((instance.overlays ?? []).map((o) => o.color));
+  // Colours the HOST chart's primary lines are using right now. We pass
+  // these to nextOverlayColor (via AddOverlayDialog's usedColors prop)
+  // so a new overlay isn't auto-assigned a hue indistinguishable from
+  // what the user is already looking at. Mode-sensitive for OI because
+  // the rendered colours depend on the long/short/total/ratio/pct/net
+  // selector. Returns a small hex list — empty is fine.
+  let hostPrimaryColors = $derived.by((): string[] => {
+    const k = instance.kind;
+    if (k === 'oi' || k === 'hl_smart_oi') {
+      const ex = k === 'hl_smart_oi' ? 'hl' : (instance.exchange ?? 'binance');
+      const mode = instance.oiHlDisplay ?? 'total';
+      if (ex === 'hl' && mode === 'long_short') return ['#22c55e', '#ef4444'];
+      if (ex === 'hl' && mode === 'long')         return ['#22c55e'];
+      if (ex === 'hl' && mode === 'short')        return ['#ef4444'];
+      if (ex === 'hl' && mode === 'long_to_short') return ['#a855f7'];
+      if (ex === 'hl' && mode === 'net_pct')      return ['#f59e0b'];
+      if (ex === 'hl' && mode === 'net')          return ['#f97316'];
+      if (ex === 'hl')                            return ['#06b6d4']; // total
+      return ['#fbbf24']; // Binance total OI default
+    }
+    if (k === 'bs')  return ['#22c55e', '#ef4444'];                  // buyer / seller
+    if (k === 'sz')  return ['#3f3f46', '#3b82f6', '#a855f7'];        // small / mid / large
+    if (k === 'fr')  return ['#fbbf24'];                              // funding bar default
+    if (k === 'tt')  return ['#84cc16', '#a855f7'];                   // top-trader L/S
+    if (k === 'ls')  return ['#fbbf24', '#06b6d4'];                   // all / taker L/S
+    if (k === 'pc')  return ['#22c55e'];                              // price-comparison primary
+    // ohlcv uses candle bodies (green/red); volume bars borrow the
+    // buyer/seller colours. Treat as bs to keep overlays clear of them.
+    if (k === 'ohlcv') return ['#22c55e', '#ef4444'];
+    return [];
+  });
+  let dialogUsedColors = $derived([...usedOverlayColors, ...hostPrimaryColors]);
 
   // ── Stable merged-lines per chart kind ──────────────────────────────
   // We can't do `lines={[...primary, ...overlayLinesD]}` inline at each
@@ -4146,6 +4250,22 @@
         {#if instance.kind === 'hl_transfers' || instance.kind === 'hl_vault_net' || instance.kind === 'hl_top_vaults' || instance.kind === 'hl_top_vault_lps' || instance.kind === 'hl_vault_detail'}
           <!-- These kinds have no token dimension — show a static USDC chip. -->
           <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">USDC</span>
+          {#if instance.kind === 'hl_transfers'}
+            <!-- Inflow/Outflow/Netflow/All selector for HL Bridge Flows.
+                 Mirrors the CeX Exchange Flow chart's selector — same
+                 `exchangeFlowType` field so saved layouts round-trip. -->
+            <select
+              value={instance.exchangeFlowType ?? 'netflow'}
+              onchange={(e) => (instance.exchangeFlowType = e.currentTarget.value as 'inflow' | 'outflow' | 'netflow' | 'all')}
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+              title="Which direction(s) of HL bridge flow to plot"
+            >
+              <option value="inflow">Inflow</option>
+              <option value="outflow">Outflow</option>
+              <option value="netflow">Netflow</option>
+              <option value="all">All</option>
+            </select>
+          {/if}
         {:else}
           <select
             value={instance.token}
@@ -5078,6 +5198,29 @@
             style="color: #a78bfa; opacity: {instance.showSum ? 1 : 0.55}"
           >Sum</span>
         </label>
+        {#if instance.kind === 'hl_transfers' && instance.showSum}
+          <!-- Sliding-window length for the HL Bridge Flows sum line. Empty
+               / 0 = strict running total from the first loaded bucket;
+               positive N = last N buckets in the current interval. -->
+          <label class="flex items-center gap-1 text-zinc-400" title="Rolling window in current-interval buckets (0 = full running total)">
+            <span class="text-[10px] uppercase tracking-widest">win</span>
+            <input
+              type="number"
+              min="0"
+              step="1"
+              placeholder="all"
+              value={instance.sumWindow ?? ''}
+              onchange={(e) => {
+                const n = Number(e.currentTarget.value);
+                instance.sumWindow = !e.currentTarget.value ? undefined
+                                   : Number.isFinite(n) && n > 0 ? Math.floor(n)
+                                   : undefined;
+              }}
+              class="w-14 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 text-right"
+            />
+            <span class="text-zinc-500 text-[10px]">bars</span>
+          </label>
+        {/if}
       {/if}
     </div>
 
@@ -5564,10 +5707,15 @@
         onSelectVault={(v) => (instance.hlSelectedVault = v)}
       />
     {:else if instance.kind === 'hl_transfers'}
+      <!-- Zero ref line only when Netflow is on screen (it crosses zero);
+           hidden in pure Inflow / Outflow modes where the line is bounded
+           below by zero by construction. Sum line, when enabled, lives on
+           the secondary axis and shares the USD formatter. -->
+      {@const hlFlowT = instance.exchangeFlowType ?? 'netflow'}
       <LineChart
         data={data as Array<Record<string, number>>}
         lines={hlBridgeFlowsLinesM}
-        refLines={NEUTRAL_REF}
+        refLines={(hlFlowT === 'netflow' || hlFlowT === 'all') ? ZERO_REF : []}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -5577,6 +5725,8 @@
         vRefLines={weekVRefLines}
         formatY={fmtUsdAxis}
         formatTooltip={fmtUsdTooltip}
+        formatY2={instance.showSum ? fmtUsdAxis : undefined}
+        formatTooltip2={instance.showSum ? fmtUsdTooltip : undefined}
       />
     {:else if isGmxV2Kind(instance.kind) && gmxIsPositionLongShortKind}
       <LineChart
@@ -5674,7 +5824,7 @@
     open={overlayDialogOpen}
     initial={overlayEditing}
     primaryToken={instance.token ?? ''}
-    usedColors={usedOverlayColors}
+    usedColors={dialogUsedColors}
     {tokens}
     {tokenGroups}
     {chainGroups}

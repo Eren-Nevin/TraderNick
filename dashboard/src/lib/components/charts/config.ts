@@ -1406,6 +1406,11 @@ export type ChartInstance = {
    *  per-bucket values are summable (transfer / AAVE / Morpho / Spark /
    *  Lido / Uniswap-USD / Aerodrome); ignored elsewhere. */
   showSum?: boolean;
+  /** Rolling sum window in buckets. 0 (or missing) = strict running total
+   *  from the first loaded row. Positive N = sliding window over the last
+   *  N buckets only. Currently consumed by the hl_transfers (HL Bridge
+   *  Flows) sum line; other canSum kinds ignore it. */
+  sumWindow?: number;
   // sz only
   under?: number;
   over?: number;
@@ -1794,18 +1799,97 @@ export function overlayableKinds(): ChartKind[] {
   return out;
 }
 
-/** Auto-assign palette for overlay lines. The host chart's primary series
- *  uses its own kind-specific colours; overlays cycle through this list. */
+/** Auto-assign palette for overlay lines. Curated for hue separation
+ *  from the host chart's typical primary palette (greens / reds / cyans /
+ *  ambers / purples used by OI, buyer/seller, OHLCV, etc.). nextOverlayColor
+ *  picks by perceptual distance, not list order, so adding a colour close
+ *  to a host primary doesn't strand future overlays in that hue. */
 export const OVERLAY_COLORS = [
-  '#22d3ee', '#a78bfa', '#f472b6', '#84cc16',
-  '#fb923c', '#facc15', '#38bdf8', '#f87171'
+  '#f472b6',  // hot pink
+  '#fde047',  // bright yellow
+  '#38bdf8',  // sky blue
+  '#fb7185',  // rose
+  '#a3e635',  // lime
+  '#c084fc',  // light purple
+  '#fb923c',  // orange
+  '#5eead4',  // mint
 ];
 
-export function nextOverlayColor(used: string[]): string {
-  for (const c of OVERLAY_COLORS) {
-    if (!used.includes(c)) return c;
+/** Convert "#rrggbb" → [h, s, l] in [0,360), [0,1], [0,1]. Tolerant of
+ *  short "#rgb" and bad input (returns mid-grey). */
+function hexToHsl(hex: string): [number, number, number] {
+  if (typeof hex !== 'string') return [0, 0, 0.5];
+  let h = hex.trim();
+  if (h.startsWith('#')) h = h.slice(1);
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  if (h.length !== 6 || /[^0-9a-fA-F]/.test(h)) return [0, 0, 0.5];
+  const r = parseInt(h.slice(0, 2), 16) / 255;
+  const g = parseInt(h.slice(2, 4), 16) / 255;
+  const b = parseInt(h.slice(4, 6), 16) / 255;
+  const max = Math.max(r, g, b);
+  const min = Math.min(r, g, b);
+  const l = (max + min) / 2;
+  if (max === min) return [0, 0, l];
+  const d = max - min;
+  const s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+  let hh = 0;
+  if (max === r) hh = ((g - b) / d + (g < b ? 6 : 0));
+  else if (max === g) hh = (b - r) / d + 2;
+  else hh = (r - g) / d + 4;
+  return [hh * 60, s, l];
+}
+
+/** Perceptual-ish distance between two hex colours. Weighted hue
+ *  (cyclic), saturation, lightness. Greys are treated as far from
+ *  saturated colours via the saturation term. Returns ≥ 0. */
+function colorDistance(a: string, b: string): number {
+  const [ah, as_, al] = hexToHsl(a);
+  const [bh, bs, bl] = hexToHsl(b);
+  let dh = Math.abs(ah - bh);
+  if (dh > 180) dh = 360 - dh;
+  // When either colour is near-grey, hue is meaningless — fall back to
+  // lightness + saturation distance only so we don't think grey is
+  // "close to red" just because grey's hue defaults to 0.
+  const minSat = Math.min(as_, bs);
+  const hueWeight = minSat;
+  return Math.sqrt(
+    (dh / 180) * (dh / 180) * 3 * hueWeight
+    + (as_ - bs) * (as_ - bs)
+    + (al - bl) * (al - bl) * 2
+  );
+}
+
+/** Pick the OVERLAY_COLORS entry with the largest minimum distance to
+ *  the set of colours already in use on this chart. `used` is the existing
+ *  overlay palette; `avoid` is the host chart's primary palette (so a new
+ *  overlay won't blend into the line the user is comparing against).
+ *  Both lists default to empty for backward compat with callers that
+ *  don't yet supply them. Falls back to round-robin only when every
+ *  palette entry exactly matches something to avoid. */
+export function nextOverlayColor(used: string[], avoid: string[] = []): string {
+  const blocked = new Set<string>();
+  for (const c of [...used, ...avoid]) {
+    if (typeof c === 'string' && c.length > 0) blocked.add(c.toLowerCase());
   }
-  return OVERLAY_COLORS[used.length % OVERLAY_COLORS.length];
+  // Fast path: prefer untaken palette entries with maximum min-distance
+  // to all blocked colours.
+  const candidates = OVERLAY_COLORS.filter((c) => !blocked.has(c.toLowerCase()));
+  const pool = candidates.length > 0 ? candidates : OVERLAY_COLORS.slice();
+  if (blocked.size === 0) return pool[0];
+  let best = pool[0];
+  let bestScore = -1;
+  for (const c of pool) {
+    let minD = Infinity;
+    for (const b of blocked) {
+      const d = colorDistance(c, b);
+      if (d < minD) minD = d;
+    }
+    if (minD > bestScore) {
+      bestScore = minD;
+      best = c;
+    }
+  }
+  return best;
 }
 
 /** Validate one overlay against its kind's expectations. Returns a cleaned
