@@ -9,6 +9,7 @@ from sanic import Blueprint, response
 from clickhouse import client
 from routes.groups import is_chain_group, is_token_group, resolve_pairs
 from routes.ohlcv import INTERVAL_SECONDS
+from throttle import throttled
 
 _SAFE_ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _FILTER_KEYS = (
@@ -377,6 +378,7 @@ async def clear_agg_cache(_request):
 
 
 @bp.get("/transfers/aggregate")
+@throttled("heavy")
 async def aggregate(request):
     # Single-stream selection (chain + kind + token) — required when neither
     # group axis is being used.

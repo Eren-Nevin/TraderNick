@@ -4,6 +4,7 @@ from sanic import Blueprint, response
 
 from clickhouse import client
 from routes.ohlcv import INTERVAL_SECONDS
+from throttle import throttled
 
 bp = Blueprint("derivatives")
 
@@ -70,6 +71,7 @@ async def open_interest(request):
 
 
 @bp.get("/long_short_ratios")
+@throttled("heavy")
 async def long_short_ratios(request):
     """Long/short ratios for the ls + tt chart kinds.
 

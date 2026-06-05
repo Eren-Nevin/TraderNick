@@ -18,6 +18,7 @@ from sanic import Blueprint, response
 
 from clickhouse import client
 from routes.ohlcv import INTERVAL_SECONDS
+from throttle import throttled
 from wallets.smart_selector import SmartSelector
 
 bp = Blueprint("hyperliquid")
@@ -68,6 +69,7 @@ def _parse_iso(s):
 
 
 @bp.get("/hyperliquid/aggregate")
+@throttled("heavy")
 async def aggregate(request):
     event = request.args.get("event")
     if event not in _EVENT_TABLES:
@@ -150,6 +152,7 @@ async def aggregate(request):
 
 
 @bp.get("/hyperliquid/realized_pnl_split")
+@throttled("heavy")
 async def realized_pnl_split(request):
     """Realized PnL bucketed by direction (long vs short).
 
@@ -279,6 +282,7 @@ async def streams(_request):
 
 
 @bp.get("/hyperliquid/wallets/leaderboard")
+@throttled("heavy")
 async def leaderboard(request):
     """Top-N traders by PnL or volume, optionally filtered to a single
     token, over a [since, until] window. Read from the pre-aggregated
@@ -345,6 +349,7 @@ async def leaderboard(request):
 
 
 @bp.get("/hyperliquid/smart_oi")
+@throttled("heavy")
 async def smart_oi(request):
     """Per-bucket HL OI restricted to a smart-wallet leaderboard.
 
@@ -468,6 +473,7 @@ async def smart_oi(request):
 
 
 @bp.get("/hyperliquid/oi_split")
+@throttled("heavy")
 async def oi_split(request):
     """Per-bucket Open Interest on HL, split into long / short / total.
 
@@ -1031,6 +1037,7 @@ async def vault_detail(request):
 
 
 @bp.get("/hyperliquid/top_positions")
+@throttled("heavy")
 async def top_positions(request):
     """Top 10 wallets by current unrealized PnL, plus each wallet's full
     position breakdown (all tokens, both sides).
@@ -1172,6 +1179,7 @@ async def top_positions(request):
 
 
 @bp.get("/hyperliquid/unrealized_pnl")
+@throttled("heavy")
 async def unrealized_pnl(request):
     """Per-bucket unrealized PnL totals for a token (long + short + net).
 
