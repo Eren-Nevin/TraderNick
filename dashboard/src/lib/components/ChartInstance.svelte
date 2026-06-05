@@ -3567,7 +3567,7 @@
     // Hash the full config + interval + window so any field change re-fetches.
     return [
       o.kind, o.seriesKey, iv, sinceIso, untilIso,
-      o.token ?? '', o.tokenGroup ?? '',
+      o.token ?? '', o.tokenGroup ?? '', o.tokenDenominator ?? '',
       o.chain ?? '', o.chainGroup ?? '',
       o.exchange ?? '', o.valueMode ?? '',
       o.gmxMarket ?? '', o.hlWallet ?? '', o.hlWalletCategory ?? '',
@@ -3576,7 +3576,8 @@
       o.uniV4Pool ? `${o.uniV4Pool.symbol0}|${o.uniV4Pool.symbol1}|${o.uniV4Pool.fee}|${o.uniV4Pool.tick_spacing}|${o.uniV4Pool.hooks}` : '',
       o.aeroPool ? `${o.aeroPool.symbol0}|${o.aeroPool.symbol1}|${o.aeroPool.tick_spacing}` : '',
       o.aeroBasicPool ? `${o.aeroBasicPool.symbol0}|${o.aeroBasicPool.symbol1}|${o.aeroBasicPool.stable}` : '',
-      o.ma ? `${o.ma.type}|${o.ma.length}` : ''
+      o.ma ? `${o.ma.type}|${o.ma.length}` : '',
+      o.sum ? `sum|${o.sum.length}` : ''
     ].join('#');
   }
 
@@ -3751,11 +3752,24 @@
          || o.seriesKey === 'short_oi' || o.seriesKey === 'net_oi')) {
       return fmtAmountTooltip;
     }
-    if (o.kind === 'ohlcv') {
+    if (o.kind === 'vol_oi') {
+      // OI / Volume is a unitless ratio (bucket multiples of liquidity).
+      // 3-4 sig figs is the right precision — too many digits looks like
+      // false accuracy on a ratio that's already noisy.
+      return (v: number) => `${v.toFixed(3)}×`;
+    }
+    if (o.kind === 'ohlcv' || o.kind === 'price') {
       // Volume is USD when the host renders it that way; close/open/high/low
       // are price (USD for fiat-quoted markets). Both formatters round to
       // a similar precision, so the USD compact form is fine for all.
+      // `price` is the close-only overlay and uses the same formatter.
       return (v: number) => `$${v.toFixed(2)}`;
+    }
+    if (o.kind === 'price_ratio') {
+      // Unitless ratio between two close prices. toPrecision(4) so
+      // BTC/USDC at ~73 000 reads "73020" and SOL/BTC at ~0.0023 reads
+      // "0.002301" — same readability across magnitudes.
+      return (v: number) => v.toPrecision(4);
     }
     if (o.valueMode === 'amount') {
       return (v: number) => v.toFixed(4);
@@ -3864,7 +3878,35 @@
     else if (instance.kind === 'hl_unrealized_pnl') primaryLines = hlUnrealizedLinesD;
     else if (instance.kind === 'hl_pnl' && (instance.hlPnlSide ?? 'total') !== 'total') primaryLines = hlPnlSplitLinesD as typeof aaveLinesD;
     else if (instance.kind === 'hl_vault_net') primaryLines = hlVaultFlowLinesD;
-    else if (instance.kind === 'hl_transfers') primaryLines = hlBridgeFlowsLinesD;
+    else if (instance.kind === 'hl_transfers') {
+      // Special-case range derivation: when host's primary lines exist
+      // (Point checked, in/out/net mode active), use them so the overlay
+      // remaps into the same range the user actually sees — e.g. in
+      // Netflow mode the y-axis is tight around net's range and the
+      // overlay should sit inside that. When primary lines are hidden
+      // (Point unchecked, no MA/Sum), fall back to the union range of
+      // all three bridge-flow fields so the overlay still has a stable
+      // target instead of vanishing.
+      const rows = data as unknown as Record<string, number>[];
+      const primaryRange = computePrimaryRangeFromLines(
+        rows,
+        hlBridgeFlowsLinesD as unknown as { compute: (d: Record<string, number>, i: number, arr: Record<string, number>[]) => number; axis?: 'primary' | 'secondary' }[]
+      );
+      const havePrimary = Number.isFinite(primaryRange[0]) && Number.isFinite(primaryRange[1]) && primaryRange[1] !== primaryRange[0];
+      if (havePrimary) return buildOverlayLines(primaryRange);
+      // Fallback: union of all three flow fields.
+      let lo = Infinity, hi = -Infinity;
+      for (const r of rows) {
+        for (const f of ['deposit','withdrawal','net']) {
+          const v = r[f];
+          if (Number.isFinite(v)) {
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+          }
+        }
+      }
+      return buildOverlayLines([lo, hi]);
+    }
     else if (isUniswapV3Kind(instance.kind) || isUniswapV2Kind(instance.kind)
              || isUniswapV4Kind(instance.kind) || isAeroClKind(instance.kind)
              || isAeroBasicKind(instance.kind)) primaryLines = uniswapLinesD;

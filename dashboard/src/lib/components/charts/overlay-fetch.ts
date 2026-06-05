@@ -49,11 +49,25 @@ export async function fetchOverlayData(
   const sinceIso = since.toISOString();
   const untilIso = until.toISOString();
   const raw = await fetchRawSeries(overlay, interval, sinceIso, untilIso, signal);
-  // Apply MA last so the line is smooth.
+  // Apply MA / Sum transform last so the line is smooth / rolled-up.
+  // ma and sum are mutually exclusive (sanitizer enforces). The chosen
+  // transform replaces the raw line — to see raw + transform together
+  // the user adds the overlay twice.
   if (overlay.ma && raw.length > 0) {
     const vals = raw.map((p) => p.value);
     const smoothed = maArray(vals, overlay.ma.length, overlay.ma.type);
     return raw.map((p, i) => ({ time: p.time, value: smoothed[i] }));
+  }
+  if (overlay.sum && raw.length > 0) {
+    const win = Math.max(1, Math.floor(overlay.sum.length));
+    const summed: number[] = new Array(raw.length);
+    let acc = 0;
+    for (let i = 0; i < raw.length; i++) {
+      acc += raw[i].value || 0;
+      if (i >= win) acc -= raw[i - win].value || 0;
+      summed[i] = acc;
+    }
+    return raw.map((p, i) => ({ time: p.time, value: summed[i] }));
   }
   return raw;
 }
@@ -68,7 +82,9 @@ async function fetchRawSeries(
   const kind = o.kind;
 
   // ── Exchange / derivatives ──────────────────────────────────────────
-  if (kind === 'ohlcv') {
+  if (kind === 'ohlcv' || kind === 'price') {
+    // `price` is the simplified "just the close line" overlay — it reuses
+    // the OHLCV endpoint and ignores any series key other than close.
     const qs = new URLSearchParams({
       token: o.token ?? 'BTC',
       interval,
@@ -78,10 +94,42 @@ async function fetchRawSeries(
       exchange: o.exchange ?? 'binance'
     });
     const res = await queuedFetch(`/api/ohlcv?${qs}`, { signal });
-    if (!res.ok) throw new Error(`overlay ohlcv ${res.status}`);
+    if (!res.ok) throw new Error(`overlay ${kind} ${res.status}`);
     const body = await res.json();
     const candles = (body.candles ?? []) as Array<Record<string, number>>;
-    return candles.map((c) => ({ time: c.time, value: numAt(c, o.seriesKey, 'close') }));
+    const key = kind === 'price' ? 'close' : o.seriesKey;
+    return candles.map((c) => ({ time: c.time, value: numAt(c, key, 'close') }));
+  }
+
+  if (kind === 'price_ratio') {
+    // numerator_close / denominator_close per bucket on the chosen
+    // exchange. Both legs share the same exchange + interval + window;
+    // the denominator falls back to the numerator (giving a flat 1.0
+    // line) if the user hasn't picked one. Buckets where the denominator
+    // close is 0 / missing emit 0 to avoid Infinity wrecking auto-scale.
+    const exchange = o.exchange ?? 'binance';
+    const num = o.token ?? 'BTC';
+    const denom = o.tokenDenominator ?? num;
+    const mkQs = (tok: string) => new URLSearchParams({
+      token: tok, interval, since: sinceIso, until: untilIso,
+      limit: '200000', exchange,
+    });
+    const [numRes, denomRes] = await Promise.all([
+      queuedFetch(`/api/ohlcv?${mkQs(num)}`,   { signal }),
+      queuedFetch(`/api/ohlcv?${mkQs(denom)}`, { signal }),
+    ]);
+    if (!numRes.ok)   throw new Error(`overlay price_ratio num ${numRes.status}`);
+    if (!denomRes.ok) throw new Error(`overlay price_ratio denom ${denomRes.status}`);
+    const numBody   = await numRes.json();
+    const denomBody = await denomRes.json();
+    const numCandles   = (numBody.candles   ?? []) as Array<Record<string, number>>;
+    const denomCandles = (denomBody.candles ?? []) as Array<Record<string, number>>;
+    const denomByTime = new Map<number, number>();
+    for (const c of denomCandles) denomByTime.set(Number(c.time), Number(c.close ?? 0));
+    return numCandles.map((c) => {
+      const d = denomByTime.get(Number(c.time)) ?? 0;
+      return { time: Number(c.time), value: d > 0 ? Number(c.close ?? 0) / d : 0 };
+    });
   }
 
   if (kind === 'hl_smart_oi') {
@@ -186,6 +234,68 @@ async function fetchRawSeries(
         ? (r.open_interest ?? 0)
         : (r.open_interest_value ?? 0))
     }));
+  }
+
+  if (kind === 'vol_oi') {
+    // Vol / OI turnover ratio in USD. Same OI-side selector as the
+    // regular `oi` overlay (HL gets long/short/total/net; Binance has
+    // only total). Numerator is per-bucket OHLCV USD volume on the same
+    // exchange; denominator is the selected OI leg. Reads as "fraction
+    // of OI that turned over this bucket". Both legs fan out in
+    // parallel; merge by `time` and divide. Buckets where OI is zero
+    // (early-history HL markets) map to 0.
+    const exchange = o.exchange ?? 'binance';
+    const token = o.token ?? 'BTC';
+    const seriesKey = o.seriesKey;
+
+    const oiQs = new URLSearchParams({ token, interval, since: sinceIso, until: untilIso, limit: '200000' });
+    const oiUrl = exchange === 'hl'
+      ? `/api/hyperliquid/oi_split?${oiQs}`
+      : `/api/open_interest?${oiQs}`;
+    const volQs = new URLSearchParams({
+      token, interval, since: sinceIso, until: untilIso, limit: '200000',
+      exchange,
+    });
+    const volUrl = `/api/ohlcv?${volQs}`;
+
+    const [oiRes, volRes] = await Promise.all([
+      queuedFetch(oiUrl, { signal }),
+      queuedFetch(volUrl, { signal }),
+    ]);
+    if (!oiRes.ok)  throw new Error(`overlay vol_oi oi  ${oiRes.status}`);
+    if (!volRes.ok) throw new Error(`overlay vol_oi vol ${volRes.status}`);
+    const oiBody  = await oiRes.json();
+    const volBody = await volRes.json();
+    const oiRows = (oiBody.series ?? []) as Array<Record<string, number>>;
+    const candles = (volBody.candles ?? []) as Array<Record<string, number>>;
+
+    const pickOi = (r: Record<string, number>): number => {
+      if (exchange === 'hl') {
+        if (seriesKey === 'net_oi_value') {
+          return Number(r.long_oi_value ?? 0) - Number(r.short_oi_value ?? 0);
+        }
+        const hlKeys = ['long_oi_value', 'short_oi_value', 'total_oi_value'];
+        const key = hlKeys.includes(seriesKey) ? seriesKey : 'total_oi_value';
+        return Number(r[key] ?? 0);
+      }
+      // Binance OI: long/short/net selections fall through to total since
+      // the exchange has no L/S split.
+      return Number(r.open_interest_value ?? 0);
+    };
+
+    const volByTime = new Map<number, number>();
+    for (const c of candles) {
+      volByTime.set(Number(c.time), Number(c.volume_usd ?? 0));
+    }
+    return oiRows.map((r) => {
+      const t = Number(r.time);
+      const vol = volByTime.get(t) ?? 0;
+      const oi = pickOi(r);
+      // Net OI can be negative when shorts dominate the book; the
+      // turnover ratio is ill-defined there, so emit 0 rather than a
+      // sign-flipped reading.
+      return { time: t, value: oi > 0 ? vol / oi : 0 };
+    });
   }
 
   if (kind === 'fr') {

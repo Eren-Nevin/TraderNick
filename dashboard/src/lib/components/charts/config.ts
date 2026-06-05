@@ -272,7 +272,10 @@ export type FundingRateBpsRow = FundingRateRow & { rate_bps: number };
 
 export type ChartKind =
   | 'ohlcv'
+  | 'price'
+  | 'price_ratio'
   | 'oi'
+  | 'vol_oi'
   | 'fr'
   | 'bs'
   | 'sz'
@@ -395,7 +398,10 @@ export type ChartKind =
 
 export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ohlcv: 'OHLCV',
+  price: 'Price',
+  price_ratio: 'Price Ratio',
   oi: 'Open Interest',
+  vol_oi: 'Vol / OI',
   fr: 'Funding Rate',
   bs: 'Taker Buyer vs Seller',
   sz: 'Volume by Size',
@@ -1147,7 +1153,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Exchange — Binance OHLCV + derivatives. The chart's in-built exchange
   // selector lets the user flip these to Hyperliquid in place, so we list
   // them once under Exchange rather than duplicating under Perp.
-  if (kind === 'ohlcv' || kind === 'pc' || kind === 'oi' || kind === 'fr'
+  if (kind === 'ohlcv' || kind === 'price' || kind === 'price_ratio' || kind === 'pc' || kind === 'oi' || kind === 'vol_oi' || kind === 'fr'
       || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls') {
     return 'Exchange';
   }
@@ -1606,8 +1612,13 @@ export type ChartOverlay = {
   color: string;
   /** When set, the overlay's values are passed through maArray() before
    *  drawing — only the MA line shows. To see raw + MA together the user
-   *  adds the overlay twice (one raw, one MA). */
+   *  adds the overlay twice (one raw, one MA). Mutually exclusive with
+   *  `sum` — sanitizeOverlay drops the loser if both are present. */
   ma?: { type: MAType; length: number };
+  /** When set, the overlay's values are replaced by a windowed running
+   *  sum before drawing — only the Σ line shows. `length` is the sliding
+   *  window in buckets (must be ≥ 2). Mutually exclusive with `ma`. */
+  sum?: { length: number };
   /** True = chip stays in the header but the line is not drawn. Toggled
    *  by clicking the coloured dot inside the chip. Persisted, so the
    *  hide-then-reload-then-show pattern works as expected. */
@@ -1620,6 +1631,10 @@ export type ChartOverlay = {
    *  Mutually exclusive with `token` — when set, overlay-fetch sends
    *  `token_group=` instead of `token=` so the server expands the bundle. */
   tokenGroup?: string;
+  /** Second token used as the denominator on price_ratio overlays only.
+   *  Defaults to the host chart's token (see initDefaultsForKind). Ignored
+   *  for every other overlay kind. */
+  tokenDenominator?: string;
   chain?: string;
   /** Server-side compound-chain group name (e.g. "EVM"). Mutually exclusive
    *  with `chain` — when set, overlay-fetch sends `chain_group=` instead of
@@ -1666,6 +1681,20 @@ export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>>
     { key: 'low',    label: 'Low' },
     { key: 'volume', label: 'Volume' }
   ],
+  // Price — the one-click "just the close line" overlay. OHLCV with
+  // close also works but most users reach for "Price" by name. Single-
+  // entry catalogue so the dialog hides the series sub-picker.
+  price: [
+    { key: 'close', label: 'Close' }
+  ],
+  // Price Ratio — numerator_close / denominator_close per bucket. Same
+  // exchange selector as Price. Numerator defaults to the host chart's
+  // token (matching the Price overlay's defaulting rule); the dialog
+  // adds a second token picker for the denominator, which defaults to
+  // the host's token. Single-entry catalogue → no series sub-picker.
+  price_ratio: [
+    { key: 'ratio', label: 'Ratio' }
+  ],
   oi: [
     // The user picks long/short/total + unit (USD/token) at add-time. For
     // binance OI only the 'total' series is meaningful; the overlay-fetch
@@ -1682,6 +1711,19 @@ export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>>
     { key: 'net_oi',           label: 'Net OI (token)' },
     { key: 'net_oi_pct',       label: 'Net OI %' },
     { key: 'long_to_short_oi', label: 'Long / Short OI' }
+  ],
+  // Volume / OI turnover ratio overlay. Side selector picks which leg of
+  // OI sits in the denominator (total / long / short / net), with both
+  // Volume and OI in USD — the ratio is unitless but USD is the
+  // canonical numerator/denominator (cross-token comparable). Reads
+  // directly as "fraction of OI that turned over in this bucket":
+  // 0.5 = half of OI traded, 2.0 = traded twice. HL-only side selections
+  // (long/short/net) lock the exchange to HL — Binance has no L/S split.
+  vol_oi: [
+    { key: 'total_oi_value',   label: 'Vol / Total OI' },
+    { key: 'long_oi_value',    label: 'Vol / Long OI' },
+    { key: 'short_oi_value',   label: 'Vol / Short OI' },
+    { key: 'net_oi_value',     label: 'Vol / Net OI' }
   ],
   // hl_smart_oi response shape is identical to /oi_split (same long/short/
   // total in token + USD), so the overlay-fetch projection reuses the
@@ -1918,9 +1960,19 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
       o.ma = { type: t, length: Math.floor(len) };
     }
   }
+  // SUM — windowed running sum; mutually exclusive with `ma`. If both
+  // got persisted somehow, prefer the MA (older feature) and drop sum.
+  if (r.sum && typeof r.sum === 'object' && !o.ma) {
+    const s = r.sum as Record<string, unknown>;
+    const len = s.length;
+    if (typeof len === 'number' && len >= 2 && len <= 5000) {
+      o.sum = { length: Math.floor(len) };
+    }
+  }
   // Per-kind config fields. Copy through whatever the kind actually reads.
   if (typeof r.token === 'string') o.token = r.token;
   if (typeof r.tokenGroup === 'string' && r.tokenGroup.length > 0) o.tokenGroup = r.tokenGroup;
+  if (typeof r.tokenDenominator === 'string' && r.tokenDenominator.length > 0) o.tokenDenominator = r.tokenDenominator;
   if (typeof r.chain === 'string') o.chain = r.chain;
   if (typeof r.chainGroup === 'string' && r.chainGroup.length > 0) o.chainGroup = r.chainGroup;
   if (r.exchange === 'binance' || r.exchange === 'hl') o.exchange = r.exchange;
@@ -1991,7 +2043,7 @@ function overlayExchangeLabel(o: ChartOverlay): string | null {
     if (!ex) return null;
     return ex === 'hyperliquid' ? 'HL' : ex.charAt(0).toUpperCase() + ex.slice(1);
   }
-  if (o.kind === 'ohlcv' || o.kind === 'oi' || o.kind === 'fr'
+  if (o.kind === 'ohlcv' || o.kind === 'price' || o.kind === 'price_ratio' || o.kind === 'oi' || o.kind === 'fr'
       || o.kind === 'bs' || o.kind === 'sz' || o.kind === 'ls') {
     const ex = o.exchange;
     if (!ex) return null;
@@ -2005,7 +2057,10 @@ export function overlayChipLabel(o: ChartOverlay): string {
   parts.push(CHART_KIND_LABELS[o.kind] ?? o.kind);
   const ex = overlayExchangeLabel(o);
   if (ex) parts.push(ex);
-  if (o.tokenGroup) parts.push(`Σ ${o.tokenGroup}`);
+  if (o.kind === 'price_ratio' && o.token && o.tokenDenominator) {
+    // Two-token ratio chip: render as "BTC / USDC" so both legs are visible.
+    parts.push(`${o.token} / ${o.tokenDenominator}`);
+  } else if (o.tokenGroup) parts.push(`Σ ${o.tokenGroup}`);
   else if (o.token) parts.push(o.token);
   if (o.chainGroup) parts.push(`Σ ${o.chainGroup}`);
   else if (o.chain && o.chain !== 'HL') parts.push(o.chain);
@@ -2021,6 +2076,7 @@ export function overlayChipLabel(o: ChartOverlay): string {
     if (s) parts.push(s.label);
   }
   if (o.ma) parts.push(`${o.ma.type.toUpperCase()}${o.ma.length}`);
+  else if (o.sum) parts.push(`Σ${o.sum.length}`);
   let label = parts.join(' · ');
   if (label.length > 64) label = label.slice(0, 61) + '…';
   return label;

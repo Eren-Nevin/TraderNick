@@ -333,6 +333,7 @@
   // ── Step 2: config form state ───────────────────────────────────────
   let formSeriesKey = $state('');
   let formToken = $state('');
+  let formTokenDenom = $state('');
   let formChain = $state('');
   let formExchange = $state<'binance' | 'hl'>('binance');
   let formExchangeFlowExchange = $state<'binance' | 'coinbase' | 'okx' | 'bybit' | 'hyperliquid'>('binance');
@@ -346,10 +347,14 @@
   let formPoolTickSpacing = $state(10);
   let formPoolHooks = $state('0x0000000000000000000000000000000000000000');
   let formPoolStable = $state(false);
-  // MA controls.
-  let formMode = $state<'raw' | 'ma'>('raw');
+  // Transform controls. `mode` picks which transform (if any) to apply
+  // to the overlay's raw series before plotting. SMA/EMA/WMA share one
+  // window field; SUM is a rolling running total over its own window.
+  // Defaults to raw — the option is opt-in per overlay.
+  let formMode = $state<'raw' | 'ma' | 'sum'>('raw');
   let formMAType = $state<MAType>('sma');
   let formMAWindow = $state(21);
+  let formSumWindow = $state(21);
   // hl_smart_oi wallet-selection state. Mirror the host chart's
   // ChartInstance.smartSelector so each overlay can carry its own
   // leaderboard shape independent of the host chart.
@@ -357,14 +362,14 @@
 
   function clearForm() {
     formSeriesKey = '';
-    formToken = ''; formChain = '';
+    formToken = ''; formTokenDenom = ''; formChain = '';
     formExchange = 'binance';
     formExchangeFlowExchange = 'binance';
     formValueMode = 'usd';
     formGmxMarket = ''; formHlWallet = '';
     formPoolSym0 = 'USDC'; formPoolSym1 = 'WETH'; formPoolFee = 500;
     formPoolTickSpacing = 10; formPoolStable = false;
-    formMode = 'raw'; formMAType = 'sma'; formMAWindow = 21;
+    formMode = 'raw'; formMAType = 'sma'; formMAWindow = 21; formSumWindow = 21;
     formSmartSelector = defaultSmartSelectorState();
   }
 
@@ -379,8 +384,15 @@
     const inherit = primaryToken || 'BTC';
     if (k.startsWith('hl_')) { formToken = inherit; formChain = 'HL'; }
     else if (k === 'transfer' || k === 'exchange_flow') { formToken = 'USDC'; formChain = 'ETH'; }
-    else if (k === 'ohlcv' || k === 'oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'tt' || k === 'ls') {
+    else if (k === 'ohlcv' || k === 'price' || k === 'oi' || k === 'vol_oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'tt' || k === 'ls') {
       formToken = inherit;
+    } else if (k === 'price_ratio') {
+      // Numerator defaults like the Price overlay (host's token). The
+      // denominator is the meaningful default — it pins to the host's
+      // token so the user only has to change the numerator to make the
+      // ratio non-trivial.
+      formToken = inherit;
+      formTokenDenom = inherit;
     } else if (k.startsWith('gmx_')) {
       formChain = 'ARB'; formGmxMarket = 'BTC/USD [WBTC-USDC]';
     } else if (k.startsWith('aero_')) {
@@ -410,6 +422,7 @@
     // decides which field to persist based on whether the selection
     // matches a known group name.
     formToken = o.tokenGroup ?? o.token ?? '';
+    formTokenDenom = o.tokenDenominator ?? '';
     // A stored chainGroup wins over `chain`: when present, the dropdown's
     // selected value is the group name itself (e.g. "EVM"). submit()
     // decides which field to persist based on whether the selection
@@ -437,6 +450,7 @@
       formPoolStable = o.aeroBasicPool.stable;
     }
     if (o.ma) { formMode = 'ma'; formMAType = o.ma.type; formMAWindow = o.ma.length; }
+    else if (o.sum) { formMode = 'sum'; formSumWindow = o.sum.length; }
     else formMode = 'raw';
     formSmartSelector = sanitizeSmartSelectorState(o.smartSelector);
   }
@@ -484,7 +498,7 @@
    *  total-OI series in either unit works for both exchanges and is left
    *  unlocked. */
   let oiHlLocked = $derived(
-    pickedKind === 'oi'
+    (pickedKind === 'oi' || pickedKind === 'vol_oi')
     && (formSeriesKey === 'long_oi_value'
         || formSeriesKey === 'short_oi_value'
         || formSeriesKey === 'long_oi'
@@ -515,7 +529,7 @@
   // isn't pinned. Pinned fields render as a small read-only chip instead
   // (see the template below).
   function tokenFieldKindUsesIt(k: ChartKind): boolean {
-    return k === 'ohlcv' || k === 'oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'tt' || k === 'ls'
+    return k === 'ohlcv' || k === 'price' || k === 'price_ratio' || k === 'oi' || k === 'vol_oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'tt' || k === 'ls'
         || k === 'transfer' || k === 'exchange_flow'
         || k.startsWith('aave_') || k.startsWith('morpho_') || k.startsWith('spark_')
         || k === 'hl_pnl' || k === 'hl_unrealized_pnl';
@@ -529,7 +543,7 @@
         || k.startsWith('uniswap_');
   }
   function exchangeFieldKindUsesIt(k: ChartKind): boolean {
-    return k === 'ohlcv' || k === 'oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'ls' || k === 'tt';
+    return k === 'ohlcv' || k === 'price' || k === 'price_ratio' || k === 'oi' || k === 'vol_oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'ls' || k === 'tt';
   }
   // Show the interactive widget only when (used AND not locked).
   function showsTokenField(k: ChartKind): boolean {
@@ -798,6 +812,8 @@
     };
     if (formMode === 'ma') {
       o.ma = { type: formMAType, length: Math.max(2, Math.floor(formMAWindow)) };
+    } else if (formMode === 'sum') {
+      o.sum = { length: Math.max(2, Math.floor(formSumWindow)) };
     }
     // Token / chain / exchange are written whether the field is interactive
     // OR pinned via a lock helper — the locked value still has to land on
@@ -815,6 +831,12 @@
       } else {
         o.token = sel.toUpperCase();
       }
+    }
+    if (k === 'price_ratio') {
+      // Single-symbol only — no group concept on the denominator side,
+      // since the ratio operation needs one concrete price.
+      const sel = formTokenDenom.trim();
+      if (sel.length > 0) o.tokenDenominator = sel.toUpperCase();
     }
     const lc = effectiveLockedChain(k);
     if (lc) {
@@ -987,7 +1009,7 @@
               </div>
             {:else}
               <label class="flex items-center gap-2">
-                <span class="w-32 text-zinc-400">Token</span>
+                <span class="w-32 text-zinc-400">{pickedKind === 'price_ratio' ? 'Numerator' : 'Token'}</span>
                 <select bind:value={formToken} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
                   {#each tokenOptions() as opt (opt.value + ':' + opt.kind)}
                     <option value={opt.value}>{opt.label}</option>
@@ -995,6 +1017,16 @@
                 </select>
               </label>
             {/if}
+          {/if}
+          {#if pickedKind === 'price_ratio'}
+            <label class="flex items-center gap-2">
+              <span class="w-32 text-zinc-400">Denominator</span>
+              <select bind:value={formTokenDenom} class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 font-mono">
+                {#each tokenOptions() as opt (opt.value + ':' + opt.kind)}
+                  <option value={opt.value}>{opt.label}</option>
+                {/each}
+              </select>
+            </label>
           {/if}
           {#if pickedKind && chainFieldKindUsesIt(pickedKind)}
             {#if effectiveLockedChain(pickedKind)}
@@ -1173,6 +1205,9 @@
             <label class="flex items-center gap-1">
               <input type="radio" bind:group={formMode} value="ma" /> MA
             </label>
+            <label class="flex items-center gap-1">
+              <input type="radio" bind:group={formMode} value="sum" /> Sum
+            </label>
           </div>
           {#if formMode === 'ma'}
             <div class="flex items-center gap-2">
@@ -1183,6 +1218,13 @@
                 <option value="wma">WMA</option>
               </select>
               <input type="number" min="2" max="500" bind:value={formMAWindow} class="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1" />
+              <span class="text-zinc-500">buckets</span>
+            </div>
+          {/if}
+          {#if formMode === 'sum'}
+            <div class="flex items-center gap-2">
+              <span class="w-32 text-zinc-400">Sum window</span>
+              <input type="number" min="2" max="5000" bind:value={formSumWindow} class="w-20 bg-zinc-900 border border-zinc-700 rounded px-2 py-1" />
               <span class="text-zinc-500">buckets</span>
             </div>
           {/if}
