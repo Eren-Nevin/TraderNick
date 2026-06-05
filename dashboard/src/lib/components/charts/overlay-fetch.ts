@@ -110,6 +110,14 @@ async function fetchRawSeries(
           value: (Number(r.long_oi_value ?? 0) - Number(r.short_oi_value ?? 0)) / t };
       });
     }
+    if (o.seriesKey === 'net_oi_value') {
+      return rows.map((r) => ({ time: r.time,
+        value: Number(r.long_oi_value ?? 0) - Number(r.short_oi_value ?? 0) }));
+    }
+    if (o.seriesKey === 'net_oi') {
+      return rows.map((r) => ({ time: r.time,
+        value: Number(r.long_oi ?? 0) - Number(r.short_oi ?? 0) }));
+    }
     const hlKeys = ['long_oi_value', 'short_oi_value', 'total_oi_value',
                     'long_oi', 'short_oi', 'total_oi'];
     const key = hlKeys.includes(o.seriesKey) ? o.seriesKey : 'total_oi_value';
@@ -142,6 +150,17 @@ async function fetchRawSeries(
           return { time: r.time,
             value: (Number(r.long_oi_value ?? 0) - Number(r.short_oi_value ?? 0)) / t };
         });
+      }
+      if (o.seriesKey === 'net_oi_value') {
+        // Net OI in USD: long_oi_value - short_oi_value. Keeps the unit
+        // (unlike net_oi_pct), so size differences across markets show up.
+        return rows.map((r) => ({ time: r.time,
+          value: Number(r.long_oi_value ?? 0) - Number(r.short_oi_value ?? 0) }));
+      }
+      if (o.seriesKey === 'net_oi') {
+        // Net OI in token amount: long_oi - short_oi.
+        return rows.map((r) => ({ time: r.time,
+          value: Number(r.long_oi ?? 0) - Number(r.short_oi ?? 0) }));
       }
       // HL response carries both unit shapes: `*_oi` (token) and `*_oi_value`
       // ($). The seriesKey already names the exact field — just read it.

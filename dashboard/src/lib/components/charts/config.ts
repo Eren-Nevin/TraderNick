@@ -235,6 +235,7 @@ export const LS_LINES = [
 ];
 
 export const NEUTRAL_REF = [{ value: 1 }];
+export const ZERO_REF = [{ value: 0 }];
 
 export function sizeSeries(under: number, over: number) {
   return [
@@ -1480,10 +1481,11 @@ export type ChartInstance = {
   hlSelectedVault?: string;
   /** oi chart only, HL exchange only: which side(s) of OI to render —
    *  'total' (default, matches the Binance behavior), 'long', 'short',
-   *  'long_short' (two lines: long + short, no total), or
-   *  'long_to_short' (one line: long / short ratio). Ignored when
+   *  'long_short' (two lines: long + short, no total), 'long_to_short'
+   *  (one line: long / short ratio), 'net_pct' (unitless skew), or
+   *  'net' (long - short in the same unit as oiUnit). Ignored when
    *  exchange='binance' (the long/short split isn't available there). */
-  oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short' | 'long_to_short' | 'net_pct';
+  oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short' | 'long_to_short' | 'net_pct' | 'net';
   /** OI unit: 'usd' = dollar notional (default, matches Binance OI panel
    *  conventions), 'token' = the underlying coin amount (e.g. BTC count).
    *  The Long/Short ratio mode ignores this — it's mathematically the same
@@ -1668,9 +1670,11 @@ export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>>
     { key: 'total_oi_value',   label: 'Total OI ($)' },
     { key: 'long_oi_value',    label: 'Long OI ($)' },
     { key: 'short_oi_value',   label: 'Short OI ($)' },
+    { key: 'net_oi_value',     label: 'Net OI ($)' },
     { key: 'total_oi',         label: 'Total OI (token)' },
     { key: 'long_oi',          label: 'Long OI (token)' },
     { key: 'short_oi',         label: 'Short OI (token)' },
+    { key: 'net_oi',           label: 'Net OI (token)' },
     { key: 'net_oi_pct',       label: 'Net OI %' },
     { key: 'long_to_short_oi', label: 'Long / Short OI' }
   ],
@@ -1683,9 +1687,11 @@ export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>>
     { key: 'total_oi_value',   label: 'Smart Total OI ($)' },
     { key: 'long_oi_value',    label: 'Smart Long OI ($)' },
     { key: 'short_oi_value',   label: 'Smart Short OI ($)' },
+    { key: 'net_oi_value',     label: 'Smart Net OI ($)' },
     { key: 'total_oi',         label: 'Smart Total OI (token)' },
     { key: 'long_oi',          label: 'Smart Long OI (token)' },
     { key: 'short_oi',         label: 'Smart Short OI (token)' },
+    { key: 'net_oi',           label: 'Smart Net OI (token)' },
     { key: 'net_oi_pct',       label: 'Smart Net OI %' },
     { key: 'long_to_short_oi', label: 'Smart Long / Short OI' }
   ],

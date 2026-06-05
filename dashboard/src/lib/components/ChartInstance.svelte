@@ -30,6 +30,7 @@
     LS_LINES,
     MA_COLORS,
     NEUTRAL_REF,
+    ZERO_REF,
     OI_LINES,
     TOP_TRADERS_LINES,
     defaultView,
@@ -2612,28 +2613,52 @@
           });
           break;
         }
-        case 'oi': {
-          // For HL long_short mode, MA tracks the total — a single MA
-          // line over two plotted lines would be arbitrary, total is
-          // the universally meaningful aggregate. For single-line modes
-          // (long/short/total — plus Binance, which always uses
-          // open_interest_value=total), MA tracks the displayed line by
-          // reading the same field.
-          const hlMode = (instance.exchange ?? 'binance') === 'hl'
+        case 'oi':
+        case 'hl_smart_oi': {
+          // HL single-line modes (long/short/total/net/ratio/pct) get one
+          // MA tracking the displayed line. Long+Short mode plots two
+          // primary lines, so we emit two MAs — one per side, dashed and
+          // colour-matched to its primary. hl_smart_oi is HL-only by
+          // construction and uses the same payload shape as /oi_split.
+          // The wallet-count overlay line is added separately in oiLinesD
+          // on a secondary axis and is intentionally excluded from MA
+          // tracking.
+          const hlMode = (instance.kind === 'hl_smart_oi'
+                          || (instance.exchange ?? 'binance') === 'hl')
             ? (instance.oiHlDisplay ?? 'total') : null;
           const useTok = (instance.oiUnit ?? 'usd') === 'token';
+          const rows = data as Array<Record<string, number>>;
+          if (hlMode === 'long_short') {
+            const longArr = maArray(
+              rows.map((d) => (useTok ? (d.long_oi  ?? 0) : (d.long_oi_value  ?? 0))),
+              ma.length, ma.type);
+            const shortArr = maArray(
+              rows.map((d) => (useTok ? (d.short_oi ?? 0) : (d.short_oi_value ?? 0))),
+              ma.length, ma.type);
+            out.push({
+              key: `cum_oi_long_${idx}`,
+              label: `Long ${tag}`,
+              color: '#22c55e',
+              dash: SUB_DASH[0],
+              compute: (_d: OpenInterestRow, i: number) => longArr[i]
+            });
+            out.push({
+              key: `cum_oi_short_${idx}`,
+              label: `Short ${tag}`,
+              color: '#ef4444',
+              dash: SUB_DASH[0],
+              compute: (_d: OpenInterestRow, i: number) => shortArr[i]
+            });
+            break;
+          }
           const pickField: (d: Record<string, number>) => number =
             hlMode === 'long'          ? (d) => (useTok ? (d.long_oi  ?? 0) : (d.long_oi_value  ?? 0)) :
             hlMode === 'short'         ? (d) => (useTok ? (d.short_oi ?? 0) : (d.short_oi_value ?? 0)) :
-            hlMode === 'long_short'    ? (d) => (useTok ? (d.total_oi ?? 0) : (d.total_oi_value ?? 0)) :
             hlMode === 'long_to_short' ? hlLongShortRatio :
             hlMode === 'net_pct'       ? hlNetOiPct :
+            hlMode === 'net'           ? hlNetOi :
                                          (d) => (useTok ? (d.open_interest ?? 0) : (d.open_interest_value ?? 0));
-          const arr = maArray(
-            (data as Array<Record<string, number>>).map(pickField),
-            ma.length,
-            ma.type
-          );
+          const arr = maArray(rows.map(pickField), ma.length, ma.type);
           out.push({
             key: `cum_oi_${idx}`,
             label: `OI ${tag}`,
@@ -3228,12 +3253,14 @@
   // vs token amount (`*_oi`, `open_interest`).
   let oiIsToken = $derived((instance.oiUnit ?? 'usd') === 'token');
   let oiHlPrimary = $derived.by(() => {
-    if ((instance.exchange ?? 'binance') !== 'hl') return null;
+    // hl_smart_oi is HL-only with no exchange field — treat it as HL.
+    if (instance.kind !== 'hl_smart_oi'
+        && (instance.exchange ?? 'binance') !== 'hl') return null;
     const mode = instance.oiHlDisplay ?? 'total';
     const unitLabel = oiIsToken ? ` (${instance.token ?? ''})` : ' (USD)';
     if (mode === 'long')  return { color: '#22c55e', field: oiIsToken ? 'long_oi'  : 'long_oi_value',  label: 'Long OI'  + unitLabel };
     if (mode === 'short') return { color: '#ef4444', field: oiIsToken ? 'short_oi' : 'short_oi_value', label: 'Short OI' + unitLabel };
-    if (mode === 'long_short' || mode === 'long_to_short' || mode === 'net_pct') return null;
+    if (mode === 'long_short' || mode === 'long_to_short' || mode === 'net_pct' || mode === 'net') return null;
     return { color: '#06b6d4', field: oiIsToken ? 'total_oi' : 'total_oi_value', label: 'OI' + unitLabel };
   });
   // Long/Short ratio: guard against zero-short buckets (early-history HL
@@ -3254,9 +3281,22 @@
     if (!isFinite(t) || t <= 0) return 0;
     return ((d.long_oi_value ?? 0) - (d.short_oi_value ?? 0)) / t;
   }
+  // Net OI absolute: long - short in the unit selected by oiUnit. Unlike
+  // hlNetOiPct this keeps the unit (USD or token), so two markets at the
+  // same skew but different sizes plot differently. Used by the 'net' mode.
+  function hlNetOi(d: Record<string, number>): number {
+    return oiIsToken
+      ? ((d.long_oi       ?? 0) - (d.short_oi       ?? 0))
+      : ((d.long_oi_value ?? 0) - (d.short_oi_value ?? 0));
+  }
   let oiLinesD = $derived.by(() => {
     if (!instance.showPoint) return [...cumulativeLines];
-    const ex = instance.exchange ?? 'binance';
+    // hl_smart_oi is HL-only by construction (no exchange field on the
+    // instance), so treat it as `ex === 'hl'` for every mode branch below
+    // — otherwise the dropdown silently falls through to the Binance shape.
+    const ex = instance.kind === 'hl_smart_oi'
+      ? 'hl'
+      : (instance.exchange ?? 'binance');
     const mode = instance.oiHlDisplay ?? 'total';
     let base: typeof cumulativeLines;
     if (ex === 'hl' && mode === 'long_short') {
@@ -3277,6 +3317,12 @@
       base = [
         { key: 'oi_net_pct', label: 'Net OI %', color: '#f59e0b',
           compute: hlNetOiPct },
+        ...cumulativeLines
+      ];
+    } else if (ex === 'hl' && mode === 'net') {
+      base = [
+        { key: 'oi_net', label: `Net OI${oiIsToken ? ` (${instance.token ?? ''})` : ' (USD)'}`, color: '#f97316',
+          compute: hlNetOi },
         ...cumulativeLines
       ];
     } else if (oiHlPrimary) {
@@ -3629,7 +3675,8 @@
       return (v: number) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(2)}%`;
     }
     if ((o.kind === 'oi' || o.kind === 'hl_smart_oi')
-        && (o.seriesKey === 'total_oi' || o.seriesKey === 'long_oi' || o.seriesKey === 'short_oi')) {
+        && (o.seriesKey === 'total_oi' || o.seriesKey === 'long_oi'
+         || o.seriesKey === 'short_oi' || o.seriesKey === 'net_oi')) {
       return fmtAmountTooltip;
     }
     if (o.kind === 'ohlcv') {
@@ -4672,7 +4719,7 @@
                construction. -->
           <select
             value={instance.oiHlDisplay ?? 'total'}
-            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short' | 'long_to_short' | 'net_pct')}
+            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short' | 'long_to_short' | 'net_pct' | 'net')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="Which side(s) of HL OI to plot"
           >
@@ -4680,6 +4727,7 @@
             <option value="long">Long</option>
             <option value="short">Short</option>
             <option value="long_short">Long + Short</option>
+            <option value="net">Net OI (L − S)</option>
             <option value="long_to_short">Long / Short</option>
             <option value="net_pct">Net OI %</option>
           </select>
@@ -5318,9 +5366,12 @@
       <!-- HL Long/Short ratio is unitless (1.03, not $1.03). Otherwise USD
            or token amount based on the oiUnit selector. hl_smart_oi reuses
            the same rendering — its payload shape matches /oi_split. -->
-      {@const oiHlMode = (instance.exchange ?? 'binance') === 'hl' ? (instance.oiHlDisplay ?? 'total') : null}
+      {@const oiHlMode = (instance.kind === 'hl_smart_oi'
+                          || (instance.exchange ?? 'binance') === 'hl')
+                          ? (instance.oiHlDisplay ?? 'total') : null}
       {@const oiIsRatio = oiHlMode === 'long_to_short'}
       {@const oiIsPct = oiHlMode === 'net_pct'}
+      {@const oiIsNet = oiHlMode === 'net'}
       {@const oiUseToken = (instance.oiUnit ?? 'usd') === 'token' && !oiIsRatio && !oiIsPct}
       {@const showWalletCount = instance.kind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)}
       <LineChart
@@ -5333,6 +5384,7 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
+        refLines={(oiIsNet || oiIsPct) ? ZERO_REF : []}
         formatY={oiIsRatio ? fmtRatio
                  : oiIsPct ? ((v: number) => `${(v >= 0 ? '+' : '')}${(v * 100).toFixed(1)}%`)
                  : (oiUseToken ? fmtAmountAxis : fmtUsdAxis)}

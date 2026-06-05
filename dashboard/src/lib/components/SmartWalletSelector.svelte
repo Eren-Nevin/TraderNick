@@ -20,16 +20,27 @@
     tokenLabel?: string;
   } = $props();
 
+  // When exactly one criterion is active (not disabled), the sort metric
+  // becomes ambiguous-by-default — there's no other knob to rank against.
+  // Snap sort_by onto that lone enabled metric so the user doesn't have to
+  // re-click the sort radio after toggling sibling criteria off.
+  function autoSort(state: SmartSelectorState): SmartSelectorState {
+    const enabled = state.criteria.filter((c) => !(c.disabled ?? false));
+    if (enabled.length === 1 && state.sort_by !== enabled[0].metric) {
+      return { ...state, sort_by: enabled[0].metric };
+    }
+    return state;
+  }
   function set(patch: Partial<SmartSelectorState>) {
-    onChange({ ...value, ...patch });
+    onChange(autoSort({ ...value, ...patch }));
   }
   function setCriterion(i: number, patch: Partial<SmartCriterionState>) {
     const next = value.criteria.slice();
     next[i] = { ...next[i], ...patch };
-    onChange({ ...value, criteria: next });
+    onChange(autoSort({ ...value, criteria: next }));
   }
   function removeCriterion(i: number) {
-    onChange({ ...value, criteria: value.criteria.filter((_, j) => j !== i) });
+    onChange(autoSort({ ...value, criteria: value.criteria.filter((_, j) => j !== i) }));
   }
   function addCriterion() {
     // Pick a metric not already in use. Falls back to 'realized_pnl' if
@@ -41,7 +52,7 @@
     // default"). They can override per-row afterwards.
     const fresh: SmartCriterionState = { metric: next.key as SmartMetricKey, scope: value.scope };
     if (next.defaultMin !== undefined) fresh.min = next.defaultMin;
-    onChange({ ...value, criteria: [...value.criteria, fresh] });
+    onChange(autoSort({ ...value, criteria: [...value.criteria, fresh] }));
   }
   function setSort(metric: SmartMetricKey) {
     // Convenience: clicking the "sort" radio also makes sure that metric
