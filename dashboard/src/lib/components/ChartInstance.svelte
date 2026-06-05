@@ -2958,12 +2958,28 @@
         const src = (data as unknown as Record<string, number>[]).map(
           (d) => (useUsd ? d.sum_value_usd : d.sum_amount) ?? 0
         );
+        // Windowed running sum — same sliding-window scheme as the
+        // hl_transfers branch above. 0 / unset = strict running total
+        // from the first loaded bucket (matches the historical default);
+        // positive N = rolling window over the last N buckets at the
+        // current interval. Lets the user read e.g. "rolling 24h supply"
+        // on an AAVE V3 supply chart at 1h interval with sumWindow=24.
+        const win = Math.max(0, Math.floor(instance.sumWindow ?? 0));
         const running: number[] = new Array(src.length);
         let acc = 0;
-        for (let i = 0; i < src.length; i++) { acc += src[i] || 0; running[i] = acc; }
+        if (win === 0) {
+          for (let i = 0; i < src.length; i++) { acc += src[i] || 0; running[i] = acc; }
+        } else {
+          for (let i = 0; i < src.length; i++) {
+            acc += src[i] || 0;
+            if (i >= win) acc -= src[i - win] || 0;
+            running[i] = acc;
+          }
+        }
+        const winLabel = win > 0 ? ` (last ${win})` : '';
         out.push({
           key: 'cum_sum',
-          label: `Σ ${valLabel}`,
+          label: `Σ ${valLabel}${winLabel}`,
           color: '#a78bfa',                 // violet-400 — distinct from MA palette
           axis: 'secondary' as const,
           compute: (_d: unknown, i: number) => running[i]
@@ -5240,10 +5256,11 @@
             style="color: #a78bfa; opacity: {instance.showSum ? 1 : 0.55}"
           >Sum</span>
         </label>
-        {#if instance.kind === 'hl_transfers' && instance.showSum}
-          <!-- Sliding-window length for the HL Bridge Flows sum line. Empty
-               / 0 = strict running total from the first loaded bucket;
-               positive N = last N buckets in the current interval. -->
+        {#if instance.showSum}
+          <!-- Sliding-window length for the sum line, applies to every
+               canSum kind. Empty / 0 = strict running total from the
+               first loaded bucket (legacy behaviour); positive N = last
+               N buckets at the current interval. -->
           <label class="flex items-center gap-1 text-zinc-400" title="Rolling window in current-interval buckets (0 = full running total)">
             <span class="text-[10px] uppercase tracking-widest">win</span>
             <input

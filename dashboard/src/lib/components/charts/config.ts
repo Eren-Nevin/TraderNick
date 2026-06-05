@@ -1413,9 +1413,8 @@ export type ChartInstance = {
    *  Lido / Uniswap-USD / Aerodrome); ignored elsewhere. */
   showSum?: boolean;
   /** Rolling sum window in buckets. 0 (or missing) = strict running total
-   *  from the first loaded row. Positive N = sliding window over the last
-   *  N buckets only. Currently consumed by the hl_transfers (HL Bridge
-   *  Flows) sum line; other canSum kinds ignore it. */
+   *  from the first loaded row (legacy default). Positive N = sliding
+   *  window over the last N buckets only. Honoured by every canSum kind. */
   sumWindow?: number;
   // sz only
   under?: number;

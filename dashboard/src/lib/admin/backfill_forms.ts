@@ -55,7 +55,8 @@ const HL_EVENTS = ['ohlcv', 'trades', 'fills', 'funding', 'position_history', 't
 const INGEST_TOKENS = [
   'BTC', 'ETH', 'SOL', 'ARB', 'LINK', 'BNB', 'POL', 'LTC', 'TRX',
   'AAVE', 'AERO', 'CAKE', 'COW', 'ENA', 'ETHFI', 'FET', 'FIL', 'HYPE',
-  'MORPHO', 'PENDLE', 'RENDER', 'SUSHI', 'UNI', 'WLD', 'VIRTUAL', 'PAXG', 'ZEC'
+  'MORPHO', 'PENDLE', 'RENDER', 'SUSHI', 'UNI', 'WLD', 'VIRTUAL', 'PAXG', 'ZEC',
+  'TON', 'NEAR', 'DOGE', 'TAO'
 ];
 
 // Universe of ERC-20 token symbols pickable in the backfill form. Wider than

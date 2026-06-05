@@ -15,7 +15,8 @@ INGEST_TOKENS = [t.strip() for t in os.environ.get(
     "INGEST_TOKENS",
     "BTC,ETH,SOL,ARB,"
     "LTC,TRX,AAVE,AERO,CAKE,COW,ENA,ETHFI,FET,FIL,HYPE,"
-    "MORPHO,PENDLE,RENDER,SUSHI,UNI,WLD,VIRTUAL,PAXG,ZEC"
+    "MORPHO,PENDLE,RENDER,SUSHI,UNI,WLD,VIRTUAL,PAXG,ZEC,"
+    "TON,NEAR,DOGE,TAO"
 ).split(",") if t.strip()]
 
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
