@@ -888,9 +888,13 @@
     error = null;
     loading = true;
     try {
-      // Transfer + AAVE event kinds use a fixed 30-day window regardless of
-      // interval (they're sparse compared to OHLCV); other kinds use the
-      // per-interval lookback window.
+      // Transfer + AAVE / HL / DEX / etc. event kinds use a fixed window
+      // regardless of interval (they're sparse compared to OHLCV); other
+      // kinds use the per-interval lookback window. The window length
+      // tracks the ClickHouse table TTL — currently 60 days. (It used to
+      // be 30 when TTL=30d; when TTL was bumped to 60 this cap was
+      // missed, which silently truncated HL Bridge Flows / etc. to half
+      // the available data.)
       let sinceIso: string;
       let untilIso: string;
       const isWideWindowKind =
@@ -912,7 +916,7 @@
       if (isWideWindowKind) {
         const now = new Date();
         const tu = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
-        const ts = new Date(tu.getTime() - 30 * 24 * 60 * 60 * 1000);
+        const ts = new Date(tu.getTime() - 60 * 24 * 60 * 60 * 1000);
         sinceIso = ts.toISOString();
         untilIso = tu.toISOString();
       } else {
