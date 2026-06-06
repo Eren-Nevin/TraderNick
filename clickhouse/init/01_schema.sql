@@ -2120,6 +2120,64 @@ FROM tradernick.hl_fills
 WHERE dir IN ('Close Long', 'Close Short', 'Long > Short', 'Short > Long')
 GROUP BY day, wallet, token, side;
 
+-- ───────────────────────────────────────────────────────────────────
+-- Per-(day, wallet, token, position_side) fill volume.
+--
+-- Captures four scalar dimensions per row:
+--   - vol_token_state        : sum(size)            — tokens traded
+--   - vol_usd_state          : sum(size * price)    — USD traded
+--   - taker_buy_vol_*_state  : same, filtered to crossed=1 AND side='B'
+--   - taker_sell_vol_*_state : same, filtered to crossed=1 AND side='A'
+--
+-- Position-side classification is inclusive — each fill goes to one side
+-- based on which position is being acted on (Opens count too):
+--   long  = Open Long  + Close Long  + Long > Short
+--   short = Open Short + Close Short + Short > Long
+-- Vault-transfer fills (dir = 'Net Child Vaults') and unknown dirs are
+-- excluded; they aren't real perp volume.
+--
+-- Powers the SmartSelector volume-style criteria (long/short volume in
+-- token + USD, plus taker buy/sell variants). Same idempotency / TTL
+-- pattern as hl_fills_pnl_daily.
+CREATE TABLE IF NOT EXISTS tradernick.hl_fills_vol_daily
+(
+    day                          Date            CODEC(DoubleDelta, ZSTD(3)),
+    wallet                       String          CODEC(ZSTD(3)),
+    token                        LowCardinality(String),
+    position_side                LowCardinality(String),
+    vol_token_state              AggregateFunction(sum, Float64),
+    vol_usd_state                AggregateFunction(sum, Float64),
+    taker_buy_vol_token_state    AggregateFunction(sum, Float64),
+    taker_buy_vol_usd_state      AggregateFunction(sum, Float64),
+    taker_sell_vol_token_state   AggregateFunction(sum, Float64),
+    taker_sell_vol_usd_state     AggregateFunction(sum, Float64)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (day, wallet, token, position_side)
+TTL day + INTERVAL 61 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_fills_vol_daily_mv
+TO tradernick.hl_fills_vol_daily
+AS
+SELECT
+    toDate(time) AS day,
+    wallet, token,
+    multiIf(
+        dir IN ('Open Long',  'Close Long',  'Long > Short'), 'long',
+        dir IN ('Open Short', 'Close Short', 'Short > Long'), 'short',
+        ''
+    ) AS position_side,
+    sumState(size)                                            AS vol_token_state,
+    sumState(size * price)                                    AS vol_usd_state,
+    sumStateIf(size,         crossed = 1 AND side = 'B')      AS taker_buy_vol_token_state,
+    sumStateIf(size * price, crossed = 1 AND side = 'B')      AS taker_buy_vol_usd_state,
+    sumStateIf(size,         crossed = 1 AND side = 'A')      AS taker_sell_vol_token_state,
+    sumStateIf(size * price, crossed = 1 AND side = 'A')      AS taker_sell_vol_usd_state
+FROM tradernick.hl_fills
+WHERE dir IN ('Open Long', 'Close Long', 'Long > Short',
+              'Open Short', 'Close Short', 'Short > Long')
+GROUP BY day, wallet, token, position_side;
+
 -- Pre-aggregated per-(wallet, token, bucket) trader performance. The right
 -- table for leaderboard queries — small + already summed. net_pnl = pnl - fees.
 CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history

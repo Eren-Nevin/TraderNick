@@ -43,6 +43,7 @@
     onView,
     hoverTime = null,
     onHover,
+    onClick,
     formatY = (v: number) => v.toFixed(2),
     formatTooltip = (v: number) => v.toFixed(4),
     formatY2,
@@ -59,6 +60,12 @@
     onView?: (v: View) => void;
     hoverTime?: number | null;
     onHover?: (t: number | null) => void;
+    /** Single-click on the plot area. Fired with the Unix-second time at
+     *  the click x position (snapped to the nearest datum) and the
+     *  underlying MouseEvent so the parent can inspect modifiers /
+     *  button. The plot's cursor stays as crosshair; parents that wire
+     *  this up should make it visually clear what is clickable. */
+    onClick?: (t: number, evt: MouseEvent) => void;
     formatY?: (v: number) => string;
     formatTooltip?: (v: number) => string;
     /** Optional axis-2 formatters. Fall back to the primary formatters
@@ -350,6 +357,15 @@
       onHover?.(xScale.invert(mx).getTime() / 1000);
     });
     overlay.on('mouseleave', () => onHover?.(null));
+    if (onClick) {
+      overlay.on('click', function (event: MouseEvent) {
+        const [mx, my] = d3.pointer(event, this);
+        if (mx < 0 || mx > plotW || my < 0 || my > plotH) return;
+        const t = xScale.invert(mx).getTime() / 1000;
+        onClick(t, event);
+      });
+      overlay.style('cursor', 'pointer');
+    }
 
     drawCrosshair();
   }

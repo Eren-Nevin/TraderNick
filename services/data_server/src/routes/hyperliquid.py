@@ -12,7 +12,7 @@ table-chart kind on the dashboard.
 """
 from __future__ import annotations
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sanic import Blueprint, response
 
@@ -469,6 +469,62 @@ async def smart_oi(request):
         "interval": interval,
         "selector": selector.summary(),
         "series": series,
+    })
+
+
+@bp.get("/hyperliquid/smart_wallets")
+@throttled("heavy")
+async def smart_wallets(request):
+    """List the wallets the SmartSelector picks on a specific day.
+
+    Companion endpoint to /hyperliquid/smart_oi — the chart shows an
+    aggregate wallet count per bucket; clicking on the wallets line
+    pops up the actual addresses, which this endpoint returns.
+
+    Query params:
+      token   — required when any criterion uses scope=token
+      day     — ISO date the user clicked (YYYY-MM-DD). Pinned to one
+                day so the response is bounded.
+      selector — same JSON shape as /smart_oi.
+    """
+    token = request.args.get("token")
+    day_arg = request.args.get("day")
+    selector_raw = request.args.get("selector")
+    if not day_arg:
+        return response.json({"error": "missing day (YYYY-MM-DD)"}, status=400)
+    try:
+        day_dt = datetime.fromisoformat(day_arg).replace(tzinfo=None)
+    except ValueError:
+        return response.json({"error": "invalid day; expected YYYY-MM-DD"}, status=400)
+    # The selector's window must straddle `day` so its target_days CTE
+    # produces a row for it. Use [day, day+1) as a minimal window — the
+    # selector still computes the full lookback ending at `day`.
+    since_dt = day_dt
+    until_dt = day_dt + timedelta(days=1)
+    try:
+        selector = SmartSelector.from_json(selector_raw, token=token)
+    except ValueError as e:
+        return response.json({"error": str(e)}, status=400)
+
+    selector_cte_sql, smart_cte_name, selector_params = selector.build_cte(since_dt, until_dt)
+    params: dict = {**selector_params, "day": day_dt.date()}
+
+    # Pull the wallets array for the requested day. groupArray inside
+    # the selector already top-N caps it; we just expand to one row per
+    # wallet preserving rank order (limit again as a belt-and-suspenders).
+    sql = f"""
+        {selector_cte_sql}
+        SELECT arrayJoin(wallets) AS wallet
+        FROM {smart_cte_name}
+        WHERE day = {{day:Date}}
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters=params)
+    wallets = [r[0] for r in rows.result_rows]
+    return response.json({
+        "day": day_dt.date().isoformat(),
+        "selector": selector.summary(),
+        "wallets": wallets,
     })
 
 

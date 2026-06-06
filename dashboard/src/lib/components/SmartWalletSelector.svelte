@@ -47,10 +47,12 @@
     // every metric is taken (unlikely; the UI can show duplicates).
     const used = new Set(value.criteria.map((c) => c.metric));
     const next = METRIC_CATALOGUE.find((m) => !used.has(m.key)) ?? METRIC_CATALOGUE[0];
-    // New criteria default to the overall selector scope — matches the
-    // user's mental model ("set them the same as the overall scope by
-    // default"). They can override per-row afterwards.
-    const fresh: SmartCriterionState = { metric: next.key as SmartMetricKey, scope: value.scope };
+    // New criteria default to token scope — most useful queries are
+    // token-specific and the engine path is dramatically cheaper when
+    // the source CTEs can be prefiltered on token. Users still flip a
+    // criterion to global on the per-row dropdown when they want a
+    // cross-token aggregate.
+    const fresh: SmartCriterionState = { metric: next.key as SmartMetricKey, scope: 'token' };
     if (next.defaultMin !== undefined) fresh.min = next.defaultMin;
     onChange(autoSort({ ...value, criteria: [...value.criteria, fresh] }));
   }
@@ -58,11 +60,11 @@
     // Convenience: clicking the "sort" radio also makes sure that metric
     // is somewhere in the criteria list (with no min/max — it's just a
     // ranking hint). Otherwise picking, say, "sharpe" sort wouldn't show
-    // anywhere in the criteria UI. The auto-added criterion inherits the
-    // overall scope so the sort's effective scope is well-defined.
+    // anywhere in the criteria UI. The auto-added criterion defaults to
+    // token scope to match the addCriterion path.
     let criteria = value.criteria;
     if (!criteria.some((c) => c.metric === metric)) {
-      criteria = [...criteria, { metric, scope: value.scope }];
+      criteria = [...criteria, { metric, scope: 'token' }];
     }
     onChange({ ...value, sort_by: metric, criteria });
   }
@@ -77,6 +79,7 @@
     const def = metricDef(key);
     if (!def) return '';
     if (def.kind === 'usd')   return which === 'min' ? '$ min' : '$ max';
+    if (def.kind === 'token') return which === 'min' ? '# tokens min' : '';
     if (def.kind === 'pct')   return which === 'min' ? '0.10 = 10%' : '';
     if (def.kind === 'ratio') return which === 'min' ? '0.50' : '';
     if (def.kind === 'count') return which === 'min' ? '# min' : '';

@@ -18,12 +18,28 @@ export type SmartMetricKey =
   | 'total_pnl'
   | 'total_pnl_pct'
   | 'volume'
+  | 'volume_token'
   | 'trade_count'
   | 'long_pnl'
   | 'short_pnl'
-  | 'sharpe';
+  | 'sharpe'
+  | 'avg_total_oi_token'
+  | 'avg_long_oi_token'
+  | 'avg_short_oi_token'
+  | 'avg_total_oi_usd'
+  | 'avg_long_oi_usd'
+  | 'avg_short_oi_usd'
+  | 'avg_roe_pct'
+  | 'long_volume_usd'
+  | 'long_volume_token'
+  | 'short_volume_usd'
+  | 'short_volume_token'
+  | 'taker_buy_volume_usd'
+  | 'taker_buy_volume_token'
+  | 'taker_sell_volume_usd'
+  | 'taker_sell_volume_token';
 
-export type SmartMetricKind = 'usd' | 'pct' | 'ratio' | 'count';
+export type SmartMetricKind = 'usd' | 'pct' | 'ratio' | 'count' | 'token';
 
 export interface SmartMetricDef {
   key: SmartMetricKey;
@@ -37,17 +53,33 @@ export interface SmartMetricDef {
 }
 
 export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
-  { key: 'pnl_pct',            label: 'Realized PnL / Volume %',   kind: 'pct' },
-  { key: 'unrealized_pnl_pct', label: 'Unrealized PnL / Volume %', kind: 'pct' },
-  { key: 'realized_pnl',       label: 'Realized PnL ($)',          kind: 'usd', defaultMin: 10000 },
-  { key: 'unrealized_pnl',     label: 'Unrealized PnL ($)',        kind: 'usd' },
-  { key: 'total_pnl',          label: 'Total PnL ($)',             kind: 'usd' },
-  { key: 'total_pnl_pct',      label: 'Total PnL %',               kind: 'pct' },
-  { key: 'volume',             label: 'Volume ($)',                kind: 'usd', defaultMin: 1_000_000 },
-  { key: 'trade_count',        label: 'Trade count',               kind: 'count' },
-  { key: 'long_pnl',           label: 'Long PnL ($)',              kind: 'usd' },
-  { key: 'short_pnl',          label: 'Short PnL ($)',             kind: 'usd' },
-  { key: 'sharpe',             label: 'Sharpe ratio',              kind: 'ratio' },
+  { key: 'pnl_pct',                 label: 'Realized PnL / Volume %',   kind: 'pct' },
+  { key: 'unrealized_pnl_pct',      label: 'Unrealized PnL / Volume %', kind: 'pct' },
+  { key: 'realized_pnl',            label: 'Realized PnL ($)',          kind: 'usd', defaultMin: 10000 },
+  { key: 'unrealized_pnl',          label: 'Unrealized PnL ($)',        kind: 'usd' },
+  { key: 'total_pnl',               label: 'Total PnL ($)',             kind: 'usd' },
+  { key: 'total_pnl_pct',           label: 'Total PnL %',               kind: 'pct' },
+  { key: 'volume',                  label: 'Volume ($)',                kind: 'usd', defaultMin: 1_000_000 },
+  { key: 'volume_token',            label: 'Volume (token)',            kind: 'token' },
+  { key: 'long_volume_usd',         label: 'Long Volume ($)',           kind: 'usd' },
+  { key: 'long_volume_token',       label: 'Long Volume (token)',       kind: 'token' },
+  { key: 'short_volume_usd',        label: 'Short Volume ($)',          kind: 'usd' },
+  { key: 'short_volume_token',      label: 'Short Volume (token)',      kind: 'token' },
+  { key: 'taker_buy_volume_usd',    label: 'Taker Buy Volume ($)',      kind: 'usd' },
+  { key: 'taker_buy_volume_token',  label: 'Taker Buy Volume (token)',  kind: 'token' },
+  { key: 'taker_sell_volume_usd',   label: 'Taker Sell Volume ($)',     kind: 'usd' },
+  { key: 'taker_sell_volume_token', label: 'Taker Sell Volume (token)', kind: 'token' },
+  { key: 'avg_total_oi_usd',        label: 'Avg Total OI ($)',          kind: 'usd' },
+  { key: 'avg_long_oi_usd',         label: 'Avg Long OI ($)',           kind: 'usd' },
+  { key: 'avg_short_oi_usd',        label: 'Avg Short OI ($)',          kind: 'usd' },
+  { key: 'avg_total_oi_token',      label: 'Avg Total OI (token)',      kind: 'token' },
+  { key: 'avg_long_oi_token',       label: 'Avg Long OI (token)',       kind: 'token' },
+  { key: 'avg_short_oi_token',      label: 'Avg Short OI (token)',      kind: 'token' },
+  { key: 'avg_roe_pct',             label: 'Avg RoE (%)',               kind: 'pct' },
+  { key: 'trade_count',             label: 'Trade count',               kind: 'count' },
+  { key: 'long_pnl',                label: 'Long PnL ($)',              kind: 'usd' },
+  { key: 'short_pnl',               label: 'Short PnL ($)',             kind: 'usd' },
+  { key: 'sharpe',                  label: 'Sharpe ratio',              kind: 'ratio' },
 ];
 
 export function metricDef(key: string): SmartMetricDef | undefined {
@@ -85,9 +117,12 @@ export function defaultSmartSelectorState(): SmartSelectorState {
   return {
     lookback: 7,
     top_n: 50,
-    scope: 'global',
+    // Default to token-scope: most users open the selector on a token
+    // chart and want criteria specific to that token; global is rarely
+    // the right default since it asks the engine to scan every token.
+    scope: 'token',
     sort_by: 'pnl_pct',
-    criteria: [{ metric: 'realized_pnl', min: 10000, scope: 'global' }],
+    criteria: [{ metric: 'realized_pnl', min: 10000, scope: 'token' }],
   };
 }
 

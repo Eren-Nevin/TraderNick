@@ -38,6 +38,16 @@ from typing import Any, Literal
 SRC_TRADE_HISTORY = "trade_history"
 SRC_EOD = "eod"
 SRC_SIDED = "sided"
+# Average wallet OI (size in tokens + USD notional, total/long/short) over
+# the trailing lookback. Reads hl_position_history_1h (one row per hourly
+# bucket per (wallet, token, side)) — every hour in the window contributes
+# one sample, so the metric truly reflects the wallet's *typical* OI in
+# the period, not just the most recent snapshot.
+SRC_OI = "oi"
+# Per-(day, wallet) fill volumes broken down by position side (long/short)
+# and taker action (buy/sell). Reads hl_fills_vol_daily, populated by the
+# MV of the same name. Each metric is available in tokens AND USD.
+SRC_VOL = "vol"
 
 
 @dataclass(frozen=True)
@@ -119,6 +129,87 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
          " arrayReduce('avg', daily_pnls_{s})"
          " / arrayReduce('stddevPop', daily_pnls_{s}),"
          " 0)"),
+    ),
+    # ── Average OI over the lookback (token + USD) ───────────────────
+    # Source columns (per-scope) emitted by the SRC_OI trailing CTE:
+    #   avg_total_oi_token_{s}, avg_long_oi_token_{s}, avg_short_oi_token_{s}
+    #   avg_total_oi_usd_{s},   avg_long_oi_usd_{s},   avg_short_oi_usd_{s}
+    "avg_total_oi_token": MetricDef(
+        "avg_total_oi_token", "Avg Total OI (token)",
+        frozenset({SRC_OI}), "avg_total_oi_token_{s}",
+    ),
+    "avg_long_oi_token": MetricDef(
+        "avg_long_oi_token", "Avg Long OI (token)",
+        frozenset({SRC_OI}), "avg_long_oi_token_{s}",
+    ),
+    "avg_short_oi_token": MetricDef(
+        "avg_short_oi_token", "Avg Short OI (token)",
+        frozenset({SRC_OI}), "avg_short_oi_token_{s}",
+    ),
+    "avg_total_oi_usd": MetricDef(
+        "avg_total_oi_usd", "Avg Total OI ($)",
+        frozenset({SRC_OI}), "avg_total_oi_usd_{s}",
+    ),
+    "avg_long_oi_usd": MetricDef(
+        "avg_long_oi_usd", "Avg Long OI ($)",
+        frozenset({SRC_OI}), "avg_long_oi_usd_{s}",
+    ),
+    "avg_short_oi_usd": MetricDef(
+        "avg_short_oi_usd", "Avg Short OI ($)",
+        frozenset({SRC_OI}), "avg_short_oi_usd_{s}",
+    ),
+    # Per-snapshot RoE in %, averaged over the lookback. At each hourly
+    # bucket: 100 × wallet_total_unrealized_pnl_usd / wallet_total_oi_usd
+    # (0 when the wallet has no OI). Then avg across all buckets in the
+    # window. USD-only — the user wants $-pnl / $-OI explicitly. Source
+    # columns emitted by the oi_trailing CTE: avg_roe_pct_{s}.
+    "avg_roe_pct": MetricDef(
+        "avg_roe_pct", "Avg RoE (%)",
+        frozenset({SRC_OI}), "avg_roe_pct_{s}",
+    ),
+    # ── Sided + taker volume (token + USD) ───────────────────────────
+    # Source columns emitted by the SRC_VOL trailing CTE:
+    #   vol_token_{s}, vol_usd_{s} (totals — vol_usd matches the legacy
+    #   `volume` metric, but vol_usd_{s} is the one to read for new code)
+    #   long_vol_token_{s},  long_vol_usd_{s}
+    #   short_vol_token_{s}, short_vol_usd_{s}
+    #   taker_buy_vol_token_{s},  taker_buy_vol_usd_{s}
+    #   taker_sell_vol_token_{s}, taker_sell_vol_usd_{s}
+    "volume_token": MetricDef(
+        "volume_token", "Volume (token)",
+        frozenset({SRC_VOL}), "vol_token_{s}",
+    ),
+    "long_volume_usd": MetricDef(
+        "long_volume_usd", "Long Volume ($)",
+        frozenset({SRC_VOL}), "long_vol_usd_{s}",
+    ),
+    "long_volume_token": MetricDef(
+        "long_volume_token", "Long Volume (token)",
+        frozenset({SRC_VOL}), "long_vol_token_{s}",
+    ),
+    "short_volume_usd": MetricDef(
+        "short_volume_usd", "Short Volume ($)",
+        frozenset({SRC_VOL}), "short_vol_usd_{s}",
+    ),
+    "short_volume_token": MetricDef(
+        "short_volume_token", "Short Volume (token)",
+        frozenset({SRC_VOL}), "short_vol_token_{s}",
+    ),
+    "taker_buy_volume_usd": MetricDef(
+        "taker_buy_volume_usd", "Taker Buy Volume ($)",
+        frozenset({SRC_VOL}), "taker_buy_vol_usd_{s}",
+    ),
+    "taker_buy_volume_token": MetricDef(
+        "taker_buy_volume_token", "Taker Buy Volume (token)",
+        frozenset({SRC_VOL}), "taker_buy_vol_token_{s}",
+    ),
+    "taker_sell_volume_usd": MetricDef(
+        "taker_sell_volume_usd", "Taker Sell Volume ($)",
+        frozenset({SRC_VOL}), "taker_sell_vol_usd_{s}",
+    ),
+    "taker_sell_volume_token": MetricDef(
+        "taker_sell_volume_token", "Taker Sell Volume (token)",
+        frozenset({SRC_VOL}), "taker_sell_vol_token_{s}",
     ),
 }
 
@@ -267,12 +358,16 @@ class SmartSelector:
             SRC_TRADE_HISTORY: set(),
             SRC_EOD: set(),
             SRC_SIDED: set(),
+            SRC_OI: set(),
+            SRC_VOL: set(),
         }
         for (src, sc) in needs:
             scopes_for[src].add(sc)
         any_source = (scopes_for[SRC_TRADE_HISTORY]
                       or scopes_for[SRC_EOD]
-                      or scopes_for[SRC_SIDED])
+                      or scopes_for[SRC_SIDED]
+                      or scopes_for[SRC_OI]
+                      or scopes_for[SRC_VOL])
         if not any_source:
             raise ValueError(
                 "selector references no sources — at least one metric "
@@ -293,14 +388,18 @@ class SmartSelector:
 
         # data_min — earliest time available in whichever source we're
         # using for the gate. trade_history is the most common; otherwise
-        # eod or sided. The gate's purpose is to drop chart days whose
-        # trailing window starts before any data exists.
-        gate_src = (
-            "tradernick.hl_trade_history" if scopes_for[SRC_TRADE_HISTORY]
-            else "tradernick.hl_position_history_eod_wallet" if scopes_for[SRC_EOD]
-            else "tradernick.hl_fills_pnl_daily"
-        )
-        gate_time_col = "time" if scopes_for[SRC_TRADE_HISTORY] else "day"
+        # eod / sided / oi / vol. The gate's purpose is to drop chart days
+        # whose trailing window starts before any data exists.
+        if scopes_for[SRC_TRADE_HISTORY]:
+            gate_src, gate_time_col = "tradernick.hl_trade_history", "time"
+        elif scopes_for[SRC_EOD]:
+            gate_src, gate_time_col = "tradernick.hl_position_history_eod_wallet", "day"
+        elif scopes_for[SRC_SIDED]:
+            gate_src, gate_time_col = "tradernick.hl_fills_pnl_daily", "day"
+        elif scopes_for[SRC_VOL]:
+            gate_src, gate_time_col = "tradernick.hl_fills_vol_daily", "day"
+        else:
+            gate_src, gate_time_col = "tradernick.hl_position_history_1h", "bucket"
         ctes.append(
             f"data_min AS (\n"
             f"            SELECT toDate(min({gate_time_col})) AS min_d\n"
@@ -441,6 +540,210 @@ class SmartSelector:
                 "        )"
             )
 
+        # ── vol_daily / vol (sided + taker fill volumes) ────────────
+        if scopes_for[SRC_VOL]:
+            # Per-(day, wallet) collapse — sum across (token, position_side)
+            # for global; sumIf for token; per-direction columns derived
+            # via sumStateIf merging. Six volume dimensions emitted per
+            # scope: vol, long_vol, short_vol, taker_buy_vol, taker_sell_vol,
+            # each in token + USD.
+            vol_day_parts: list[str] = []
+            for global_expr, token_expr, g_alias, t_alias in [
+                ("sumMerge(vol_token_state)",
+                 "sumMergeIf(vol_token_state, token = {sel_token:String})",
+                 "vol_token_g", "vol_token_t"),
+                ("sumMerge(vol_usd_state)",
+                 "sumMergeIf(vol_usd_state, token = {sel_token:String})",
+                 "vol_usd_g", "vol_usd_t"),
+                ("sumMergeIf(vol_token_state, position_side = 'long')",
+                 "sumMergeIf(vol_token_state, position_side = 'long' AND token = {sel_token:String})",
+                 "long_vol_token_g", "long_vol_token_t"),
+                ("sumMergeIf(vol_usd_state, position_side = 'long')",
+                 "sumMergeIf(vol_usd_state, position_side = 'long' AND token = {sel_token:String})",
+                 "long_vol_usd_g", "long_vol_usd_t"),
+                ("sumMergeIf(vol_token_state, position_side = 'short')",
+                 "sumMergeIf(vol_token_state, position_side = 'short' AND token = {sel_token:String})",
+                 "short_vol_token_g", "short_vol_token_t"),
+                ("sumMergeIf(vol_usd_state, position_side = 'short')",
+                 "sumMergeIf(vol_usd_state, position_side = 'short' AND token = {sel_token:String})",
+                 "short_vol_usd_g", "short_vol_usd_t"),
+                ("sumMerge(taker_buy_vol_token_state)",
+                 "sumMergeIf(taker_buy_vol_token_state, token = {sel_token:String})",
+                 "taker_buy_vol_token_g", "taker_buy_vol_token_t"),
+                ("sumMerge(taker_buy_vol_usd_state)",
+                 "sumMergeIf(taker_buy_vol_usd_state, token = {sel_token:String})",
+                 "taker_buy_vol_usd_g", "taker_buy_vol_usd_t"),
+                ("sumMerge(taker_sell_vol_token_state)",
+                 "sumMergeIf(taker_sell_vol_token_state, token = {sel_token:String})",
+                 "taker_sell_vol_token_g", "taker_sell_vol_token_t"),
+                ("sumMerge(taker_sell_vol_usd_state)",
+                 "sumMergeIf(taker_sell_vol_usd_state, token = {sel_token:String})",
+                 "taker_sell_vol_usd_g", "taker_sell_vol_usd_t"),
+            ]:
+                vol_day_parts.append(
+                    proj_pair(global_expr, token_expr, SRC_VOL, g_alias, t_alias))
+            vol_day_parts = [p for p in vol_day_parts if p]
+            # Same prefilter trick as oi_snapshots — when only token
+            # scope is needed, push `token = sel_token` into the source
+            # WHERE so CH skips other tokens entirely (the table's
+            # ORDER BY puts `token` in the 3rd slot after day/wallet, so
+            # the prefilter still helps via the index but less so than
+            # on the 1h MV).
+            vol_inner_token_filter = ""
+            if "global" not in scopes_for[SRC_VOL] and "token" in scopes_for[SRC_VOL]:
+                vol_inner_token_filter = "              AND token = {sel_token:String}\n"
+            ctes.append(
+                "vol_per_wallet_day AS (\n"
+                "            SELECT day, wallet,\n"
+                "                   " + ",\n                   ".join(vol_day_parts) + "\n"
+                "            FROM tradernick.hl_fills_vol_daily\n"
+                "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL {sel_lookback:UInt32} DAY\n"
+                "              AND day <  toDate({sel_until:DateTime})\n"
+                f"{vol_inner_token_filter}"
+                "            GROUP BY day, wallet\n"
+                "        )"
+            )
+            # Trailing sum over the lookback window.
+            vol_trail_parts: list[str] = []
+            for col_name in [
+                "vol_token", "vol_usd",
+                "long_vol_token", "long_vol_usd",
+                "short_vol_token", "short_vol_usd",
+                "taker_buy_vol_token", "taker_buy_vol_usd",
+                "taker_sell_vol_token", "taker_sell_vol_usd",
+            ]:
+                if "global" in scopes_for[SRC_VOL]:
+                    vol_trail_parts.append(f"sum(src.{col_name}_g) AS {col_name}_g")
+                if "token" in scopes_for[SRC_VOL]:
+                    vol_trail_parts.append(f"sum(src.{col_name}_t) AS {col_name}_t")
+            ctes.append(
+                "vol_trailing AS (\n"
+                "            SELECT target.d AS day, src.wallet AS wallet,\n"
+                "                   " + ",\n                   ".join(vol_trail_parts) + "\n"
+                "            FROM target_days target\n"
+                "            CROSS JOIN vol_per_wallet_day src\n"
+                "            WHERE src.day >= target.d - {sel_lookback:UInt32}\n"
+                "              AND src.day <  target.d\n"
+                "            GROUP BY target.d, src.wallet\n"
+                "        )"
+            )
+
+        # ── avg OI over hourly snapshots ────────────────────────────
+        if scopes_for[SRC_OI]:
+            # Inner: argMaxMerge the hourly snapshot per (bucket, token,
+            # side, wallet). Middle: collapse to per-(bucket, wallet)
+            # totals + sided sums; emit per-scope projections of both
+            # amount (tokens) and size (USD). Outer (oi_trailing):
+            # average those per-bucket wallet OIs across all hourly
+            # buckets in the trailing lookback window.
+            # Prefilter on token when only token-scope metrics are
+            # referenced — hl_position_history_1h's ORDER BY starts with
+            # `token`, so filtering on it lets CH skip all other tokens'
+            # parts entirely. Without this, a 7-day NEAR-scoped query
+            # reads ~50M rows × 30 tokens; with it, ~1-12M rows × 1
+            # token. The global path can't prefilter (it needs all
+            # tokens summed), so it pays the larger read.
+            oi_inner_token_filter = ""
+            if "global" not in scopes_for[SRC_OI] and "token" in scopes_for[SRC_OI]:
+                oi_inner_token_filter = "              AND token = {sel_token:String}\n"
+            ctes.append(
+                "oi_snapshots AS (\n"
+                "            SELECT bucket, token, side, wallet,\n"
+                "                   argMaxMerge(amount_state) AS amt,\n"
+                "                   argMaxMerge(size_state)   AS sz,\n"
+                "                   argMaxMerge(pnl_state)    AS pnl\n"
+                "            FROM tradernick.hl_position_history_1h\n"
+                "            WHERE bucket >= {sel_since:DateTime} - INTERVAL {sel_lookback:UInt32} DAY\n"
+                "              AND bucket <  {sel_until:DateTime}\n"
+                f"{oi_inner_token_filter}"
+                "            GROUP BY bucket, token, side, wallet\n"
+                "        )"
+            )
+            # Per-bucket per-wallet sums. Six numeric columns per scope:
+            # total/long/short × tokens/USD. Token filter only applies on
+            # _t projections via sumIf.
+            oi_bucket_parts: list[str] = []
+            def _pp(g_expr, t_expr, g_alias, t_alias):
+                return proj_pair(g_expr, t_expr, SRC_OI, g_alias, t_alias)
+            oi_bucket_parts.append(_pp(
+                "sum(amt)",
+                "sumIf(amt, token = {sel_token:String})",
+                "total_oi_token_g", "total_oi_token_t"))
+            oi_bucket_parts.append(_pp(
+                "sumIf(amt, side='long')",
+                "sumIf(amt, side='long' AND token = {sel_token:String})",
+                "long_oi_token_g", "long_oi_token_t"))
+            oi_bucket_parts.append(_pp(
+                "sumIf(amt, side='short')",
+                "sumIf(amt, side='short' AND token = {sel_token:String})",
+                "short_oi_token_g", "short_oi_token_t"))
+            oi_bucket_parts.append(_pp(
+                "sum(sz)",
+                "sumIf(sz, token = {sel_token:String})",
+                "total_oi_usd_g", "total_oi_usd_t"))
+            oi_bucket_parts.append(_pp(
+                "sumIf(sz, side='long')",
+                "sumIf(sz, side='long' AND token = {sel_token:String})",
+                "long_oi_usd_g", "long_oi_usd_t"))
+            oi_bucket_parts.append(_pp(
+                "sumIf(sz, side='short')",
+                "sumIf(sz, side='short' AND token = {sel_token:String})",
+                "short_oi_usd_g", "short_oi_usd_t"))
+            # Wallet-total unrealized PnL at this bucket (USD). Paired
+            # with total_oi_usd in the trailing CTE to compute per-bucket
+            # RoE, which is then averaged over the lookback.
+            oi_bucket_parts.append(_pp(
+                "sum(pnl)",
+                "sumIf(pnl, token = {sel_token:String})",
+                "unrealized_pnl_usd_g", "unrealized_pnl_usd_t"))
+            oi_bucket_parts = [p for p in oi_bucket_parts if p]
+            ctes.append(
+                "oi_per_bucket AS (\n"
+                "            SELECT bucket, wallet,\n"
+                "                   " + ",\n                   ".join(oi_bucket_parts) + "\n"
+                "            FROM oi_snapshots\n"
+                "            GROUP BY bucket, wallet\n"
+                "        )"
+            )
+            # Trailing: avg per-bucket wallet OI over the lookback ending
+            # at target.d (exclusive). One row per (target.d, wallet).
+            # avg_roe_pct: per-snapshot 100×pnl/OI averaged across
+            # buckets (not the bulk pnl/OI ratio — the user wants the
+            # time-weighted view). Buckets where OI is 0 contribute 0.
+            oi_trail_parts: list[str] = []
+            for col_name in [
+                "total_oi_token", "long_oi_token", "short_oi_token",
+                "total_oi_usd",   "long_oi_usd",   "short_oi_usd",
+            ]:
+                if "global" in scopes_for[SRC_OI]:
+                    oi_trail_parts.append(f"avg(src.{col_name}_g) AS avg_{col_name}_g")
+                if "token" in scopes_for[SRC_OI]:
+                    oi_trail_parts.append(f"avg(src.{col_name}_t) AS avg_{col_name}_t")
+            # Ratio (0.15 = 15%) to match the existing pct convention used
+            # by pnl_pct / unrealized_pnl_pct / total_pnl_pct. The UI's
+            # min/max placeholder ("0.10 = 10%") is the cue for users.
+            if "global" in scopes_for[SRC_OI]:
+                oi_trail_parts.append(
+                    "avg(if(src.total_oi_usd_g > 0, "
+                    "src.unrealized_pnl_usd_g / src.total_oi_usd_g, 0)) "
+                    "AS avg_roe_pct_g")
+            if "token" in scopes_for[SRC_OI]:
+                oi_trail_parts.append(
+                    "avg(if(src.total_oi_usd_t > 0, "
+                    "src.unrealized_pnl_usd_t / src.total_oi_usd_t, 0)) "
+                    "AS avg_roe_pct_t")
+            ctes.append(
+                "oi_trailing AS (\n"
+                "            SELECT target.d AS day, src.wallet AS wallet,\n"
+                "                   " + ",\n                   ".join(oi_trail_parts) + "\n"
+                "            FROM target_days target\n"
+                "            CROSS JOIN oi_per_bucket src\n"
+                "            WHERE toDate(src.bucket) >= target.d - {sel_lookback:UInt32}\n"
+                "              AND toDate(src.bucket) <  target.d\n"
+                "            GROUP BY target.d, src.wallet\n"
+                "        )"
+            )
+
         # ── combined ────────────────────────────────────────────────
         # Spine table is whichever exists; trailing is biggest when it does.
         # Subsequent sources LEFT JOIN onto the spine so wallets missing
@@ -469,10 +772,18 @@ class SmartSelector:
             combined_cols += ["u.day AS day", "u.wallet AS wallet"]
             combined_from = "FROM unrealized_eod u"
             spine_alias = "u"
-        else:
+        elif scopes_for[SRC_SIDED]:
             combined_cols += ["s.day AS day", "s.wallet AS wallet"]
             combined_from = "FROM sided_pnl s"
             spine_alias = "s"
+        elif scopes_for[SRC_VOL]:
+            combined_cols += ["v.day AS day", "v.wallet AS wallet"]
+            combined_from = "FROM vol_trailing v"
+            spine_alias = "v"
+        else:
+            combined_cols += ["o.day AS day", "o.wallet AS wallet"]
+            combined_from = "FROM oi_trailing o"
+            spine_alias = "o"
 
         if scopes_for[SRC_EOD]:
             if spine_alias != "u":
@@ -495,6 +806,38 @@ class SmartSelector:
             if "token" in scopes_for[SRC_SIDED]:
                 combined_cols.append("coalesce(s.long_pnl_t, 0) AS long_pnl_t")
                 combined_cols.append("coalesce(s.short_pnl_t, 0) AS short_pnl_t")
+
+        if scopes_for[SRC_VOL]:
+            if spine_alias != "v":
+                combined_from += (
+                    f"\n            LEFT JOIN vol_trailing v "
+                    f"ON v.day = {spine_alias}.day AND v.wallet = {spine_alias}.wallet")
+            for col_name in [
+                "vol_token", "vol_usd",
+                "long_vol_token", "long_vol_usd",
+                "short_vol_token", "short_vol_usd",
+                "taker_buy_vol_token", "taker_buy_vol_usd",
+                "taker_sell_vol_token", "taker_sell_vol_usd",
+            ]:
+                if "global" in scopes_for[SRC_VOL]:
+                    combined_cols.append(f"coalesce(v.{col_name}_g, 0) AS {col_name}_g")
+                if "token" in scopes_for[SRC_VOL]:
+                    combined_cols.append(f"coalesce(v.{col_name}_t, 0) AS {col_name}_t")
+
+        if scopes_for[SRC_OI]:
+            if spine_alias != "o":
+                combined_from += (
+                    f"\n            LEFT JOIN oi_trailing o "
+                    f"ON o.day = {spine_alias}.day AND o.wallet = {spine_alias}.wallet")
+            for col_name in [
+                "avg_total_oi_token", "avg_long_oi_token", "avg_short_oi_token",
+                "avg_total_oi_usd",   "avg_long_oi_usd",   "avg_short_oi_usd",
+                "avg_roe_pct",
+            ]:
+                if "global" in scopes_for[SRC_OI]:
+                    combined_cols.append(f"coalesce(o.{col_name}_g, 0) AS {col_name}_g")
+                if "token" in scopes_for[SRC_OI]:
+                    combined_cols.append(f"coalesce(o.{col_name}_t, 0) AS {col_name}_t")
 
         ctes.append(
             "combined AS (\n"

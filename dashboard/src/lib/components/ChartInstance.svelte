@@ -116,6 +116,7 @@
   import { fetchOverlayData, type OverlayPoint } from '$lib/components/charts/overlay-fetch';
   import AddOverlayDialog from '$lib/components/AddOverlayDialog.svelte';
   import SmartWalletSelector from '$lib/components/SmartWalletSelector.svelte';
+  import SmartWalletsDialog from '$lib/components/SmartWalletsDialog.svelte';
   import {
     defaultSmartSelectorState,
     smartSelectorCacheKey
@@ -3434,11 +3435,15 @@
     }
     // Smart-money OI: optional "wallets passing filter" line on the
     // secondary (right-side) axis. Independent scale so it doesn't fight
-    // the OI line for vertical space. Integer formatter via formatY2.
+    // the OI line for vertical space. Rendered as a short-dashed amber
+    // line so it reads as supplementary context — the OI lines are the
+    // primary read; the wallet count is a "is the filter too tight?"
+    // sanity check. Integer formatter via formatY2.
     if (instance.kind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)) {
       base.push({
         key: 'wallet_count', label: 'Wallets', color: '#fbbf24',
         axis: 'secondary',
+        dash: '3,3',
         compute: (d: Record<string, number>) => d.wallet_count ?? 0,
       });
     }
@@ -3572,6 +3577,48 @@
   let overlayLoadingIds = $state<Set<string>>(new Set());
   let overlayDialogOpen = $state(false);
   let overlayEditing = $state<ChartOverlay | null>(null);
+
+  // Smart-wallets popover (hl_smart_oi only): triggered by clicking the
+  // wallet-count line. Loads the wallet addresses for the clicked day
+  // and pops up SmartWalletsDialog with copy + Coinglass actions.
+  let walletsDialogOpen = $state(false);
+  let walletsDialogLoading = $state(false);
+  let walletsDialogError = $state<string | null>(null);
+  let walletsDialogList = $state<string[]>([]);
+  let walletsDialogDay = $state('');
+  let walletsFetchCtl: AbortController | null = null;
+
+  async function openSmartWalletsDialog(timeSec: number) {
+    if (instance.kind !== 'hl_smart_oi') return;
+    // Round to UTC day — matches the selector's `target_days` grain.
+    const d = new Date(timeSec * 1000);
+    const dayIso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    walletsDialogDay = dayIso;
+    walletsDialogList = [];
+    walletsDialogError = null;
+    walletsDialogLoading = true;
+    walletsDialogOpen = true;
+    if (walletsFetchCtl) walletsFetchCtl.abort();
+    walletsFetchCtl = new AbortController();
+    try {
+      const selector = JSON.stringify(instance.smartSelector ?? {});
+      const qs = new URLSearchParams({
+        token: instance.token ?? '',
+        day: dayIso,
+        selector,
+      });
+      const res = await fetch(`/api/hyperliquid/smart_wallets?${qs}`, { signal: walletsFetchCtl.signal });
+      if (!res.ok) throw new Error(`smart_wallets ${res.status}`);
+      const body = await res.json();
+      walletsDialogList = (body.wallets ?? []) as string[];
+    } catch (e) {
+      if ((e as DOMException)?.name !== 'AbortError') {
+        walletsDialogError = e instanceof Error ? e.message : String(e);
+      }
+    } finally {
+      walletsDialogLoading = false;
+    }
+  }
 
   let canHaveOverlays = $derived(
     instance.kind !== 'pc'
@@ -5599,6 +5646,7 @@
                  : (oiUseToken ? fmtAmountTooltip : fmtUsdTooltip)}
         formatY2={showWalletCount ? ((v: number) => Math.round(v).toString()) : undefined}
         formatTooltip2={showWalletCount ? ((v: number) => `${Math.round(v)} wallets`) : undefined}
+        onClick={showWalletCount ? ((t: number) => openSmartWalletsDialog(t)) : undefined}
       />
     {:else if instance.kind === 'fr'}
       <SignedBarChart
@@ -5899,6 +5947,16 @@
     onClose={() => { overlayDialogOpen = false; overlayEditing = null; }}
   />
 {/if}
+
+<SmartWalletsDialog
+  open={walletsDialogOpen}
+  wallets={walletsDialogList}
+  loading={walletsDialogLoading}
+  error={walletsDialogError}
+  day={walletsDialogDay}
+  token={instance.token ?? ''}
+  onClose={() => { walletsDialogOpen = false; if (walletsFetchCtl) walletsFetchCtl.abort(); }}
+/>
 
 <style>
   /* Indeterminate progress strip — a coloured segment slides left→right→left
