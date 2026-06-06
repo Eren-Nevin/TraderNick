@@ -2230,3 +2230,19 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_vaults
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (vault, time, wallet);
+
+-- ───────────────────────────────────────────────────────────────────
+-- Saved SmartSelector presets. A "preset" is the full JSON state of a
+-- SmartSelectorState (lookback, top_n, scope, sort_by, criteria[…]) so
+-- the user can save a configuration on one chart and load it on another.
+-- ReplacingMergeTree keyed on name means re-saving with the same name
+-- updates the row (background-merged); the API reads with FINAL so the
+-- latest version is always returned.
+CREATE TABLE IF NOT EXISTS tradernick.smart_selector_presets
+(
+    name        String,
+    config      String,
+    created_at  DateTime DEFAULT now() CODEC(DoubleDelta, ZSTD(3)),
+    updated_at  DateTime DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+) ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY name;

@@ -2,6 +2,7 @@
   import {
     METRIC_CATALOGUE,
     defaultSmartSelectorState,
+    sanitizeSmartSelectorState,
     metricDef,
     type SmartSelectorState,
     type SmartCriterionState,
@@ -85,6 +86,91 @@
     if (def.kind === 'count') return which === 'min' ? '# min' : '';
     return '';
   }
+
+  // ── Saved presets ─────────────────────────────────────────────────
+  // Server-side "criteria groups": the full SmartSelectorState saved
+  // under a name. Loaded into the picker via the Load dropdown; saved
+  // via the Save button with a name prompt. Persisted in
+  // tradernick.smart_selector_presets (ReplacingMergeTree keyed on
+  // name) so re-saving the same name updates the row.
+  type Preset = { name: string; config: string; updated_at?: string };
+  let presets = $state<Preset[]>([]);
+  let presetsLoading = $state(false);
+  let presetsError = $state<string | null>(null);
+  let saveOpen = $state(false);
+  let saveName = $state('');
+  let saving = $state(false);
+
+  async function loadPresetList() {
+    presetsLoading = true;
+    presetsError = null;
+    try {
+      const res = await fetch('/api/hyperliquid/smart_selector_presets');
+      if (!res.ok) throw new Error(`${res.status}`);
+      const body = await res.json();
+      presets = (body.presets ?? []) as Preset[];
+    } catch (e) {
+      presetsError = e instanceof Error ? e.message : String(e);
+    } finally {
+      presetsLoading = false;
+    }
+  }
+
+  function applyPreset(name: string) {
+    if (!name) return;
+    const p = presets.find((x) => x.name === name);
+    if (!p) return;
+    try {
+      const parsed = JSON.parse(p.config) as unknown;
+      const cleaned = sanitizeSmartSelectorState(parsed);
+      onChange(cleaned);
+    } catch (e) {
+      presetsError = `Failed to load "${name}": ${e instanceof Error ? e.message : String(e)}`;
+    }
+  }
+
+  async function savePreset() {
+    const name = saveName.trim();
+    if (!name) return;
+    saving = true;
+    try {
+      const res = await fetch('/api/hyperliquid/smart_selector_presets', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ name, config: JSON.stringify(value) }),
+      });
+      if (!res.ok) throw new Error(await res.text());
+      saveOpen = false;
+      saveName = '';
+      await loadPresetList();
+    } catch (e) {
+      presetsError = e instanceof Error ? e.message : String(e);
+    } finally {
+      saving = false;
+    }
+  }
+
+  async function deletePreset(name: string) {
+    if (!name) return;
+    if (!confirm(`Delete preset "${name}"?`)) return;
+    try {
+      const res = await fetch(`/api/hyperliquid/smart_selector_presets/${encodeURIComponent(name)}`, {
+        method: 'DELETE',
+      });
+      if (!res.ok) throw new Error(await res.text());
+      await loadPresetList();
+    } catch (e) {
+      presetsError = e instanceof Error ? e.message : String(e);
+    }
+  }
+
+  // Lazy-load on first render. $effect runs after mount; the list is
+  // small and the dropdown shows "Loading…" until it lands.
+  $effect(() => {
+    if (presets.length === 0 && !presetsLoading && !presetsError) {
+      loadPresetList();
+    }
+  });
 </script>
 
 <div class="rounded-md border border-zinc-700 bg-zinc-900/40 p-2.5 space-y-2 text-xs">
@@ -115,7 +201,97 @@
       <option value="global">Global</option>
       <option value="token">{tokenLabel ? `Token (${tokenLabel})` : 'Token'}</option>
     </select>
+
+    <!-- Saved presets — load + save + delete. Pushed to the right so
+         the per-chart knobs stay grouped on the left. -->
+    <span class="flex-1"></span>
+    <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Preset</span>
+    <select
+      onchange={(e) => {
+        const sel = (e.target as HTMLSelectElement);
+        applyPreset(sel.value);
+        sel.value = '';  // reset so re-picking the same preset re-fires
+      }}
+      class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 max-w-[10rem] truncate"
+      title="Load a saved criteria group"
+    >
+      <option value="">{presetsLoading ? 'Loading…' : (presets.length === 0 ? '(no presets)' : 'Load…')}</option>
+      {#each presets as p (p.name)}
+        <option value={p.name}>{p.name}</option>
+      {/each}
+    </select>
+    {#if value.criteria.length > 0}
+      <!-- Per-preset delete: only enabled when a preset is currently
+           applied (loosely — we just need a name in scope). Surface as
+           a small ✕ next to the dropdown matching by current selection. -->
+    {/if}
+    <button
+      type="button"
+      onclick={() => { saveOpen = !saveOpen; if (saveOpen) saveName = ''; }}
+      class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded px-2 py-0.5 text-zinc-200 text-[11px]"
+      title="Save the current criteria group as a named preset"
+    >Save</button>
   </div>
+
+  {#if saveOpen}
+    <div class="flex items-center gap-2">
+      <span class="text-zinc-500 text-[10px] uppercase tracking-widest w-12">Name</span>
+      <input
+        type="text"
+        bind:value={saveName}
+        placeholder="e.g. SOL whales ≥ $1M, 30d"
+        maxlength="80"
+        onkeydown={(e) => { if (e.key === 'Enter') savePreset(); if (e.key === 'Escape') saveOpen = false; }}
+        class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100"
+      />
+      <button
+        type="button"
+        onclick={savePreset}
+        disabled={saving || saveName.trim().length === 0}
+        class="bg-emerald-700 hover:bg-emerald-600 disabled:bg-zinc-800 disabled:text-zinc-500 border border-zinc-700 rounded px-2 py-0.5 text-zinc-100 text-[11px]"
+      >{saving ? 'Saving…' : 'Confirm'}</button>
+      <button
+        type="button"
+        onclick={() => { saveOpen = false; saveName = ''; }}
+        class="text-zinc-400 hover:text-zinc-100 px-1.5 py-0.5 text-[11px]"
+      >Cancel</button>
+      {#if presets.some((p) => p.name === saveName.trim())}
+        <span class="text-amber-400 text-[10px]">overwrites existing</span>
+      {/if}
+    </div>
+  {/if}
+
+  {#if presetsError}
+    <div class="text-red-400 text-[11px] flex items-center gap-2">
+      <span>{presetsError}</span>
+      <button type="button" class="text-zinc-500 hover:text-zinc-200" onclick={() => (presetsError = null)}>✕</button>
+    </div>
+  {/if}
+
+  {#if presets.length > 0}
+    <!-- Compact list of saved presets so the user can delete one without
+         needing a separate management page. Hidden when the list is
+         empty; rendered as small chips. -->
+    <div class="flex items-center gap-1.5 flex-wrap text-[10px]">
+      <span class="text-zinc-500 uppercase tracking-widest">Saved:</span>
+      {#each presets as p (p.name)}
+        <span class="inline-flex items-center gap-1 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5">
+          <button
+            type="button"
+            class="text-zinc-200 hover:text-emerald-300"
+            title="Load this preset"
+            onclick={() => applyPreset(p.name)}
+          >{p.name}</button>
+          <button
+            type="button"
+            class="text-zinc-500 hover:text-red-300 leading-none"
+            title="Delete this preset"
+            onclick={() => deletePreset(p.name)}
+          >✕</button>
+        </span>
+      {/each}
+    </div>
+  {/if}
 
   <div class="space-y-1">
     {#each value.criteria as c, i (i)}

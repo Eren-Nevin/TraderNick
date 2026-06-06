@@ -38,6 +38,12 @@ from typing import Any, Literal
 SRC_TRADE_HISTORY = "trade_history"
 SRC_EOD = "eod"
 SRC_SIDED = "sided"
+# HIP-3 sub-asset tokens carry a `<namespace>:` prefix (e.g. `xyz:FOO`).
+# We exclude them from every wallet-ranking calculation so PnL / volume /
+# OI from speculative sub-assets can't game the selector. The chart-
+# display routes (smart_oi, oi_split, …) pin a specific token from the
+# curated INGEST_TOKENS list, so they implicitly exclude HIP-3.
+HIP3_EXCLUDE = "AND position(token, ':') = 0"
 # Average wallet OI (size in tokens + USD notional, total/long/short) over
 # the trailing lookback. Reads hl_position_history_1h (one row per hourly
 # bucket per (wallet, token, side)) — every hour in the window contributes
@@ -439,6 +445,7 @@ class SmartSelector:
                 f"            FROM tradernick.hl_trade_history\n"
                 f"            WHERE time >= {{sel_since:DateTime}} - INTERVAL {{sel_lookback:UInt32}} DAY\n"
                 f"              AND time <  {{sel_until:DateTime}}\n"
+                f"              {HIP3_EXCLUDE}\n"
                 f"            GROUP BY d, wallet\n"
                 f"        )"
             )
@@ -492,6 +499,7 @@ class SmartSelector:
                 "                FROM tradernick.hl_position_history_eod_wallet\n"
                 "                WHERE day >= toDate({sel_since:DateTime}) - INTERVAL 1 DAY\n"
                 "                  AND day <  toDate({sel_until:DateTime})\n"
+                f"                  {HIP3_EXCLUDE}\n"
                 "                GROUP BY snap_day, wallet, token, side\n"
                 "            )\n"
                 "            GROUP BY day, wallet\n"
@@ -513,6 +521,7 @@ class SmartSelector:
                 "            FROM tradernick.hl_fills_pnl_daily\n"
                 "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL {sel_lookback:UInt32} DAY\n"
                 "              AND day <  toDate({sel_until:DateTime})\n"
+                f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY day, wallet, side\n"
                 "        )"
             )
@@ -600,6 +609,7 @@ class SmartSelector:
                 "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL {sel_lookback:UInt32} DAY\n"
                 "              AND day <  toDate({sel_until:DateTime})\n"
                 f"{vol_inner_token_filter}"
+                f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY day, wallet\n"
                 "        )"
             )
@@ -656,6 +666,7 @@ class SmartSelector:
                 "            WHERE bucket >= {sel_since:DateTime} - INTERVAL {sel_lookback:UInt32} DAY\n"
                 "              AND bucket <  {sel_until:DateTime}\n"
                 f"{oi_inner_token_filter}"
+                f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY bucket, token, side, wallet\n"
                 "        )"
             )

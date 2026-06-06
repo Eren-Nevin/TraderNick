@@ -528,6 +528,87 @@ async def smart_wallets(request):
     })
 
 
+# ── SmartSelector presets ────────────────────────────────────────────
+# Persistence layer for "criteria groups" — a saved SmartSelectorState
+# (lookback / top_n / scope / sort_by / criteria[…]) under a name. Lets
+# the user dial in a filter on one chart and reuse it elsewhere.
+
+_PRESET_NAME_RE = __import__("re").compile(r"^[A-Za-z0-9._\- ]{1,80}$")
+
+
+@bp.get("/hyperliquid/smart_selector_presets")
+async def smart_selector_presets_list(request):
+    """List all saved SmartSelector presets. Returns
+    [{name, config, updated_at}], sorted alphabetically by name. Cheap —
+    no JOIN, no FINAL on a multi-row read (FINAL still adds a merge pass
+    over the table; small table, no problem). The frontend dropdown
+    consumes this directly."""
+    ch = await client()
+    rows = await ch.query(
+        "SELECT name, config, toString(updated_at) AS updated_at "
+        "FROM tradernick.smart_selector_presets FINAL "
+        "ORDER BY name")
+    return response.json({
+        "presets": [
+            {"name": r[0], "config": r[1], "updated_at": r[2]}
+            for r in rows.result_rows
+        ],
+    })
+
+
+@bp.post("/hyperliquid/smart_selector_presets")
+async def smart_selector_presets_save(request):
+    """Upsert a preset. Body: {name, config}. `config` is the JSON-
+    encoded SmartSelectorState — we validate it round-trips through
+    SmartSelector.from_json (with a placeholder token to satisfy
+    token-scope criteria) so we don't persist garbage.
+    ReplacingMergeTree dedupes on `name`; the inserted row carries
+    `updated_at = now()`."""
+    body = request.json or {}
+    name = body.get("name")
+    config = body.get("config")
+    if not isinstance(name, str) or not _PRESET_NAME_RE.match(name):
+        return response.json({"error": "name must be 1-80 chars [A-Za-z0-9._- ]"}, status=400)
+    if not isinstance(config, str):
+        return response.json({"error": "config must be a JSON string"}, status=400)
+    # Validate config can be parsed as a SmartSelectorState. Use a
+    # placeholder token so token-scope criteria don't trip the "no token
+    # supplied" check.
+    try:
+        SmartSelector.from_json(config, token="__validate__")
+    except ValueError as e:
+        return response.json({"error": f"invalid selector config: {e}"}, status=400)
+    ch = await client()
+    # ch.command() doesn't accept VALUES rows the way ch.insert() does —
+    # use the typed insert helper instead. ReplacingMergeTree dedupes
+    # on `name` so repeated saves overwrite cleanly (background merge).
+    await ch.insert(
+        "smart_selector_presets",
+        [(name, config)],
+        column_names=["name", "config"],
+    )
+    return response.json({"ok": True, "name": name})
+
+
+@bp.delete("/hyperliquid/smart_selector_presets/<name>")
+async def smart_selector_presets_delete(request, name: str):
+    """Remove a preset by name. ALTER … DELETE is the standard
+    MergeTree-family delete; runs as a background mutation but the row
+    becomes invisible immediately. No-op if the name doesn't exist."""
+    # Sanic doesn't auto-decode dynamic path params, so a name with a
+    # space arrives as "BTC%20whales". Decode before the regex check.
+    from urllib.parse import unquote
+    name = unquote(name)
+    if not _PRESET_NAME_RE.match(name):
+        return response.json({"error": "invalid name"}, status=400)
+    ch = await client()
+    await ch.command(
+        "DELETE FROM tradernick.smart_selector_presets "
+        "WHERE name = {name:String}",
+        parameters={"name": name})
+    return response.json({"ok": True, "name": name})
+
+
 @bp.get("/hyperliquid/oi_split")
 @throttled("heavy")
 async def oi_split(request):
