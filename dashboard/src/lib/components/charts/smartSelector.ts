@@ -106,7 +106,7 @@ export interface SmartCriterionState {
 }
 
 export interface SmartSelectorState {
-  lookback: number;          // 1..60
+  lookback: number;          // 1..180
   top_n: number;             // 1..500
   scope: 'global' | 'token';
   sort_by: SmartMetricKey;
@@ -133,7 +133,7 @@ export function sanitizeSmartSelectorState(raw: unknown): SmartSelectorState {
   if (!raw || typeof raw !== 'object') return d;
   const r = raw as Record<string, unknown>;
   const out: SmartSelectorState = { ...d };
-  if (typeof r.lookback === 'number' && r.lookback >= 1 && r.lookback <= 60) {
+  if (typeof r.lookback === 'number' && r.lookback >= 1 && r.lookback <= 180) {
     out.lookback = Math.round(r.lookback);
   }
   if (typeof r.top_n === 'number' && r.top_n >= 1 && r.top_n <= 500) {

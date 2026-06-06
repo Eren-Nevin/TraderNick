@@ -9,17 +9,19 @@ import { defaultSmartSelectorState, sanitizeSmartSelectorState } from './smartSe
 
 export type MAType = 'sma' | 'ema' | 'wma';
 
-// Default chart window per interval — the full ClickHouse TTL (60 days)
-// so every chart shows every row we have. Users zoom in if they want
-// finer detail; we don't pre-truncate.
+// Default chart window per interval — tracks the ClickHouse TTL (180
+// days). 1m / 5m stay tighter (30d) because painting 30×1440 minute
+// candles is already heavy; longer history at minute granularity is
+// rarely useful and the user can switch to a coarser interval when
+// they want more history.
 export const LOOKBACK_DAYS: Record<Interval, number> = {
-  '1m': 60,
-  '5m': 60,
-  '15m': 60,
-  '30m': 60,
-  '1h': 60,
-  '4h': 60,
-  '1d': 60
+  '1m':  30,
+  '5m':  30,
+  '15m': 180,
+  '30m': 180,
+  '1h':  180,
+  '4h':  180,
+  '1d':  180
 };
 
 export function lookbackWindow(iv: Interval): { since: Date; until: Date } {

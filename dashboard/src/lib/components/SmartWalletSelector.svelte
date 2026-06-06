@@ -93,7 +93,7 @@
     <span class="w-px h-4 bg-zinc-800"></span>
     <span class="text-zinc-400">Lookback</span>
     <input
-      type="number" min="1" max="60" step="1"
+      type="number" min="1" max="180" step="1"
       value={value.lookback}
       onchange={(e) => set({ lookback: Math.round(Number((e.target as HTMLInputElement).value) || 7) })}
       class="w-14 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100"

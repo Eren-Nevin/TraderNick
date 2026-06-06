@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_ohlcv_1m
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time)
-TTL time + INTERVAL 60 DAY;
+TTL time + INTERVAL 180 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_raw_trades
 (
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_raw_trades
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, id)
-TTL toDateTime(time) + INTERVAL 60 DAY;
+TTL toDateTime(time) + INTERVAL 180 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.transfers
 (
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS tradernick.transfers
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (chain, token, time, sender, receiver, amount, tx_id, log_index)
-TTL time + INTERVAL 60 DAY;
+TTL time + INTERVAL 180 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_open_interest
 (
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_open_interest
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time)
-TTL time + INTERVAL 60 DAY;
+TTL time + INTERVAL 180 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_long_short_ratios
 (
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_long_short_ratios
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time)
-TTL time + INTERVAL 60 DAY;
+TTL time + INTERVAL 180 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_funding_rate
 (
@@ -92,7 +92,7 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_funding_rate
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time)
-TTL time + INTERVAL 60 DAY;
+TTL time + INTERVAL 180 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.ingestion_jobs
 (
@@ -108,7 +108,7 @@ CREATE TABLE IF NOT EXISTS tradernick.ingestion_jobs
 )
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (job_id)
-TTL updated_at + INTERVAL 60 DAY;
+TTL updated_at + INTERVAL 180 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Per-stream live ingestion tracking.
@@ -282,7 +282,7 @@ CREATE TABLE IF NOT EXISTS tradernick.exchange_flow_minute
 ENGINE = SummingMergeTree
 PARTITION BY toYYYYMM(time)
 ORDER BY (direction, exchange, chain, token, time)
-TTL time + INTERVAL 60 DAY;
+TTL time + INTERVAL 180 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.mv_exchange_flow
 TO tradernick.exchange_flow_minute AS
@@ -1854,7 +1854,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_ohlcv_1m
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time)
-TTL time + INTERVAL 60 DAY;
+TTL time + INTERVAL 180 DAY;
 
 -- Public trade flow (one row per matched trade). buyer_wallet + seller_wallet
 -- visible because HL is fully on-chain.
@@ -1873,7 +1873,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_trades
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, id)
-TTL toDateTime(time) + INTERVAL 60 DAY;
+TTL toDateTime(time) + INTERVAL 180 DAY;
 
 -- Individual fill records (one per wallet per side). Highest-volume HL table
 -- — same TTL as binance_raw_trades. `dir` distinguishes Open Long / Close
@@ -1903,7 +1903,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_fills
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, tid, wallet)
-TTL toDateTime(time) + INTERVAL 60 DAY;
+TTL toDateTime(time) + INTERVAL 180 DAY;
 
 -- Per-wallet funding events. amount is the funding paid by this wallet for
 -- its position_amount in this token at this rate. Sign convention: positive
@@ -1922,7 +1922,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_funding
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, wallet)
-TTL toDateTime(time) + INTERVAL 60 DAY;
+TTL toDateTime(time) + INTERVAL 180 DAY;
 
 -- Position snapshots — one row per (wallet, token) at each 5m tick (carry-
 -- forward: every currently-open position emits a row every snapshot).
@@ -1950,7 +1950,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, side, wallet)
-TTL toDateTime(time) + INTERVAL 60 DAY;
+TTL toDateTime(time) + INTERVAL 180 DAY;
 
 -- 15-minute rollup of hl_position_history. Source emits a 5m carry-forward
 -- snapshot per (wallet, token, side); /oi_split and /unrealized_pnl both do
@@ -1977,7 +1977,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_15m
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(bucket)
 ORDER BY (token, bucket, side, wallet)
-TTL bucket + INTERVAL 60 DAY;
+TTL bucket + INTERVAL 180 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_15m_mv
 TO tradernick.hl_position_history_15m
@@ -2011,7 +2011,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_1h
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(bucket)
 ORDER BY (token, bucket, side, wallet)
-TTL bucket + INTERVAL 60 DAY;
+TTL bucket + INTERVAL 180 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_1h_mv
 TO tradernick.hl_position_history_1h
@@ -2047,13 +2047,13 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_eod_wallet
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (day, wallet, token, side)
--- 61 not 60: TTL with `day + INTERVAL N DAY` is Date-typed and expires
+-- 181 not 180: TTL with `day + INTERVAL N DAY` is Date-typed and expires
 -- at the resulting date's MIDNIGHT (00:00:00), so on the day a row hits
--- its 60-day mark anything written that day before midnight passes was
+-- its 180-day mark anything written that day before midnight passes was
 -- already eligible for the next TTL merge — the eod MV silently lost its
 -- youngest row on every backfill. One extra day of padding sidesteps the
 -- date/datetime granularity mismatch without further code changes.
-TTL day + INTERVAL 61 DAY;
+TTL day + INTERVAL 181 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_eod_wallet_mv
 TO tradernick.hl_position_history_eod_wallet
@@ -2096,13 +2096,13 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_fills_pnl_daily
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (day, wallet, token, side)
--- 61 not 60: TTL with `day + INTERVAL N DAY` is Date-typed and expires
+-- 181 not 180: TTL with `day + INTERVAL N DAY` is Date-typed and expires
 -- at the resulting date's MIDNIGHT (00:00:00), so on the day a row hits
--- its 60-day mark anything written that day before midnight passes was
+-- its 180-day mark anything written that day before midnight passes was
 -- already eligible for the next TTL merge — the eod MV silently lost its
 -- youngest row on every backfill. One extra day of padding sidesteps the
 -- date/datetime granularity mismatch without further code changes.
-TTL day + INTERVAL 61 DAY;
+TTL day + INTERVAL 181 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_fills_pnl_daily_mv
 TO tradernick.hl_fills_pnl_daily
@@ -2154,7 +2154,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_fills_vol_daily
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (day, wallet, token, position_side)
-TTL day + INTERVAL 61 DAY;
+TTL day + INTERVAL 181 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_fills_vol_daily_mv
 TO tradernick.hl_fills_vol_daily
@@ -2196,7 +2196,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (wallet, token, time)
-TTL toDateTime(time) + INTERVAL 60 DAY;
+TTL toDateTime(time) + INTERVAL 180 DAY;
 
 -- Bridge in/out (USDC on Arbitrum ↔ HL). No TTL — historical capital
 -- migration is a useful reference. direction = 'deposit' (Arb→HL) or

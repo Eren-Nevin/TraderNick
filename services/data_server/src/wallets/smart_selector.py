@@ -254,8 +254,8 @@ class SmartSelector:
             raise ValueError("selector must be a JSON object")
 
         lookback = obj.get("lookback")
-        if not isinstance(lookback, int) or not (1 <= lookback <= 60):
-            raise ValueError("selector.lookback must be int in [1, 60]")
+        if not isinstance(lookback, int) or not (1 <= lookback <= 180):
+            raise ValueError("selector.lookback must be int in [1, 180]")
         top_n = obj.get("top_n")
         if not isinstance(top_n, int) or not (1 <= top_n <= 500):
             raise ValueError("selector.top_n must be int in [1, 500]")
