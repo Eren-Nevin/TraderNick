@@ -190,7 +190,21 @@ async def basic_auth(request):
 
 @app.before_server_start
 async def _startup(app_, _loop):
-    app_.ctx.http = httpx.AsyncClient(timeout=httpx.Timeout(15.0))
+    # Gap-calendar calls against transfers / hl_fills take ~4s solo on a
+    # 971M-row table and >15s under 5-way concurrency from a single
+    # FillBoardSection mount. 60s leaves headroom; the semaphore below
+    # caps actual concurrency so we don't have to rely on it.
+    app_.ctx.http = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
+    # Per-provider semaphore for /gaps/calendar forwards. The dashboard
+    # fires one fetch per FillBoard simultaneously on mount, which
+    # blasts the backfill service with N concurrent gap_detection
+    # passes — and gap_detection runs 3 large CH scans per call. The
+    # semaphore queues calls per provider (max 2 inflight) so CH
+    # contention stays bounded and the 4th/5th request returns at
+    # ~2× single latency instead of 5× under uncoordinated load.
+    app_.ctx.gap_calendar_semaphores = {
+        provider: asyncio.Semaphore(2) for provider in PROVIDER_URLS
+    }
     log.info("admin_server up. providers=%s legacy=%s",
              {k: bool(v["live"]) for k, v in PROVIDER_URLS.items()},
              LEGACY_INGESTION_URL or "<unset>")
@@ -418,7 +432,14 @@ async def create_backfill(request, job_type: str):
 @app.get("/gaps/calendar")
 async def get_gaps_calendar(request):
     """Per-event coverage calendar — routes to the owning provider's
-    backfill service based on the event_key's provider."""
+    backfill service based on the event_key's provider.
+
+    Wrapped in a per-provider semaphore: when a FillBoardSection mounts
+    it fires one fetch per event (5–8) concurrently, and the underlying
+    CH scans on the transfers / hl_fills tables don't parallelise well.
+    The semaphore caps inflight calls per provider so the 4th/5th
+    request returns at ~2× single latency rather than starving every
+    request to a 60s timeout."""
     event_key = request.args.get("event")
     if not event_key:
         return response.json({"error": "missing required ?event=..."}, status=400)
@@ -437,7 +458,12 @@ async def get_gaps_calendar(request):
             status=502,
         )
     qs = request.query_string
-    return await _forward(request, "GET", url, f"/gaps/calendar?{qs}")
+    sem = request.app.ctx.gap_calendar_semaphores.get(spec.provider)
+    if sem is None:
+        # Unknown provider — let it through unthrottled rather than 500.
+        return await _forward(request, "GET", url, f"/gaps/calendar?{qs}")
+    async with sem:
+        return await _forward(request, "GET", url, f"/gaps/calendar?{qs}")
 
 
 @app.get("/gaps")
