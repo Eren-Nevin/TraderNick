@@ -478,3 +478,34 @@ services:
     ports:
       - "10000:3000"
     restart: unless-stopped
+
+  # Horatio-parity read API backed by ClickHouse. Read-only — never
+  # writes ingestion tables, never queues jobs. Wallet writes and
+  # job/admin calls forward to admin_server. Snapshots persist to a
+  # bind-mounted directory so they survive container restarts.
+  #
+  # Phase 0: skeleton only (just /health). Route handlers land in
+  # Phase 1. Bringing this service up MUST NOT restart any other
+  # container — it has no `depends_on` chain back into the running
+  # ingestion stack beyond `clickhouse` (which is already healthy).
+  data_provider:
+    build: ./services/data_provider
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      SNAPSHOTS_DIR: /data/snapshots
+      # admin_server is the canonical target for wallet writes + job calls,
+      # but Phase E (per-provider split) hasn't cut over yet, so the
+      # monolith `ingestion` still owns these endpoints. Override via .env
+      # once admin_server is the live gateway.
+      ADMIN_SERVER_URL: ${DATA_PROVIDER_ADMIN_URL:-http://ingestion:8000}
+    ports:
+      - "10005:8000"
+    volumes:
+      - ./data/snapshots:/data/snapshots
+    restart: unless-stopped

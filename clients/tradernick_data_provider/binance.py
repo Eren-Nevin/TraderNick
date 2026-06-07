@@ -1,0 +1,228 @@
+from __future__ import annotations
+
+from typing import TYPE_CHECKING
+
+import httpx
+import pyarrow as pa
+
+from ._http import fetch_table
+from ._query import CacheableQuery
+
+if TYPE_CHECKING:
+    from typing import Self
+
+
+class RawTradesQuery(CacheableQuery):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
+        super().__init__(session, base_url, {"token": token})
+
+    def add_symbol(self, enabled: bool = True) -> Self:
+        self._body["add_symbol"] = enabled
+        return self
+
+    def with_id(self) -> Self:
+        """Include the trade id column in results (excluded by default)."""
+        self._body["with_id"] = True
+        return self
+
+    async def _fetch_table(self) -> pa.Table:
+        return await fetch_table(self._session, self._base_url + "/binance/raw_trades/read", self._body)
+
+
+class OHLCVQuery(CacheableQuery):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str, window: str):
+        super().__init__(session, base_url, {"token": token, "window": window})
+
+    async def _fetch_table(self) -> pa.Table:
+        return await fetch_table(self._session, self._base_url + "/binance/ohlcv/read", self._body)
+
+
+class BookDepthQuery(CacheableQuery):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
+        super().__init__(session, base_url, {"token": token})
+
+    async def _fetch_table(self) -> pa.Table:
+        return await fetch_table(
+            self._session, self._base_url + "/binance/book_depth/read", self._body
+        )
+
+
+class OpenInterestQuery(CacheableQuery):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
+        super().__init__(session, base_url, {"token": token})
+
+    async def _fetch_table(self) -> pa.Table:
+        return await fetch_table(
+            self._session, self._base_url + "/binance/open_interest/read", self._body
+        )
+
+
+class FundingRateQuery(CacheableQuery):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
+        super().__init__(session, base_url, {"token": token})
+
+    async def _fetch_table(self) -> pa.Table:
+        return await fetch_table(
+            self._session, self._base_url + "/binance/funding_rate/read", self._body
+        )
+
+
+class LongShortRatiosQuery(CacheableQuery):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
+        super().__init__(session, base_url, {"token": token})
+
+    async def _fetch_table(self) -> pa.Table:
+        return await fetch_table(
+            self._session, self._base_url + "/binance/long_short_ratios/read", self._body
+        )
+
+
+class BinanceNamespace:
+    def __init__(self, session: httpx.AsyncClient, base_url: str):
+        self._session = session
+        self._base_url = base_url
+
+    def raw_trades(self, token: str) -> RawTradesQuery:
+        return RawTradesQuery(self._session, self._base_url, token)
+
+    def ohlcv(self, token: str, window: str) -> OHLCVQuery:
+        return OHLCVQuery(self._session, self._base_url, token, window)
+
+    def book_depth(self, token: str) -> BookDepthQuery:
+        return BookDepthQuery(self._session, self._base_url, token)
+
+    def open_interest(self, token: str) -> OpenInterestQuery:
+        return OpenInterestQuery(self._session, self._base_url, token)
+
+    def funding_rate(self, token: str) -> FundingRateQuery:
+        return FundingRateQuery(self._session, self._base_url, token)
+
+    def long_short_ratios(self, token: str) -> LongShortRatiosQuery:
+        return LongShortRatiosQuery(self._session, self._base_url, token)
+
+    async def flush_raw_trades(self, token: str | None = None) -> None:
+        body = {}
+        if token is not None:
+            body["token"] = token
+        await self._session.post(self._base_url + "/binance/raw_trades/flush", json=body)
+
+    async def flush_ohlcv(self, token: str | None = None, window: str | None = None) -> None:
+        body = {}
+        if token is not None:
+            body["token"] = token
+        if window is not None:
+            body["window"] = window
+        await self._session.post(self._base_url + "/binance/ohlcv/flush", json=body)
+
+    async def flush_exchange(
+        self, endpoint: str | None = None, token: str | None = None
+    ) -> None:
+        body = {}
+        if endpoint is not None:
+            body["endpoint"] = endpoint
+        if token is not None:
+            body["token"] = token
+        await self._session.post(self._base_url + "/binance/exchange/flush", json=body)
+
+    async def compact_raw_trades(self, token: str | None = None) -> None:
+        body = {}
+        if token is not None:
+            body["token"] = token
+        await self._session.post(self._base_url + "/binance/raw_trades/compact", json=body)
+
+    async def compact_ohlcv(self, token: str | None = None, window: str | None = None) -> None:
+        body = {}
+        if token is not None:
+            body["token"] = token
+        if window is not None:
+            body["window"] = window
+        await self._session.post(self._base_url + "/binance/ohlcv/compact", json=body)
+
+    async def compact_exchange(
+        self, endpoint: str | None = None, token: str | None = None
+    ) -> None:
+        body = {}
+        if endpoint is not None:
+            body["endpoint"] = endpoint
+        if token is not None:
+            body["token"] = token
+        await self._session.post(self._base_url + "/binance/exchange/compact", json=body)
+
+
+class HyperliquidQuery(CacheableQuery):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, path: str):
+        super().__init__(session, base_url, {})
+        self._hl_path = path
+
+    def tokens(self, *symbols: str) -> Self:
+        """Filter by HL token symbol(s). Accepts one or more."""
+        self._body["tokens"] = list(symbols)
+        return self
+
+    def wallets(self, *addresses: str) -> Self:
+        """Filter by wallet address(es). Accepts one or more."""
+        self._body["wallets"] = list(addresses)
+        return self
+
+    def window(self, size: str) -> Self:
+        """Bucket size for trade_history/position_history/ohlcv (e.g. ``'5m'``, ``'1h'``)."""
+        self._body["window"] = size
+        return self
+
+    def per_token(self, flag: bool = True) -> Self:
+        self._body["per_token"] = flag
+        return self
+
+    def skip_hip3(self, flag: bool = True) -> Self:
+        """Exclude HIP3 (stock/commodity) markets when ``True``; server default when omitted."""
+        self._body["skip_hip3"] = flag
+        return self
+
+    def market_type(self, t: str) -> Self:
+        self._body["market_type"] = t
+        return self
+
+    def limit(self, n: int) -> Self:
+        self._body["limit"] = n
+        return self
+
+    async def _fetch_table(self) -> pa.Table:
+        return await fetch_table(self._session, self._base_url + self._hl_path, self._body)
+
+
+class HyperliquidNamespace:
+    def __init__(self, session: httpx.AsyncClient, base_url: str):
+        self._session = session
+        self._base_url = base_url
+
+    def fills(self) -> HyperliquidQuery:
+        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/fills/read")
+
+    def trades(self) -> HyperliquidQuery:
+        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/trades/read")
+
+    def ohlcv(self) -> HyperliquidQuery:
+        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/ohlcv/read")
+
+    def funding(self) -> HyperliquidQuery:
+        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/funding/read")
+
+    def transfers(self) -> HyperliquidQuery:
+        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/transfers/read")
+
+    def vaults(self) -> HyperliquidQuery:
+        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/vaults/read")
+
+    def sends(self) -> HyperliquidQuery:
+        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/sends/read")
+
+    def spot_transfers(self) -> HyperliquidQuery:
+        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/spot_transfers/read")
+
+    def trade_history(self) -> HyperliquidQuery:
+        """Pre-aggregated PnL/volume per wallet-token-window. Requires ``tokens`` or ``wallets``."""
+        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/trade_history/read")
+
+    def position_history(self) -> HyperliquidQuery:
+        """Carry-forward position snapshots per window. Requires ``tokens`` or ``wallets``."""
+        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/position_history/read")
