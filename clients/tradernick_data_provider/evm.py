@@ -7,7 +7,9 @@ from __future__ import annotations
 
 import httpx
 
+from .aerodrome import AerodromeNamespace
 from .erc20 import ERC20Namespace, ERC20TransfersQuery
+from .morpho import MorphoNamespace
 from .protocols import (
     AaveNamespace,
     LidoNamespace,
@@ -17,11 +19,17 @@ from .protocols import (
     ThresholdNamespace,
     UniswapNamespace,
 )
+from .spark import SparkNamespace
 
 
 class EvmNamespace:
-    """EVM chain: ``client.evm.{erc20,aave,uniswap,lido,stader,threshold}``
-    plus ``client.evm.native_transfers()``."""
+    """EVM chain: ``client.evm.{erc20, aave, uniswap, lido, stader, threshold,
+    spark, morpho, aerodrome}`` plus ``client.evm.native_transfers()``.
+
+    Spark / Morpho / Aerodrome are TN-exclusive — they're not in Horatio's
+    surface but live under the same `evm.*` namespace so the rest of the
+    API stays consistent. Existing horatio-compatible code is unaffected
+    (the new namespaces are additive)."""
 
     erc20: ERC20Namespace
     aave: AaveNamespace
@@ -29,6 +37,9 @@ class EvmNamespace:
     lido: LidoNamespace
     stader: StaderNamespace
     threshold: ThresholdNamespace
+    spark: SparkNamespace
+    morpho: MorphoNamespace
+    aerodrome: AerodromeNamespace
 
     def __init__(self, session: httpx.AsyncClient, base_url: str):
         self._session = session
@@ -39,6 +50,9 @@ class EvmNamespace:
         self.lido = LidoNamespace(session, base_url)
         self.stader = StaderNamespace(session, base_url)
         self.threshold = ThresholdNamespace(session, base_url)
+        self.spark = SparkNamespace(session, base_url)
+        self.morpho = MorphoNamespace(session, base_url)
+        self.aerodrome = AerodromeNamespace(session, base_url)
         self._native = NativeNamespace(session, base_url)
 
     def native_transfers(self) -> NativeTransfersQuery:

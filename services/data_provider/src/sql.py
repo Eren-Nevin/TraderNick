@@ -963,3 +963,377 @@ def evm_lido(
         ORDER BY time
     """
     return sql, params
+
+
+# ===========================================================================
+# Spark — TN-exclusive. Schema mirrors AAVE 1:1; we expose the same six
+# events with identical projections so consumers can swap `evm.aave.*` for
+# `evm.spark.*` without re-shaping their downstream code.
+# ===========================================================================
+
+SPARK_EVENT_TABLE = {
+    'deposit':     'spark_deposits',
+    'withdraw':    'spark_withdrawals',
+    'borrow':      'spark_borrows',
+    'repay':       'spark_repays',
+    'flashloan':   'spark_flashloans',
+    'liquidation': 'spark_liquidations',
+}
+
+# Spark schemas are byte-identical to AAVE — reuse the projection map.
+_SPARK_PROJECTION = _AAVE_PROJECTION
+
+
+def evm_spark(
+    event: str, network: str, since: str, until: str,
+    *, involving: str | None = None,
+    exclude_involving: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    table = SPARK_EVENT_TABLE.get(event)
+    if not table:
+        raise ValueError(f"Unknown Spark event: {event!r}. Valid: {list(SPARK_EVENT_TABLE)}")
+    chain = chain_from_network(network)
+    if chain is None:
+        return None, None
+    spec = _SPARK_PROJECTION[event]
+    actor_col = 'owner' if event == 'liquidation' else 'user'
+    params: dict[str, Any] = {
+        'chain': chain,
+        'since': _ts_to_ch(since), 'until': _ts_to_ch(until),
+    }
+    where = [
+        'chain = {chain:String}',
+        'time >= toDateTime({since:String})',
+        'time <  toDateTime({until:String})',
+    ]
+    if involving:
+        params['involving'] = involving.lower()
+        where.append(f'lower({actor_col}) = {{involving:String}}')
+    if exclude_involving:
+        params['exclude_involving'] = exclude_involving.lower()
+        where.append(f'lower({actor_col}) != {{exclude_involving:String}}')
+    sql = f"""
+        SELECT {_projection_clause(spec)}
+        FROM tradernick.{table} FINAL
+        WHERE {' AND '.join(where)}
+        ORDER BY time
+    """
+    return sql, params
+
+
+# ===========================================================================
+# Morpho — TN-exclusive. Different model from AAVE/Spark: per-market lending
+# keyed by `market_id`, with `assets` + `shares` instead of a single
+# `amount`. Liquidations carry repaid/seized + bad-debt vectors.
+# ===========================================================================
+
+MORPHO_EVENT_TABLE = {
+    'supply':            'morpho_supplies',
+    'withdraw':          'morpho_withdrawals',
+    'borrow':            'morpho_borrows',
+    'repay':             'morpho_repays',
+    'supply_collateral': 'morpho_supply_collaterals',
+    'withdraw_collateral': 'morpho_withdraw_collaterals',
+    'liquidation':       'morpho_liquidations',
+}
+
+_MORPHO_PROJECTION = {
+    'supply': [
+        'block_number', 'market_id', 'caller', 'on_behalf',
+        'token', 'assets', 'shares', ('_TIME_MS', 'time'),
+    ],
+    'withdraw': [
+        'block_number', 'market_id', 'caller', 'on_behalf', 'receiver',
+        'token', 'assets', 'shares', ('_TIME_MS', 'time'),
+    ],
+    'borrow': [
+        'block_number', 'market_id', 'caller', 'on_behalf', 'receiver',
+        'token', 'assets', 'shares', ('_TIME_MS', 'time'),
+    ],
+    'repay': [
+        'block_number', 'market_id', 'caller', 'on_behalf',
+        'token', 'assets', 'shares', ('_TIME_MS', 'time'),
+    ],
+    'supply_collateral': [
+        'block_number', 'market_id', 'caller', 'on_behalf',
+        'token', 'assets', ('_TIME_MS', 'time'),
+    ],
+    'withdraw_collateral': [
+        'block_number', 'market_id', 'caller', 'on_behalf', 'receiver',
+        'token', 'assets', ('_TIME_MS', 'time'),
+    ],
+    'liquidation': [
+        'block_number', 'market_id', 'caller', 'borrower',
+        'loan_token', 'collateral_token',
+        'repaid_assets', 'repaid_shares', 'seized_assets',
+        'bad_debt_assets', 'bad_debt_shares',
+        ('_TIME_MS', 'time'),
+    ],
+}
+
+# Per-event actor column for `involving` filter — joins against caller +
+# (for variants with a receiver) the receiver column too.
+_MORPHO_ACTOR_COLS = {
+    'supply':              ['caller', 'on_behalf'],
+    'withdraw':            ['caller', 'on_behalf', 'receiver'],
+    'borrow':              ['caller', 'on_behalf', 'receiver'],
+    'repay':               ['caller', 'on_behalf'],
+    'supply_collateral':   ['caller', 'on_behalf'],
+    'withdraw_collateral': ['caller', 'on_behalf', 'receiver'],
+    'liquidation':         ['caller', 'borrower'],
+}
+
+
+def evm_morpho(
+    event: str, network: str, since: str, until: str,
+    *, involving: str | None = None,
+    exclude_involving: str | None = None,
+    market_id: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    table = MORPHO_EVENT_TABLE.get(event)
+    if not table:
+        raise ValueError(f"Unknown Morpho event: {event!r}. Valid: {list(MORPHO_EVENT_TABLE)}")
+    chain = chain_from_network(network)
+    if chain is None:
+        return None, None
+    spec = _MORPHO_PROJECTION[event]
+    actors = _MORPHO_ACTOR_COLS[event]
+    params: dict[str, Any] = {
+        'chain': chain,
+        'since': _ts_to_ch(since), 'until': _ts_to_ch(until),
+    }
+    where = [
+        'chain = {chain:String}',
+        'time >= toDateTime({since:String})',
+        'time <  toDateTime({until:String})',
+    ]
+    if market_id:
+        params['market_id'] = market_id.lower()
+        where.append('lower(market_id) = {market_id:String}')
+    if involving:
+        params['involving'] = involving.lower()
+        clauses = [f'lower({c}) = {{involving:String}}' for c in actors]
+        where.append('(' + ' OR '.join(clauses) + ')')
+    if exclude_involving:
+        params['exclude_involving'] = exclude_involving.lower()
+        clauses = [f'lower({c}) != {{exclude_involving:String}}' for c in actors]
+        where.append('(' + ' AND '.join(clauses) + ')')
+    sql = f"""
+        SELECT {_projection_clause(spec)}
+        FROM tradernick.{table} FINAL
+        WHERE {' AND '.join(where)}
+        ORDER BY time
+    """
+    return sql, params
+
+
+# ===========================================================================
+# Aerodrome — TN-exclusive. Two flavors:
+#  - concentrated: V3-like CL pools keyed by (symbol0, symbol1, tick_spacing)
+#  - basic:        V2-like AMM pools keyed by (symbol0, symbol1) only
+# Both expose swap / deposit / withdraw / collect (concentrated) or
+# swap / deposit / withdraw / claim (basic). Pair ordering canonical-or-
+# reversed both accepted, same as Uniswap.
+# ===========================================================================
+
+AERO_CONCENTRATED_EVENT_TABLE = {
+    'swap':     'aero_concentrated_swaps',
+    'deposit':  'aero_concentrated_deposits',
+    'withdraw': 'aero_concentrated_withdrawals',
+    'collect':  'aero_concentrated_collects',
+}
+
+AERO_BASIC_EVENT_TABLE = {
+    'swap':     'aero_basic_swaps',
+    'deposit':  'aero_basic_deposits',
+    'withdraw': 'aero_basic_withdrawals',
+    'claim':    'aero_basic_claims',
+}
+
+
+def _aero_pair_filter(params: dict, where: list,
+                      symbol0: str | None, symbol1: str | None) -> None:
+    """Accept either pair ordering, mirroring uniswap canonical-pair logic."""
+    if symbol0 and symbol1:
+        params['s0'] = symbol0
+        params['s1'] = symbol1
+        where.append(
+            '((symbol0 = {s0:String} AND symbol1 = {s1:String}) '
+            'OR (symbol0 = {s1:String} AND symbol1 = {s0:String}))'
+        )
+    elif symbol0:
+        params['s0'] = symbol0
+        where.append('(symbol0 = {s0:String} OR symbol1 = {s0:String})')
+    elif symbol1:
+        params['s1'] = symbol1
+        where.append('(symbol0 = {s1:String} OR symbol1 = {s1:String})')
+
+
+def evm_aero_concentrated(
+    event: str, network: str,
+    symbol0: str | None, symbol1: str | None, tick_spacing: int | None,
+    since: str, until: str,
+    *, involving: str | None = None,
+    exclude_involving: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    table = AERO_CONCENTRATED_EVENT_TABLE.get(event)
+    if not table:
+        raise ValueError(f"Unknown Aerodrome (concentrated) event: {event!r}.")
+    chain = chain_from_network(network)
+    if chain is None:
+        return None, None
+    params: dict[str, Any] = {
+        'chain': chain,
+        'since': _ts_to_ch(since), 'until': _ts_to_ch(until),
+    }
+    where = [
+        'chain = {chain:String}',
+        'time >= toDateTime({since:String})',
+        'time <  toDateTime({until:String})',
+    ]
+    _aero_pair_filter(params, where, symbol0, symbol1)
+    if tick_spacing is not None:
+        params['ts'] = int(tick_spacing)
+        where.append('tick_spacing = {ts:UInt32}')
+
+    if event == 'swap':
+        actor_col, recipient_col = 'swapper', 'recipient'
+        spec = [
+            'block_number', 'pool_address', 'swapper', 'recipient',
+            ('token_sold',   'tokenSold'),
+            ('token_bought', 'tokenBought'),
+            ('amount_sold',   'amountSold'),
+            ('amount_bought', 'amountBought'),
+            'sqrt_based_price', 'liquidity', 'tick',
+            ('_TIME_MS', 'time'),
+        ]
+    elif event == 'deposit':
+        actor_col, recipient_col = 'sender', 'owner'
+        spec = [
+            'block_number', 'pool_address', 'sender', 'owner',
+            'amount0', 'amount1',
+            ('symbol0', 'token0'), ('symbol1', 'token1'),
+            'tick_lower', 'tick_upper', 'price_lower', 'price_upper',
+            ('_TIME_MS', 'time'),
+        ]
+    elif event == 'withdraw':
+        actor_col, recipient_col = 'owner', 'pool_address'
+        spec = [
+            'block_number', 'pool_address', 'owner',
+            'amount0', 'amount1',
+            ('symbol0', 'token0'), ('symbol1', 'token1'),
+            'tick_lower', 'tick_upper', 'price_lower', 'price_upper',
+            ('_TIME_MS', 'time'),
+        ]
+    else:  # collect
+        actor_col, recipient_col = 'owner', 'recipient'
+        spec = [
+            'block_number', 'pool_address', 'owner', 'recipient',
+            'amount0', 'amount1',
+            ('symbol0', 'token0'), ('symbol1', 'token1'),
+            'tick_lower', 'tick_upper', 'price_lower', 'price_upper',
+            ('_TIME_MS', 'time'),
+        ]
+
+    if involving:
+        params['involving'] = involving.lower()
+        where.append(f'(lower({actor_col}) = {{involving:String}} '
+                     f'OR lower({recipient_col}) = {{involving:String}})')
+    if exclude_involving:
+        params['exclude_involving'] = exclude_involving.lower()
+        where.append(f'(lower({actor_col}) != {{exclude_involving:String}} '
+                     f'AND lower({recipient_col}) != {{exclude_involving:String}})')
+
+    sql = f"""
+        SELECT {_projection_clause(spec)}
+        FROM tradernick.{table} FINAL
+        WHERE {' AND '.join(where)}
+        ORDER BY time
+    """
+    return sql, params
+
+
+def evm_aero_basic(
+    event: str, network: str,
+    symbol0: str | None, symbol1: str | None,
+    stable: bool | None, since: str, until: str,
+    *, involving: str | None = None,
+    exclude_involving: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """V2-AMM Aerodrome events. `stable` filters by the pool's curve flavor
+    (Velodrome-style stable vs volatile pair); pass None to include both."""
+    table = AERO_BASIC_EVENT_TABLE.get(event)
+    if not table:
+        raise ValueError(f"Unknown Aerodrome (basic) event: {event!r}.")
+    chain = chain_from_network(network)
+    if chain is None:
+        return None, None
+    params: dict[str, Any] = {
+        'chain': chain,
+        'since': _ts_to_ch(since), 'until': _ts_to_ch(until),
+    }
+    where = [
+        'chain = {chain:String}',
+        'time >= toDateTime({since:String})',
+        'time <  toDateTime({until:String})',
+    ]
+    _aero_pair_filter(params, where, symbol0, symbol1)
+    if stable is not None:
+        params['stable'] = 1 if stable else 0
+        where.append('stable = {stable:UInt8}')
+
+    # Basic AMM events share a (sender/recipient/actor) shape but per-event
+    # specifics — keep projections lean and conservative; the route returns
+    # the columns CH already has under their natural names.
+    if event == 'swap':
+        actor_col, recipient_col = 'swapper', 'recipient'
+        spec = [
+            'block_number', 'pool_address', 'swapper', 'recipient',
+            ('token_sold',   'tokenSold'),
+            ('token_bought', 'tokenBought'),
+            ('amount_sold',   'amountSold'),
+            ('amount_bought', 'amountBought'),
+            'stable', ('_TIME_MS', 'time'),
+        ]
+    elif event == 'deposit':
+        # Basic deposit only carries `sender` — no owner column.
+        actor_col, recipient_col = 'sender', 'sender'
+        spec = [
+            'block_number', 'pool_address', 'sender',
+            'amount0', 'amount1',
+            ('symbol0', 'token0'), ('symbol1', 'token1'),
+            'stable', ('_TIME_MS', 'time'),
+        ]
+    elif event == 'withdraw':
+        actor_col, recipient_col = 'owner', 'recipient'
+        spec = [
+            'block_number', 'pool_address', 'owner', 'recipient',
+            'amount0', 'amount1',
+            ('symbol0', 'token0'), ('symbol1', 'token1'),
+            'stable', ('_TIME_MS', 'time'),
+        ]
+    else:  # claim — both sender + recipient present
+        actor_col, recipient_col = 'sender', 'recipient'
+        spec = [
+            'block_number', 'pool_address', 'sender', 'recipient',
+            'amount0', 'amount1',
+            ('symbol0', 'token0'), ('symbol1', 'token1'),
+            'stable', ('_TIME_MS', 'time'),
+        ]
+
+    if involving:
+        params['involving'] = involving.lower()
+        where.append(f'(lower({actor_col}) = {{involving:String}} '
+                     f'OR lower({recipient_col}) = {{involving:String}})')
+    if exclude_involving:
+        params['exclude_involving'] = exclude_involving.lower()
+        where.append(f'(lower({actor_col}) != {{exclude_involving:String}} '
+                     f'AND lower({recipient_col}) != {{exclude_involving:String}})')
+
+    sql = f"""
+        SELECT {_projection_clause(spec)}
+        FROM tradernick.{table} FINAL
+        WHERE {' AND '.join(where)}
+        ORDER BY time
+    """
+    return sql, params

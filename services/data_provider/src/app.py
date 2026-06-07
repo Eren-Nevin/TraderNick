@@ -898,3 +898,241 @@ async def evm_threshold(request: Request):
     return await _maybe_save_or_return(
         _EMPTY_THRESHOLD, body, f"{body.get('network','x')}_threshold_{body.get('event','x')}.parquet",
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 4: TN-exclusive protocols (Spark, Morpho, Aerodrome). Not in
+# horatio-data-provider's surface — adding new namespaces to the client.
+# ---------------------------------------------------------------------------
+
+# Spark mirrors AAVE's six-event surface byte-for-byte; reuse AAVE empties.
+@app.post('/evm/spark/read')
+async def evm_spark(request: Request):
+    body = request.json or {}
+    try:
+        _require(body, 'event', 'network', 'since', 'until')
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    try:
+        sql, params = sql_b.evm_spark(
+            body['event'], body['network'], body['since'], body['until'],
+            involving=body.get('involving'),
+            exclude_involving=body.get('exclude_involving'),
+        )
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    empty_template = _EMPTY_AAVE_BY_EVENT.get(body['event'], _EMPTY_AAVE_BY_EVENT['deposit'])
+    if sql is None:
+        df = empty_template
+    else:
+        df = await query_polars(sql, params)
+        if df.is_empty():
+            df = empty_template
+    return await _maybe_save_or_return(
+        df, body, f"{body['network']}_spark_{body['event']}.parquet",
+    )
+
+
+_EMPTY_MORPHO_BY_EVENT = {
+    'supply': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'market_id': pl.Utf8,
+        'caller': pl.Utf8, 'on_behalf': pl.Utf8, 'token': pl.Utf8,
+        'assets': pl.Float64, 'shares': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'withdraw': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'market_id': pl.Utf8,
+        'caller': pl.Utf8, 'on_behalf': pl.Utf8, 'receiver': pl.Utf8,
+        'token': pl.Utf8, 'assets': pl.Float64, 'shares': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'borrow': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'market_id': pl.Utf8,
+        'caller': pl.Utf8, 'on_behalf': pl.Utf8, 'receiver': pl.Utf8,
+        'token': pl.Utf8, 'assets': pl.Float64, 'shares': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'repay': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'market_id': pl.Utf8,
+        'caller': pl.Utf8, 'on_behalf': pl.Utf8, 'token': pl.Utf8,
+        'assets': pl.Float64, 'shares': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'supply_collateral': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'market_id': pl.Utf8,
+        'caller': pl.Utf8, 'on_behalf': pl.Utf8, 'token': pl.Utf8,
+        'assets': pl.Float64, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'withdraw_collateral': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'market_id': pl.Utf8,
+        'caller': pl.Utf8, 'on_behalf': pl.Utf8, 'receiver': pl.Utf8,
+        'token': pl.Utf8, 'assets': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'liquidation': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'market_id': pl.Utf8,
+        'caller': pl.Utf8, 'borrower': pl.Utf8,
+        'loan_token': pl.Utf8, 'collateral_token': pl.Utf8,
+        'repaid_assets': pl.Float64, 'repaid_shares': pl.Float64,
+        'seized_assets': pl.Float64,
+        'bad_debt_assets': pl.Float64, 'bad_debt_shares': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+}
+
+
+@app.post('/evm/morpho/read')
+async def evm_morpho(request: Request):
+    body = request.json or {}
+    try:
+        _require(body, 'event', 'network', 'since', 'until')
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    try:
+        sql, params = sql_b.evm_morpho(
+            body['event'], body['network'], body['since'], body['until'],
+            involving=body.get('involving'),
+            exclude_involving=body.get('exclude_involving'),
+            market_id=body.get('market_id'),
+        )
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    empty_template = _EMPTY_MORPHO_BY_EVENT.get(body['event'], _EMPTY_MORPHO_BY_EVENT['supply'])
+    if sql is None:
+        df = empty_template
+    else:
+        df = await query_polars(sql, params)
+        if df.is_empty():
+            df = empty_template
+    return await _maybe_save_or_return(
+        df, body, f"{body['network']}_morpho_{body['event']}.parquet",
+    )
+
+
+_EMPTY_AERO_CL_BY_EVENT = {
+    'swap': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8,
+        'swapper': pl.Utf8, 'recipient': pl.Utf8,
+        'tokenSold': pl.Utf8, 'tokenBought': pl.Utf8,
+        'amountSold': pl.Float64, 'amountBought': pl.Float64,
+        'sqrt_based_price': pl.Float64, 'liquidity': pl.Float64,
+        'tick': pl.Int32, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'deposit': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8,
+        'sender': pl.Utf8, 'owner': pl.Utf8,
+        'amount0': pl.Float64, 'amount1': pl.Float64,
+        'token0': pl.Utf8, 'token1': pl.Utf8,
+        'tick_lower': pl.Int32, 'tick_upper': pl.Int32,
+        'price_lower': pl.Float64, 'price_upper': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'withdraw': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8, 'owner': pl.Utf8,
+        'amount0': pl.Float64, 'amount1': pl.Float64,
+        'token0': pl.Utf8, 'token1': pl.Utf8,
+        'tick_lower': pl.Int32, 'tick_upper': pl.Int32,
+        'price_lower': pl.Float64, 'price_upper': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'collect': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8,
+        'owner': pl.Utf8, 'recipient': pl.Utf8,
+        'amount0': pl.Float64, 'amount1': pl.Float64,
+        'token0': pl.Utf8, 'token1': pl.Utf8,
+        'tick_lower': pl.Int32, 'tick_upper': pl.Int32,
+        'price_lower': pl.Float64, 'price_upper': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+}
+
+
+_EMPTY_AERO_BASIC_BY_EVENT = {
+    'swap': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8,
+        'swapper': pl.Utf8, 'recipient': pl.Utf8,
+        'tokenSold': pl.Utf8, 'tokenBought': pl.Utf8,
+        'amountSold': pl.Float64, 'amountBought': pl.Float64,
+        'stable': pl.UInt8, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'deposit': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8, 'sender': pl.Utf8,
+        'amount0': pl.Float64, 'amount1': pl.Float64,
+        'token0': pl.Utf8, 'token1': pl.Utf8,
+        'stable': pl.UInt8, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'withdraw': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8,
+        'owner': pl.Utf8, 'recipient': pl.Utf8,
+        'amount0': pl.Float64, 'amount1': pl.Float64,
+        'token0': pl.Utf8, 'token1': pl.Utf8,
+        'stable': pl.UInt8, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'claim': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8,
+        'sender': pl.Utf8, 'recipient': pl.Utf8,
+        'amount0': pl.Float64, 'amount1': pl.Float64,
+        'token0': pl.Utf8, 'token1': pl.Utf8,
+        'stable': pl.UInt8, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+}
+
+
+@app.post('/evm/aerodrome/concentrated/read')
+async def evm_aero_concentrated(request: Request):
+    body = request.json or {}
+    try:
+        _require(body, 'event', 'network', 'since', 'until')
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    try:
+        sql, params = sql_b.evm_aero_concentrated(
+            body['event'], body['network'],
+            body.get('symbol0'), body.get('symbol1'),
+            body.get('tick_spacing'),
+            body['since'], body['until'],
+            involving=body.get('involving'),
+            exclude_involving=body.get('exclude_involving'),
+        )
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    empty_template = _EMPTY_AERO_CL_BY_EVENT.get(body['event'], _EMPTY_AERO_CL_BY_EVENT['swap'])
+    if sql is None:
+        df = empty_template
+    else:
+        df = await query_polars(sql, params)
+        if df.is_empty():
+            df = empty_template
+    return await _maybe_save_or_return(
+        df, body, f"{body['network']}_aero_cl_{body['event']}.parquet",
+    )
+
+
+@app.post('/evm/aerodrome/basic/read')
+async def evm_aero_basic(request: Request):
+    body = request.json or {}
+    try:
+        _require(body, 'event', 'network', 'since', 'until')
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    try:
+        sql, params = sql_b.evm_aero_basic(
+            body['event'], body['network'],
+            body.get('symbol0'), body.get('symbol1'),
+            body.get('stable'),
+            body['since'], body['until'],
+            involving=body.get('involving'),
+            exclude_involving=body.get('exclude_involving'),
+        )
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    empty_template = _EMPTY_AERO_BASIC_BY_EVENT.get(body['event'], _EMPTY_AERO_BASIC_BY_EVENT['swap'])
+    if sql is None:
+        df = empty_template
+    else:
+        df = await query_polars(sql, params)
+        if df.is_empty():
+            df = empty_template
+    return await _maybe_save_or_return(
+        df, body, f"{body['network']}_aero_basic_{body['event']}.parquet",
+    )
