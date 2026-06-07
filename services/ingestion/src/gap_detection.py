@@ -666,10 +666,18 @@ async def _calendar_hourly_counts(ch, spec: CalendarEventSpec,
 
 
 async def _calendar_baseline_per_hour(ch, spec: CalendarEventSpec,
-                                      now: datetime) -> dict[int, float]:
-    """Per-hour-of-day MEDIAN row count over the trailing
-    `baseline_window_days`. Returns {hour_of_day → median_rows}.
-    24 entries (missing hours default to 0 in the lookup).
+                                      now: datetime,
+                                      anchor: datetime | None = None) -> dict[int, float]:
+    """Per-hour-of-day MEDIAN row count over the `baseline_window_days`
+    ending at `anchor` (defaults to `now`). Returns {hour_of_day →
+    median_rows}. 24 entries (missing hours default to 0 in the lookup).
+
+    `anchor` lets us compute the baseline against the last known data
+    instead of wall-clock now. Critical for cold backfilled feeds: HL
+    position_history was backfilled up to 2026-02-03 then paused, so
+    a now-anchored 7d window finds zero rows → baseline=0 → every
+    hour classifies as inactive → the FillBoard shows a fully-gray
+    180-day grid even though the historical data is present.
 
     Median (not mean) because a recent in-flight backfill leaves
     unmerged duplicate rows in the source table — ReplacingMergeTree
@@ -677,13 +685,14 @@ async def _calendar_baseline_per_hour(ch, spec: CalendarEventSpec,
     show 2× / 5× the true row count. Mean baselines get blown out by
     those outlier days; median walks past them."""
     where_extra = f"AND {spec.filter_sql}" if spec.filter_sql else ""
-    baseline_start = now - timedelta(days=spec.baseline_window_days)
+    end = anchor or now
+    baseline_start = end - timedelta(days=spec.baseline_window_days)
     sql = f"""
         WITH per_hour AS (
             SELECT toStartOfHour({spec.time_col}) AS h, count() AS rows
             FROM {spec.table}
             WHERE {spec.time_col} >= toDateTime('{_format_dt(baseline_start)}')
-              AND {spec.time_col} <  toDateTime('{_format_dt(now)}')
+              AND {spec.time_col} <  toDateTime('{_format_dt(end)}')
               {where_extra}
             GROUP BY h
         )
@@ -799,11 +808,22 @@ async def find_calendar(event_key: str, since: datetime, until: datetime,
     now = datetime.utcnow().replace(microsecond=0)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     ch = await async_client()
-    first_last_task = _calendar_first_last(ch, spec)
-    hourly_task = _calendar_hourly_counts(ch, spec, since, until)
-    baseline_task = _calendar_baseline_per_hour(ch, spec, now)
-    (first_data, last_data), hourly_counts, baseline_per_hod = await asyncio.gather(
-        first_last_task, hourly_task, baseline_task,
+    # Two-pass: first/last to find where data ends, then baseline + hourly.
+    # The first_last query reads min/max of the time column which is cheap
+    # on this sort key; making the baseline contingent on it is worth the
+    # tiny serial step because it lets cold backfilled feeds (HL
+    # position_history paused since 2026-02-03, live disabled) classify
+    # correctly instead of rendering a fully-gray 180-day grid.
+    first_data, last_data = await _calendar_first_last(ch, spec)
+    # Anchor the baseline at min(now, last_data). When the feed is live
+    # this is now and behaviour is unchanged. When the feed is cold the
+    # baseline window slides back to where the data actually ends, so
+    # the per-hour-of-day median reflects real activity and historical
+    # days classify as filled instead of all-inactive.
+    anchor = last_data if last_data and last_data < now else now
+    hourly_counts, baseline_per_hod = await asyncio.gather(
+        _calendar_hourly_counts(ch, spec, since, until),
+        _calendar_baseline_per_hour(ch, spec, now, anchor=anchor),
     )
     hour_status = _classify_hours(
         spec, hourly_counts, baseline_per_hod, since, until, now,
