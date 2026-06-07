@@ -356,9 +356,51 @@ def _transfers_filters(params: dict[str, Any], where: list[str], *,
                        exclude_sender: str | None = None,
                        exclude_receiver: str | None = None,
                        exclude_involving: str | None = None,
+                       sender_label: str | None = None,
+                       receiver_label: str | None = None,
+                       involving_label: str | None = None,
+                       exclude_sender_label: str | None = None,
+                       exclude_receiver_label: str | None = None,
+                       exclude_involving_label: str | None = None,
+                       sender_category: str | None = None,
+                       receiver_category: str | None = None,
+                       involving_category: str | None = None,
+                       exclude_sender_category: str | None = None,
+                       exclude_receiver_category: str | None = None,
+                       exclude_involving_category: str | None = None,
                        min_amount: float | None = None,
                        max_amount: float | None = None) -> None:
-    """Mutate `where`/`params` with the common transfer filters."""
+    """Mutate `where`/`params` with the wallet-selection filters the
+    transfers tables support.
+
+    Pushdown maps:
+
+      - address  (`sender` / `receiver` / `involving`)
+            → `lower(sender|receiver) = lower(addr)`
+              Case-insensitive for EVM (the transfers row stores raw mixed
+              case; `lower(sender)` evaluates per row). BTC/TRON addresses
+              the user passes through unchanged via `lower()` which is a
+              no-op for already-lowercase addresses.
+
+      - label    (`*_label`)
+            → `sender_entity = lower(label)` — interpreting Horatio's
+              "label" as TN's entity tag (e.g. "Binance"). TN doesn't
+              have a per-address label/nickname column; entity is the
+              closest semantic. The materialized `sender_entity` column
+              is pre-lowered.
+
+      - category (`*_category`)
+            → `has(sender_categories, lower(category))`. The
+              `sender_categories` materialized column is pre-lowered
+              `Array(LowCardinality(String))`, populated by the
+              dictGet('tradernick.wallet_labels', 'categories_lower', addr)
+              ALTER on the transfers schema.
+
+    Skip indexes (set() on sender_categories / receiver_categories /
+    sender_entity / receiver_entity) make these pushdown filters cheap
+    even on the 971M-row transfers table — the test for the dashboard's
+    exchange-flow rollup is the same pattern.
+    """
     if sender:
         params['sender'] = sender.lower()
         where.append('lower(sender) = {sender:String}')
@@ -377,6 +419,59 @@ def _transfers_filters(params: dict[str, Any], where: list[str], *,
     if exclude_involving:
         params['exclude_involving'] = exclude_involving.lower()
         where.append('(lower(sender) != {exclude_involving:String} AND lower(receiver) != {exclude_involving:String})')
+
+    # ----- label (entity) ----------------------------------------------------
+    if sender_label:
+        params['sender_label'] = sender_label.lower()
+        where.append("coalesce(sender_entity, '') = {sender_label:String}")
+    if receiver_label:
+        params['receiver_label'] = receiver_label.lower()
+        where.append("coalesce(receiver_entity, '') = {receiver_label:String}")
+    if involving_label:
+        params['involving_label'] = involving_label.lower()
+        where.append(
+            "(coalesce(sender_entity, '') = {involving_label:String} "
+            "OR coalesce(receiver_entity, '') = {involving_label:String})"
+        )
+    if exclude_sender_label:
+        params['exclude_sender_label'] = exclude_sender_label.lower()
+        where.append("coalesce(sender_entity, '') != {exclude_sender_label:String}")
+    if exclude_receiver_label:
+        params['exclude_receiver_label'] = exclude_receiver_label.lower()
+        where.append("coalesce(receiver_entity, '') != {exclude_receiver_label:String}")
+    if exclude_involving_label:
+        params['exclude_involving_label'] = exclude_involving_label.lower()
+        where.append(
+            "(coalesce(sender_entity, '') != {exclude_involving_label:String} "
+            "AND coalesce(receiver_entity, '') != {exclude_involving_label:String})"
+        )
+
+    # ----- category ----------------------------------------------------------
+    if sender_category:
+        params['sender_category'] = sender_category.lower()
+        where.append('has(sender_categories, {sender_category:String})')
+    if receiver_category:
+        params['receiver_category'] = receiver_category.lower()
+        where.append('has(receiver_categories, {receiver_category:String})')
+    if involving_category:
+        params['involving_category'] = involving_category.lower()
+        where.append(
+            '(has(sender_categories, {involving_category:String}) '
+            'OR has(receiver_categories, {involving_category:String}))'
+        )
+    if exclude_sender_category:
+        params['exclude_sender_category'] = exclude_sender_category.lower()
+        where.append('NOT has(sender_categories, {exclude_sender_category:String})')
+    if exclude_receiver_category:
+        params['exclude_receiver_category'] = exclude_receiver_category.lower()
+        where.append('NOT has(receiver_categories, {exclude_receiver_category:String})')
+    if exclude_involving_category:
+        params['exclude_involving_category'] = exclude_involving_category.lower()
+        where.append(
+            '(NOT has(sender_categories, {exclude_involving_category:String}) '
+            'AND NOT has(receiver_categories, {exclude_involving_category:String}))'
+        )
+
     if min_amount is not None:
         params['min_amount'] = float(min_amount)
         where.append('amount >= {min_amount:Float64}')

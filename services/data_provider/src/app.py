@@ -267,14 +267,9 @@ _EMPTY_LIDO_BY_EVENT = {
         'time': pl.Datetime('ms', 'UTC'),
     }),
 }
-_EMPTY_STADER   = pl.DataFrame(schema={
-    'block_number': pl.Int64, 'caller': pl.Utf8, 'receiver': pl.Utf8,
-    'amount': pl.Float64, 'time': pl.Datetime('ms', 'UTC'),
-})
-_EMPTY_THRESHOLD = pl.DataFrame(schema={
-    'block_number': pl.Int64, 'depositor': pl.Utf8,
-    'amount': pl.Float64, 'time': pl.Datetime('ms', 'UTC'),
-})
+# Stader and Threshold dropped — TN doesn't ingest those upstreams and
+# the empty stubs were giving callers a false-positive impression that
+# the namespace existed. Re-add if/when TN ingestion picks them up.
 _EMPTY_HL_OHLCV = pl.DataFrame(schema={
     'window': pl.Datetime('us', 'UTC'), 'token': pl.Utf8,
     'open': pl.Float64, 'close': pl.Float64,
@@ -425,15 +420,7 @@ async def evm_erc20_transfers(request: Request):
     if not isinstance(tokens, list) or not tokens:
         return response.json({'error': 'tokens must be a non-empty list'}, status=400)
     sql, params = sql_b.evm_erc20_transfers(
-        network, tokens, since, until,
-        sender=body.get('sender'),
-        receiver=body.get('receiver'),
-        involving=body.get('involving'),
-        exclude_sender=body.get('exclude_sender'),
-        exclude_receiver=body.get('exclude_receiver'),
-        exclude_involving=body.get('exclude_involving'),
-        min_amount=body.get('min_amount'),
-        max_amount=body.get('max_amount'),
+        network, tokens, since, until, **_transfer_filter_kwargs(body),
     )
     if sql is None:
         df = _EMPTY_TRANSFER_FULL
@@ -530,18 +517,20 @@ async def binance_long_short_ratios(request: Request):
 # ---------------------------------------------------------------------------
 
 def _transfer_filter_kwargs(body: dict) -> dict:
-    """Pull the filter args the SQL builders accept off the request body.
-    Done here once so each route handler stays a thin shim."""
-    return {
-        'sender':            body.get('sender'),
-        'receiver':          body.get('receiver'),
-        'involving':         body.get('involving'),
-        'exclude_sender':    body.get('exclude_sender'),
-        'exclude_receiver':  body.get('exclude_receiver'),
-        'exclude_involving': body.get('exclude_involving'),
-        'min_amount':        body.get('min_amount'),
-        'max_amount':        body.get('max_amount'),
-    }
+    """Pull every wallet-selection / amount filter the SQL builder accepts
+    off the request body. Centralized so each transfer route stays a thin
+    shim — adding a new filter is two lines in the body + sql.py, not
+    five copy-pastes per route."""
+    keys = (
+        'sender', 'receiver', 'involving',
+        'exclude_sender', 'exclude_receiver', 'exclude_involving',
+        'sender_label', 'receiver_label', 'involving_label',
+        'exclude_sender_label', 'exclude_receiver_label', 'exclude_involving_label',
+        'sender_category', 'receiver_category', 'involving_category',
+        'exclude_sender_category', 'exclude_receiver_category', 'exclude_involving_category',
+        'min_amount', 'max_amount',
+    )
+    return {k: body.get(k) for k in keys}
 
 
 async def evm_native_transfers(request: Request):
@@ -879,25 +868,6 @@ for _func, _base in (
 ):
     app.add_route(_func, f'{_base}/read', methods=['POST'], name=f'{_func.__name__}_read')
     app.add_route(_func, f'{_base}/read/min', methods=['POST'], name=f'{_func.__name__}_min')
-
-
-@app.post('/evm/stader/read')
-async def evm_stader(request: Request):
-    """Stader isn't in TN ingestion — return Horatio's empty schema so
-    drop-in client code doesn't error."""
-    body = request.json or {}
-    return await _maybe_save_or_return(
-        _EMPTY_STADER, body, f"{body.get('network','x')}_stader_{body.get('event','x')}.parquet",
-    )
-
-
-@app.post('/evm/threshold/read')
-async def evm_threshold(request: Request):
-    """Threshold isn't in TN ingestion — return Horatio's empty schema."""
-    body = request.json or {}
-    return await _maybe_save_or_return(
-        _EMPTY_THRESHOLD, body, f"{body.get('network','x')}_threshold_{body.get('event','x')}.parquet",
-    )
 
 
 # ---------------------------------------------------------------------------

@@ -15,28 +15,28 @@ from .protocols import (
     LidoNamespace,
     NativeNamespace,
     NativeTransfersQuery,
-    StaderNamespace,
-    ThresholdNamespace,
     UniswapNamespace,
 )
 from .spark import SparkNamespace
 
 
 class EvmNamespace:
-    """EVM chain: ``client.evm.{erc20, aave, uniswap, lido, stader, threshold,
-    spark, morpho, aerodrome}`` plus ``client.evm.native_transfers()``.
+    """EVM chain: ``client.evm.{erc20, aave, uniswap, lido, spark, morpho,
+    aerodrome}`` plus ``client.evm.native_transfers()``.
 
     Spark / Morpho / Aerodrome are TN-exclusive — they're not in Horatio's
-    surface but live under the same `evm.*` namespace so the rest of the
+    surface but live under the same ``evm.*`` namespace so the rest of the
     API stays consistent. Existing horatio-compatible code is unaffected
-    (the new namespaces are additive)."""
+    (the new namespaces are additive).
+
+    Stader / Threshold were dropped in 0.4.0: TN doesn't ingest those
+    upstreams, and the empty-stub responses gave callers a false impression
+    the namespaces were live. Re-add when ingestion picks them up."""
 
     erc20: ERC20Namespace
     aave: AaveNamespace
     uniswap: UniswapNamespace
     lido: LidoNamespace
-    stader: StaderNamespace
-    threshold: ThresholdNamespace
     spark: SparkNamespace
     morpho: MorphoNamespace
     aerodrome: AerodromeNamespace
@@ -48,8 +48,6 @@ class EvmNamespace:
         self.aave = AaveNamespace(session, base_url)
         self.uniswap = UniswapNamespace(session, base_url)
         self.lido = LidoNamespace(session, base_url)
-        self.stader = StaderNamespace(session, base_url)
-        self.threshold = ThresholdNamespace(session, base_url)
         self.spark = SparkNamespace(session, base_url)
         self.morpho = MorphoNamespace(session, base_url)
         self.aerodrome = AerodromeNamespace(session, base_url)
