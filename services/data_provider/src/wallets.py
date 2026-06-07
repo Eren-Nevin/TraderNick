@@ -23,7 +23,7 @@ import httpx
 import polars as pl
 from sanic import Request, Sanic, response
 
-from .ch import query_polars
+from .ch import get_client, query_polars
 
 log = logging.getLogger(__name__)
 
@@ -114,13 +114,45 @@ def register(app: Sanic) -> None:
 
     @app.delete('/wallets/<address>')
     async def wallets_delete(request: Request, address: str):
-        """data_provider is read-only — admin_server handles wallet deletes.
-        Today the monolith doesn't expose a single-row delete, so this
-        returns 501 until that lands. The client treats 501 as a recoverable
-        error (Horatio surfaces it as DataProviderHTTPError)."""
-        return response.json(
-            {'error': 'wallets delete is not exposed by admin_server yet; '
-                      'edit tradernick.wallets directly and call '
-                      '/admin/wallets/rematerialize'},
-            status=501,
+        """Delete a single wallet by address.
+
+        The wallets row is removed via lightweight delete against
+        `tradernick.wallets`. The dictionary `wallet_labels` reloads on
+        its LIFETIME(MIN 300 MAX 600) cycle, so subsequent transfer reads
+        will stop matching this address within ~5-10 min without manual
+        intervention.
+
+        Caveat: the materialized columns on `tradernick.transfers`
+        (sender_categories / receiver_categories / sender_entity /
+        receiver_entity) were computed at insert time from the dictionary,
+        so existing transfer rows still carry the old labels. Mirrors
+        Horatio's behavior (its wallet delete doesn't reach back into
+        historical data either). Call /admin/wallets/rematerialize on
+        ingestion if you need the historical rows rebuilt — that's a
+        ~minutes-to-hour operation we deliberately keep out of the hot path.
+        """
+        addr = address.strip()
+        if not addr:
+            return response.json({'error': 'address required'}, status=400)
+
+        # Confirm the row exists so we can return a proper 404 instead of
+        # an opaque 200 when the user deletes something that wasn't there.
+        check = await query_polars(
+            "SELECT count() AS n FROM tradernick.wallets FINAL "
+            "WHERE lower(address) = {addr:String}",
+            {'addr': addr.lower()},
         )
+        if check.is_empty() or int(check['n'][0]) == 0:
+            return response.json({'error': 'not found'}, status=404)
+
+        client = await get_client()
+        # Lightweight delete: avoids the heavy ALTER...DELETE mutation
+        # path on this small (<1M rows) wallets table. Async on the CH
+        # side; the dictionary refresh handles eventual consistency.
+        await client.command(
+            "DELETE FROM tradernick.wallets "
+            "WHERE lower(address) = {addr:String}",
+            parameters={'addr': addr.lower()},
+        )
+        log.info('wallets.delete address=%s', addr.lower())
+        return response.json({'deleted': addr})

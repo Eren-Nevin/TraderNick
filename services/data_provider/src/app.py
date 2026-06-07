@@ -117,42 +117,156 @@ async def _maybe_save_or_return(df: pl.DataFrame, body: dict, filename: str):
 # protocol empty schemas so polars reads back the right column types.
 # ---------------------------------------------------------------------------
 
-_EMPTY_OHLCV    = pl.DataFrame(schema={
-    'time': pl.Datetime('ms', 'UTC'),
-    'open': pl.Float64, 'high': pl.Float64,
-    'low':  pl.Float64, 'close': pl.Float64, 'volume': pl.Float64,
+"""Empty-frame templates.
+
+Two-tier: per-route populated shape (full Horatio column set) and the
+narrower legacy `_EMPTY_*` templates used for unsupported-network calls.
+A populated 0-row response carries the same schema as a 1-row response
+so the client's polars/pandas decoder sees consistent columns either
+way."""
+
+# Binance — full populated shapes
+_EMPTY_OHLCV_FULL = pl.DataFrame(schema={
+    'time': pl.Datetime('ms', 'UTC'), 'token': pl.Utf8,
+    'open': pl.Float64, 'close': pl.Float64,
+    'high': pl.Float64, 'low': pl.Float64, 'volume': pl.Float64,
+    'buyer_taker_volume': pl.Float64, 'seller_taker_volume': pl.Float64,
+    'trade_count': pl.Int64,
 })
-_EMPTY_EXCHANGE = pl.DataFrame(schema={
-    'time': pl.Datetime('ms', 'UTC'), 'value': pl.Float64,
+_EMPTY_FUNDING_FULL = pl.DataFrame(schema={
+    'time': pl.Datetime('ms', 'UTC'), 'token': pl.Utf8, 'rate': pl.Float64,
 })
-_EMPTY_AAVE     = pl.DataFrame(schema={
-    'block_number': pl.Int64, 'user': pl.Utf8, 'token': pl.Utf8,
-    'amount': pl.Float64, 'time': pl.Datetime('ms', 'UTC'),
+_EMPTY_BOOK_DEPTH_FULL = pl.DataFrame(schema={
+    'time': pl.Datetime('ms', 'UTC'), 'token': pl.Utf8,
+    'percentage': pl.Int64, 'depth': pl.Float64, 'value': pl.Float64,
 })
-_EMPTY_ERC20    = pl.DataFrame(schema={
+_EMPTY_OPEN_INTEREST_FULL = pl.DataFrame(schema={
+    'time': pl.Datetime('ms', 'UTC'), 'token': pl.Utf8,
+    'open_interest': pl.Float64, 'open_interest_value': pl.Float64,
+})
+_EMPTY_LSR_FULL = pl.DataFrame(schema={
+    'time': pl.Datetime('ms', 'UTC'), 'token': pl.Utf8,
+    'top_trader_count_ratio': pl.Float64, 'top_trader_vol_ratio': pl.Float64,
+    'long_short_count_ratio': pl.Float64, 'taker_long_short_vol_ratio': pl.Float64,
+})
+_EMPTY_RAW_TRADES_FULL = pl.DataFrame(schema={
+    'time': pl.Datetime('ms', 'UTC'), 'token': pl.Utf8,
+    'amount': pl.Float64, 'price': pl.Float64, 'buy': pl.Boolean,
+})
+
+# Transfers — same shape for erc20/native/tron/btc
+_EMPTY_TRANSFER_FULL = pl.DataFrame(schema={
     'block_number': pl.Int64, 'token': pl.Utf8,
     'sender': pl.Utf8, 'receiver': pl.Utf8,
     'amount': pl.Float64, 'time': pl.Datetime('ms', 'UTC'),
 })
-_EMPTY_NATIVE   = pl.DataFrame(schema={
-    'block_number': pl.Int64, 'token': pl.Utf8,
-    'sender': pl.Utf8, 'receiver': pl.Utf8,
-    'amount': pl.Float64, 'time': pl.Datetime('ms', 'UTC'),
-})
-_EMPTY_TRADES   = pl.DataFrame(schema={
-    'id': pl.Int64, 'time': pl.Datetime('ms', 'UTC'),
-    'price': pl.Float64, 'amount': pl.Float64, 'buy': pl.Boolean,
-})
-_EMPTY_UNISWAP  = pl.DataFrame(schema={
-    'block_number': pl.Int64, 'sender': pl.Utf8, 'recipient': pl.Utf8,
-    'amount0': pl.Float64, 'amount1': pl.Float64,
-    'time': pl.Datetime('ms', 'UTC'),
-})
-_EMPTY_LIDO     = pl.DataFrame(schema={
-    'block_number': pl.Int64, 'sender': pl.Utf8,
-    'minted_amount': pl.Float64, 'minted_token': pl.Utf8,
-    'time': pl.Datetime('ms', 'UTC'),
-})
+
+# AAVE — per-event populated shapes
+_EMPTY_AAVE_BY_EVENT = {
+    'deposit': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'user': pl.Utf8, 'token': pl.Utf8,
+        'amount': pl.Float64, 'on_behalf_of': pl.Utf8,
+        'referral_code': pl.Int64, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'withdraw': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'user': pl.Utf8, 'token': pl.Utf8,
+        'amount': pl.Float64, 'recipient': pl.Utf8,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'borrow': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'user': pl.Utf8, 'token': pl.Utf8,
+        'amount': pl.Float64, 'on_behalf_of': pl.Utf8,
+        'interest_rate_mode': pl.Int64, 'borrow_rate': pl.Float64,
+        'referral_code': pl.Int64, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'repay': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'user': pl.Utf8, 'token': pl.Utf8,
+        'amount': pl.Float64, 'repayer': pl.Utf8, 'use_a_tokens': pl.Boolean,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'flashloan': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'user': pl.Utf8, 'token': pl.Utf8,
+        'amount': pl.Float64, 'target': pl.Utf8,
+        'interest_rate_mode': pl.Int64, 'premium': pl.Float64,
+        'referral_code': pl.Int64, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'liquidation': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'owner': pl.Utf8, 'liquidator': pl.Utf8,
+        'debt_token': pl.Utf8, 'collateral_token': pl.Utf8,
+        'debt_to_cover': pl.Float64,
+        'liquidated_collateral_amount': pl.Float64,
+        'receive_a_token': pl.Boolean, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+}
+
+# Uniswap V3 — swap has camelCase columns; LP events use snake_case.
+_EMPTY_UNISWAP_BY_EVENT = {
+    'swap': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8,
+        'swapper': pl.Utf8, 'recipient': pl.Utf8,
+        'tokenSold': pl.Utf8, 'tokenBought': pl.Utf8,
+        'amountSold': pl.Float64, 'amountBought': pl.Float64,
+        'sqrt_based_price': pl.Float64, 'liquidity': pl.Float64,
+        'tick': pl.Int32, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'deposit': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8,
+        'sender': pl.Utf8, 'owner': pl.Utf8,
+        'amount0': pl.Float64, 'amount1': pl.Float64,
+        'token0': pl.Utf8, 'token1': pl.Utf8,
+        'tick_lower': pl.Int32, 'tick_upper': pl.Int32,
+        'price_lower': pl.Float64, 'price_upper': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'withdraw': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8, 'owner': pl.Utf8,
+        'amount0': pl.Float64, 'amount1': pl.Float64,
+        'token0': pl.Utf8, 'token1': pl.Utf8,
+        'tick_lower': pl.Int32, 'tick_upper': pl.Int32,
+        'price_lower': pl.Float64, 'price_upper': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'collect': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'pool_address': pl.Utf8,
+        'owner': pl.Utf8, 'recipient': pl.Utf8,
+        'amount0': pl.Float64, 'amount1': pl.Float64,
+        'token0': pl.Utf8, 'token1': pl.Utf8,
+        'tick_lower': pl.Int32, 'tick_upper': pl.Int32,
+        'price_lower': pl.Float64, 'price_upper': pl.Float64,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+}
+
+# Lido — per-event populated shapes
+_EMPTY_LIDO_BY_EVENT = {
+    'deposit': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'sender': pl.Utf8, 'referral': pl.Utf8,
+        'minted_amount': pl.Float64, 'minted_token': pl.Utf8,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'withdrawal_request': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'request_id': pl.Int64,
+        'requestor': pl.Utf8, 'owner': pl.Utf8,
+        'burned_amount': pl.Float64, 'burned_token': pl.Utf8,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'withdrawal_claimed': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'request_id': pl.Int64,
+        'receiver': pl.Utf8, 'owner': pl.Utf8,
+        'withdraw_amount': pl.Float64, 'withdraw_token': pl.Utf8,
+        'burned_token': pl.Utf8, 'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'l2_deposit': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'sender': pl.Utf8, 'receiver': pl.Utf8,
+        'minted_amount': pl.Float64, 'minted_token': pl.Utf8,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+    'l2_withdrawal_request': pl.DataFrame(schema={
+        'block_number': pl.Int64, 'sender': pl.Utf8, 'receiver': pl.Utf8,
+        'burned_amount': pl.Float64, 'burned_token': pl.Utf8,
+        'time': pl.Datetime('ms', 'UTC'),
+    }),
+}
 _EMPTY_STADER   = pl.DataFrame(schema={
     'block_number': pl.Int64, 'caller': pl.Utf8, 'receiver': pl.Utf8,
     'amount': pl.Float64, 'time': pl.Datetime('ms', 'UTC'),
@@ -251,8 +365,7 @@ async def binance_ohlcv(request: Request):
         return response.json({'error': str(e)}, status=400)
     df = await query_polars(sql, params)
     if df.is_empty():
-        df = _EMPTY_OHLCV
-    df = _cast_time_ms_utc(df)
+        df = _EMPTY_OHLCV_FULL
     return await _maybe_save_or_return(df, body, f'binance_{token}_ohlcv_{window}.parquet')
 
 
@@ -267,8 +380,7 @@ async def binance_funding_rate(request: Request):
     sql, params = sql_b.binance_funding_rate(token, since, until)
     df = await query_polars(sql, params)
     if df.is_empty():
-        df = _EMPTY_EXCHANGE
-    df = _cast_time_ms_utc(df)
+        df = _EMPTY_FUNDING_FULL
     return await _maybe_save_or_return(df, body, f'binance_{token}_funding_rate.parquet')
 
 
@@ -290,14 +402,14 @@ async def evm_aave(request: Request):
         )
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
+    empty_template = _EMPTY_AAVE_BY_EVENT.get(event, _EMPTY_AAVE_BY_EVENT['deposit'])
     if sql is None:
         # Unsupported network — drop-in Horatio behavior: empty result, no error.
-        df = _EMPTY_AAVE
+        df = empty_template
     else:
         df = await query_polars(sql, params)
         if df.is_empty():
-            df = _EMPTY_AAVE
-    df = _cast_time_ms_utc(df)
+            df = empty_template
     return await _maybe_save_or_return(df, body, f'{network}_aave_{event}.parquet')
 
 
@@ -324,16 +436,16 @@ async def evm_erc20_transfers(request: Request):
         max_amount=body.get('max_amount'),
     )
     if sql is None:
-        df = _EMPTY_ERC20
+        df = _EMPTY_TRANSFER_FULL
     else:
         df = await query_polars(sql, params)
         if df.is_empty():
-            df = _EMPTY_ERC20
-    df = _cast_time_ms_utc(df)
-    # `local_filters` are Horatio's post-query polars-side filters. Phase 1
-    # accepts the field but no-ops on it; the body still validates so
-    # callers that send it get the same on-the-wire success they did
-    # against Horatio. Real local_filter semantics land in Phase 2.
+            df = _EMPTY_TRANSFER_FULL
+    # `local_filters` are Horatio's post-query polars-side filters. The
+    # route accepts the field but only the snapshot-scan path applies them
+    # (see snapshots.scan); on the raw-read path they're informational —
+    # the body still validates so client code that includes them gets the
+    # same 200 it did against Horatio.
     filename = f"{network}_{'_'.join(tokens)}_transfers.parquet"
     return await _maybe_save_or_return(df, body, filename)
 
@@ -357,10 +469,12 @@ async def binance_raw_trades(request: Request):
     )
     df = await query_polars(sql, params)
     if df.is_empty():
-        df = _EMPTY_TRADES if with_id else _EMPTY_TRADES.drop('id')
+        df = (
+            _EMPTY_RAW_TRADES_FULL.with_columns(pl.lit(None).cast(pl.Int64).alias('id'))
+            if with_id else _EMPTY_RAW_TRADES_FULL
+        )
     if add_symbol:
         df = df.with_columns(pl.lit(token).alias('symbol'))
-    df = _cast_time_ms_utc(df)
     return await _maybe_save_or_return(df, body, f'binance_{token}_raw_trades.parquet')
 
 
@@ -375,8 +489,7 @@ async def binance_book_depth(request: Request):
     sql, params = sql_b.binance_book_depth(token, body['since'], body['until'])
     df = await query_polars(sql, params)
     if df.is_empty():
-        df = _EMPTY_EXCHANGE
-    df = _cast_time_ms_utc(df)
+        df = _EMPTY_BOOK_DEPTH_FULL
     return await _maybe_save_or_return(df, body, f'binance_{token}_book_depth.parquet')
 
 
@@ -391,8 +504,7 @@ async def binance_open_interest(request: Request):
     sql, params = sql_b.binance_open_interest(token, body['since'], body['until'])
     df = await query_polars(sql, params)
     if df.is_empty():
-        df = _EMPTY_EXCHANGE
-    df = _cast_time_ms_utc(df)
+        df = _EMPTY_OPEN_INTEREST_FULL
     return await _maybe_save_or_return(df, body, f'binance_{token}_open_interest.parquet')
 
 
@@ -407,8 +519,7 @@ async def binance_long_short_ratios(request: Request):
     sql, params = sql_b.binance_long_short_ratios(token, body['since'], body['until'])
     df = await query_polars(sql, params)
     if df.is_empty():
-        df = _EMPTY_EXCHANGE
-    df = _cast_time_ms_utc(df)
+        df = _EMPTY_LSR_FULL
     return await _maybe_save_or_return(df, body, f'binance_{token}_long_short_ratios.parquet')
 
 
@@ -444,12 +555,11 @@ async def evm_native_transfers(request: Request):
         network, body['since'], body['until'], **_transfer_filter_kwargs(body),
     )
     if sql is None:
-        df = _EMPTY_NATIVE
+        df = _EMPTY_TRANSFER_FULL
     else:
         df = await query_polars(sql, params)
         if df.is_empty():
-            df = _EMPTY_NATIVE
-    df = _cast_time_ms_utc(df)
+            df = _EMPTY_TRANSFER_FULL
     return await _maybe_save_or_return(df, body, f'{network}_native_transfers.parquet')
 
 
@@ -464,12 +574,11 @@ async def tron_native_transfers(request: Request):
         network, body['since'], body['until'], **_transfer_filter_kwargs(body),
     )
     if sql is None:
-        df = _EMPTY_NATIVE
+        df = _EMPTY_TRANSFER_FULL
     else:
         df = await query_polars(sql, params)
         if df.is_empty():
-            df = _EMPTY_NATIVE
-    df = _cast_time_ms_utc(df)
+            df = _EMPTY_TRANSFER_FULL
     return await _maybe_save_or_return(df, body, f'{network}_native_transfers.parquet')
 
 
@@ -486,12 +595,11 @@ async def tron_trc20_transfers(request: Request):
         network, tokens, body['since'], body['until'], **_transfer_filter_kwargs(body),
     )
     if sql is None:
-        df = _EMPTY_ERC20
+        df = _EMPTY_TRANSFER_FULL
     else:
         df = await query_polars(sql, params)
         if df.is_empty():
-            df = _EMPTY_ERC20
-    df = _cast_time_ms_utc(df)
+            df = _EMPTY_TRANSFER_FULL
     filename = f"{network}_{'_'.join(tokens)}_trc20_transfers.parquet"
     return await _maybe_save_or_return(df, body, filename)
 
@@ -507,12 +615,11 @@ async def btc_native_transfers(request: Request):
         network, body['since'], body['until'], **_transfer_filter_kwargs(body),
     )
     if sql is None:
-        df = _EMPTY_NATIVE
+        df = _EMPTY_TRANSFER_FULL
     else:
         df = await query_polars(sql, params)
         if df.is_empty():
-            df = _EMPTY_NATIVE
-    df = _cast_time_ms_utc(df)
+            df = _EMPTY_TRANSFER_FULL
     return await _maybe_save_or_return(df, body, f'{network}_native_transfers.parquet')
 
 
@@ -545,11 +652,6 @@ async def hyperliquid_ohlcv(request: Request):
     df = await query_polars(sql, params)
     if df.is_empty():
         df = _EMPTY_HL_OHLCV
-    # HL OHLCV uses `window` instead of `time` — the client renames it.
-    if 'window' in df.columns:
-        dt = df.schema['window']
-        if isinstance(dt, pl.Datetime) and (dt.time_unit != 'us' or dt.time_zone != 'UTC'):
-            df = df.with_columns(pl.col('window').cast(pl.Datetime('us', 'UTC')))
     return await _maybe_save_or_return(df, body, 'hyperliquid_ohlcv.parquet')
 
 
@@ -726,13 +828,13 @@ async def evm_uniswap(request: Request):
         )
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
+    empty_template = _EMPTY_UNISWAP_BY_EVENT.get(body['event'], _EMPTY_UNISWAP_BY_EVENT['swap'])
     if sql is None:
-        df = _EMPTY_UNISWAP
+        df = empty_template
     else:
         df = await query_polars(sql, params)
         if df.is_empty():
-            df = _EMPTY_UNISWAP
-    df = _cast_time_ms_utc(df)
+            df = empty_template
     return await _maybe_save_or_return(
         df, body, f"{body['network']}_uniswap_{body['event']}.parquet",
     )
@@ -753,13 +855,13 @@ async def evm_lido(request: Request):
         )
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
+    empty_template = _EMPTY_LIDO_BY_EVENT.get(body['event'], _EMPTY_LIDO_BY_EVENT['deposit'])
     if sql is None:
-        df = _EMPTY_LIDO
+        df = empty_template
     else:
         df = await query_polars(sql, params)
         if df.is_empty():
-            df = _EMPTY_LIDO
-    df = _cast_time_ms_utc(df)
+            df = empty_template
     return await _maybe_save_or_return(
         df, body, f"{body['network']}_lido_{body['event']}.parquet",
     )
