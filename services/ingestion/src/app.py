@@ -198,7 +198,9 @@ async def get_gaps_calendar(request):
         return response.json({"error": f"invalid since/until: {exc}"}, status=400)
     if since_dt >= until_dt:
         return response.json({"error": "since must be earlier than until"}, status=400)
-    result = await gap_detection.find_calendar(event_key, since_dt, until_dt)
+    chain = request.args.get("chain") or None
+    result = await gap_detection.find_calendar(event_key, since_dt, until_dt,
+                                                chain=chain)
     return response.json(result)
 
 

@@ -25,10 +25,11 @@ the tokens were fine.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from enum import Enum
 import logging
+import re
 
 from clickhouse import async_client
 
@@ -768,16 +769,33 @@ def _today_hours(hour_status: dict[datetime, str], today: datetime) -> list[dict
     return out
 
 
-async def find_calendar(event_key: str, since: datetime, until: datetime) -> dict:
+_CHAIN_RE = re.compile(r"^[A-Za-z0-9_]{1,16}$")
+
+
+async def find_calendar(event_key: str, since: datetime, until: datetime,
+                        chain: str | None = None) -> dict:
     """Build the fill-board payload for one event over [since, until).
 
     Runs three CH queries in parallel: first/last, per-hour counts in
     the display window, and per-hour-of-day baseline over the trailing
-    `baseline_window_days`. Classifies + aggregates in Python."""
+    `baseline_window_days`. Classifies + aggregates in Python.
+
+    `chain` (optional) appends `AND chain = '<chain>'` to the spec's
+    filter so a single event_key can serve per-chain views without a
+    schema-level fan-out. The caller is responsible for choosing a
+    chain the table actually has — invalid values just yield an
+    all-empty calendar."""
     spec = CALENDAR_EVENTS.get(event_key)
     if spec is None:
         return {"event": event_key, "error": f"no calendar spec for event {event_key!r}",
                 "days": [], "today_hours": []}
+    if chain:
+        if not _CHAIN_RE.match(chain):
+            return {"event": event_key, "error": f"invalid chain {chain!r}",
+                    "days": [], "today_hours": []}
+        extra = f"chain = '{chain}'"
+        combined = f"{spec.filter_sql} AND {extra}" if spec.filter_sql else extra
+        spec = replace(spec, filter_sql=combined)
     now = datetime.utcnow().replace(microsecond=0)
     today = now.replace(hour=0, minute=0, second=0, microsecond=0)
     ch = await async_client()

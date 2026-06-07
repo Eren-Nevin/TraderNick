@@ -10,7 +10,18 @@ export type CalendarEvent = {
   event_key: string;   // 'aave_v3.deposit'
   label: string;       // 'AAVE V3 Deposit'
   provider: Provider;
+  // Optional: chains this event spans. When set (length>1), the
+  // FillBoard shows a chain selector that adds `&chain=<x>` to the
+  // gap calendar fetch. Single-chain events omit this entirely.
+  chains?: string[];
 };
+
+// Chain rosters by deployment scope. Centralised so a chain-add only
+// touches one place. Keep aligned with services/ingestion config:
+// EVM_NATIVE_TRANSFERS / EVM_ERC20_BY_CHAIN / AAVE_EVENTS_CHAINS.
+const EVM_FULL = ['ETH', 'ARB', 'BASE', 'BSC', 'POLYGON'];
+const EVM_NO_BSC = ['ETH', 'ARB', 'BASE', 'POLYGON'];
+const ETH_AND_BASE = ['ETH', 'BASE'];
 
 const EVENTS: CalendarEvent[] = [
   // Hyperliquid — 8 events
@@ -33,26 +44,26 @@ const EVENTS: CalendarEvent[] = [
 
   // Transfers — 5 sub-feeds
   { event_key: 'transfers.btc',         label: 'BTC Transfers',         provider: 'Transfers' },
-  { event_key: 'transfers.evm_native',  label: 'EVM Native Transfers',  provider: 'Transfers' },
-  { event_key: 'transfers.evm_erc20',   label: 'EVM ERC-20 Transfers',  provider: 'Transfers' },
+  { event_key: 'transfers.evm_native',  label: 'EVM Native Transfers',  provider: 'Transfers', chains: EVM_FULL },
+  { event_key: 'transfers.evm_erc20',   label: 'EVM ERC-20 Transfers',  provider: 'Transfers', chains: EVM_FULL },
   { event_key: 'transfers.tron_native', label: 'Tron Native Transfers', provider: 'Transfers' },
   { event_key: 'transfers.tron_trc20',  label: 'Tron TRC-20 Transfers', provider: 'Transfers' },
 
-  // AAVE V3 — 6 events
-  { event_key: 'aave_v3.deposit',     label: 'AAVE V3 Deposit',     provider: 'AAVE V3' },
-  { event_key: 'aave_v3.withdraw',    label: 'AAVE V3 Withdraw',    provider: 'AAVE V3' },
-  { event_key: 'aave_v3.borrow',      label: 'AAVE V3 Borrow',      provider: 'AAVE V3' },
-  { event_key: 'aave_v3.repay',       label: 'AAVE V3 Repay',       provider: 'AAVE V3' },
-  { event_key: 'aave_v3.flashloan',   label: 'AAVE V3 Flashloan',   provider: 'AAVE V3' },
-  { event_key: 'aave_v3.liquidation', label: 'AAVE V3 Liquidation', provider: 'AAVE V3' },
+  // AAVE V3 — 6 events. Deployed on all 5 EVM chains.
+  { event_key: 'aave_v3.deposit',     label: 'AAVE V3 Deposit',     provider: 'AAVE V3', chains: EVM_FULL },
+  { event_key: 'aave_v3.withdraw',    label: 'AAVE V3 Withdraw',    provider: 'AAVE V3', chains: EVM_FULL },
+  { event_key: 'aave_v3.borrow',      label: 'AAVE V3 Borrow',      provider: 'AAVE V3', chains: EVM_FULL },
+  { event_key: 'aave_v3.repay',       label: 'AAVE V3 Repay',       provider: 'AAVE V3', chains: EVM_FULL },
+  { event_key: 'aave_v3.flashloan',   label: 'AAVE V3 Flashloan',   provider: 'AAVE V3', chains: EVM_FULL },
+  { event_key: 'aave_v3.liquidation', label: 'AAVE V3 Liquidation', provider: 'AAVE V3', chains: EVM_FULL },
 
-  // AAVE V2 — 6 events
-  { event_key: 'aave_v2.deposit',     label: 'AAVE V2 Deposit',     provider: 'AAVE V2' },
-  { event_key: 'aave_v2.withdraw',    label: 'AAVE V2 Withdraw',    provider: 'AAVE V2' },
-  { event_key: 'aave_v2.borrow',      label: 'AAVE V2 Borrow',      provider: 'AAVE V2' },
-  { event_key: 'aave_v2.repay',       label: 'AAVE V2 Repay',       provider: 'AAVE V2' },
-  { event_key: 'aave_v2.flashloan',   label: 'AAVE V2 Flashloan',   provider: 'AAVE V2' },
-  { event_key: 'aave_v2.liquidation', label: 'AAVE V2 Liquidation', provider: 'AAVE V2' },
+  // AAVE V2 — 6 events. Same 5-chain roster per AAVE_EVENTS_CHAINS.
+  { event_key: 'aave_v2.deposit',     label: 'AAVE V2 Deposit',     provider: 'AAVE V2', chains: EVM_FULL },
+  { event_key: 'aave_v2.withdraw',    label: 'AAVE V2 Withdraw',    provider: 'AAVE V2', chains: EVM_FULL },
+  { event_key: 'aave_v2.borrow',      label: 'AAVE V2 Borrow',      provider: 'AAVE V2', chains: EVM_FULL },
+  { event_key: 'aave_v2.repay',       label: 'AAVE V2 Repay',       provider: 'AAVE V2', chains: EVM_FULL },
+  { event_key: 'aave_v2.flashloan',   label: 'AAVE V2 Flashloan',   provider: 'AAVE V2', chains: EVM_FULL },
+  { event_key: 'aave_v2.liquidation', label: 'AAVE V2 Liquidation', provider: 'AAVE V2', chains: EVM_FULL },
 
   // AAVE V4 — 5 events (no flashloan)
   { event_key: 'aave_v4.deposit',     label: 'AAVE V4 Deposit',     provider: 'AAVE V4' },
@@ -61,16 +72,16 @@ const EVENTS: CalendarEvent[] = [
   { event_key: 'aave_v4.repay',       label: 'AAVE V4 Repay',       provider: 'AAVE V4' },
   { event_key: 'aave_v4.liquidation', label: 'AAVE V4 Liquidation', provider: 'AAVE V4' },
 
-  // Uniswap V3 — 4 events
-  { event_key: 'uniswap_v3.swap',     label: 'Uniswap V3 Swap',     provider: 'Uniswap V3' },
-  { event_key: 'uniswap_v3.deposit',  label: 'Uniswap V3 Deposit',  provider: 'Uniswap V3' },
-  { event_key: 'uniswap_v3.withdraw', label: 'Uniswap V3 Withdraw', provider: 'Uniswap V3' },
-  { event_key: 'uniswap_v3.collect',  label: 'Uniswap V3 Collect',  provider: 'Uniswap V3' },
+  // Uniswap V3 — 4 events. Deployed on all 5 EVM chains.
+  { event_key: 'uniswap_v3.swap',     label: 'Uniswap V3 Swap',     provider: 'Uniswap V3', chains: EVM_FULL },
+  { event_key: 'uniswap_v3.deposit',  label: 'Uniswap V3 Deposit',  provider: 'Uniswap V3', chains: EVM_FULL },
+  { event_key: 'uniswap_v3.withdraw', label: 'Uniswap V3 Withdraw', provider: 'Uniswap V3', chains: EVM_FULL },
+  { event_key: 'uniswap_v3.collect',  label: 'Uniswap V3 Collect',  provider: 'Uniswap V3', chains: EVM_FULL },
 
-  // Uniswap V2 — 3 events (no collect)
-  { event_key: 'uniswap_v2.swap',     label: 'Uniswap V2 Swap',     provider: 'Uniswap V2' },
-  { event_key: 'uniswap_v2.deposit',  label: 'Uniswap V2 Deposit',  provider: 'Uniswap V2' },
-  { event_key: 'uniswap_v2.withdraw', label: 'Uniswap V2 Withdraw', provider: 'Uniswap V2' },
+  // Uniswap V2 — 3 events (no collect). Not on BSC.
+  { event_key: 'uniswap_v2.swap',     label: 'Uniswap V2 Swap',     provider: 'Uniswap V2', chains: EVM_NO_BSC },
+  { event_key: 'uniswap_v2.deposit',  label: 'Uniswap V2 Deposit',  provider: 'Uniswap V2', chains: EVM_NO_BSC },
+  { event_key: 'uniswap_v2.withdraw', label: 'Uniswap V2 Withdraw', provider: 'Uniswap V2', chains: EVM_NO_BSC },
 
   // Uniswap V4 — 3 events
   { event_key: 'uniswap_v4.swap',     label: 'Uniswap V4 Swap',     provider: 'Uniswap V4' },
@@ -96,14 +107,14 @@ const EVENTS: CalendarEvent[] = [
   { event_key: 'lido.l2_deposit',            label: 'Lido L2 Deposit',            provider: 'Lido' },
   { event_key: 'lido.l2_withdrawal_request', label: 'Lido L2 Withdrawal Request', provider: 'Lido' },
 
-  // Morpho — 7 events
-  { event_key: 'morpho.supply',              label: 'Morpho Supply',              provider: 'Morpho' },
-  { event_key: 'morpho.withdraw',            label: 'Morpho Withdraw',            provider: 'Morpho' },
-  { event_key: 'morpho.borrow',              label: 'Morpho Borrow',              provider: 'Morpho' },
-  { event_key: 'morpho.repay',               label: 'Morpho Repay',               provider: 'Morpho' },
-  { event_key: 'morpho.supply_collateral',   label: 'Morpho Supply Collateral',   provider: 'Morpho' },
-  { event_key: 'morpho.withdraw_collateral', label: 'Morpho Withdraw Collateral', provider: 'Morpho' },
-  { event_key: 'morpho.liquidation',         label: 'Morpho Liquidation',         provider: 'Morpho' },
+  // Morpho — 7 events. Currently ETH + BASE.
+  { event_key: 'morpho.supply',              label: 'Morpho Supply',              provider: 'Morpho', chains: ETH_AND_BASE },
+  { event_key: 'morpho.withdraw',            label: 'Morpho Withdraw',            provider: 'Morpho', chains: ETH_AND_BASE },
+  { event_key: 'morpho.borrow',              label: 'Morpho Borrow',              provider: 'Morpho', chains: ETH_AND_BASE },
+  { event_key: 'morpho.repay',               label: 'Morpho Repay',               provider: 'Morpho', chains: ETH_AND_BASE },
+  { event_key: 'morpho.supply_collateral',   label: 'Morpho Supply Collateral',   provider: 'Morpho', chains: ETH_AND_BASE },
+  { event_key: 'morpho.withdraw_collateral', label: 'Morpho Withdraw Collateral', provider: 'Morpho', chains: ETH_AND_BASE },
+  { event_key: 'morpho.liquidation',         label: 'Morpho Liquidation',         provider: 'Morpho', chains: ETH_AND_BASE },
 
   // Spark — 6 events
   { event_key: 'spark.deposit',     label: 'Spark Deposit',     provider: 'Spark' },
