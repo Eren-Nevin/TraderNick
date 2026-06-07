@@ -46,6 +46,20 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**0.4.0 — Transfer wallet selection + multi-network `as_parquet` lands.**
+- All transfer queries (`evm.erc20`, `evm.native_transfers`, `tron.native`,
+  `tron.trc20`, `btc.native`) now accept full Horatio wallet-selection
+  pushdown: `sender_label` / `receiver_label` / `involving_label`,
+  `sender_category` / `receiver_category` / `involving_category`, and every
+  `exclude_*` variant.
+- `query.network([...]).as_parquet(key)` now works for all transfer
+  queries — server-side fan-out across networks, in-process concat, single
+  parquet under `key`. Optional `with_network` column auto-toggles on
+  multi-network calls.
+- **Breaking:** `evm.stader` / `evm.threshold` namespaces removed. TN
+  doesn't ingest those upstreams; the stubs were giving false-positive
+  "namespace exists" signals. Re-add when TN ingestion picks them up.
+
 **0.3.0 — Phase 4 TN-exclusive protocols.** Adds Spark, Morpho, and
 Aerodrome (concentrated + basic). New namespaces live under
 `client.evm.{spark, morpho, aerodrome}`; existing `aave / uniswap / lido /
@@ -79,7 +93,7 @@ What works:
   as_parquet}` — server-side parquet snapshots with `local_*` filters
 - `client.jobs.{list, get, cancel}` — proxies to the ingestion job queue
 
-TN-exclusive (new in 0.3.0):
+TN-exclusive (since 0.3.0):
 - `evm.spark.{deposits, withdrawals, borrows, repays, flashloans,
   liquidations}` — same six-event surface as `evm.aave` byte-for-byte
 - `evm.morpho.{supplies, withdrawals, borrows, repays, supply_collaterals,
@@ -90,9 +104,10 @@ TN-exclusive (new in 0.3.0):
   optional `stable` flag
 
 Not yet exposed:
-- `evm.{stader, threshold}` — return empty schemas (TN doesn't ingest
-  these networks yet)
-- `gmx.*` namespace planned for 0.4.0 (GMX has ~10 per-event schemas; bigger lift)
+- `evm.{stader, threshold}` — dropped in 0.4.0 (TN doesn't ingest the
+  upstream yet); re-add when ingestion lands
+- `gmx.*` namespace planned for a future release (GMX has ~10 per-event
+  schemas; bigger lift)
 - `hyperliquid.{sends, spot_transfers}` — return empty schemas
 - `client.scan_parquet` only honors address-based `local_*` filters;
   label/category/entity variants are wired but no-op without

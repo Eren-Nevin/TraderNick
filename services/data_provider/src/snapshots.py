@@ -13,16 +13,18 @@ tradernick_data_provider client treats them identically:
   POST /snapshots/scan   →  lazy filter via polars (or DuckDB if engine='duckdb'),
                             return filtered parquet bytes — or save under
                             `save_key` server-side without a round trip.
-
-`save_multi` (server-side per-network fan-out + DuckDB merge) is sketched
-here but doesn't share state with the per-route handlers — until we wire
-it up to a proper subprocess pool it returns 501. Single-network calls
-already exercise the inline `save_key` path on each route, so the only
-loss is the parallel multi-network upload optimization.
+  POST /snapshots/save_multi → server-side per-network fan-out for transfer
+                            queries (erc20 / native / trc20 / btc). Runs the
+                            same SQL the per-route handlers do, concats the
+                            per-network frames in-process, applies local
+                            filters, writes parquet under `save_key`. Bytes
+                            never leave the box; the client only sees a
+                            {"saved": true, "key": ...} ack.
 """
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -31,6 +33,9 @@ import re
 import polars as pl
 import pyarrow.parquet as pq
 from sanic import Request, Sanic, response
+
+from . import sql as sql_b
+from .ch import query_polars
 
 log = logging.getLogger(__name__)
 
@@ -128,18 +133,154 @@ def register(app: Sanic) -> None:
 
     @app.post('/snapshots/save_multi')
     async def snapshots_save_multi(request: Request):
-        """Server-side multi-network fan-out + DuckDB merge.
+        """Per-network fan-out for transfer queries; concat + persist as one
+        parquet under `save_key`.
 
-        Horatio runs the per-network reads in subprocesses and merges via
-        DuckDB so the client never materializes the union. Phase 2 ships
-        a 501 stub — single-network calls already exercise the inline
-        `save_key` path on each route. Wiring the subprocess pool is
-        tracked alongside the scan engine work.
-        """
-        return response.json(
-            {'error': 'save_multi not implemented yet — set save_key on the per-route call instead'},
-            status=501,
+        Body:
+          {
+            "protocol": "erc20_transfers" | "native_transfers"
+                       | "trc20_transfers" | "tron_native_transfers"
+                       | "bitcoin_native_transfers",
+            "networks": ["ETH", "ARB", ...],
+            "save_key": "my-snapshot",
+            "since": ISO, "until": ISO,
+            "tokens": [...],          # erc20 / trc20 only
+            "min_amount"|"max_amount": float?,
+            "sender"|"receiver"|"involving"|<exclude_*>|<*_label>|<*_category>: ...,
+            "with_network": bool?,    # default true for len(networks) > 1
+            "include_zero_amounts": bool?,
+            "local_filters": [...]?,  # applied post-concat
+          }
+
+        The route reuses the per-route SQL builders so multi-network and
+        single-network reads always agree on filter semantics. Per-network
+        queries are gathered concurrently — CH is the bottleneck, not the
+        Python side."""
+        body = request.json or {}
+        protocol = body.get('protocol')
+        networks = body.get('networks') or []
+        save_key = body.get('save_key')
+        since, until = body.get('since'), body.get('until')
+
+        if not protocol:
+            return response.json({'error': 'missing protocol'}, status=400)
+        if not networks or not isinstance(networks, list):
+            return response.json({'error': 'networks must be a non-empty list'}, status=400)
+        if not save_key:
+            return response.json({'error': 'missing save_key'}, status=400)
+        if not since or not until:
+            return response.json({'error': 'missing since/until'}, status=400)
+        try:
+            dst = _snap_path(app, save_key)
+        except ValueError as e:
+            return response.json({'error': str(e)}, status=400)
+
+        # Pull every shared transfer filter kwarg off the body. Same keys
+        # the per-route handler passes through `_transfer_filter_kwargs`.
+        filter_keys = (
+            'sender', 'receiver', 'involving',
+            'exclude_sender', 'exclude_receiver', 'exclude_involving',
+            'sender_label', 'receiver_label', 'involving_label',
+            'exclude_sender_label', 'exclude_receiver_label', 'exclude_involving_label',
+            'sender_category', 'receiver_category', 'involving_category',
+            'exclude_sender_category', 'exclude_receiver_category', 'exclude_involving_category',
+            'min_amount', 'max_amount',
         )
+        filters = {k: body.get(k) for k in filter_keys}
+
+        tokens = body.get('tokens')
+        per_proto = {
+            'erc20_transfers':         (sql_b.evm_erc20_transfers,   True),
+            'native_transfers':        (sql_b.evm_native_transfers,  False),
+            'trc20_transfers':         (sql_b.tron_trc20_transfers,  True),
+            'tron_native_transfers':   (sql_b.tron_native_transfers, False),
+            'bitcoin_native_transfers':(sql_b.btc_native_transfers,  False),
+        }
+        if protocol not in per_proto:
+            return response.json(
+                {'error': f'unsupported protocol: {protocol}'}, status=400,
+            )
+        builder, needs_tokens = per_proto[protocol]
+        if needs_tokens and (not isinstance(tokens, list) or not tokens):
+            return response.json(
+                {'error': f'{protocol} requires non-empty tokens list'}, status=400,
+            )
+
+        def _build(network: str):
+            if needs_tokens:
+                return builder(network, tokens, since, until, **filters)
+            return builder(network, since, until, **filters)
+
+        async def _read_one(network: str) -> pl.DataFrame | None:
+            sql, params = _build(network)
+            if sql is None:
+                # Unsupported network on this protocol — skip silently;
+                # multi-net callers commonly probe a superset.
+                log.info('save_multi: %s/%s unsupported, skipping', protocol, network)
+                return None
+            df = await query_polars(sql, params)
+            if df.is_empty():
+                return None
+            return df.with_columns(pl.lit(network).alias('network'))
+
+        with_network = body.get('with_network')
+        if with_network is None:
+            with_network = len(networks) > 1
+
+        try:
+            results = await asyncio.gather(
+                *[_read_one(n) for n in networks], return_exceptions=False,
+            )
+        except Exception as e:
+            log.exception('save_multi fan-out failed')
+            return response.json({'error': f'fan-out failed: {e}'}, status=500)
+
+        frames = [df for df in results if df is not None]
+        if not frames:
+            # Empty union — emit the canonical empty-transfer schema so the
+            # client gets a parquet it can read back without a column-shape
+            # surprise. Optionally add the network column.
+            empty = pl.DataFrame(schema={
+                'block_number': pl.Int64, 'token': pl.Utf8,
+                'sender': pl.Utf8, 'receiver': pl.Utf8,
+                'amount': pl.Float64, 'time': pl.Datetime('ms', 'UTC'),
+                **({'network': pl.Utf8} if with_network else {}),
+            })
+            if not with_network and 'network' in empty.columns:
+                empty = empty.drop('network')
+            empty.write_parquet(dst)
+            return response.json({
+                'saved': True, 'key': _safe_key(save_key), 'rows': 0, 'networks': [],
+            })
+
+        # Concat must tolerate per-network column drift (e.g. native vs
+        # erc20 token col). `diagonal_relaxed` widens missing columns to
+        # null and reconciles supertype differences.
+        combined = pl.concat(frames, how='diagonal_relaxed')
+
+        if not with_network and 'network' in combined.columns:
+            combined = combined.drop('network')
+
+        # Mirror the per-route default: hide amount==0 noise unless the
+        # caller explicitly opted in. Token-approval transfers etc.
+        if not body.get('include_zero_amounts') and 'amount' in combined.columns:
+            combined = combined.filter(pl.col('amount') != 0)
+
+        local_filters = body.get('local_filters') or []
+        if local_filters:
+            combined = _apply_local_filters_lazy(combined.lazy(), local_filters).collect()
+
+        if 'time' in combined.columns:
+            combined = combined.sort('time')
+
+        combined.write_parquet(dst)
+        nets_seen = sorted({
+            n for n, f in zip(networks, results) if f is not None
+        })
+        return response.json({
+            'saved': True, 'key': _safe_key(save_key),
+            'rows': combined.height, 'networks': nets_seen,
+        })
 
     @app.post('/snapshots/scan')
     async def snapshots_scan(request: Request):
