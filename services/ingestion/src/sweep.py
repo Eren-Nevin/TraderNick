@@ -61,7 +61,14 @@ def sweep_cadence_s(live_cadence_s: float) -> float:
     return live_cadence_s * SWEEP_MULTIPLIER
 
 
-def sweep_since(*, now: datetime, sweep_cadence_seconds: float, last_seen: datetime | None) -> datetime:
+def sweep_since(
+    *,
+    now: datetime,
+    sweep_cadence_seconds: float,
+    last_seen: datetime | None,
+    max_window_seconds: float | None = None,
+    stream_name: str | None = None,
+) -> datetime:
     """Pick the `since` boundary for one sweep fire.
 
     Returns the *earlier* of:
@@ -71,13 +78,38 @@ def sweep_since(*, now: datetime, sweep_cadence_seconds: float, last_seen: datet
                               than one sweep cadence, fetch all the way back
                               to it, plus 5 min safety)
 
-    Examples (sweep_cadence = 60min):
+    `max_window_seconds` caps the result at `now - max_window_seconds` —
+    the upstream API's per-request range limit (e.g. 7d for binance raw
+    trades, 31d for binance OHLCV). Without it, a single stale per-token
+    watermark (one token that hasn't received data in months — typically
+    DeFiStream-side delisting/gap) makes every sweep tick throw an
+    out-of-range error and the live token cohort never gets swept.
+    With the cap, the sweep covers as much as the API allows; the deeper
+    gap requires a targeted backfill to fix.
+
+    Examples (sweep_cadence = 60min, no cap):
       last_seen 30 min ago  →  since = now - 60min
       last_seen 100 min ago →  since = now - 105min
       last_seen None        →  since = now - 60min
+
+    With cap = 7 days, last_seen = 100 days ago → since = now - 7d, and
+    a WARNING is logged so the deeper gap is visible.
     """
     minimum_since = now - timedelta(seconds=sweep_cadence_seconds)
     if last_seen is None:
-        return minimum_since
-    gap_since = last_seen - SWEEP_SAFETY_OVERLAP
-    return min(minimum_since, gap_since)
+        since = minimum_since
+    else:
+        gap_since = last_seen - SWEEP_SAFETY_OVERLAP
+        since = min(minimum_since, gap_since)
+    if max_window_seconds is not None:
+        cap = now - timedelta(seconds=max_window_seconds)
+        if since < cap:
+            log.warning(
+                "%s sweep window capped: wanted since=%s (last_seen=%s) "
+                "but API max_window=%.0fs → using since=%s. Deeper gap "
+                "needs a targeted backfill.",
+                stream_name or "sweep", since, last_seen,
+                max_window_seconds, cap,
+            )
+            return cap
+    return since

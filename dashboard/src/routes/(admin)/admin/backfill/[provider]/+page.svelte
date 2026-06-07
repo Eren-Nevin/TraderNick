@@ -16,6 +16,7 @@
   } from '$lib/admin/providers';
   import BackfillJobsTable from '$lib/admin/components/BackfillJobsTable.svelte';
   import BackfillForm from '$lib/admin/components/BackfillForm.svelte';
+  import FillBoardSection from '$lib/admin/components/FillBoardSection.svelte';
 
   const ctx = getContext<AdminContext>(ADMIN_CTX_KEY);
 
@@ -24,6 +25,10 @@
     provider ? ctx.jobs.filter((j) => jobProvider(j.job_type) === provider) : [],
   );
   let forms = $derived(provider ? formsForProvider(provider) : []);
+  // Scope the table's Clear button to this provider's job_types. The
+  // form spec keys are unprefixed (e.g. `binance_ohlcv`); the backend
+  // matches `job_type` which is prefixed (`backfill_binance_ohlcv`).
+  let clearScopeJobTypes = $derived(forms.map((f) => `backfill_${f.type}`));
 </script>
 
 <div class="px-8 py-6 space-y-6">
@@ -41,7 +46,14 @@
     {#if ctx.jobsErr}
       <div class="text-xs text-red-300 bg-red-950/30 p-2 rounded">{ctx.jobsErr}</div>
     {/if}
-    <BackfillJobsTable jobs={jobsFiltered} cancelJob={ctx.cancelJob} />
+    <BackfillJobsTable
+      jobs={jobsFiltered}
+      cancelJob={ctx.cancelJob}
+      clearFinished={ctx.clearFinishedJobs}
+      {clearScopeJobTypes}
+    />
+
+    <FillBoardSection {provider} />
 
     <section class="space-y-4">
       <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wide">Kick new backfill</h2>

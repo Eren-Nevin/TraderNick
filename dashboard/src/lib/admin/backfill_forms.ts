@@ -314,5 +314,37 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
       { name: 'tokens', label: 'Tokens', kind: 'multiselect',
         options: INGEST_TOKENS, defaultSelected: INGEST_TOKENS }
     ]
+  },
+  {
+    type: 'binance_book_depth',
+    label: 'Binance book depth',
+    description: 'BPS-level depth snapshots (12 rows / snapshot, ~every 30s). ' +
+      'Quota cost is 100/day/token — much higher than the other Binance feeds. ' +
+      'Live stream ships disabled by default; enable in Live streams when ready.',
+    fields: [
+      { name: 'tokens', label: 'Tokens', kind: 'multiselect',
+        options: INGEST_TOKENS, defaultSelected: INGEST_TOKENS }
+    ]
+  },
+
+  // Data process — derived-MV maintenance backfills. Single-shot rebuilds
+  // FROM the current state of upstream tables; no time window.
+  {
+    type: 'exchange_flow_minute',
+    label: 'Exchange flow rebuild',
+    description: 'Rebuild tradernick.exchange_flow_minute from transfers FINAL ' +
+      'using the staging-swap-recover pattern. The chart never sees an empty ' +
+      'rollup during the rebuild. Idempotent — re-running is safe.',
+    fields: []
+  },
+  {
+    type: 'transfers_rematerialize',
+    label: 'Transfers rematerialize (post-wallet upload)',
+    description: 'Refresh dictionary + MATERIALIZE COLUMN ×4 (sender/receiver ' +
+      'categories + entity) + DROP/ADD/MATERIALIZE INDEX ×4 on transfers. ' +
+      'Fire this after uploading a new wallet_labels parquet so historical ' +
+      'rows pick up the new mapping. Also rebuilds exchange_flow_minute by ' +
+      'default (uncheck to skip).',
+    fields: []
   }
 ];

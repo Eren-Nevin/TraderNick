@@ -61,6 +61,18 @@
     await refresh();
   }
 
+  async function clearFinishedJobs(jobTypes?: string[]): Promise<{ deleted: number }> {
+    const res = await fetch('/api/admin/jobs/clear-finished', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(jobTypes && jobTypes.length ? { job_types: jobTypes } : {})
+    });
+    if (!res.ok) throw new Error(`clear-finished → ${res.status} ${await res.text()}`);
+    const body = await res.json();
+    await refresh();
+    return { deleted: Number(body?.deleted ?? 0) };
+  }
+
   // Pass a getter-based proxy so consumers see the latest $state value
   // every time they read these fields (instead of a snapshot taken at
   // setContext time).
@@ -73,6 +85,7 @@
     refresh,
     streamAction,
     cancelJob,
+    clearFinishedJobs,
   };
   setContext(ADMIN_CTX_KEY, ctx);
 

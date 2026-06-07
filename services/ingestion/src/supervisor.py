@@ -69,11 +69,26 @@ class Supervisor:
     # ------------------------------------------------------------------
     async def start_from_registry(self):
         """Walk streams.STREAMS, consult the persisted enabled state, spawn
-        one supervise task per enabled stream. Called once at server startup."""
+        one supervise task per enabled stream. Called once at server startup.
+
+        With the per-provider split, an env-set `INGESTION_PROVIDER` filters
+        the registry to streams owned by this container. `INGESTION_ROLE`
+        gates whether streams are spawned at all — only `live` and the
+        legacy `monolith` role spawn streams. `backfill` / `admin`
+        services walk a no-op (their `/streams` endpoint still works for
+        observability — it just returns an empty set)."""
         # Local imports — avoid a cycle with streams package and keep import
         # cost out of `python -m streams.xxx` workers.
         from streams import STREAMS
         import ch_status
+        import provider_registry as pr
+
+        role = pr.current_role()
+        provider = pr.current_provider()
+        if role not in ("live", "monolith"):
+            log.info("supervisor: role=%s — not spawning any streams "
+                     "(provider=%s)", role, provider)
+            return
 
         try:
             persisted = await ch_status.read_all_state()
@@ -81,12 +96,38 @@ class Supervisor:
             log.exception("read_all_state failed (treating all as enabled): %s", exc)
             persisted = {}
 
-        for spec in STREAMS:
+        # Provider filter: only streams whose group maps to our provider.
+        # In `monolith` mode (default for the unmodified env) provider is
+        # None and every stream passes.
+        if provider is not None:
+            owned = pr.streams_owned_by(provider, group_of=lambda n: n)
+            specs = [s for s in STREAMS if s.name in owned]
+            log.info("supervisor: provider=%s role=%s — filtered %d/%d streams",
+                     provider, role, len(specs), len(STREAMS))
+        else:
+            specs = list(STREAMS)
+            log.info("supervisor: monolith mode — %d streams", len(specs))
+
+        # Force-idle on first boot for per-provider services. The monolith
+        # is already actively polling every stream; if a sibling service
+        # came up with `enabled_default=True` it would double-poll until
+        # the operator noticed. We treat "absent from persisted state +
+        # not monolith" as `enabled=False` so the new services park
+        # quietly and the operator enables them through the admin UI
+        # one cutover at a time. Monolith-mode (role=='monolith') falls
+        # back to enabled_default exactly as before.
+        force_idle = role != "monolith"
+        for spec in specs:
             enabled = persisted.get(spec.name)
             if enabled is None:
-                enabled = spec.enabled_default
+                enabled = (False if force_idle else spec.enabled_default)
             if not enabled:
-                log.info("stream %s disabled — not spawning", spec.name)
+                if force_idle and spec.name not in persisted:
+                    log.info("stream %s: no persisted state on per-provider "
+                             "service — defaulting to OFF (admin UI to enable)",
+                             spec.name)
+                else:
+                    log.info("stream %s disabled — not spawning", spec.name)
                 self.workers[spec.name] = WorkerStatus(spec.name, spec.module, "stream")
                 continue
             self._spawn(spec.name, spec.module, "stream")

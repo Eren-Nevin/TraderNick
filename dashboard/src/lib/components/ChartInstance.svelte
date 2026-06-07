@@ -126,6 +126,7 @@
   import type { View } from '$lib/chart-zoom';
   import { queuedFetch } from '$lib/fetch-queue';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
+  import { SHADOW_ITEM_MARKER_PROPERTY_NAME } from 'svelte-dnd-action';
 
   // Module-scope cache survives component remounts. svelte-dnd-action
   // destroys and recreates the chart component when its DOM node moves
@@ -762,6 +763,15 @@
   }
 
   $effect(() => {
+    // Drag-reorder guard: svelte-dnd-action briefly replaces the dragged
+    // item with a "shadow" placeholder that lacks the chart's config
+    // fields. Without this guard, loadKey() returns a different value
+    // (e.g. instance.smartSelector becomes undefined → defaults kick
+    // in) and the effect re-fetches mid-drag, plus once more after the
+    // drop when the real instance returns. The shadow object has the
+    // SHADOW_ITEM_MARKER_PROPERTY_NAME flag; skip the effect while it's
+    // present and the cached data + loadedKey survive the drag intact.
+    if ((instance as unknown as Record<string, unknown>)[SHADOW_ITEM_MARKER_PROPERTY_NAME]) return;
     const key = loadKey();
     if (key === loadedKey) return;
     // Remount fast-path: if we previously loaded the exact same key for this
@@ -3648,6 +3658,12 @@
 
   let overlayFetchCtl: AbortController | null = null;
   $effect(() => {
+    // Drag-reorder guard — same reasoning as the main load effect:
+    // during a svelte-dnd-action drag the bound instance briefly
+    // becomes a shadow placeholder and any read of instance.overlays
+    // would return undefined, causing all overlays to be cleared and
+    // refetched on drop.
+    if ((instance as unknown as Record<string, unknown>)[SHADOW_ITEM_MARKER_PROPERTY_NAME]) return;
     // Subscribe only to the inputs that should re-trigger overlay loading.
     // Anything we *read but write back to* (overlayLoaded itself) is read
     // through `untrack` so the write at the end doesn't loop the effect.
@@ -3818,10 +3834,9 @@
       return fmtAmountTooltip;
     }
     if (o.kind === 'vol_oi') {
-      // OI / Volume is a unitless ratio (bucket multiples of liquidity).
-      // 3-4 sig figs is the right precision — too many digits looks like
-      // false accuracy on a ratio that's already noisy.
-      return (v: number) => `${v.toFixed(3)}×`;
+      // Bucket volume as a percent of OI — "20% of OI turned over this bucket".
+      // 1 decimal is enough; the underlying ratio is noisy.
+      return (v: number) => `${(v * 100).toFixed(1)}%`;
     }
     if (o.kind === 'ohlcv' || o.kind === 'price') {
       // Volume is USD when the host renders it that way; close/open/high/low

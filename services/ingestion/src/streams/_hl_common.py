@@ -92,10 +92,20 @@ async def run(stream_name: str, event: str) -> None:
     # watermark, which can lag arbitrarily far behind — adding a new token
     # to the live roster temporarily drags `min_watermark_per_token` back
     # to that token's earliest row, and a single request would 400 with
-    # "Time range too large". Cap each sweep request at 30 days (one day
-    # of headroom) and walk the gap in sequential chunks so a wide window
-    # closes incrementally instead of failing outright.
-    MAX_SWEEP_CHUNK = timedelta(days=30)
+    # "Time range too large". Cap each sweep request and walk the gap in
+    # sequential chunks so a wide window closes incrementally instead of
+    # failing outright.
+    #
+    # Per-event override below `MAX_SWEEP_CHUNK` for heavy endpoints whose
+    # response volume blows past DeFiStream's *response-side* memory limit
+    # well before the documented 30-day window cap. `position_history` is
+    # the worst: 31 tokens × 5-min snapshots × wallet-level rows produces
+    # 50-120K rows per 5-min bucket; an 8-hour gap on that shape returned
+    # HTTP 500 Code 241 (upstream ClickHouse OOM) during the 2026-06-06
+    # incident. Capping at 1 hour keeps each chunk well within the volume
+    # DeFiStream demonstrably handles in steady state.
+    _SWEEP_CHUNK_OVERRIDES = {"position_history": timedelta(hours=1)}
+    MAX_SWEEP_CHUNK = _SWEEP_CHUNK_OVERRIDES.get(event, timedelta(days=30))
     CHUNK_PACING_S = 0.5
 
     async def _run_sweep_once(ch, label: str) -> tuple[int, str | None]:
@@ -119,9 +129,9 @@ async def run(stream_name: str, event: str) -> None:
                 log.info("%s %s window=%s..%s rows=%d (last_seen=%s)",
                          event, label, since, now, n, last_seen)
                 return n, None
-            log.info("%s %s window=%s spans %.1f days — chunking in %sd slices (last_seen=%s)",
-                     event, label, since, span.total_seconds() / 86400.0,
-                     int(MAX_SWEEP_CHUNK.total_seconds() // 86400), last_seen)
+            log.info("%s %s window=%s spans %.1f hours — chunking in %.1f-hour slices (last_seen=%s)",
+                     event, label, since, span.total_seconds() / 3600.0,
+                     MAX_SWEEP_CHUNK.total_seconds() / 3600.0, last_seen)
             chunks_total = 0
             n_chunks = 0
             cur = since

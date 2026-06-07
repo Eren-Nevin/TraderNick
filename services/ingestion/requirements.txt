@@ -4,3 +4,4 @@ clickhouse-connect[async]>=0.7.20
 python-dotenv>=1.0
 polars>=1.0
 pyarrow>=14.0
+httpx>=0.27

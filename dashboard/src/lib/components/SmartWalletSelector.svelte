@@ -100,6 +100,9 @@
   let saveOpen = $state(false);
   let saveName = $state('');
   let saving = $state(false);
+  // Manage panel — hidden by default so a fresh chart isn't visually
+  // decorated with chips from other charts' saved presets.
+  let manageOpen = $state(false);
 
   async function loadPresetList() {
     presetsLoading = true;
@@ -231,6 +234,27 @@
       class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded px-2 py-0.5 text-zinc-200 text-[11px]"
       title="Save the current criteria group as a named preset"
     >Save</button>
+    <button
+      type="button"
+      onclick={() => {
+        if (value.criteria.length === 0) return;
+        if (!confirm(`Remove all ${value.criteria.length} criteria?`)) return;
+        // Wipe criteria but keep lookback / top_n / scope / sort_by so
+        // the user doesn't have to redo the surrounding knobs.
+        onChange({ ...value, criteria: [] });
+      }}
+      disabled={value.criteria.length === 0}
+      class="bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-900 disabled:text-zinc-600 border border-zinc-700 rounded px-2 py-0.5 text-zinc-200 text-[11px]"
+      title="Remove all criteria (lookback / scope / sort stay)"
+    >Reset</button>
+    {#if presets.length > 0}
+      <button
+        type="button"
+        onclick={() => (manageOpen = !manageOpen)}
+        class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded px-2 py-0.5 text-zinc-200 text-[11px]"
+        title="Show / hide the saved-preset list (for deleting)"
+      >{manageOpen ? 'Hide' : 'Manage'}</button>
+    {/if}
   </div>
 
   {#if saveOpen}
@@ -268,20 +292,16 @@
     </div>
   {/if}
 
-  {#if presets.length > 0}
-    <!-- Compact list of saved presets so the user can delete one without
-         needing a separate management page. Hidden when the list is
-         empty; rendered as small chips. -->
-    <div class="flex items-center gap-1.5 flex-wrap text-[10px]">
-      <span class="text-zinc-500 uppercase tracking-widest">Saved:</span>
+  {#if manageOpen && presets.length > 0}
+    <!-- Manage panel: toggled by the Manage button. Lists each saved
+         preset with its own delete button. Hidden by default so a fresh
+         chart isn't visually decorated with chips of other charts'
+         saved presets (which can read as "applied state"). -->
+    <div class="flex items-center gap-1.5 flex-wrap text-[10px] border-t border-zinc-800 pt-1.5">
+      <span class="text-zinc-500 uppercase tracking-widest">Manage:</span>
       {#each presets as p (p.name)}
         <span class="inline-flex items-center gap-1 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5">
-          <button
-            type="button"
-            class="text-zinc-200 hover:text-emerald-300"
-            title="Load this preset"
-            onclick={() => applyPreset(p.name)}
-          >{p.name}</button>
+          <span class="text-zinc-300">{p.name}</span>
           <button
             type="button"
             class="text-zinc-500 hover:text-red-300 leading-none"

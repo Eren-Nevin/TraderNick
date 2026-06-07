@@ -87,6 +87,7 @@ LONG_SHORT_COLUMNS = [
     "long_short_count_ratio", "taker_long_short_vol_ratio",
 ]
 FUNDING_RATE_COLUMNS = ["token", "time", "rate"]
+BOOK_DEPTH_COLUMNS = ["token", "time", "percentage", "depth", "value"]
 
 TRANSFER_COLUMNS = [
     "kind", "chain", "token", "time", "block_number",
@@ -159,6 +160,21 @@ def funding_rate_df_to_rows(df: pl.DataFrame):
             str(r["token"]),
             _to_naive_utc(r["time"]),
             float(r["rate"]),
+        ])
+    return rows
+
+
+def book_depth_df_to_rows(df: pl.DataFrame):
+    """12 rows per snapshot, levels in bps {±500, ±400, ±300, ±200, ±100, ±20}.
+    `time` carries sub-second precision (DateTime64(3) on the CH side)."""
+    rows = []
+    for r in df.iter_rows(named=True):
+        rows.append([
+            str(r["token"]),
+            _to_naive_utc(r["time"]),
+            int(r["percentage"]),
+            float(r["depth"]),
+            float(r["value"]),
         ])
     return rows
 

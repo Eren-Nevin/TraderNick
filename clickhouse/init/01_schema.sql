@@ -17,7 +17,7 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_ohlcv_1m
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time)
-TTL time + INTERVAL 180 DAY;
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_raw_trades
 (
@@ -32,7 +32,7 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_raw_trades
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, id)
-TTL toDateTime(time) + INTERVAL 180 DAY;
+TTL toDateTime(time) + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.transfers
 (
@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS tradernick.transfers
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (chain, token, time, sender, receiver, amount, tx_id, log_index)
-TTL time + INTERVAL 180 DAY;
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_open_interest
 (
@@ -65,7 +65,7 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_open_interest
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time)
-TTL time + INTERVAL 180 DAY;
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_long_short_ratios
 (
@@ -80,7 +80,7 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_long_short_ratios
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time)
-TTL time + INTERVAL 180 DAY;
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_funding_rate
 (
@@ -92,7 +92,26 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_funding_rate
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time)
-TTL time + INTERVAL 180 DAY;
+TTL time + INTERVAL 270 DAY;
+
+-- Book depth (BPS-level snapshots). 12 rows per snapshot at fixed
+-- percentage levels {±500, ±400, ±300, ±200, ±100, ±20} from mid-price,
+-- one snapshot every ~30s per token. Time is sub-second (DateTime64(3))
+-- and (token, time) is the natural snapshot key — `percentage` is the
+-- tie-breaker in ORDER BY so dedup is per-row not per-snapshot.
+CREATE TABLE IF NOT EXISTS tradernick.binance_book_depth
+(
+    token        LowCardinality(String),
+    time         DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    percentage   Int16          CODEC(T64, ZSTD(3)),
+    depth        Float64        CODEC(Gorilla, ZSTD(3)),
+    value        Float64        CODEC(Gorilla, ZSTD(3)),
+    ingested_at  DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(toDate(time))
+ORDER BY (token, time, percentage)
+TTL toDateTime(time) + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.ingestion_jobs
 (
@@ -108,7 +127,7 @@ CREATE TABLE IF NOT EXISTS tradernick.ingestion_jobs
 )
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (job_id)
-TTL updated_at + INTERVAL 180 DAY;
+TTL updated_at + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Per-stream live ingestion tracking.
@@ -282,7 +301,7 @@ CREATE TABLE IF NOT EXISTS tradernick.exchange_flow_minute
 ENGINE = SummingMergeTree
 PARTITION BY toYYYYMM(time)
 ORDER BY (direction, exchange, chain, token, time)
-TTL time + INTERVAL 180 DAY;
+TTL time + INTERVAL 270 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.mv_exchange_flow
 TO tradernick.exchange_flow_minute AS
@@ -342,7 +361,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_deposits
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, eth_market, token, time, user, tx_id, log_index);
+ORDER BY (chain, eth_market, token, time, user, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_withdrawals
 (
@@ -361,7 +381,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_withdrawals
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, eth_market, token, time, user, tx_id, log_index);
+ORDER BY (chain, eth_market, token, time, user, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_borrows
 (
@@ -383,7 +404,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_borrows
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, eth_market, token, time, user, tx_id, log_index);
+ORDER BY (chain, eth_market, token, time, user, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_repays
 (
@@ -403,7 +425,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_repays
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, eth_market, token, time, user, tx_id, log_index);
+ORDER BY (chain, eth_market, token, time, user, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_flashloans
 (
@@ -425,7 +448,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_flashloans
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, eth_market, token, time, user, tx_id, log_index);
+ORDER BY (chain, eth_market, token, time, user, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- Liquidations are structurally different: no single (user, token) — instead
 -- (owner, debt_token, debt_to_cover) + (collateral_token, liquidated_collateral_amount, liquidator).
@@ -449,7 +473,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_liquidations
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, eth_market, debt_token, time, owner, tx_id, log_index);
+ORDER BY (chain, eth_market, debt_token, time, owner, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 -- Uniswap V3 events — four tables, one per event type. Pool is identified by
 -- (chain, symbol0, symbol1, fee_tier). DeFiStream canonicalises (symbol0,
 -- symbol1) to address-order on output (USDC < WETH alphabetically too) — we
@@ -482,7 +507,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_swaps
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.uniswap_deposits
 (
@@ -508,7 +534,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_deposits
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.uniswap_withdrawals
 (
@@ -533,7 +560,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_withdrawals
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.uniswap_collects
 (
@@ -559,7 +587,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_collects
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, fee_tier, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Lido liquid-staking events
@@ -588,7 +617,8 @@ CREATE TABLE IF NOT EXISTS tradernick.lido_deposits
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, time, tx_id, log_index);
+ORDER BY (chain, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.lido_withdrawal_requests
 (
@@ -607,7 +637,8 @@ CREATE TABLE IF NOT EXISTS tradernick.lido_withdrawal_requests
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, time, tx_id, log_index);
+ORDER BY (chain, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.lido_withdrawal_claims
 (
@@ -627,7 +658,8 @@ CREATE TABLE IF NOT EXISTS tradernick.lido_withdrawal_claims
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, time, tx_id, log_index);
+ORDER BY (chain, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.lido_l2_deposits
 (
@@ -645,7 +677,8 @@ CREATE TABLE IF NOT EXISTS tradernick.lido_l2_deposits
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, time, tx_id, log_index);
+ORDER BY (chain, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.lido_l2_withdrawal_requests
 (
@@ -663,7 +696,8 @@ CREATE TABLE IF NOT EXISTS tradernick.lido_l2_withdrawal_requests
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, time, tx_id, log_index);
+ORDER BY (chain, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- AAVE v2 events (legacy mainnet + Polygon pools)
@@ -689,7 +723,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v2_deposits
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_v2_withdrawals
 (
@@ -706,7 +741,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v2_withdrawals
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_v2_borrows
 (
@@ -726,7 +762,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v2_borrows
     ingested_at        DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_v2_repays
 (
@@ -743,7 +780,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v2_repays
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_v2_flashloans
 (
@@ -762,7 +800,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v2_flashloans
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_v2_liquidations
 (
@@ -782,7 +821,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v2_liquidations
     ingested_at                  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, debt_token, time, tx_id, log_index);
+ORDER BY (chain, debt_token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Uniswap V2 events
@@ -813,7 +853,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_v2_swaps
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.uniswap_v2_deposits
 (
@@ -832,7 +873,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_v2_deposits
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.uniswap_v2_withdrawals
 (
@@ -852,7 +894,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_v2_withdrawals
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Uniswap V4 events
@@ -893,7 +936,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_v4_swaps
     ingested_at      DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.uniswap_v4_deposits
 (
@@ -918,7 +962,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_v4_deposits
     ingested_at      DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.uniswap_v4_withdrawals
 (
@@ -943,7 +988,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_v4_withdrawals
     ingested_at      DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- initialize fires once per pool deployment — useful for a "new pool count"
 -- chart on the DeX page. The symbol0/symbol1 columns come from the V4 client
@@ -968,7 +1014,8 @@ CREATE TABLE IF NOT EXISTS tradernick.uniswap_v4_initializes
     ingested_at       DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, fee, tick_spacing, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Aerodrome concentrated-pool events (BASE only)
@@ -1003,7 +1050,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_swaps
     ingested_at      DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_deposits
 (
@@ -1028,7 +1076,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_deposits
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_withdrawals
 (
@@ -1052,7 +1101,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_withdrawals
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_collects
 (
@@ -1077,7 +1127,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aero_concentrated_collects
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, tick_spacing, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Aerodrome basic-pool events (Solidly-style v1 AMM, BASE only)
@@ -1110,7 +1161,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aero_basic_swaps (
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aero_basic_deposits (
     chain         LowCardinality(String),
@@ -1129,7 +1181,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aero_basic_deposits (
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aero_basic_withdrawals (
     chain         LowCardinality(String),
@@ -1149,7 +1202,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aero_basic_withdrawals (
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aero_basic_claims (
     chain         LowCardinality(String),
@@ -1169,7 +1223,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aero_basic_claims (
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index);
+ORDER BY (chain, symbol0, symbol1, stable, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- AAVE v4 events (ETH only)
@@ -1199,7 +1254,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v4_deposits
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_v4_withdrawals
 (
@@ -1219,7 +1275,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v4_withdrawals
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_v4_borrows
 (
@@ -1239,7 +1296,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v4_borrows
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_v4_repays
 (
@@ -1259,7 +1317,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v4_repays
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.aave_v4_liquidations
 (
@@ -1279,7 +1338,8 @@ CREATE TABLE IF NOT EXISTS tradernick.aave_v4_liquidations
     ingested_at       DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, debt_token, time, tx_id, log_index);
+ORDER BY (chain, debt_token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Morpho events (ETH + BASE)
@@ -1309,7 +1369,8 @@ CREATE TABLE IF NOT EXISTS tradernick.morpho_supplies
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.morpho_withdrawals
 (
@@ -1329,7 +1390,8 @@ CREATE TABLE IF NOT EXISTS tradernick.morpho_withdrawals
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.morpho_borrows
 (
@@ -1349,7 +1411,8 @@ CREATE TABLE IF NOT EXISTS tradernick.morpho_borrows
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.morpho_repays
 (
@@ -1368,7 +1431,8 @@ CREATE TABLE IF NOT EXISTS tradernick.morpho_repays
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.morpho_supply_collaterals
 (
@@ -1386,7 +1450,8 @@ CREATE TABLE IF NOT EXISTS tradernick.morpho_supply_collaterals
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.morpho_withdraw_collaterals
 (
@@ -1405,7 +1470,8 @@ CREATE TABLE IF NOT EXISTS tradernick.morpho_withdraw_collaterals
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.morpho_liquidations
 (
@@ -1428,7 +1494,8 @@ CREATE TABLE IF NOT EXISTS tradernick.morpho_liquidations
     ingested_at       DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, loan_token, time, tx_id, log_index);
+ORDER BY (chain, loan_token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Spark events (ETH only)
@@ -1452,7 +1519,8 @@ CREATE TABLE IF NOT EXISTS tradernick.spark_deposits
     ingested_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.spark_withdrawals
 (
@@ -1469,7 +1537,8 @@ CREATE TABLE IF NOT EXISTS tradernick.spark_withdrawals
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.spark_borrows
 (
@@ -1489,7 +1558,8 @@ CREATE TABLE IF NOT EXISTS tradernick.spark_borrows
     ingested_at        DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.spark_repays
 (
@@ -1507,7 +1577,8 @@ CREATE TABLE IF NOT EXISTS tradernick.spark_repays
     ingested_at  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.spark_flashloans
 (
@@ -1527,7 +1598,8 @@ CREATE TABLE IF NOT EXISTS tradernick.spark_flashloans
     ingested_at        DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, tx_id, log_index);
+ORDER BY (chain, token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.spark_liquidations
 (
@@ -1547,7 +1619,8 @@ CREATE TABLE IF NOT EXISTS tradernick.spark_liquidations
     ingested_at                  DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, debt_token, time, tx_id, log_index);
+ORDER BY (chain, debt_token, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- GMX V2 events (defistream 2.14.0)
@@ -1598,7 +1671,8 @@ CREATE TABLE IF NOT EXISTS tradernick.gmx_position_increases
     ingested_at              DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, market_name, time, tx_id, log_index);
+ORDER BY (chain, market_name, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- position_decreases gained base_pnl_usd in defistream 2.16 (previously
 -- only liquidations had it). Storing here too so realised PnL is queryable
@@ -1632,7 +1706,8 @@ CREATE TABLE IF NOT EXISTS tradernick.gmx_position_decreases
     ingested_at              DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, market_name, time, tx_id, log_index);
+ORDER BY (chain, market_name, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- Liquidations carry one extra field — base_pnl_usd — and otherwise
 -- match the position_decreases shape. Kept in their own table so queries
@@ -1666,7 +1741,8 @@ CREATE TABLE IF NOT EXISTS tradernick.gmx_liquidations
     ingested_at              DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, market_name, time, tx_id, log_index);
+ORDER BY (chain, market_name, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- Swaps go through a GM pool too; `market` identifies which pool.
 -- `order_key` was added in defistream 2.18 — links a swap to the parent
@@ -1694,7 +1770,8 @@ CREATE TABLE IF NOT EXISTS tradernick.gmx_swaps
     ingested_at        DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, market_name, time, tx_id, log_index);
+ORDER BY (chain, market_name, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- Deposits / withdrawals — defistream 2.16 added src_chain_id +
 -- src_chain_name (cross-chain LP); 2.19 added the realized_* enrichment
@@ -1729,7 +1806,8 @@ CREATE TABLE IF NOT EXISTS tradernick.gmx_deposits
     ingested_at                   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, market_name, time, tx_id, log_index);
+ORDER BY (chain, market_name, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.gmx_withdrawals
 (
@@ -1758,7 +1836,8 @@ CREATE TABLE IF NOT EXISTS tradernick.gmx_withdrawals
     ingested_at              DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, market_name, time, tx_id, log_index);
+ORDER BY (chain, market_name, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.gmx_funding
 (
@@ -1777,7 +1856,8 @@ CREATE TABLE IF NOT EXISTS tradernick.gmx_funding
     ingested_at                    DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, market_name, time, tx_id, log_index);
+ORDER BY (chain, market_name, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 CREATE TABLE IF NOT EXISTS tradernick.gmx_borrowing
 (
@@ -1794,7 +1874,8 @@ CREATE TABLE IF NOT EXISTS tradernick.gmx_borrowing
     ingested_at                   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, market_name, time, tx_id, log_index);
+ORDER BY (chain, market_name, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- Fees collected — fee_type distinguishes the source ('position', 'swap',
 -- 'deposit', 'withdraw'). The protocol receives `fee_amount_for_pool` and
@@ -1822,7 +1903,8 @@ CREATE TABLE IF NOT EXISTS tradernick.gmx_fees_collected
     ingested_at            DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, market_name, time, tx_id, log_index);
+ORDER BY (chain, market_name, time, tx_id, log_index)
+TTL time + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Hyperliquid (defistream ds.exchange.hyperliquid.*)
@@ -1854,7 +1936,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_ohlcv_1m
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time)
-TTL time + INTERVAL 180 DAY;
+TTL time + INTERVAL 270 DAY;
 
 -- Public trade flow (one row per matched trade). buyer_wallet + seller_wallet
 -- visible because HL is fully on-chain.
@@ -1873,7 +1955,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_trades
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, id)
-TTL toDateTime(time) + INTERVAL 180 DAY;
+TTL toDateTime(time) + INTERVAL 270 DAY;
 
 -- Individual fill records (one per wallet per side). Highest-volume HL table
 -- — same TTL as binance_raw_trades. `dir` distinguishes Open Long / Close
@@ -1903,7 +1985,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_fills
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, tid, wallet)
-TTL toDateTime(time) + INTERVAL 180 DAY;
+TTL toDateTime(time) + INTERVAL 270 DAY;
 
 -- Per-wallet funding events. amount is the funding paid by this wallet for
 -- its position_amount in this token at this rate. Sign convention: positive
@@ -1922,7 +2004,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_funding
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, wallet)
-TTL toDateTime(time) + INTERVAL 180 DAY;
+TTL toDateTime(time) + INTERVAL 270 DAY;
 
 -- Position snapshots — one row per (wallet, token) at each 5m tick (carry-
 -- forward: every currently-open position emits a row every snapshot).
@@ -1950,7 +2032,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, side, wallet)
-TTL toDateTime(time) + INTERVAL 180 DAY;
+TTL toDateTime(time) + INTERVAL 270 DAY;
 
 -- 15-minute rollup of hl_position_history. Source emits a 5m carry-forward
 -- snapshot per (wallet, token, side); /oi_split and /unrealized_pnl both do
@@ -1977,7 +2059,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_15m
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(bucket)
 ORDER BY (token, bucket, side, wallet)
-TTL bucket + INTERVAL 180 DAY;
+TTL bucket + INTERVAL 270 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_15m_mv
 TO tradernick.hl_position_history_15m
@@ -2011,7 +2093,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_1h
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(bucket)
 ORDER BY (token, bucket, side, wallet)
-TTL bucket + INTERVAL 180 DAY;
+TTL bucket + INTERVAL 270 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_1h_mv
 TO tradernick.hl_position_history_1h
@@ -2053,7 +2135,7 @@ ORDER BY (day, wallet, token, side)
 -- already eligible for the next TTL merge — the eod MV silently lost its
 -- youngest row on every backfill. One extra day of padding sidesteps the
 -- date/datetime granularity mismatch without further code changes.
-TTL day + INTERVAL 181 DAY;
+TTL day + INTERVAL 271 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_eod_wallet_mv
 TO tradernick.hl_position_history_eod_wallet
@@ -2102,7 +2184,7 @@ ORDER BY (day, wallet, token, side)
 -- already eligible for the next TTL merge — the eod MV silently lost its
 -- youngest row on every backfill. One extra day of padding sidesteps the
 -- date/datetime granularity mismatch without further code changes.
-TTL day + INTERVAL 181 DAY;
+TTL day + INTERVAL 271 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_fills_pnl_daily_mv
 TO tradernick.hl_fills_pnl_daily
@@ -2154,7 +2236,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_fills_vol_daily
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(day)
 ORDER BY (day, wallet, token, position_side)
-TTL day + INTERVAL 181 DAY;
+TTL day + INTERVAL 271 DAY;
 
 CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_fills_vol_daily_mv
 TO tradernick.hl_fills_vol_daily
@@ -2178,6 +2260,39 @@ WHERE dir IN ('Open Long', 'Close Long', 'Long > Short',
               'Open Short', 'Close Short', 'Short > Long')
 GROUP BY day, wallet, token, position_side;
 
+-- ───────────────────────────────────────────────────────────────────
+-- Per-(day, wallet, token) accrued funding PnL.
+--
+-- `hl_funding.amount` is signed: positive = wallet received funding for
+-- this event, negative = wallet paid. Summing it over a lookback gives
+-- the wallet's pure carry component, which the SmartSelector uses to
+-- split realized PnL into directional vs funding-derived:
+--   non_funding_pnl  = realized_pnl − funding_pnl
+--   funding_pnl_share = funding_pnl / realized_pnl
+-- so cash-and-carry / delta-neutral wallets can be filtered out of
+-- "smart trader" rankings.
+CREATE TABLE IF NOT EXISTS tradernick.hl_funding_daily
+(
+    day               Date           CODEC(DoubleDelta, ZSTD(3)),
+    wallet            String         CODEC(ZSTD(3)),
+    token             LowCardinality(String),
+    funding_pnl_state AggregateFunction(sum, Float64)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(day)
+ORDER BY (day, wallet, token)
+TTL day + INTERVAL 271 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_funding_daily_mv
+TO tradernick.hl_funding_daily
+AS
+SELECT
+    toDate(time) AS day,
+    wallet,
+    token,
+    sumState(amount) AS funding_pnl_state
+FROM tradernick.hl_funding
+GROUP BY day, wallet, token;
+
 -- Pre-aggregated per-(wallet, token, bucket) trader performance. The right
 -- table for leaderboard queries — small + already summed. net_pnl = pnl - fees.
 CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history
@@ -2196,7 +2311,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (wallet, token, time)
-TTL toDateTime(time) + INTERVAL 180 DAY;
+TTL toDateTime(time) + INTERVAL 270 DAY;
 
 -- Bridge in/out (USDC on Arbitrum ↔ HL). No TTL — historical capital
 -- migration is a useful reference. direction = 'deposit' (Arb→HL) or

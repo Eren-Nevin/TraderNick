@@ -176,7 +176,16 @@ async def _run(events_filter: list[str] | None = None, stream_name: str | None =
                         where="chain = {chain:String} AND symbol0 = {s0:String} AND symbol1 = {s1:String} AND fee_tier = {fee:UInt32}",
                         parameters={"chain": chain, "s0": sym0, "s1": sym1, "fee": fee},
                     )
-                    since = sweep.sweep_since(now=now, sweep_cadence_seconds=sweep_cadence, last_seen=last_seen)
+                    since = sweep.sweep_since(
+                        now=now,
+                        sweep_cadence_seconds=sweep_cadence,
+                        last_seen=last_seen,
+                        # DeFiStream EVM parquet event endpoints cap each request
+                        # at 7 days (100k blocks). Leave 1 day of slack so the
+                        # 5-min live overlap + clock skew can never push us over.
+                        max_window_seconds=6 * 24 * 3600,
+                        stream_name=stream_name,
+                    )
                     if since >= now:
                         return
                     label = f"uniswap_events/{chain}/{sym0}-{sym1}/{fee}/{event}"

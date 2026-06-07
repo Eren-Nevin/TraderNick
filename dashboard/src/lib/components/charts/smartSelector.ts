@@ -30,6 +30,8 @@ export type SmartMetricKey =
   | 'avg_long_oi_usd'
   | 'avg_short_oi_usd'
   | 'avg_roe_pct'
+  | 'non_funding_pnl'
+  | 'funding_pnl_share'
   | 'long_volume_usd'
   | 'long_volume_token'
   | 'short_volume_usd'
@@ -76,6 +78,8 @@ export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
   { key: 'avg_long_oi_token',       label: 'Avg Long OI (token)',       kind: 'token' },
   { key: 'avg_short_oi_token',      label: 'Avg Short OI (token)',      kind: 'token' },
   { key: 'avg_roe_pct',             label: 'Avg RoE (%)',               kind: 'pct' },
+  { key: 'non_funding_pnl',         label: 'Non-Funding PnL ($)',       kind: 'usd' },
+  { key: 'funding_pnl_share',       label: 'Funding PnL Share',         kind: 'pct' },
   { key: 'trade_count',             label: 'Trade count',               kind: 'count' },
   { key: 'long_pnl',                label: 'Long PnL ($)',              kind: 'usd' },
   { key: 'short_pnl',               label: 'Short PnL ($)',             kind: 'usd' },

@@ -54,14 +54,425 @@ services:
       - "10002:8000"
     restart: unless-stopped
 
+  # =============================================================
+  # Per-provider × {live, backfill} ingestion services (Phase C).
+  #
+  # All share `./services/ingestion` as the build context — same image,
+  # role + provider picked via env. New providers are added by dropping
+  # a sibling stanza here; no monolithic file needs to change.
+  #
+  # During migration the legacy `ingestion` service above stays running
+  # with its existing streams + backfills. New services come up idle
+  # (force-idle bootstrap, Phase E) and the user enables streams on
+  # them one provider at a time.
+  # =============================================================
+  hyperliquid_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: hyperliquid
+      INGESTION_ROLE: live
+      INGEST_TOKENS: ${INGEST_TOKENS:-BTC,ETH,SOL,ARB,LINK,BNB,POL,LTC,TRX,AAVE,AERO,CAKE,COW,ENA,ETHFI,FET,FIL,HYPE,MORPHO,PENDLE,RENDER,SUSHI,UNI,WLD,VIRTUAL,PAXG}
+    restart: unless-stopped
+
+  hyperliquid_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: hyperliquid
+      INGESTION_ROLE: backfill
+      INGEST_TOKENS: ${INGEST_TOKENS:-BTC,ETH,SOL,ARB,LINK,BNB,POL,LTC,TRX,AAVE,AERO,CAKE,COW,ENA,ETHFI,FET,FIL,HYPE,MORPHO,PENDLE,RENDER,SUSHI,UNI,WLD,VIRTUAL,PAXG}
+    restart: unless-stopped
+
+  binance_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: binance
+      INGESTION_ROLE: live
+      INGEST_TOKENS: ${INGEST_TOKENS:-BTC,ETH,SOL,ARB,LINK,BNB,POL,LTC,TRX,AAVE,AERO,CAKE,COW,ENA,ETHFI,FET,FIL,HYPE,MORPHO,PENDLE,RENDER,SUSHI,UNI,WLD,VIRTUAL,PAXG}
+    restart: unless-stopped
+
+  binance_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: binance
+      INGESTION_ROLE: backfill
+      INGEST_TOKENS: ${INGEST_TOKENS:-BTC,ETH,SOL,ARB,LINK,BNB,POL,LTC,TRX,AAVE,AERO,CAKE,COW,ENA,ETHFI,FET,FIL,HYPE,MORPHO,PENDLE,RENDER,SUSHI,UNI,WLD,VIRTUAL,PAXG}
+    restart: unless-stopped
+
+  transfers_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: transfers
+      INGESTION_ROLE: live
+    restart: unless-stopped
+
+  transfers_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: transfers
+      INGESTION_ROLE: backfill
+    restart: unless-stopped
+
+  aave_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: aave
+      INGESTION_ROLE: live
+    restart: unless-stopped
+
+  aave_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: aave
+      INGESTION_ROLE: backfill
+    restart: unless-stopped
+
+  uniswap_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: uniswap
+      INGESTION_ROLE: live
+    restart: unless-stopped
+
+  uniswap_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: uniswap
+      INGESTION_ROLE: backfill
+    restart: unless-stopped
+
+  aerodrome_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: aerodrome
+      INGESTION_ROLE: live
+    restart: unless-stopped
+
+  aerodrome_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: aerodrome
+      INGESTION_ROLE: backfill
+    restart: unless-stopped
+
+  lido_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: lido
+      INGESTION_ROLE: live
+    restart: unless-stopped
+
+  lido_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: lido
+      INGESTION_ROLE: backfill
+    restart: unless-stopped
+
+  morpho_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: morpho
+      INGESTION_ROLE: live
+    restart: unless-stopped
+
+  morpho_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: morpho
+      INGESTION_ROLE: backfill
+    restart: unless-stopped
+
+  spark_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: spark
+      INGESTION_ROLE: live
+    restart: unless-stopped
+
+  spark_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: spark
+      INGESTION_ROLE: backfill
+    restart: unless-stopped
+
+  gmx_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: gmx
+      INGESTION_ROLE: live
+    restart: unless-stopped
+
+  gmx_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: gmx
+      INGESTION_ROLE: backfill
+    restart: unless-stopped
+
+  # Derived-data MV refresh + backfill — see plan §"data_process". Not a
+  # DeFiStream provider; reads from raw tables already populated by the
+  # provider services and writes into MVs (hl_position_history_*,
+  # hl_fills_pnl_daily, exchange_flow_minute).
+  data_process_live:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: data_process
+      INGESTION_ROLE: live
+    restart: unless-stopped
+
+  data_process_backfill:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_PROVIDER: data_process
+      INGESTION_ROLE: backfill
+    restart: unless-stopped
+
+  # =============================================================
+  # admin_server — thin Sanic gateway. Holds no state, runs no workers.
+  # The dashboard talks ONLY to this service; admin_server fans out /
+  # routes to the per-provider services. Provider services remain
+  # independently callable by curl / scripts, so the system survives
+  # admin_server going offline (chart-data path goes via data_server,
+  # which is wholly independent).
+  # =============================================================
+  admin_server:
+    build: ./services/ingestion
+    command: ["python", "-m", "sanic", "admin_server:app", "--host=0.0.0.0", "--port=8000", "--single-process"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_ROLE: admin_server
+      # Routing table — the single source of truth for provider URLs.
+      # Adding a new provider = +2 env vars here and +1 in
+      # provider_registry.GROUP_TO_PROVIDER. Nothing on the dashboard.
+      #
+      # Each URL defaults to the monolith (`ingestion`) so that, until a
+      # provider is explicitly cut over, admin_server routes its calls
+      # to the still-running monolith. Cutover = one line in .env:
+      #     SPARK_LIVE_URL=http://spark_live:8000
+      #     SPARK_BACKFILL_URL=http://spark_backfill:8000
+      # then `docker compose up -d admin_server` re-reads the env. The
+      # other providers stay on the monolith until the operator flips
+      # their URL the same way.
+      HYPERLIQUID_LIVE_URL:     ${HYPERLIQUID_LIVE_URL:-http://ingestion:8000}
+      HYPERLIQUID_BACKFILL_URL: ${HYPERLIQUID_BACKFILL_URL:-http://ingestion:8000}
+      BINANCE_LIVE_URL:         ${BINANCE_LIVE_URL:-http://ingestion:8000}
+      BINANCE_BACKFILL_URL:     ${BINANCE_BACKFILL_URL:-http://ingestion:8000}
+      TRANSFERS_LIVE_URL:       ${TRANSFERS_LIVE_URL:-http://ingestion:8000}
+      TRANSFERS_BACKFILL_URL:   ${TRANSFERS_BACKFILL_URL:-http://ingestion:8000}
+      AAVE_LIVE_URL:            ${AAVE_LIVE_URL:-http://ingestion:8000}
+      AAVE_BACKFILL_URL:        ${AAVE_BACKFILL_URL:-http://ingestion:8000}
+      UNISWAP_LIVE_URL:         ${UNISWAP_LIVE_URL:-http://ingestion:8000}
+      UNISWAP_BACKFILL_URL:     ${UNISWAP_BACKFILL_URL:-http://ingestion:8000}
+      AERODROME_LIVE_URL:       ${AERODROME_LIVE_URL:-http://ingestion:8000}
+      AERODROME_BACKFILL_URL:   ${AERODROME_BACKFILL_URL:-http://ingestion:8000}
+      LIDO_LIVE_URL:            ${LIDO_LIVE_URL:-http://ingestion:8000}
+      LIDO_BACKFILL_URL:        ${LIDO_BACKFILL_URL:-http://ingestion:8000}
+      MORPHO_LIVE_URL:          ${MORPHO_LIVE_URL:-http://ingestion:8000}
+      MORPHO_BACKFILL_URL:      ${MORPHO_BACKFILL_URL:-http://ingestion:8000}
+      SPARK_LIVE_URL:           ${SPARK_LIVE_URL:-http://ingestion:8000}
+      SPARK_BACKFILL_URL:       ${SPARK_BACKFILL_URL:-http://ingestion:8000}
+      GMX_LIVE_URL:             ${GMX_LIVE_URL:-http://ingestion:8000}
+      GMX_BACKFILL_URL:         ${GMX_BACKFILL_URL:-http://ingestion:8000}
+      DATA_PROCESS_LIVE_URL:     ${DATA_PROCESS_LIVE_URL:-http://ingestion:8000}
+      DATA_PROCESS_BACKFILL_URL: ${DATA_PROCESS_BACKFILL_URL:-http://ingestion:8000}
+      TRADERNICK_ADMIN_URL:      ${TRADERNICK_ADMIN_URL:-http://ingestion:8000}
+      # Legacy monolith URL — admin_server's belt-and-braces fallback
+      # for any provider whose URL env var resolves to empty.
+      LEGACY_INGESTION_URL:     http://ingestion:8000
+    restart: unless-stopped
+
+  # Wallets parquet upload endpoint. Eventually takes over the
+  # /admin/wallets/* surface from the monolith; today it cohabits.
+  tradernick_admin:
+    build: ./services/ingestion
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+      INGESTION_ROLE: admin
+      WALLETS_PARQUET_PATH: ${WALLETS_PARQUET_PATH:-/app/data/wallets.parquet}
+    volumes:
+      - ${WALLETS_PARQUET_HOST:-./data}:/app/data:ro
+    restart: unless-stopped
+
   dashboard:
     build: ./dashboard
     depends_on:
       - data_server
       - ingestion
+      - admin_server
     environment:
       INTERNAL_DATA_SERVER_URL: http://data_server:8000
-      INTERNAL_INGESTION_URL: http://ingestion:8000
+      # admin_server is the single admin entry point. It fans out and
+      # routes to the per-provider services internally. Provider services
+      # are still independently callable for direct ops work but the
+      # dashboard never touches them.
+      INTERNAL_INGESTION_URL: http://admin_server:8000
       INGESTION_ADMIN_USER: ${ADMIN_USER:-admin}
       INGESTION_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change_me}
     ports:

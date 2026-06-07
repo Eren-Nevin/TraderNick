@@ -42,11 +42,21 @@ _BINANCE_CADENCE = {
     "ohlcv": 300, "raw_trades": 300,
     "open_interest": 300, "long_short_ratios": 300,
     "funding_rate": 1800,
+    "book_depth": 300,
 }
+
+# Streams that ship disabled by default — must be flipped on from the
+# admin UI before they spawn. Used for endpoints that cost extra quota
+# or aren't ready for production wiring yet.
+_BINANCE_OFF_BY_DEFAULT = {"book_depth"}
 
 
 def _binance(ev: str) -> StreamSpec:
-    return StreamSpec(f"binance.{ev}", f"streams.binance_{ev}", "Binance", _BINANCE_CADENCE[ev])
+    return StreamSpec(
+        f"binance.{ev}", f"streams.binance_{ev}", "Binance",
+        _BINANCE_CADENCE[ev],
+        enabled_default=ev not in _BINANCE_OFF_BY_DEFAULT,
+    )
 
 
 def _aave(version: str, ev: str) -> StreamSpec:
@@ -78,6 +88,7 @@ STREAMS: list[StreamSpec] = [
     _binance("open_interest"),
     _binance("long_short_ratios"),
     _binance("funding_rate"),
+    _binance("book_depth"),
 
     # Transfers — 5 streams (one per chain-family, multi-asset internally).
     StreamSpec("transfers.btc",         "streams.btc_transfers",         "Transfers", 1800),
@@ -173,6 +184,18 @@ STREAMS: list[StreamSpec] = [
     StreamSpec("gmx.funding",           "streams.gmx_funding",           "GMX", 300),
     StreamSpec("gmx.borrowing",         "streams.gmx_borrowing",         "GMX", 300),
     StreamSpec("gmx.fees_collected",    "streams.gmx_fees_collected",    "GMX", 300),
+
+    # Data process — derived-MV refresh ticks. Not DeFiStream pollers;
+    # they read from raw tables and rebuild MV targets. Ships disabled
+    # by default so the monolith's identical loop stays in charge until
+    # the per-provider data_process_live service is enabled.
+    StreamSpec(
+        "data_process.exchange_flow_self_heal",
+        "streams.data_process_exchange_flow",
+        "Data process",
+        15 * 60,
+        enabled_default=False,
+    ),
 ]
 
 

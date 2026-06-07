@@ -3,7 +3,7 @@ import hmac
 import logging
 import os
 import tempfile
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from sanic import Sanic, response
 
@@ -18,7 +18,10 @@ from scripts.bootstrap_wallets import (
 
 import config
 from jobs.manager import (
+    JOB_TYPE_BACKFILL_BOOK_DEPTH,
     JOB_TYPE_BACKFILL_BTC_TRANSFERS,
+    JOB_TYPE_BACKFILL_EXCHANGE_FLOW_MINUTE,
+    JOB_TYPE_BACKFILL_TRANSFERS_REMATERIALIZE,
     JOB_TYPE_BACKFILL_EVM_ERC20_TRANSFERS,
     JOB_TYPE_BACKFILL_EVM_NATIVE_TRANSFERS,
     JOB_TYPE_BACKFILL_FUNDING_RATE,
@@ -85,17 +88,21 @@ async def basic_auth(request):
 
 @app.before_server_start
 async def startup(app_, _loop):
+    import provider_registry as pr
+    log.info("ingestion startup: %s", pr.describe())
+    role = pr.current_role()
+
     app_.ctx.supervisor = Supervisor()
-    # New per-stream model: enumerate streams.STREAMS, consult the persisted
-    # ingestion_event_state table for on/off, spawn one worker per enabled
-    # stream. Legacy groups still in streams.LEGACY_GROUPS_* also get spawned
-    # by the same call until their migration completes.
+    # start_from_registry is itself role-aware — backfill/admin services
+    # short-circuit inside it and walk away without spawning anything.
     await app_.ctx.supervisor.start_from_registry()
+
     app_.ctx.jobs = JobManager()
     try:
         await app_.ctx.jobs.resume_inflight()
     except Exception:
         log.exception("resume_inflight failed (continuing)")
+
     # Self-healing tick for exchange_flow_minute. The push MV
     # (mv_exchange_flow) compounds whenever the source `transfers` table
     # has unmerged duplicates (live-stream retries / backfill re-runs /
@@ -103,7 +110,16 @@ async def startup(app_, _loop):
     # is real-time accurate between ticks; this background rebuild runs
     # FROM transfers FINAL on a 15-minute cadence so any drift heals on
     # its own. One run = one TRUNCATE + ~30-50s 30d-window INSERT.
-    app_.add_task(_exchange_flow_refresh_loop())
+    #
+    # In the per-provider split this tick moves to `data_process_live`
+    # (Phase B). Keep it running on the monolith for backward compat —
+    # the env kill-switch lets the operator silence it once the
+    # data_process service is taking over.
+    if role == "monolith" and os.environ.get("EXCHANGE_FLOW_SELF_HEAL_ENABLED", "1") == "1":
+        app_.add_task(_exchange_flow_refresh_loop())
+    else:
+        log.info("exchange_flow self-heal disabled (role=%s, env kill-switch=%s)",
+                 role, os.environ.get("EXCHANGE_FLOW_SELF_HEAL_ENABLED", "1"))
 
 
 async def _exchange_flow_refresh_loop():
@@ -127,6 +143,109 @@ async def _exchange_flow_refresh_loop():
 @app.get("/health")
 async def health(_request):
     return response.json({"ok": True})
+
+
+@app.get("/gaps/calendar")
+async def get_gaps_calendar(request):
+    """Per-event coverage calendar — powers the FillBoard UI.
+
+    Query params:
+      event (required)  StreamSpec.name (e.g. 'aave_v3.deposit')
+      since (optional)  default = now - 180d
+      until (optional)  default = tomorrow 00:00 UTC (so today's hours
+                        show up in `today_hours`)
+
+    Returns past-days array + today-hours strip + first/last data
+    dates. See gap_detection.find_calendar() for the classification
+    contract."""
+    import gap_detection
+    import provider_registry as pr
+    event_key = request.args.get("event")
+    if not event_key:
+        return response.json({"error": "missing required ?event=..."}, status=400)
+    spec = gap_detection.CALENDAR_EVENTS.get(event_key)
+    if spec is None:
+        return response.json({"error": f"no calendar spec for event {event_key!r}"},
+                             status=404)
+    # Per-provider service rejects events that don't belong to it (the
+    # admin_server gateway routes events to the correct provider; this
+    # is the defence-in-depth check). Monolith mode accepts anything.
+    container_provider = pr.current_provider()
+    if container_provider is not None and spec.provider != container_provider:
+        return response.json(
+            {"error": f"event {event_key!r} belongs to provider {spec.provider!r}; "
+                      f"this container hosts {container_provider!r}"},
+            status=400,
+        )
+    now = datetime.utcnow().replace(microsecond=0)
+    tomorrow_midnight = (now + timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0,
+    )
+    raw_since = request.args.get("since")
+    raw_until = request.args.get("until")
+    try:
+        since_dt = (
+            datetime.fromisoformat(raw_since.replace("Z", "+00:00"))
+            .astimezone(timezone.utc).replace(tzinfo=None)
+            if raw_since else now - timedelta(days=180)
+        )
+        until_dt = (
+            datetime.fromisoformat(raw_until.replace("Z", "+00:00"))
+            .astimezone(timezone.utc).replace(tzinfo=None)
+            if raw_until else tomorrow_midnight
+        )
+    except (TypeError, ValueError) as exc:
+        return response.json({"error": f"invalid since/until: {exc}"}, status=400)
+    if since_dt >= until_dt:
+        return response.json({"error": "since must be earlier than until"}, status=400)
+    result = await gap_detection.find_calendar(event_key, since_dt, until_dt)
+    return response.json(result)
+
+
+@app.get("/gaps")
+async def get_gaps(request):
+    """Find days with materially-below-expected row counts for this
+    container's provider. Window defaults to the last 30 days.
+
+    Query params:
+      since (ISO 8601, optional)  default = now - 30d
+      until (ISO 8601, optional)  default = now
+
+    Returns gap rows from every table the provider's gap-spec catalogue
+    knows about. See `gap_detection.GAP_SPECS` for the per-table rules.
+    """
+    import gap_detection
+    import provider_registry as pr
+    provider = pr.current_provider()
+    if provider is None:
+        # Monolith mode — caller must pass ?provider=NAME.
+        provider = request.args.get("provider")
+        if not provider:
+            return response.json(
+                {"error": "monolith /gaps requires ?provider=NAME "
+                          "(per-provider services derive it from INGESTION_PROVIDER)"},
+                status=400,
+            )
+    raw_since = request.args.get("since")
+    raw_until = request.args.get("until")
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    try:
+        if raw_since:
+            since_dt = datetime.fromisoformat(raw_since.replace("Z", "+00:00")) \
+                .astimezone(timezone.utc).replace(tzinfo=None)
+        else:
+            since_dt = now - timedelta(days=30)
+        if raw_until:
+            until_dt = datetime.fromisoformat(raw_until.replace("Z", "+00:00")) \
+                .astimezone(timezone.utc).replace(tzinfo=None)
+        else:
+            until_dt = now
+    except (TypeError, ValueError) as exc:
+        return response.json({"error": f"invalid since/until: {exc}"}, status=400)
+    if since_dt >= until_dt:
+        return response.json({"error": "since must be earlier than until"}, status=400)
+    result = await gap_detection.find_gaps(provider, since_dt, until_dt)
+    return response.json(result)
 
 
 @app.get("/streams")
@@ -203,20 +322,39 @@ async def cancel_job(request, job_id: str):
 
 
 @app.post("/jobs/clear-finished")
-async def clear_finished_jobs(_request):
-    """Hard-delete every job row that isn't currently running. Used by the
-    admin panel's 'Clear finished' button to drop completed / failed /
-    cancelled jobs and reduce table clutter. Running jobs are preserved."""
+async def clear_finished_jobs(request):
+    """Hard-delete finished (non-running) job rows. Used by the admin
+    panel's 'Clear finished' button to drop completed / failed /
+    cancelled jobs and reduce table clutter. Running jobs are preserved.
+
+    Optional JSON body `{"job_types": ["backfill_x", ...]}` scopes the
+    deletion to those types — used by per-provider backfill pages so the
+    button only clears jobs visible on that page. Empty / missing body
+    deletes across every job type (the overview page's behaviour)."""
     from clickhouse import async_client
+    job_types: list[str] = []
+    try:
+        body = request.json or {}
+        raw = body.get("job_types")
+        if isinstance(raw, list):
+            job_types = [str(x) for x in raw if isinstance(x, str)]
+    except Exception:
+        pass
     ch = await async_client()
-    # Count first so we can report.
+    where = "status != 'running'"
+    params: dict = {}
+    if job_types:
+        where += " AND job_type IN {types:Array(String)}"
+        params["types"] = job_types
     pre = await ch.query(
-        "SELECT count() FROM tradernick.ingestion_jobs FINAL WHERE status != 'running'"
+        f"SELECT count() FROM tradernick.ingestion_jobs FINAL WHERE {where}",
+        parameters=params,
     )
     n = int(pre.result_rows[0][0]) if pre.result_rows else 0
     await ch.command(
-        "ALTER TABLE tradernick.ingestion_jobs DELETE WHERE status != 'running' "
-        "SETTINGS mutations_sync=2"
+        f"ALTER TABLE tradernick.ingestion_jobs DELETE WHERE {where} "
+        "SETTINGS mutations_sync=2",
+        parameters=params,
     )
     return response.json({"ok": True, "deleted": n})
 
@@ -311,6 +449,50 @@ async def backfill_long_short_ratios(request):
 @app.post("/jobs/backfill/binance_funding_rate")
 async def backfill_funding_rate(request):
     return await _create_backfill(request, JOB_TYPE_BACKFILL_FUNDING_RATE)
+
+
+@app.post("/jobs/backfill/binance_book_depth")
+async def backfill_book_depth(request):
+    return await _create_backfill(request, JOB_TYPE_BACKFILL_BOOK_DEPTH)
+
+
+# data_process backfills are one-shot operations that don't take a time
+# window — they rebuild a target table FROM the current state of the
+# source. We bypass _parse_backfill_window so the dashboard can fire
+# them with an empty body.
+async def _create_unwindowed_backfill(request, job_type: str, args_extra: dict | None = None):
+    body = request.json or {}
+    args_extra = {**(args_extra or {}), **{k: v for k, v in body.items()
+                                            if k in {"refresh_exchange_flow",
+                                                     "table"}}}
+    args_extra["force"] = bool(body.get("force", False))
+    # Use sentinel since/until equal to now so existing dashboards that
+    # display the window column don't render '?' — the column is just
+    # "when the job was created".
+    now = datetime.now(timezone.utc).replace(second=0, microsecond=0, tzinfo=None)
+    try:
+        job = await request.app.ctx.jobs.create_backfill_args(
+            job_type, now, now, args_extra,
+        )
+    except RuntimeError as exc:
+        return response.json({"error": str(exc)}, status=429)
+    except ValueError as exc:
+        return response.json({"error": str(exc)}, status=400)
+    return response.json(job, status=202)
+
+
+@app.post("/jobs/backfill/exchange_flow_minute")
+async def backfill_exchange_flow_minute(request):
+    return await _create_unwindowed_backfill(
+        request, JOB_TYPE_BACKFILL_EXCHANGE_FLOW_MINUTE,
+    )
+
+
+@app.post("/jobs/backfill/transfers_rematerialize")
+async def backfill_transfers_rematerialize(request):
+    return await _create_unwindowed_backfill(
+        request, JOB_TYPE_BACKFILL_TRANSFERS_REMATERIALIZE,
+    )
 
 
 async def _create_transfer_backfill(request, job_type: str, extract_args):

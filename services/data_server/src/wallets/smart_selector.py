@@ -38,6 +38,7 @@ from typing import Any, Literal
 SRC_TRADE_HISTORY = "trade_history"
 SRC_EOD = "eod"
 SRC_SIDED = "sided"
+SRC_FUNDING = "funding"
 # HIP-3 sub-asset tokens carry a `<namespace>:` prefix (e.g. `xyz:FOO`).
 # We exclude them from every wallet-ranking calculation so PnL / volume /
 # OI from speculative sub-assets can't game the selector. The chart-
@@ -217,6 +218,32 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         "taker_sell_volume_token", "Taker Sell Volume (token)",
         frozenset({SRC_VOL}), "taker_sell_vol_token_{s}",
     ),
+    # ── Funding-decomposed PnL ───────────────────────────────────────
+    # Separates realized PnL into directional (price-move) component
+    # and funding-carry component so cash-and-carry / delta-neutral
+    # wallets don't get ranked as "smart traders". Source columns from
+    # the funding trailing CTE: funding_pnl_{s}.
+    #
+    #   non_funding_pnl   = realized_pnl − funding_pnl   (the real edge)
+    #   funding_pnl_share = funding_pnl / realized_pnl   (carry-ness)
+    #
+    # Carry wallets cluster non_funding_pnl near 0 and funding_pnl_share
+    # near 1; directional traders cluster non_funding_pnl ≫ 0 and
+    # funding_pnl_share ≪ 1. Combine both as criteria to be strict:
+    #   non_funding_pnl ≥ X AND funding_pnl_share ≤ 0.5.
+    "non_funding_pnl": MetricDef(
+        "non_funding_pnl", "Non-Funding PnL ($)",
+        frozenset({SRC_TRADE_HISTORY, SRC_FUNDING}),
+        "(realized_pnl_{s} - funding_pnl_{s})",
+    ),
+    # Share is undefined when realized_pnl ≤ 0; guard with `if` so
+    # those wallets don't blow the divide. Value > 0 makes the
+    # filter "funding_pnl_share ≤ 0.5" semantically clean.
+    "funding_pnl_share": MetricDef(
+        "funding_pnl_share", "Funding PnL Share",
+        frozenset({SRC_TRADE_HISTORY, SRC_FUNDING}),
+        "if(realized_pnl_{s} > 0, funding_pnl_{s} / realized_pnl_{s}, 0)",
+    ),
 }
 
 
@@ -366,6 +393,7 @@ class SmartSelector:
             SRC_SIDED: set(),
             SRC_OI: set(),
             SRC_VOL: set(),
+            SRC_FUNDING: set(),
         }
         for (src, sc) in needs:
             scopes_for[src].add(sc)
@@ -373,7 +401,8 @@ class SmartSelector:
                       or scopes_for[SRC_EOD]
                       or scopes_for[SRC_SIDED]
                       or scopes_for[SRC_OI]
-                      or scopes_for[SRC_VOL])
+                      or scopes_for[SRC_VOL]
+                      or scopes_for[SRC_FUNDING])
         if not any_source:
             raise ValueError(
                 "selector references no sources — at least one metric "
@@ -404,6 +433,8 @@ class SmartSelector:
             gate_src, gate_time_col = "tradernick.hl_fills_pnl_daily", "day"
         elif scopes_for[SRC_VOL]:
             gate_src, gate_time_col = "tradernick.hl_fills_vol_daily", "day"
+        elif scopes_for[SRC_FUNDING]:
+            gate_src, gate_time_col = "tradernick.hl_funding_daily", "day"
         else:
             gate_src, gate_time_col = "tradernick.hl_position_history_1h", "bucket"
         ctes.append(
@@ -543,6 +574,50 @@ class SmartSelector:
                 "                   " + ",\n                   ".join(sided_trail_parts) + "\n"
                 "            FROM target_days target\n"
                 "            CROSS JOIN sided_pnl_daily src\n"
+                "            WHERE src.day >= target.d - {sel_lookback:UInt32}\n"
+                "              AND src.day <  target.d\n"
+                "            GROUP BY target.d, src.wallet\n"
+                "        )"
+            )
+
+        # ── funding (per-day per-wallet accrued funding PnL) ────────
+        if scopes_for[SRC_FUNDING]:
+            # Daily per-wallet collapse — sum across tokens for global,
+            # sumIf to one token for token scope. Prefilter on token when
+            # only token scope is requested (hl_funding_daily ORDER BY is
+            # (day, wallet, token), so the token filter is most efficient
+            # on the GROUP BY layer, but pushing it into WHERE doesn't
+            # hurt and reads cleaner alongside the other sources).
+            fund_inner_token_filter = ""
+            if "global" not in scopes_for[SRC_FUNDING] and "token" in scopes_for[SRC_FUNDING]:
+                fund_inner_token_filter = "              AND token = {sel_token:String}\n"
+            fund_day_proj = proj_pair(
+                "sumMerge(funding_pnl_state)",
+                "sumMergeIf(funding_pnl_state, token = {sel_token:String})",
+                SRC_FUNDING, "funding_pnl_g", "funding_pnl_t")
+            ctes.append(
+                "funding_per_wallet_day AS (\n"
+                "            SELECT day, wallet,\n"
+                "                   " + fund_day_proj + "\n"
+                "            FROM tradernick.hl_funding_daily\n"
+                "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL {sel_lookback:UInt32} DAY\n"
+                "              AND day <  toDate({sel_until:DateTime})\n"
+                f"{fund_inner_token_filter}"
+                f"              {HIP3_EXCLUDE}\n"
+                "            GROUP BY day, wallet\n"
+                "        )"
+            )
+            fund_trail_parts: list[str] = []
+            if "global" in scopes_for[SRC_FUNDING]:
+                fund_trail_parts.append("sum(src.funding_pnl_g) AS funding_pnl_g")
+            if "token" in scopes_for[SRC_FUNDING]:
+                fund_trail_parts.append("sum(src.funding_pnl_t) AS funding_pnl_t")
+            ctes.append(
+                "funding_trailing AS (\n"
+                "            SELECT target.d AS day, src.wallet AS wallet,\n"
+                "                   " + ",\n                   ".join(fund_trail_parts) + "\n"
+                "            FROM target_days target\n"
+                "            CROSS JOIN funding_per_wallet_day src\n"
                 "            WHERE src.day >= target.d - {sel_lookback:UInt32}\n"
                 "              AND src.day <  target.d\n"
                 "            GROUP BY target.d, src.wallet\n"
@@ -791,6 +866,10 @@ class SmartSelector:
             combined_cols += ["v.day AS day", "v.wallet AS wallet"]
             combined_from = "FROM vol_trailing v"
             spine_alias = "v"
+        elif scopes_for[SRC_FUNDING]:
+            combined_cols += ["f.day AS day", "f.wallet AS wallet"]
+            combined_from = "FROM funding_trailing f"
+            spine_alias = "f"
         else:
             combined_cols += ["o.day AS day", "o.wallet AS wallet"]
             combined_from = "FROM oi_trailing o"
@@ -849,6 +928,16 @@ class SmartSelector:
                     combined_cols.append(f"coalesce(o.{col_name}_g, 0) AS {col_name}_g")
                 if "token" in scopes_for[SRC_OI]:
                     combined_cols.append(f"coalesce(o.{col_name}_t, 0) AS {col_name}_t")
+
+        if scopes_for[SRC_FUNDING]:
+            if spine_alias != "f":
+                combined_from += (
+                    f"\n            LEFT JOIN funding_trailing f "
+                    f"ON f.day = {spine_alias}.day AND f.wallet = {spine_alias}.wallet")
+            if "global" in scopes_for[SRC_FUNDING]:
+                combined_cols.append("coalesce(f.funding_pnl_g, 0) AS funding_pnl_g")
+            if "token" in scopes_for[SRC_FUNDING]:
+                combined_cols.append("coalesce(f.funding_pnl_t, 0) AS funding_pnl_t")
 
         ctes.append(
             "combined AS (\n"

@@ -101,7 +101,15 @@ async def main(stream_name: str | None = None):
             _sweep_t0 = time.monotonic()
             try:
                 last_seen = await min_watermark_per_token(ch, table="tradernick.binance_ohlcv_1m", tokens=tokens)
-                since = sweep.sweep_since(now=now, sweep_cadence_seconds=sweep_cadence, last_seen=last_seen)
+                since = sweep.sweep_since(
+                    now=now,
+                    sweep_cadence_seconds=sweep_cadence,
+                    last_seen=last_seen,
+                    # DeFiStream OHLCV cap is 31 days; leave 1 day of slack
+                    # for clock skew and the live overlap.
+                    max_window_seconds=30 * 24 * 3600,
+                    stream_name=stream_name or "binance_ohlcv",
+                )
                 if since < now:
                     n = await fetch_and_insert(ds, tokens, since, now)
                     log.info("binance_ohlcv sweep window=%s..%s rows=%d (min_last_seen=%s, tokens=%d)", since, now, n, last_seen, len(tokens))

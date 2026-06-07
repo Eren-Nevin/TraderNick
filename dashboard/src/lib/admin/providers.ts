@@ -13,6 +13,7 @@ export const PROVIDERS = [
   'Uniswap V3', 'Uniswap V2', 'Uniswap V4',
   'Aerodrome', 'Aerodrome Basic',
   'Lido', 'Morpho', 'Spark', 'GMX',
+  'Data process',
 ] as const;
 
 export type Provider = (typeof PROVIDERS)[number];
@@ -39,6 +40,7 @@ export const FORM_TYPE_TO_PROVIDER: Record<string, Provider> = {
   binance_open_interest: 'Binance',
   binance_long_short_ratios: 'Binance',
   binance_funding_rate: 'Binance',
+  binance_book_depth: 'Binance',
 
   evm_erc20_transfers: 'Transfers',
   evm_native_transfers: 'Transfers',
@@ -61,6 +63,9 @@ export const FORM_TYPE_TO_PROVIDER: Record<string, Provider> = {
   morpho_events: 'Morpho',
   spark_events: 'Spark',
   gmx_v2_events: 'GMX',
+
+  exchange_flow_minute: 'Data process',
+  transfers_rematerialize: 'Data process',
 };
 
 export function formsForProvider(p: Provider): BackfillFormSpec[] {

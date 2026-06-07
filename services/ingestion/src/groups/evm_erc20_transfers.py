@@ -123,7 +123,16 @@ async def main(stream_name: str | None = None):
                         if ls is not None:
                             last_seens.append(ls)
                     last_seen = min(last_seens) if last_seens else None
-                    since = sweep.sweep_since(now=now, sweep_cadence_seconds=sweep_cadence, last_seen=last_seen)
+                    since = sweep.sweep_since(
+                        now=now,
+                        sweep_cadence_seconds=sweep_cadence,
+                        last_seen=last_seen,
+                        # DeFiStream EVM parquet event endpoints cap each request
+                        # at 7 days (100k blocks). Leave 1 day of slack so the
+                        # 5-min live overlap + clock skew can never push us over.
+                        max_window_seconds=6 * 24 * 3600,
+                        stream_name=stream_name,
+                    )
                     if since >= now:
                         return
                     label = f"evm_erc20_transfers/{chain}"

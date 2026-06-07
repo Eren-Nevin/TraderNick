@@ -91,6 +91,11 @@ export type AdminContext = {
   refresh(): Promise<void>;
   streamAction(name: string, action: StreamAction): Promise<void>;
   cancelJob(id: string): Promise<void>;
+  /** Hard-delete finished (non-running) jobs. When `jobTypes` is given,
+   *  only rows matching one of those types are removed — used by the
+   *  per-provider backfill pages so the button only clears jobs visible
+   *  on the current page. Omit `jobTypes` to clear across every type. */
+  clearFinishedJobs(jobTypes?: string[]): Promise<{ deleted: number }>;
 };
 
 export const ADMIN_CTX_KEY = Symbol('admin-ctx');

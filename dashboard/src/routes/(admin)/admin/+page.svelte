@@ -86,7 +86,11 @@
   {#if ctx.jobsErr}
     <div class="text-xs text-red-300 bg-red-950/30 p-2 rounded">{ctx.jobsErr}</div>
   {/if}
-  <BackfillJobsTable jobs={ctx.jobs} cancelJob={ctx.cancelJob} />
+  <BackfillJobsTable
+    jobs={ctx.jobs}
+    cancelJob={ctx.cancelJob}
+    clearFinished={ctx.clearFinishedJobs}
+  />
 
   <!-- ============================ Kick backfill ============================ -->
   <section class="space-y-3">

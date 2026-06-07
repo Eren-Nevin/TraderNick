@@ -8,10 +8,42 @@
   type Props = {
     jobs: JobRow[];
     cancelJob: (id: string) => Promise<void>;
+    /** When provided, a "Clear finished" button renders next to the
+     *  header. The callback receives the list of job_types covering this
+     *  view (so per-provider pages only clear their own rows; the
+     *  overview page passes an empty array to clear across every type). */
+    clearFinished?: (jobTypes: string[]) => Promise<{ deleted: number }>;
+    /** Scope the Clear button. Empty array = "every type" (overview);
+     *  populated = "only these job_types" (per-provider pages). */
+    clearScopeJobTypes?: string[];
   };
-  let { jobs, cancelJob }: Props = $props();
+  let { jobs, cancelJob, clearFinished, clearScopeJobTypes }: Props = $props();
 
   let nRunning = $derived(jobs.filter((j) => j.status === 'running').length);
+  let nFinishedVisible = $derived(jobs.filter((j) => j.status !== 'running' && j.status !== 'pending').length);
+
+  let clearing = $state(false);
+  let clearMsg = $state<string | null>(null);
+  async function onClearFinished() {
+    if (!clearFinished) return;
+    if (nFinishedVisible === 0) return;
+    const scope = clearScopeJobTypes && clearScopeJobTypes.length ? 'these' : 'all';
+    const ok = window.confirm(
+      `Permanently delete ${nFinishedVisible} finished backfill job row${nFinishedVisible === 1 ? '' : 's'} ` +
+      `(${scope === 'these' ? 'this provider' : 'every provider'})? Running jobs are kept.`
+    );
+    if (!ok) return;
+    clearing = true;
+    clearMsg = null;
+    try {
+      const { deleted } = await clearFinished(clearScopeJobTypes ?? []);
+      clearMsg = `Removed ${deleted} job${deleted === 1 ? '' : 's'}.`;
+    } catch (e) {
+      clearMsg = String(e);
+    } finally {
+      clearing = false;
+    }
+  }
 
   // Click-to-inspect: a single selected job ID drives the details panel
   // below the table. Click the same ID again (or any other UI that drops
@@ -42,10 +74,28 @@
 </script>
 
 <section class="space-y-2">
-  <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wide">
-    Backfill jobs ({nRunning})
-    <span class="text-[10px] text-zinc-500 font-normal normal-case">running · {jobs.length} total in window</span>
-  </h2>
+  <div class="flex items-center justify-between gap-3 flex-wrap">
+    <h2 class="text-sm font-semibold text-zinc-300 uppercase tracking-wide">
+      Backfill jobs ({nRunning})
+      <span class="text-[10px] text-zinc-500 font-normal normal-case">running · {jobs.length} total in window</span>
+    </h2>
+    {#if clearFinished}
+      <div class="flex items-center gap-2">
+        {#if clearMsg}
+          <span class="text-[10px] text-zinc-500">{clearMsg}</span>
+        {/if}
+        <button
+          type="button"
+          class="text-xs px-2 py-0.5 bg-zinc-900 border border-zinc-700 rounded hover:border-rose-500 hover:text-rose-300 disabled:opacity-40 disabled:cursor-not-allowed"
+          disabled={clearing || nFinishedVisible === 0}
+          onclick={onClearFinished}
+          title={nFinishedVisible === 0 ? 'No finished jobs to clear' : 'Permanently delete completed / failed / cancelled rows in this view'}
+        >
+          {clearing ? 'Clearing…' : `Clear finished (${nFinishedVisible})`}
+        </button>
+      </div>
+    {/if}
+  </div>
   <div class="overflow-auto border border-zinc-800 rounded-md">
     <table class="text-xs w-full">
       <thead class="bg-zinc-900 text-zinc-400">
