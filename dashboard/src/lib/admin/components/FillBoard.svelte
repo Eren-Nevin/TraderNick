@@ -130,7 +130,15 @@
   </div>
 
   {#if err}
-    <div class="text-xs text-rose-300 bg-rose-950/30 p-2 rounded">{err}</div>
+    <div class="text-xs text-rose-300 bg-rose-950/30 p-2 rounded flex items-start gap-2">
+      <span class="flex-1 min-w-0 break-words">{err}</span>
+      <button
+        type="button"
+        onclick={load}
+        disabled={loading}
+        class="shrink-0 px-2 py-0.5 rounded border border-rose-700/50 text-rose-200 hover:bg-rose-900/40 disabled:opacity-50"
+      >retry</button>
+    </div>
   {:else if !data}
     <div class="text-xs text-zinc-500 py-4 text-center">no data</div>
   {:else}
