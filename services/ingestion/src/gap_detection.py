@@ -456,14 +456,29 @@ class CalendarEventSpec:
     # intrinsically inactive (not a gap). For sparse feeds like funding
     # (3 events/day) most hours of day have baseline=0 → inactive.
     min_baseline_per_hour: float = 0.1
+    # REGULAR_CADENCE only — per-token rows-per-day the upstream is
+    # contracted to emit (e.g. 288 for OI 5m, 1440 for 1m OHLCV).
+    # When > 0, the per-hour baseline becomes
+    # (expected_per_day × current_token_count) / 24, deterministic and
+    # independent of recent cadence. This prevents an upstream cadence
+    # ramp from retroactively repainting historical days as gaps:
+    # before, the median-of-trailing-7d baseline absorbed the new high
+    # cadence, so months at the old (still-valid) 5m rate read as
+    # 33% under baseline → empty → gray.
+    # token_col is the column we count distinct values over to scale
+    # the baseline by current universe size.
+    expected_per_day: int = 0
+    token_col: str = "token"
 
 
 def _reg_cadence(event_key, provider, label, table, *,
-                 filter_sql="", threshold_ratio=0.7):
+                 filter_sql="", threshold_ratio=0.7,
+                 expected_per_day=0):
     return CalendarEventSpec(
         event_key=event_key, provider=provider, label=label, table=table,
         filter_sql=filter_sql, mode=GapMode.REGULAR_CADENCE,
         threshold_ratio=threshold_ratio,
+        expected_per_day=expected_per_day,
     )
 
 
@@ -529,8 +544,8 @@ CALENDAR_EVENTS: dict[str, CalendarEventSpec] = {}
 # Hyperliquid — 8 events. ohlcv + funding are regular cadence (1m bars,
 # hourly funding); the rest are event-driven.
 CALENDAR_EVENTS.update({
-    "hyperliquid.ohlcv":            _reg_cadence("hyperliquid.ohlcv", "hyperliquid", "HL OHLCV 1m",            "tradernick.hl_ohlcv_1m"),
-    "hyperliquid.funding":          _reg_cadence("hyperliquid.funding", "hyperliquid", "HL Funding",            "tradernick.hl_funding"),
+    "hyperliquid.ohlcv":            _reg_cadence("hyperliquid.ohlcv", "hyperliquid", "HL OHLCV 1m",            "tradernick.hl_ohlcv_1m",   expected_per_day=_PER_DAY_1m),
+    "hyperliquid.funding":          _reg_cadence("hyperliquid.funding", "hyperliquid", "HL Funding",            "tradernick.hl_funding",    expected_per_day=_PER_DAY_1h),
     "hyperliquid.trades":           _event_driven("hyperliquid.trades", "hyperliquid", "HL Trades",             "tradernick.hl_trades"),
     "hyperliquid.fills":            _event_driven("hyperliquid.fills", "hyperliquid", "HL Fills",              "tradernick.hl_fills"),
     "hyperliquid.position_history": _event_driven("hyperliquid.position_history", "hyperliquid", "HL Position History", "tradernick.hl_position_history"),
@@ -542,9 +557,9 @@ CALENDAR_EVENTS.update({
 # Binance — 6 feeds. All but raw_trades are regular cadence (deterministic
 # upstream emit). raw_trades' per-hour volume swings with market activity.
 CALENDAR_EVENTS.update({
-    "binance.ohlcv":              _reg_cadence("binance.ohlcv",             "binance", "Binance OHLCV 1m",          "tradernick.binance_ohlcv_1m"),
-    "binance.open_interest":      _reg_cadence("binance.open_interest",     "binance", "Binance Open Interest",     "tradernick.binance_open_interest"),
-    "binance.long_short_ratios":  _reg_cadence("binance.long_short_ratios", "binance", "Binance Long/Short Ratios", "tradernick.binance_long_short_ratios"),
+    "binance.ohlcv":              _reg_cadence("binance.ohlcv",             "binance", "Binance OHLCV 1m",          "tradernick.binance_ohlcv_1m",         expected_per_day=_PER_DAY_1m),
+    "binance.open_interest":      _reg_cadence("binance.open_interest",     "binance", "Binance Open Interest",     "tradernick.binance_open_interest",    expected_per_day=_PER_DAY_5m),
+    "binance.long_short_ratios":  _reg_cadence("binance.long_short_ratios", "binance", "Binance Long/Short Ratios", "tradernick.binance_long_short_ratios", expected_per_day=_PER_DAY_5m),
     # Funding rate is 8h cadence — most hours of day have baseline=0 and
     # therefore become inactive, so the only hours that classify are the
     # 3 funding hours per day. That's the intended behaviour.
@@ -672,6 +687,17 @@ async def _calendar_baseline_per_hour(ch, spec: CalendarEventSpec,
     ending at `anchor` (defaults to `now`). Returns {hour_of_day →
     median_rows}. 24 entries (missing hours default to 0 in the lookup).
 
+    REGULAR_CADENCE override: when spec.expected_per_day > 0, the
+    baseline is computed deterministically as
+    (expected_per_day × current_token_count) / 24, identical across
+    all hours-of-day. The upstream cadence is a contract — using the
+    spec value, not the trailing-7d median, means a recent cadence
+    ramp (e.g. OI moving from 5m → 1m polls in Apr 2026) can't
+    retroactively repaint months at the old (still-valid) cadence as
+    gaps. The dynamic median is kept for EVENT_DRIVEN feeds and for
+    sparse regular feeds (funding_rate, book_depth) that left
+    expected_per_day=0.
+
     `anchor` lets us compute the baseline against the last known data
     instead of wall-clock now. Critical for cold backfilled feeds: HL
     position_history was backfilled up to 2026-02-03 then paused, so
@@ -684,8 +710,10 @@ async def _calendar_baseline_per_hour(ch, spec: CalendarEventSpec,
     dedupes only on background merges, so a hot partition can briefly
     show 2× / 5× the true row count. Mean baselines get blown out by
     those outlier days; median walks past them."""
-    where_extra = f"AND {spec.filter_sql}" if spec.filter_sql else ""
     end = anchor or now
+    if spec.mode == GapMode.REGULAR_CADENCE and spec.expected_per_day > 0:
+        return await _calendar_baseline_static(ch, spec, end)
+    where_extra = f"AND {spec.filter_sql}" if spec.filter_sql else ""
     baseline_start = end - timedelta(days=spec.baseline_window_days)
     sql = f"""
         WITH per_hour AS (
@@ -703,6 +731,36 @@ async def _calendar_baseline_per_hour(ch, spec: CalendarEventSpec,
     """
     rs = await ch.query(sql)
     return {int(r[0]): float(r[1]) for r in rs.result_rows}
+
+
+async def _calendar_baseline_static(ch, spec: CalendarEventSpec,
+                                     end: datetime) -> dict[int, float]:
+    """Static baseline for REGULAR_CADENCE specs with expected_per_day set.
+
+    Per-hour = (expected_per_day × n_tokens) / 24, same across hours.
+    n_tokens is the distinct token count over the last 24h of the
+    table (so the universe scales with whatever is currently being
+    polled). If the table is empty in that window we fall back to a
+    72h lookback; if still empty, baseline=0 → everything inactive,
+    matching the dynamic path's behavior on a dry table."""
+    where_extra = f"AND {spec.filter_sql}" if spec.filter_sql else ""
+    for lookback_h in (24, 72, 24 * 14):
+        start = end - timedelta(hours=lookback_h)
+        sql = f"""
+            SELECT uniqExact({spec.token_col})
+            FROM {spec.table}
+            WHERE {spec.time_col} >= toDateTime('{_format_dt(start)}')
+              AND {spec.time_col} <  toDateTime('{_format_dt(end)}')
+              {where_extra}
+        """
+        rs = await ch.query(sql)
+        n_tokens = int(rs.result_rows[0][0]) if rs.result_rows else 0
+        if n_tokens > 0:
+            break
+    if n_tokens == 0:
+        return {h: 0.0 for h in range(24)}
+    per_hour = (spec.expected_per_day * n_tokens) / 24.0
+    return {h: per_hour for h in range(24)}
 
 
 def _classify_hours(spec: CalendarEventSpec,
@@ -751,12 +809,17 @@ def _aggregate_days(hour_status: dict[datetime, str],
             elif s == "empty":
                 active += 1
         if active == 0:
+            # No baseline-active hours — feed was inherently inactive
+            # this day (cold backfill window edge, or future hour).
             status = "gray"
         elif filled == active:
             status = "green"
-        elif filled == 0:
-            status = "gray"
         else:
+            # Any partial gap — including a full-day blackout where
+            # filled==0 — is red. Treating filled==0 as gray here used
+            # to collapse "completely missing on a feed we expected
+            # data from" into the same color as "feed wasn't active",
+            # hiding real ingestion holes.
             status = "red"
         out.append({
             "day": day.date().isoformat(),
