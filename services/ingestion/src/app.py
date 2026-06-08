@@ -98,10 +98,11 @@ async def startup(app_, _loop):
     await app_.ctx.supervisor.start_from_registry()
 
     app_.ctx.jobs = JobManager()
-    try:
-        await app_.ctx.jobs.resume_inflight()
-    except Exception:
-        log.exception("resume_inflight failed (continuing)")
+    # Run resume in the background with retries. On PC reboot the
+    # backfill containers race ClickHouse for DNS resolution / readiness;
+    # the first attempt routinely fails with gaierror. Without retries,
+    # in-flight jobs are silently abandoned and become zombies.
+    app_.add_task(_resume_inflight_with_retry(app_.ctx.jobs))
 
     # Self-healing tick for exchange_flow_minute. The push MV
     # (mv_exchange_flow) compounds whenever the source `transfers` table
@@ -120,6 +121,41 @@ async def startup(app_, _loop):
     else:
         log.info("exchange_flow self-heal disabled (role=%s, env kill-switch=%s)",
                  role, os.environ.get("EXCHANGE_FLOW_SELF_HEAL_ENABLED", "1"))
+
+
+async def _resume_inflight_with_retry(jobs):
+    """Drive `jobs.resume_inflight()` from a background task with
+    exponential backoff. On container restart (especially PC reboot)
+    ClickHouse may not be reachable for the first several seconds —
+    DNS resolution returns NXDOMAIN, or the port hasn't bound yet.
+    Without retries, in-flight rows are silently abandoned and the
+    jobs become zombies (status='running', subprocess_alive=false).
+
+    The loop exits on first success. We keep retrying for ~15 minutes
+    of total wall-clock; beyond that something is very wrong and the
+    operator should look at the logs."""
+    import asyncio
+    delay = 2.0
+    attempt = 0
+    deadline = 60 * 15  # seconds of total retry budget
+    elapsed = 0.0
+    while True:
+        attempt += 1
+        try:
+            await jobs.resume_inflight()
+            log.info("resume_inflight succeeded on attempt %d", attempt)
+            return
+        except Exception as exc:  # noqa: BLE001
+            if elapsed >= deadline:
+                log.exception(
+                    "resume_inflight failed after %d attempts (%.0fs); giving up — "
+                    "in-flight jobs will be left as zombies", attempt, elapsed)
+                return
+            log.warning("resume_inflight attempt %d failed (%s); retrying in %.1fs",
+                        attempt, exc.__class__.__name__, delay)
+            await asyncio.sleep(delay)
+            elapsed += delay
+            delay = min(delay * 1.6, 30.0)
 
 
 async def _exchange_flow_refresh_loop():
