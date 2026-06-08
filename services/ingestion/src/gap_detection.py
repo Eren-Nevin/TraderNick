@@ -14,10 +14,13 @@ Two detection modes:
   funding / LSR / book_depth) where any missing minute screams gap.
 
   EVENT_DRIVEN — the upstream emits irregularly (AAVE deposits, transfers,
-  HL fills). Baseline is the trailing-`baseline_window_days` median
-  per group. A day under `threshold_ratio × median` is a gap. Inherently
-  noisier — used to surface "we got 0 transfers on ETH for a day when
-  the trailing 14d median is 80k" but won't catch a thin trading day.
+  HL fills). Calendar mode uses a static per-hour minimum baked into
+  the spec (`min_per_hour`, with optional `per_chain_min_per_hour`
+  overrides). An hour with row count < min_per_hour is a gap.
+
+  (The legacy per-provider `/gaps` endpoint still uses a trailing-median
+  baseline on GapTableSpec — see below — but the calendar / fill-board
+  path went static after the median-absorbs-recent-spikes problem.)
 
 Group columns: each spec carries the natural dim(s) (token, chain,
 (chain, kind), …) so a missing-BTC day shows up even if the rest of
@@ -446,25 +449,26 @@ class CalendarEventSpec:
     time_col: str = "time"
     filter_sql: str = ""              # '' or "kind = 'btc'"
     mode: GapMode = GapMode.EVENT_DRIVEN
-    # Fraction of the per-hour baseline (computed dynamically) the
-    # current hour must hit to be considered "filled". 0.7 is the tight
-    # default for regular-cadence feeds (deterministic upstream), 0.2
-    # is the loose default for event-driven tables.
+    # Fraction of the per-hour baseline the current hour must hit to be
+    # considered "filled". 0.7 for regular-cadence feeds; 1.0 for
+    # event_driven (which use a static min_per_hour as the baseline
+    # itself — `actual >= 1.0 × min_per_hour` == `actual >= min_per_hour`).
     threshold_ratio: float = 0.2
-    baseline_window_days: int = 7
-    # Below this avg-rows-per-hour, treat the hour-of-day as
-    # intrinsically inactive (not a gap). For sparse feeds like funding
-    # (3 events/day) most hours of day have baseline=0 → inactive.
-    min_baseline_per_hour: float = 0.1
+    # EVENT_DRIVEN only — static minimum rows-per-hour. An hour is
+    # "filled" when row count ≥ min_per_hour. If chain in per_chain has
+    # an entry, that overrides min_per_hour for the chain-filtered view.
+    # The dynamic-median classifier was removed: median absorbs recent
+    # volume changes and retroactively repaints valid older periods as
+    # gaps. Static thresholds, signed off per event during catalogue
+    # build, are the only honest answer for irregular-cadence feeds.
+    min_per_hour: int = 1
+    per_chain_min_per_hour: tuple[tuple[str, int], ...] = ()
     # REGULAR_CADENCE only — per-token rows-per-day the upstream is
     # contracted to emit (e.g. 288 for OI 5m, 1440 for 1m OHLCV).
     # When > 0, the per-hour baseline becomes
     # (expected_per_day × current_token_count) / 24, deterministic and
     # independent of recent cadence. This prevents an upstream cadence
-    # ramp from retroactively repainting historical days as gaps:
-    # before, the median-of-trailing-7d baseline absorbed the new high
-    # cadence, so months at the old (still-valid) 5m rate read as
-    # 33% under baseline → empty → gray.
+    # ramp from retroactively repainting historical days as gaps.
     # token_col is the column we count distinct values over to scale
     # the baseline by current universe size.
     expected_per_day: int = 0
@@ -493,39 +497,50 @@ def _reg_cadence(event_key, provider, label, table, *,
 
 
 def _event_driven(event_key, provider, label, table, *,
-                  filter_sql="", threshold_ratio=0.2,
-                  min_baseline_per_hour=0.1):
+                  filter_sql="", min_per_hour=1,
+                  per_chain_min_per_hour=()):
     return CalendarEventSpec(
         event_key=event_key, provider=provider, label=label, table=table,
         filter_sql=filter_sql, mode=GapMode.EVENT_DRIVEN,
-        threshold_ratio=threshold_ratio,
-        min_baseline_per_hour=min_baseline_per_hour,
+        threshold_ratio=1.0,
+        min_per_hour=min_per_hour,
+        per_chain_min_per_hour=tuple(per_chain_min_per_hour),
     )
 
 
+def _resolve_min_per_hour(spec: "CalendarEventSpec", chain: str | None) -> int:
+    """Look up the chain-specific override, else fall back to the
+    spec's default min_per_hour. Used by the EVENT_DRIVEN baseline."""
+    if chain:
+        for c, v in spec.per_chain_min_per_hour:
+            if c == chain:
+                return v
+    return spec.min_per_hour
+
+
 def _aave_events(version, table_prefix, events):
-    """version='v3' table_prefix='aave_' OR version='v2' table_prefix='aave_v2_' etc.
-    events is a list of (event_name, table_suffix) — table is then
-    `tradernick.{table_prefix}{table_suffix}`."""
+    """All AAVE events: min_per_hour=1 across all chains. Signed off
+    catalogue-wide as part of the dynamic-median removal."""
     out = {}
     for ev, suffix in events:
         key = f"aave_{version}.{ev}"
         out[key] = _event_driven(
             key, "aave", f"AAVE {version.upper()} {ev.title()}",
             f"tradernick.{table_prefix}{suffix}",
-            # liquidations are rare — wider min_baseline.
-            min_baseline_per_hour=(0.05 if ev == "liquidation" else 0.1),
+            min_per_hour=1,
         )
     return out
 
 
 def _uni_events(version, table_prefix, events):
+    """All Uniswap events: min_per_hour=1 across all chains."""
     out = {}
     for ev, suffix in events:
         key = f"uniswap_{version}.{ev}"
         out[key] = _event_driven(
             key, "uniswap", f"Uniswap {version.upper()} {ev.title()}",
             f"tradernick.{table_prefix}{suffix}",
+            min_per_hour=1,
         )
     return out
 
@@ -556,12 +571,12 @@ CALENDAR_EVENTS: dict[str, CalendarEventSpec] = {}
 CALENDAR_EVENTS.update({
     "hyperliquid.ohlcv":            _reg_cadence("hyperliquid.ohlcv", "hyperliquid", "HL OHLCV 1m",            "tradernick.hl_ohlcv_1m",   expected_per_day=_PER_DAY_1m),
     "hyperliquid.funding":          _reg_cadence("hyperliquid.funding", "hyperliquid", "HL Funding",            "tradernick.hl_funding",    expected_per_day=_PER_DAY_1h),
-    "hyperliquid.trades":           _event_driven("hyperliquid.trades", "hyperliquid", "HL Trades",             "tradernick.hl_trades"),
-    "hyperliquid.fills":            _event_driven("hyperliquid.fills", "hyperliquid", "HL Fills",              "tradernick.hl_fills"),
-    "hyperliquid.position_history": _event_driven("hyperliquid.position_history", "hyperliquid", "HL Position History", "tradernick.hl_position_history"),
-    "hyperliquid.trade_history":    _event_driven("hyperliquid.trade_history", "hyperliquid", "HL Trade History", "tradernick.hl_trade_history"),
-    "hyperliquid.transfers":        _event_driven("hyperliquid.transfers", "hyperliquid", "HL Transfers",       "tradernick.hl_transfers"),
-    "hyperliquid.vaults":           _event_driven("hyperliquid.vaults", "hyperliquid", "HL Vaults",            "tradernick.hl_vaults"),
+    "hyperliquid.trades":           _event_driven("hyperliquid.trades", "hyperliquid", "HL Trades",             "tradernick.hl_trades",             min_per_hour=10_000),
+    "hyperliquid.fills":            _event_driven("hyperliquid.fills", "hyperliquid", "HL Fills",              "tradernick.hl_fills",              min_per_hour=10_000),
+    "hyperliquid.position_history": _event_driven("hyperliquid.position_history", "hyperliquid", "HL Position History", "tradernick.hl_position_history", min_per_hour=100_000),
+    "hyperliquid.trade_history":    _event_driven("hyperliquid.trade_history", "hyperliquid", "HL Trade History", "tradernick.hl_trade_history",     min_per_hour=1_000),
+    "hyperliquid.transfers":        _event_driven("hyperliquid.transfers", "hyperliquid", "HL Transfers",       "tradernick.hl_transfers",          min_per_hour=1),
+    "hyperliquid.vaults":           _event_driven("hyperliquid.vaults", "hyperliquid", "HL Vaults",            "tradernick.hl_vaults",             min_per_hour=1),
 })
 
 # Binance — 6 feeds. All but raw_trades are regular cadence (deterministic
@@ -590,17 +605,23 @@ CALENDAR_EVENTS.update({
                                                 threshold_ratio=0.5,
                                                 expected_per_day=_PER_DAY_BOOK_DEPTH),
     "binance.raw_trades":         _event_driven("binance.raw_trades",       "binance", "Binance Raw Trades",        "tradernick.binance_raw_trades",
-                                                min_baseline_per_hour=10),
+                                                min_per_hour=10_000),
 })
 
 # Transfers — 5 sub-feeds, all live in the single `transfers` table
-# distinguished by the `kind` column.
+# distinguished by the `kind` column. Per-chain thresholds reflect
+# real steady-state volumes (rule: min observed > 5000 → 10k; > 1000
+# → 1k; else → 1, see catalogue lock-in conversation).
+_EVM_ERC20_MIN = (("ETH", 10_000), ("ARB", 10_000), ("BASE", 10_000),
+                  ("BSC", 10_000), ("POLYGON", 10_000))
+_EVM_NATIVE_MIN = (("ETH", 10_000), ("ARB", 1_000), ("BASE", 10_000),
+                   ("BSC", 10_000), ("POLYGON", 1_000))
 CALENDAR_EVENTS.update({
-    "transfers.btc":         _event_driven("transfers.btc",         "transfers", "BTC Transfers",         "tradernick.transfers", filter_sql="kind = 'btc'"),
-    "transfers.evm_native":  _event_driven("transfers.evm_native",  "transfers", "EVM Native Transfers",  "tradernick.transfers", filter_sql="kind = 'native'"),
-    "transfers.evm_erc20":   _event_driven("transfers.evm_erc20",   "transfers", "EVM ERC-20 Transfers",  "tradernick.transfers", filter_sql="kind = 'erc20'"),
-    "transfers.tron_native": _event_driven("transfers.tron_native", "transfers", "Tron Native Transfers", "tradernick.transfers", filter_sql="kind = 'tron_native'"),
-    "transfers.tron_trc20":  _event_driven("transfers.tron_trc20",  "transfers", "Tron TRC-20 Transfers", "tradernick.transfers", filter_sql="kind = 'trc20'"),
+    "transfers.btc":         _event_driven("transfers.btc",         "transfers", "BTC Transfers",         "tradernick.transfers", filter_sql="kind = 'btc'",          min_per_hour=1_000),
+    "transfers.evm_native":  _event_driven("transfers.evm_native",  "transfers", "EVM Native Transfers",  "tradernick.transfers", filter_sql="kind = 'native'",       min_per_hour=10_000, per_chain_min_per_hour=_EVM_NATIVE_MIN),
+    "transfers.evm_erc20":   _event_driven("transfers.evm_erc20",   "transfers", "EVM ERC-20 Transfers",  "tradernick.transfers", filter_sql="kind = 'erc20'",        min_per_hour=10_000, per_chain_min_per_hour=_EVM_ERC20_MIN),
+    "transfers.tron_native": _event_driven("transfers.tron_native", "transfers", "Tron Native Transfers", "tradernick.transfers", filter_sql="kind = 'tron_native'",  min_per_hour=10_000),
+    "transfers.tron_trc20":  _event_driven("transfers.tron_trc20",  "transfers", "Tron TRC-20 Transfers", "tradernick.transfers", filter_sql="kind = 'trc20'",        min_per_hour=10_000),
 })
 
 # AAVE V3 + V2 + V4 — table names match the schema's pluralisation.
@@ -643,7 +664,7 @@ CALENDAR_EVENTS.update({
     "morpho.repay":               _event_driven("morpho.repay",               "morpho", "Morpho Repay",               "tradernick.morpho_repays"),
     "morpho.supply_collateral":   _event_driven("morpho.supply_collateral",   "morpho", "Morpho Supply Collateral",   "tradernick.morpho_supply_collaterals"),
     "morpho.withdraw_collateral": _event_driven("morpho.withdraw_collateral", "morpho", "Morpho Withdraw Collateral", "tradernick.morpho_withdraw_collaterals"),
-    "morpho.liquidation":         _event_driven("morpho.liquidation",         "morpho", "Morpho Liquidation",         "tradernick.morpho_liquidations", min_baseline_per_hour=0.05),
+    "morpho.liquidation":         _event_driven("morpho.liquidation",         "morpho", "Morpho Liquidation",         "tradernick.morpho_liquidations"),
 })
 
 # Spark — 6 events.
@@ -653,14 +674,14 @@ CALENDAR_EVENTS.update({
     "spark.borrow":      _event_driven("spark.borrow",      "spark", "Spark Borrow",      "tradernick.spark_borrows"),
     "spark.repay":       _event_driven("spark.repay",       "spark", "Spark Repay",       "tradernick.spark_repays"),
     "spark.flashloan":   _event_driven("spark.flashloan",   "spark", "Spark Flashloan",   "tradernick.spark_flashloans"),
-    "spark.liquidation": _event_driven("spark.liquidation", "spark", "Spark Liquidation", "tradernick.spark_liquidations", min_baseline_per_hour=0.05),
+    "spark.liquidation": _event_driven("spark.liquidation", "spark", "Spark Liquidation", "tradernick.spark_liquidations"),
 })
 
 # GMX — 9 events.
 CALENDAR_EVENTS.update({
     "gmx.position_increase": _event_driven("gmx.position_increase", "gmx", "GMX Position Increase", "tradernick.gmx_position_increases"),
     "gmx.position_decrease": _event_driven("gmx.position_decrease", "gmx", "GMX Position Decrease", "tradernick.gmx_position_decreases"),
-    "gmx.liquidation":       _event_driven("gmx.liquidation",       "gmx", "GMX Liquidation",       "tradernick.gmx_liquidations", min_baseline_per_hour=0.05),
+    "gmx.liquidation":       _event_driven("gmx.liquidation",       "gmx", "GMX Liquidation",       "tradernick.gmx_liquidations"),
     "gmx.swap":              _event_driven("gmx.swap",              "gmx", "GMX Swap",              "tradernick.gmx_swaps"),
     "gmx.deposit":           _event_driven("gmx.deposit",           "gmx", "GMX Deposit",           "tradernick.gmx_deposits"),
     "gmx.withdraw":          _event_driven("gmx.withdraw",          "gmx", "GMX Withdraw",          "tradernick.gmx_withdrawals"),
@@ -706,52 +727,25 @@ async def _calendar_hourly_counts(ch, spec: CalendarEventSpec,
 
 async def _calendar_baseline_per_hour(ch, spec: CalendarEventSpec,
                                       now: datetime,
-                                      anchor: datetime | None = None) -> dict[int, float]:
-    """Per-hour-of-day MEDIAN row count over the `baseline_window_days`
-    ending at `anchor` (defaults to `now`). Returns {hour_of_day →
-    median_rows}. 24 entries (missing hours default to 0 in the lookup).
+                                      chain: str | None = None) -> dict[int, float]:
+    """Return {hour_of_day → expected_rows_per_hour}, 24 entries.
 
-    REGULAR_CADENCE override: when spec.expected_per_day > 0, the
-    baseline is computed deterministically (see
-    _calendar_baseline_static) from the spec's contracted cadence,
-    not the trailing-7d median. A recent cadence ramp on the upstream
-    (e.g. OI moving from 5m → 1m polls in Apr 2026) can't then
-    retroactively repaint months at the old (still-valid) cadence as
-    gaps. The dynamic median is kept only for EVENT_DRIVEN feeds.
+    Both modes are now static (the dynamic-median EVENT_DRIVEN path was
+    removed — it absorbed recent volume swings and retroactively
+    repainted older valid periods as gaps):
 
-    `anchor` lets us compute the baseline against the last known data
-    instead of wall-clock now. Critical for cold backfilled feeds: HL
-    position_history was backfilled up to 2026-02-03 then paused, so
-    a now-anchored 7d window finds zero rows → baseline=0 → every
-    hour classifies as inactive → the FillBoard shows a fully-gray
-    180-day grid even though the historical data is present.
+      REGULAR_CADENCE → (expected_per_day × current_token_count) / 24,
+      optionally concentrated on `hours_of_emit` for bursty feeds.
 
-    Median (not mean) because a recent in-flight backfill leaves
-    unmerged duplicate rows in the source table — ReplacingMergeTree
-    dedupes only on background merges, so a hot partition can briefly
-    show 2× / 5× the true row count. Mean baselines get blown out by
-    those outlier days; median walks past them."""
-    end = anchor or now
-    if spec.mode == GapMode.REGULAR_CADENCE and spec.expected_per_day > 0:
-        return await _calendar_baseline_static(ch, spec, end)
-    where_extra = f"AND {spec.filter_sql}" if spec.filter_sql else ""
-    baseline_start = end - timedelta(days=spec.baseline_window_days)
-    sql = f"""
-        WITH per_hour AS (
-            SELECT toStartOfHour({spec.time_col}) AS h, count() AS rows
-            FROM {spec.table}
-            WHERE {spec.time_col} >= toDateTime('{_format_dt(baseline_start)}')
-              AND {spec.time_col} <  toDateTime('{_format_dt(end)}')
-              {where_extra}
-            GROUP BY h
-        )
-        SELECT toHour(h) AS hod, quantile(0.5)(rows) AS baseline
-        FROM per_hour
-        GROUP BY hod
-        ORDER BY hod
+      EVENT_DRIVEN → flat at spec.min_per_hour, or
+      spec.per_chain_min_per_hour[chain] if the chain has an override.
     """
-    rs = await ch.query(sql)
-    return {int(r[0]): float(r[1]) for r in rs.result_rows}
+    if spec.mode == GapMode.REGULAR_CADENCE and spec.expected_per_day > 0:
+        return await _calendar_baseline_static(ch, spec, now)
+    if spec.mode == GapMode.EVENT_DRIVEN:
+        val = float(_resolve_min_per_hour(spec, chain))
+        return {h: val for h in range(24)}
+    return {h: 0.0 for h in range(24)}
 
 
 async def _calendar_baseline_static(ch, spec: CalendarEventSpec,
@@ -795,13 +789,16 @@ def _classify_hours(spec: CalendarEventSpec,
                     hourly_counts: dict[datetime, int],
                     baseline_per_hod: dict[int, float],
                     since: datetime, until: datetime,
-                    now: datetime) -> dict[datetime, str]:
+                    now: datetime,
+                    first_data: datetime | None = None) -> dict[datetime, str]:
     """Walk every hour in [since, until) and classify it as one of:
-    - 'filled'   : active and met threshold
+    - 'filled'   : active and met threshold (actual >= baseline × threshold_ratio)
     - 'empty'    : active but below threshold (gap)
-    - 'inactive' : baseline-too-low or not-yet-in-the-past (future)
+    - 'inactive' : future / in-progress / before first_data / baseline=0
     """
     current_hour = now.replace(minute=0, second=0, microsecond=0)
+    first_hour = (first_data.replace(minute=0, second=0, microsecond=0)
+                  if first_data else None)
     hour = since.replace(minute=0, second=0, microsecond=0)
     out: dict[datetime, str] = {}
     while hour < until:
@@ -810,7 +807,12 @@ def _classify_hours(spec: CalendarEventSpec,
         baseline = baseline_per_hod.get(hod, 0.0)
         if hour >= current_hour:
             out[hour] = "inactive"  # future / in-progress
-        elif baseline < spec.min_baseline_per_hour:
+        elif first_hour and hour < first_hour:
+            # Pre-history: the table never had data this early. Avoid
+            # painting it as red just because the upstream wasn't
+            # being collected yet.
+            out[hour] = "inactive"
+        elif baseline <= 0:
             out[hour] = "inactive"
         elif actual >= baseline * spec.threshold_ratio:
             out[hour] = "filled"
@@ -877,9 +879,10 @@ async def find_calendar(event_key: str, since: datetime, until: datetime,
                         chains: list[str] | None = None) -> dict:
     """Build the fill-board payload for one event over [since, until).
 
-    Runs three CH queries in parallel: first/last, per-hour counts in
-    the display window, and per-hour-of-day baseline over the trailing
-    `baseline_window_days`. Classifies + aggregates in Python.
+    Runs first/last + per-hour counts in parallel. Baseline is static:
+    REGULAR_CADENCE → contracted cadence × token universe; EVENT_DRIVEN
+    → spec.min_per_hour (or per-chain override). Classifies and
+    aggregates in Python.
 
     `chain` (optional) appends `AND chain = '<chain>'` to the spec's
     filter so a single event_key can serve per-chain views without a
@@ -917,18 +920,13 @@ async def find_calendar(event_key: str, since: datetime, until: datetime,
     # position_history paused since 2026-02-03, live disabled) classify
     # correctly instead of rendering a fully-gray 180-day grid.
     first_data, last_data = await _calendar_first_last(ch, spec)
-    # Anchor the baseline at min(now, last_data). When the feed is live
-    # this is now and behaviour is unchanged. When the feed is cold the
-    # baseline window slides back to where the data actually ends, so
-    # the per-hour-of-day median reflects real activity and historical
-    # days classify as filled instead of all-inactive.
-    anchor = last_data if last_data and last_data < now else now
     hourly_counts, baseline_per_hod = await asyncio.gather(
         _calendar_hourly_counts(ch, spec, since, until),
-        _calendar_baseline_per_hour(ch, spec, now, anchor=anchor),
+        _calendar_baseline_per_hour(ch, spec, now, chain=chain),
     )
     hour_status = _classify_hours(
         spec, hourly_counts, baseline_per_hod, since, until, now,
+        first_data=first_data,
     )
     days = _aggregate_days(hour_status, since, today)
     today_hours_payload = _today_hours(hour_status, today)
