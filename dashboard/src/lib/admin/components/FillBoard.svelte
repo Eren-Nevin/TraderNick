@@ -38,16 +38,21 @@
     days?: number;           // display window. Default 180.
     // Optional per-chain selector. When present (length >= 2) a
     // dropdown is rendered; selecting a chain refetches with
-    // `&chain=<x>`. The first entry is the default. "All" is added
-    // implicitly as a leading option.
+    // `&chain=<x>`. Default = 'ETH' if present, else chains[0].
+    // No "All" view — multi-chain aggregation masked single-chain
+    // blackouts and made the picture harder to read, not easier.
     chains?: string[];
   };
   let { eventKey, label, days: windowDays = 180, chains }: Props = $props();
 
-  // Selected chain. Empty string = "All" (no chain filter).
-  // Initialise to "All" — matches the historical pre-selector behaviour
-  // so a user dropping in still sees the aggregate picture.
-  let chain = $state<string>('');
+  // Selected chain. Empty string only for single-chain events
+  // (chains undefined) — those don't render a selector and the URL
+  // omits `&chain=`.
+  let chain = $state<string>(
+    chains && chains.length > 0
+      ? (chains.includes('ETH') ? 'ETH' : chains[0])
+      : ''
+  );
 
   let loading = $state(true);
   let err = $state<string | null>(null);
@@ -61,12 +66,6 @@
       let url = `/api/admin/gaps/calendar?event=${encodeURIComponent(eventKey)}`;
       if (chain) {
         url += `&chain=${encodeURIComponent(chain)}`;
-      } else if (chains && chains.length >= 2) {
-        // "All" view: ask the backend to fan out per chain and reduce
-        // per-day to the worst status. Without this, a chain with a
-        // multi-month blackout (e.g. BSC) is masked by the others'
-        // normal volume in the raw count() aggregation.
-        url += `&chains=${chains.map(encodeURIComponent).join(',')}`;
       }
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -158,7 +157,6 @@
           disabled={loading}
           class="text-[11px] bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-zinc-200 disabled:opacity-50"
         >
-          <option value="">All</option>
           {#each chains as c (c)}
             <option value={c}>{c}</option>
           {/each}
