@@ -469,16 +469,26 @@ class CalendarEventSpec:
     # the baseline by current universe size.
     expected_per_day: int = 0
     token_col: str = "token"
+    # For bursty regular feeds (e.g. Binance funding at 00/08/16 UTC),
+    # rows arrive only on specific hours-of-day. Distributing
+    # expected_per_day evenly across all 24 hours would mark most hours
+    # as expected-but-empty even though the upstream never intends to
+    # emit there. When set, the static baseline is concentrated on
+    # these hours (per_emit_hour = expected_per_day × n_tokens /
+    # len(hours_of_emit)); other hours stay at zero and classify as
+    # inactive. Empty tuple means "evenly distributed across 24h".
+    hours_of_emit: tuple[int, ...] = ()
 
 
 def _reg_cadence(event_key, provider, label, table, *,
                  filter_sql="", threshold_ratio=0.7,
-                 expected_per_day=0):
+                 expected_per_day=0, hours_of_emit=()):
     return CalendarEventSpec(
         event_key=event_key, provider=provider, label=label, table=table,
         filter_sql=filter_sql, mode=GapMode.REGULAR_CADENCE,
         threshold_ratio=threshold_ratio,
         expected_per_day=expected_per_day,
+        hours_of_emit=hours_of_emit,
     )
 
 
@@ -563,7 +573,19 @@ CALENDAR_EVENTS.update({
     # Funding rate is 8h cadence — most hours of day have baseline=0 and
     # therefore become inactive, so the only hours that classify are the
     # 3 funding hours per day. That's the intended behaviour.
-    "binance.funding_rate":       _reg_cadence("binance.funding_rate",      "binance", "Binance Funding Rate",      "tradernick.binance_funding_rate"),
+    # Funding rate: 3 emits/day at 00/08/16 UTC. Static baseline is
+    # concentrated on those three hours; other hours stay at zero and
+    # classify as inactive.
+    "binance.funding_rate":       _reg_cadence("binance.funding_rate",      "binance", "Binance Funding Rate",      "tradernick.binance_funding_rate",
+                                                threshold_ratio=0.34,
+                                                expected_per_day=_PER_DAY_8h,
+                                                hours_of_emit=(0, 8, 16)),
+    # Book depth is the one regular_cadence feed kept on dynamic median:
+    # its "regularity" is a polling-selection artifact (only a subset of
+    # token × bps pairs is enabled in live), not an upstream contract,
+    # so the static baseline (which scales by distinct-token-count over
+    # the whole table) can't model what's actually being polled. The
+    # dynamic median over the last 7d observes the realised polling set.
     "binance.book_depth":         _reg_cadence("binance.book_depth",        "binance", "Binance Book Depth",        "tradernick.binance_book_depth"),
     "binance.raw_trades":         _event_driven("binance.raw_trades",       "binance", "Binance Raw Trades",        "tradernick.binance_raw_trades",
                                                 min_baseline_per_hour=10),
@@ -688,15 +710,15 @@ async def _calendar_baseline_per_hour(ch, spec: CalendarEventSpec,
     median_rows}. 24 entries (missing hours default to 0 in the lookup).
 
     REGULAR_CADENCE override: when spec.expected_per_day > 0, the
-    baseline is computed deterministically as
-    (expected_per_day × current_token_count) / 24, identical across
-    all hours-of-day. The upstream cadence is a contract — using the
-    spec value, not the trailing-7d median, means a recent cadence
-    ramp (e.g. OI moving from 5m → 1m polls in Apr 2026) can't
+    baseline is computed deterministically (see
+    _calendar_baseline_static) from the spec's contracted cadence,
+    not the trailing-7d median. A recent cadence ramp on the upstream
+    (e.g. OI moving from 5m → 1m polls in Apr 2026) can't then
     retroactively repaint months at the old (still-valid) cadence as
-    gaps. The dynamic median is kept for EVENT_DRIVEN feeds and for
-    sparse regular feeds (funding_rate, book_depth) that left
-    expected_per_day=0.
+    gaps. The dynamic median is kept only for EVENT_DRIVEN feeds and
+    for book_depth, whose "regularity" is a polling-selection
+    artifact (only a subset of token × bps pairs is enabled in live)
+    rather than an upstream contract.
 
     `anchor` lets us compute the baseline against the last known data
     instead of wall-clock now. Critical for cold backfilled feeds: HL
@@ -759,6 +781,13 @@ async def _calendar_baseline_static(ch, spec: CalendarEventSpec,
             break
     if n_tokens == 0:
         return {h: 0.0 for h in range(24)}
+    if spec.hours_of_emit:
+        # Bursty regular feeds (e.g. funding @ 00/08/16 UTC): concentrate
+        # the day's expected row volume on the declared emit hours.
+        emit_hours = set(spec.hours_of_emit)
+        per_emit_hour = (spec.expected_per_day * n_tokens) / len(emit_hours)
+        return {h: (per_emit_hour if h in emit_hours else 0.0)
+                for h in range(24)}
     per_hour = (spec.expected_per_day * n_tokens) / 24.0
     return {h: per_hour for h in range(24)}
 
