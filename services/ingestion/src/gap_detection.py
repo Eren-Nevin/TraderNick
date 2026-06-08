@@ -580,13 +580,15 @@ CALENDAR_EVENTS.update({
                                                 threshold_ratio=0.34,
                                                 expected_per_day=_PER_DAY_8h,
                                                 hours_of_emit=(0, 8, 16)),
-    # Book depth is the one regular_cadence feed kept on dynamic median:
-    # its "regularity" is a polling-selection artifact (only a subset of
-    # token × bps pairs is enabled in live), not an upstream contract,
-    # so the static baseline (which scales by distinct-token-count over
-    # the whole table) can't model what's actually being polled. The
-    # dynamic median over the last 7d observes the realised polling set.
-    "binance.book_depth":         _reg_cadence("binance.book_depth",        "binance", "Binance Book Depth",        "tradernick.binance_book_depth"),
+    # Book depth polls the SAME token universe as OHLCV (config.INGEST_TOKENS)
+    # at 30s ticks emitting _BOOK_DEPTH_PER_SNAPSHOT bps rows each →
+    # _PER_DAY_BOOK_DEPTH rows/token/day. Same static-baseline path as the
+    # other regular feeds; when the stream is paused, 0 rows in the last
+    # 24h drives baseline to 0 and the day reads as inactive (gray) —
+    # honest signal that the feed is off.
+    "binance.book_depth":         _reg_cadence("binance.book_depth",        "binance", "Binance Book Depth",        "tradernick.binance_book_depth",
+                                                threshold_ratio=0.5,
+                                                expected_per_day=_PER_DAY_BOOK_DEPTH),
     "binance.raw_trades":         _event_driven("binance.raw_trades",       "binance", "Binance Raw Trades",        "tradernick.binance_raw_trades",
                                                 min_baseline_per_hour=10),
 })
@@ -715,10 +717,7 @@ async def _calendar_baseline_per_hour(ch, spec: CalendarEventSpec,
     not the trailing-7d median. A recent cadence ramp on the upstream
     (e.g. OI moving from 5m → 1m polls in Apr 2026) can't then
     retroactively repaint months at the old (still-valid) cadence as
-    gaps. The dynamic median is kept only for EVENT_DRIVEN feeds and
-    for book_depth, whose "regularity" is a polling-selection
-    artifact (only a subset of token × bps pairs is enabled in live)
-    rather than an upstream contract.
+    gaps. The dynamic median is kept only for EVENT_DRIVEN feeds.
 
     `anchor` lets us compute the baseline against the last known data
     instead of wall-clock now. Critical for cold backfilled feeds: HL
