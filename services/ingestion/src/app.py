@@ -199,8 +199,10 @@ async def get_gaps_calendar(request):
     if since_dt >= until_dt:
         return response.json({"error": "since must be earlier than until"}, status=400)
     chain = request.args.get("chain") or None
+    raw_chains = request.args.get("chains") or ""
+    chains_list = [c for c in (s.strip() for s in raw_chains.split(",")) if c] or None
     result = await gap_detection.find_calendar(event_key, since_dt, until_dt,
-                                                chain=chain)
+                                                chain=chain, chains=chains_list)
     return response.json(result)
 
 

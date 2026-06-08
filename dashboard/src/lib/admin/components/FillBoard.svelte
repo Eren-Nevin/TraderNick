@@ -59,7 +59,15 @@
     err = null;
     try {
       let url = `/api/admin/gaps/calendar?event=${encodeURIComponent(eventKey)}`;
-      if (chain) url += `&chain=${encodeURIComponent(chain)}`;
+      if (chain) {
+        url += `&chain=${encodeURIComponent(chain)}`;
+      } else if (chains && chains.length >= 2) {
+        // "All" view: ask the backend to fan out per chain and reduce
+        // per-day to the worst status. Without this, a chain with a
+        // multi-month blackout (e.g. BSC) is masked by the others'
+        // normal volume in the raw count() aggregation.
+        url += `&chains=${chains.map(encodeURIComponent).join(',')}`;
+      }
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       data = (await res.json()) as CalendarPayload;

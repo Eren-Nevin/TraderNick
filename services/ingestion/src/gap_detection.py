@@ -782,7 +782,8 @@ _CHAIN_RE = re.compile(r"^[A-Za-z0-9_]{1,16}$")
 
 
 async def find_calendar(event_key: str, since: datetime, until: datetime,
-                        chain: str | None = None) -> dict:
+                        chain: str | None = None,
+                        chains: list[str] | None = None) -> dict:
     """Build the fill-board payload for one event over [since, until).
 
     Runs three CH queries in parallel: first/last, per-hour counts in
@@ -793,7 +794,17 @@ async def find_calendar(event_key: str, since: datetime, until: datetime,
     filter so a single event_key can serve per-chain views without a
     schema-level fan-out. The caller is responsible for choosing a
     chain the table actually has — invalid values just yield an
-    all-empty calendar."""
+    all-empty calendar.
+
+    `chains` (optional) drives the "All" view: when the FillBoard's
+    chain selector is set to All it sends the catalogue's chain list
+    so the backend can fan out per-chain and reduce per-day to the
+    WORST status. Aggregating with a raw `count()` across chains
+    masks per-chain gaps — a 2-month BSC blackout disappears the
+    moment ETH/ARB/BASE have normal volume. The pessimistic reduction
+    surfaces that gap as gray in the All view."""
+    if chains and not chain:
+        return await _find_calendar_multi(event_key, since, until, chains)
     spec = CALENDAR_EVENTS.get(event_key)
     if spec is None:
         return {"event": event_key, "error": f"no calendar spec for event {event_key!r}",
@@ -844,6 +855,82 @@ async def find_calendar(event_key: str, since: datetime, until: datetime,
         "days": days,
         "today_hours": today_hours_payload,
         "errors": [],
+    }
+
+
+async def _find_calendar_multi(event_key: str, since: datetime, until: datetime,
+                                chains: list[str]) -> dict:
+    """Fan out find_calendar() per chain, reduce per-day to worst status.
+
+    Reduction (per day cell):
+      any gray   → gray   (one chain has no baseline / no data → coverage incomplete)
+      any red    → red    (one chain is below threshold)
+      all green  → green
+
+    `hours_active` and `hours_filled` are summed across chains so the
+    tooltip still conveys volume. `first_data` = min across chains,
+    `last_data` = max across chains."""
+    for c in chains:
+        if not _CHAIN_RE.match(c):
+            return {"event": event_key, "error": f"invalid chain {c!r}",
+                    "days": [], "today_hours": []}
+    results = await asyncio.gather(*[
+        find_calendar(event_key, since, until, chain=c) for c in chains
+    ])
+    errors: list[dict] = []
+    ok: list[dict] = []
+    for c, r in zip(chains, results):
+        if r.get("error"):
+            errors.append({"chain": c, "error": r["error"]})
+        else:
+            ok.append(r)
+    if not ok:
+        return {"event": event_key,
+                "error": "all per-chain calendars failed",
+                "errors": errors, "days": [], "today_hours": []}
+    base = ok[0]
+    # Days arrays from each chain are aligned: same since/until → same
+    # length / dates. Reduce index-wise.
+    n_days = len(base["days"])
+    out_days = []
+    for i in range(n_days):
+        cells = [r["days"][i] for r in ok]
+        statuses = {c["status"] for c in cells}
+        if "gray" in statuses:
+            status = "gray"
+        elif "red" in statuses:
+            status = "red"
+        else:
+            status = "green"
+        out_days.append({
+            "day": cells[0]["day"],
+            "status": status,
+            "hours_active": sum(c["hours_active"] for c in cells),
+            "hours_filled": sum(c["hours_filled"] for c in cells),
+        })
+    out_hours = []
+    for h in range(24):
+        statuses = {r["today_hours"][h]["status"] for r in ok}
+        out_hours.append({
+            "hour": h,
+            "status": "green" if statuses == {"green"} else "gray",
+        })
+    firsts = [r["first_data"] for r in ok if r.get("first_data")]
+    lasts = [r["last_data"] for r in ok if r.get("last_data")]
+    return {
+        "event": event_key,
+        "provider": base["provider"],
+        "label": base["label"],
+        "table": base["table"],
+        "mode": base["mode"],
+        "since": since.isoformat(),
+        "until": until.isoformat(),
+        "today_utc": base["today_utc"],
+        "first_data": min(firsts) if firsts else None,
+        "last_data": max(lasts) if lasts else None,
+        "days": out_days,
+        "today_hours": out_hours,
+        "errors": errors,
     }
 
 
