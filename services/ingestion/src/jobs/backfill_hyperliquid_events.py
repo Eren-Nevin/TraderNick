@@ -52,7 +52,12 @@ _CHUNK_HOURS = {
     "ohlcv":            6,
     "trades":           6,
     "fills":            6,
-    "position_history": 1,   # already finer — keep as-is
+    # 2026-06-10: bumped 1h → 6h after the SDK 2.27 + min_size=1000 + 15m
+    # window shape brought per-1h-chunk row counts down to ~125K
+    # (April: 160K, Jan: 125K). A 6h chunk is now ~750K rows — comfortably
+    # within the response volume DefiStream handled in steady state before
+    # the 2026-06-06 incident at 8h × the old 1.76M/h shape.
+    "position_history": 6,
     "trade_history":    6,
     "transfers":        6,
     "funding":          6,
@@ -138,7 +143,10 @@ async def _fetch_chunk(ds, *, event, tokens, since, until):
             if event == "ohlcv":
                 b = b.window("1m")
             elif event == "position_history":
-                b = b.window("5m")
+                # Mirrors the live group: 15m grid + $1000 min position size.
+                b = b.window("15m").min_size(1000)
+            elif event == "trade_history":
+                b = b.window("1h")
             df = await b.as_df("polars")
             if df.is_empty(): return 0
             rows = transform(df)
@@ -165,6 +173,11 @@ async def main(job_id):
     completed_set = {tuple(k) if isinstance(k, list) else k for k in args.get("completed_chunks", [])}
     chunks = _planned_chunks(events, tokens, since, until)
     total = len(chunks)
+    # Surface the exact planned total so the dashboard can render "X / Y
+    # chunks done" instead of just X. The figure is stable for the life of
+    # the job — chunk count only depends on (events, tokens, since, until)
+    # and the per-event _CHUNK_HOURS map, none of which mutate post-launch.
+    args["total_chunks"] = total
     def _chunk_key(ev: str, tok, cs):
         return f"{ev}|{tok}|{cs.isoformat()}" if tok else f"{ev}|{cs.isoformat()}"
     done = sum(1 for (ev, tok, cs, _) in chunks if _chunk_key(ev, tok, cs) in completed_set)

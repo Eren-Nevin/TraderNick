@@ -2303,6 +2303,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history
     pnl           Float64        CODEC(Gorilla, ZSTD(3)),
     fees          Float64        CODEC(Gorilla, ZSTD(3)),
     net_pnl       Float64        CODEC(Gorilla, ZSTD(3)),
+    funding       Float64        CODEC(Gorilla, ZSTD(3)),
     volume        Float64        CODEC(Gorilla, ZSTD(3)),
     buy_volume    Float64        CODEC(Gorilla, ZSTD(3)),
     sell_volume   Float64        CODEC(Gorilla, ZSTD(3)),

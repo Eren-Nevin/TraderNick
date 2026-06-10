@@ -98,7 +98,15 @@ async def _fetch_and_insert(ds, *, event, tokens, since, until) -> int:
             if event == "ohlcv":
                 b = b.window("1m")
             elif event == "position_history":
-                b = b.window("5m")
+                # 15m snapshot grid (was 5m) — 3× fewer rows per token-day at
+                # the cost of coarser carry-forward granularity. min_size=1000
+                # drops dust positions, focusing the table on wallets worth
+                # tracking.
+                b = b.window("15m").min_size(1000)
+            elif event == "trade_history":
+                # Explicit 1h bucket — matches the canonical leaderboard
+                # cadence and keeps gap detection at hour granularity.
+                b = b.window("1h")
             df = await b.as_df("polars")
             if df.is_empty():
                 return 0

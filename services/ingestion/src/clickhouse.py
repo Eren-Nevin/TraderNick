@@ -2224,7 +2224,7 @@ def hl_position_history_df_to_rows(df: pl.DataFrame):
 
 HL_TRADE_HISTORY_COLUMNS = [
     "time", "wallet", "token",
-    "pnl", "fees", "net_pnl",
+    "pnl", "fees", "net_pnl", "funding",
     "volume", "buy_volume", "sell_volume", "trade_count",
 ]
 
@@ -2239,6 +2239,7 @@ def hl_trade_history_df_to_rows(df: pl.DataFrame):
             float(r["pnl"]) if r.get("pnl") is not None else 0.0,
             float(r["fees"]) if r.get("fees") is not None else 0.0,
             float(r["net_pnl"]) if r.get("net_pnl") is not None else 0.0,
+            float(r["funding"]) if r.get("funding") is not None else 0.0,
             float(r["volume"]) if r.get("volume") is not None else 0.0,
             float(r["buy_volume"]) if r.get("buy_volume") is not None else 0.0,
             float(r["sell_volume"]) if r.get("sell_volume") is not None else 0.0,
