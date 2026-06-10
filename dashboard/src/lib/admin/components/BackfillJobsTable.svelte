@@ -59,14 +59,39 @@
   // events, chains, pairs, force, custom fields …) goes into the
   // "user-supplied parameters" rendering. completed_chunks is the
   // job's internal checkpointing — useful but very noisy, so we
-  // surface a count instead of dumping the full list.
+  // surface a count instead of dumping the full list. total_chunks
+  // is folded into that same row, so it's filtered out here.
   const TIME_KEYS = ['since', 'until'];
+  const HIDDEN_KEYS = new Set(['total_chunks']);
   function nonTimeArgs(args: Record<string, unknown> | undefined | null): [string, unknown][] {
     if (!args) return [];
-    return Object.entries(args).filter(([k]) => !TIME_KEYS.includes(k));
+    return Object.entries(args).filter(([k]) => !TIME_KEYS.includes(k) && !HIDDEN_KEYS.has(k));
   }
-  function fmtArgValue(k: string, v: unknown): string {
-    if (k === 'completed_chunks' && Array.isArray(v)) return `${v.length} chunks done`;
+
+  // Best-effort total: prefer the value the backfill script wrote into
+  // args; otherwise reverse-derive from completed_chunks ÷ progress.
+  // Reverse-derived totals are slightly off when progress was rounded
+  // server-side, so they're prefixed with ~ in the UI.
+  function totalChunks(args: Record<string, unknown> | undefined | null,
+                       progress: number | undefined | null): { total: number | null; exact: boolean } {
+    if (!args) return { total: null, exact: false };
+    const t = args['total_chunks'];
+    if (typeof t === 'number' && Number.isFinite(t) && t > 0) {
+      return { total: Math.round(t), exact: true };
+    }
+    const cc = args['completed_chunks'];
+    if (Array.isArray(cc) && typeof progress === 'number' && progress > 0) {
+      return { total: Math.max(cc.length, Math.round(cc.length / progress)), exact: false };
+    }
+    return { total: null, exact: false };
+  }
+
+  function fmtArgValue(k: string, v: unknown, args?: Record<string, unknown>, progress?: number): string {
+    if (k === 'completed_chunks' && Array.isArray(v)) {
+      const { total, exact } = totalChunks(args ?? null, progress ?? null);
+      if (total != null) return `${v.length} / ${exact ? '' : '~'}${total} chunks done`;
+      return `${v.length} chunks done`;
+    }
     if (Array.isArray(v)) return v.length <= 30 ? v.join(', ') : `${v.slice(0, 30).join(', ')} … (+${v.length - 30})`;
     if (typeof v === 'object' && v !== null) return JSON.stringify(v);
     return String(v);
@@ -137,8 +162,12 @@
               {((j.args?.since as string | undefined) ?? '?').slice(0, 10)} → {((j.args?.until as string | undefined) ?? '?').slice(0, 10)}
             </td>
             <td class="px-2 py-1 text-zinc-500 max-w-xs truncate font-mono" title={JSON.stringify(j.args ?? {})}>
+              {#if Array.isArray(j.args?.completed_chunks)}
+                {@const tc = totalChunks(j.args, j.progress)}
+                <span class="text-zinc-300">chunks={(j.args.completed_chunks as unknown[]).length}{tc.total != null ? `/${tc.exact ? '' : '~'}${tc.total}` : ''}</span>{' '}
+              {/if}
               {Object.entries(j.args ?? {})
-                .filter(([k]) => !['since', 'until', 'force', 'completed_chunks'].includes(k))
+                .filter(([k]) => !['since', 'until', 'force', 'completed_chunks', 'total_chunks'].includes(k))
                 .map(([k, v]) => `${k}=${Array.isArray(v) ? v.length : v}`)
                 .join(' ')}
             </td>
@@ -195,7 +224,7 @@
             {#each nonTimeArgs(selectedJob.args) as [k, v] (k)}
               <tr class="border-t border-zinc-800">
                 <td class="px-2 py-1 text-zinc-500 align-top w-48">{k}</td>
-                <td class="px-2 py-1 text-zinc-200 whitespace-pre-wrap break-all">{fmtArgValue(k, v)}</td>
+                <td class="px-2 py-1 text-zinc-200 whitespace-pre-wrap break-all">{fmtArgValue(k, v, selectedJob.args, selectedJob.progress)}</td>
               </tr>
             {/each}
             {#if nonTimeArgs(selectedJob.args).length === 0}
