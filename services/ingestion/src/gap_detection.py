@@ -573,7 +573,7 @@ CALENDAR_EVENTS.update({
     "hyperliquid.funding":          _reg_cadence("hyperliquid.funding", "hyperliquid", "HL Funding",            "tradernick.hl_funding",    expected_per_day=_PER_DAY_1h),
     "hyperliquid.trades":           _event_driven("hyperliquid.trades", "hyperliquid", "HL Trades",             "tradernick.hl_trades",             min_per_hour=10_000),
     "hyperliquid.fills":            _event_driven("hyperliquid.fills", "hyperliquid", "HL Fills",              "tradernick.hl_fills",              min_per_hour=10_000),
-    "hyperliquid.position_history": _event_driven("hyperliquid.position_history", "hyperliquid", "HL Position History", "tradernick.hl_position_history", min_per_hour=100_000),
+    "hyperliquid.position_history": _event_driven("hyperliquid.position_history", "hyperliquid", "HL Position History", "tradernick.hl_position_history", min_per_hour=10_000),
     "hyperliquid.trade_history":    _event_driven("hyperliquid.trade_history", "hyperliquid", "HL Trade History", "tradernick.hl_trade_history",     min_per_hour=1_000),
     "hyperliquid.transfers":        _event_driven("hyperliquid.transfers", "hyperliquid", "HL Transfers",       "tradernick.hl_transfers",          min_per_hour=1),
     "hyperliquid.vaults":           _event_driven("hyperliquid.vaults", "hyperliquid", "HL Vaults",            "tradernick.hl_vaults",             min_per_hour=1),
