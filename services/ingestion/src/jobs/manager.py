@@ -193,12 +193,66 @@ class JobManager:
 
     async def cancel(self, job_id: str) -> bool:
         proc = self._procs.get(job_id)
-        if proc is None:
+        if proc is not None:
+            try:
+                proc.terminate()
+            except ProcessLookupError:
+                pass
+            return True
+        # No live subprocess. Either this manager doesn't own the job
+        # (foreign provider) or the row is a zombie: status still
+        # 'running'/'pending' from a subprocess that died without writing
+        # its terminal state (typically: SIGTERM during a tick + aiohttp
+        # session torn down before the cancelled write landed — see
+        # 2026-06-10 e828004f incident).
+        #
+        # Auto-finalize the zombie only when we own the job_type AND the
+        # row hasn't been updated in a while. The staleness window must
+        # be long enough that a slow tick (HTTP+insert can take 20-60s
+        # on heavy chunks) never gets misclassified as dead, but short
+        # enough that a stuck row clears in seconds from the UI's view.
+        return await self._finalize_zombie(job_id, stale_after_s=90.0)
+
+    async def _finalize_zombie(self, job_id: str, *, stale_after_s: float) -> bool:
+        """If `job_id` is a row this manager owns, currently in a non-terminal
+        state, and hasn't ticked in `stale_after_s` seconds, write a final
+        'cancelled' row attributing it to subprocess loss and return True.
+        Otherwise return False — the caller surfaces this as 409."""
+        ch = await async_client()
+        rows = await ch.query(
+            """
+            SELECT job_type, args, progress, started_at, updated_at, status
+            FROM tradernick.ingestion_jobs FINAL
+            WHERE job_id = {job_id:String}
+            """,
+            parameters={"job_id": job_id},
+        )
+        if not rows.result_rows:
             return False
-        try:
-            proc.terminate()
-        except ProcessLookupError:
-            pass
+        job_type, args_json, progress, started_at, updated_at, status = rows.result_rows[0]
+        if job_type not in self._owned_types:
+            return False
+        if status not in ("running", "pending"):
+            return False
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if updated_at and (now - updated_at).total_seconds() < stale_after_s:
+            return False
+        # Write the missing terminal row. Preserve args verbatim so the
+        # UI's `completed_chunks` / `total_chunks` view stays correct.
+        error_msg = (
+            "auto-finalized — subprocess no longer present and row had not "
+            f"ticked in {stale_after_s:.0f}s (likely SIGTERM-on-shutdown race "
+            "without terminal status write)"
+        )
+        await ch.insert(
+            "tradernick.ingestion_jobs",
+            [[job_id, job_type, args_json, "cancelled", float(progress),
+              started_at, now, error_msg, now]],
+            column_names=["job_id", "job_type", "args", "status", "progress",
+                          "started_at", "finished_at", "error", "updated_at"],
+        )
+        log.warning("zombie job %s (type=%s) auto-finalized as cancelled (%.0fs stale)",
+                    job_id, job_type, (now - updated_at).total_seconds() if updated_at else -1)
         return True
 
     async def get(self, job_id: str) -> Optional[dict]:
