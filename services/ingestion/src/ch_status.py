@@ -217,6 +217,15 @@ async def write_tick(
     c["last_rows"] = int(rows)
     if error is None:
         c["last_success_at"] = now
+        # Successful tick — clear any stale error from a prior failed
+        # tick. The previous behaviour preserved last_error indefinitely
+        # ("prev:" line in the admin UI), but in practice we want the
+        # column to reflect *current* health: once a stream recovers,
+        # the row should stop showing the old error text. Failing ticks
+        # immediately repopulate above, so genuine current errors are
+        # never hidden by this clear.
+        c["last_error"] = None
+        c["last_error_at"] = None
     if duration_s is not None:
         c["last_live_duration_s"] = float(duration_s)
     row = _build_row(
@@ -251,6 +260,12 @@ async def write_sweep(
     if error is not None:
         c["last_error"] = error
         c["last_error_at"] = now
+    else:
+        # Successful sweep — clear any stale error from a prior failed
+        # tick or sweep. Same rationale as the success-clear in
+        # write_tick: the column should reflect *current* health.
+        c["last_error"] = None
+        c["last_error_at"] = None
     c["last_sweep_duration_s"] = float(duration_s)
     row = _build_row(c, name, now=now, tick_in_progress=0)
     try:

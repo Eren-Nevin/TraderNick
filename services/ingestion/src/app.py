@@ -493,8 +493,12 @@ async def _create_unwindowed_backfill(request, job_type: str, args_extra: dict |
 
 @app.post("/jobs/backfill/exchange_flow_minute")
 async def backfill_exchange_flow_minute(request):
-    return await _create_unwindowed_backfill(
-        request, JOB_TYPE_BACKFILL_EXCHANGE_FLOW_MINUTE,
+    # Now a windowed backfill — under the hood the job module forwards to
+    # data_processor.backfill which walks the affected hourly partitions
+    # in [since, until). Without a real window every job would complete
+    # instantly with progress=1.0 (no partitions in zero-width range).
+    return await _create_transfer_backfill(
+        request, JOB_TYPE_BACKFILL_EXCHANGE_FLOW_MINUTE, _extract_empty,
     )
 
 

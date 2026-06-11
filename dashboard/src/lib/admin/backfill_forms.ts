@@ -332,9 +332,10 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
   {
     type: 'exchange_flow_minute',
     label: 'Exchange flow rebuild',
-    description: 'Rebuild tradernick.exchange_flow_minute from transfers FINAL ' +
-      'using the staging-swap-recover pattern. The chart never sees an empty ' +
-      'rollup during the rebuild. Idempotent — re-running is safe.',
+    description: 'Rebuild tradernick.exchange_flow_minute over [since, until) ' +
+      'from transfers FINAL via REPLACE PARTITION (one hourly partition at a ' +
+      'time). Idempotent — re-running is safe. Pick a wide window to fix a ' +
+      'long-standing gap or a narrow window for a recent fix.',
     fields: []
   },
   {
