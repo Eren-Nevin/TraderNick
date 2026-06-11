@@ -86,18 +86,23 @@
   let chartBaseStart = 0;
   let chartBaseEnd = 0;
 
+  // O(log N) hover hit-test. `data` is time-sorted; bisect to the
+  // insertion point then snap to whichever neighbour is closer. The
+  // old O(N) linear scan ran on every mouse-move per chart and dominated
+  // hover self-time on pages with many charts.
   let hoverIdx = $derived.by(() => {
     if (hoverTime === null || !data.length) return null;
-    let best = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < data.length; i++) {
-      const dd = Math.abs(data[i].time - hoverTime);
-      if (dd < bestDist) {
-        bestDist = dd;
-        best = i;
-      }
+    let lo = 0;
+    let hi = data.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (data[mid].time < hoverTime) lo = mid + 1;
+      else hi = mid;
     }
-    return best;
+    if (lo === 0) return 0;
+    const a = data[lo - 1].time;
+    const b = data[lo].time;
+    return Math.abs(b - hoverTime) < Math.abs(hoverTime - a) ? lo : lo - 1;
   });
   let hoverDatum = $derived(hoverIdx !== null ? data[hoverIdx] : null);
 

@@ -172,12 +172,22 @@ export function weekBoundariesSec(sinceSec: number, untilSec: number): number[] 
   return out;
 }
 
-/** Tooltip timestamp helper — "Sun 2026-05-24 12:34:56 UTC". */
+/** Tooltip timestamp helper — "Sun 2026-05-24 12:34:56 UTC".
+ *  Memoized: hover/crosshair redraws hit this on the same handful of
+ *  timestamps thousands of times; `toLocaleDateString` is a measurable
+ *  fraction of hover self-time in profiles. Cap at 50k so the cache
+ *  can't grow unbounded over a long session. */
+const _fmtUtcTimeCache = new Map<number, string>();
 export function fmtUtcTime(unixSec: number): string {
+  const hit = _fmtUtcTimeCache.get(unixSec);
+  if (hit !== undefined) return hit;
   const d = new Date(unixSec * 1000);
   const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
   const iso = d.toISOString().replace('T', ' ').slice(0, 19);
-  return `${weekday} ${iso} UTC`;
+  const out = `${weekday} ${iso} UTC`;
+  if (_fmtUtcTimeCache.size > 50_000) _fmtUtcTimeCache.clear();
+  _fmtUtcTimeCache.set(unixSec, out);
+  return out;
 }
 
 export const BUYER_SELLER_SERIES = [
