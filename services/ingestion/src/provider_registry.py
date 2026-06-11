@@ -91,6 +91,9 @@ JOB_TYPE_TO_PROVIDER: dict[str, str] = {
     "backfill_hl_fills_pnl_daily":      "data_process",
     "backfill_exchange_flow_minute":    "data_process",
     "backfill_transfers_rematerialize": "data_process",
+    # Unified materializer backfill — single job_type covering all 7
+    # derived tables. See data_processor/backfill.py.
+    "backfill_data_processor":          "data_process",
 }
 
 

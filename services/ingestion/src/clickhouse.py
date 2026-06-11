@@ -35,27 +35,21 @@ async def delete_transfers_range(*, where_extra: str, since: datetime, until: da
     The caller is responsible for ensuring `where_extra` uses only `safe_ident()`-validated
     identifiers (i.e. no quoted user strings). Time predicate is appended via AND.
 
-    Also purges the same time window from `tradernick.exchange_flow_minute` — the
-    SummingMergeTree rollup downstream of mv_exchange_flow doesn't know about
-    deletes upstream, so leaving it intact while the source is force-purged
-    would leave stale (and, after re-ingest, compounded) sums that drift the
-    chart by orders of magnitude. The rollup's column set is direction /
-    exchange / chain / token / time, so we can scope to the same time window
-    without knowing the caller's chain/token predicate (slightly wider purge,
-    but mv_exchange_flow is the only writer and the periodic rebuild covers
-    any over-purge instantly).
+    The rollup `tradernick.exchange_flow_minute` is no longer purged here:
+    under the data_processor model, the rollup is rebuilt from source FINAL
+    via REPLACE PARTITION, and an auto-triggered `backfill_data_processor`
+    job runs immediately after the parent source backfill completes (see
+    JobManager._maybe_spawn_downstream). The old time-only DELETE on the
+    rollup had a cross-kind blast radius (purging an ETH ERC-20 window
+    also wiped BTC / native / tron rollup contributions until the next
+    self-heal); the new path is precise to the source-row predicate.
     """
     ch = await async_client()
-    src_sql = (
+    sql = (
         "DELETE FROM tradernick.transfers "
         f"WHERE ({where_extra}) AND time >= '{sql_dt(since)}' AND time < '{sql_dt(until)}'"
     )
-    rollup_sql = (
-        "DELETE FROM tradernick.exchange_flow_minute "
-        f"WHERE time >= '{sql_dt(since)}' AND time < '{sql_dt(until)}'"
-    )
-    await ch.command(src_sql)
-    await ch.command(rollup_sql)
+    await ch.command(sql)
 
 
 async def async_client():

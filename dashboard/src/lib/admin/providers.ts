@@ -66,6 +66,7 @@ export const FORM_TYPE_TO_PROVIDER: Record<string, Provider> = {
 
   exchange_flow_minute: 'Data process',
   transfers_rematerialize: 'Data process',
+  data_processor: 'Data process',
 };
 
 export function formsForProvider(p: Provider): BackfillFormSpec[] {

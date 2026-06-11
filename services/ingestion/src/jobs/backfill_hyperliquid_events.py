@@ -52,16 +52,29 @@ _CHUNK_HOURS = {
     "ohlcv":            6,
     "trades":           6,
     "fills":            6,
-    # 2026-06-10: bumped 1h → 6h after the SDK 2.27 + min_size=1000 + 15m
-    # window shape brought per-1h-chunk row counts down to ~125K
-    # (April: 160K, Jan: 125K). A 6h chunk is now ~750K rows — comfortably
-    # within the response volume DefiStream handled in steady state before
-    # the 2026-06-06 incident at 8h × the old 1.76M/h shape.
-    "position_history": 6,
+    # position_history: 2h chunks are fine for historical windows
+    # (~5s/chunk, ~300k rows). The recurring "last chunk hangs" failures
+    # are not a chunk-size issue — they're a live-overlap contention
+    # issue handled by `_LIVE_OVERLAP_BUFFER` below.
+    "position_history": 2,
     "trade_history":    6,
     "transfers":        6,
     "funding":          6,
     "vaults":           6,
+}
+
+# Per-event "freshness buffer" — the backfill won't fetch chunks whose
+# end-time is within this window of `now`. Lets the live worker own that
+# recent zone and prevents the backfill from queueing the identical
+# request behind a still-streaming live response on the same API key.
+# Three jobs in a row (de1d2fa19, a4cd69dd, 91278d03) hung on the
+# position_history chunk that included the most recent few hours
+# while the live position_history sweep was simultaneously hitting DS
+# for the same window. Without a buffer, every backfill `until ≈ now`
+# request keeps reproducing the same hang.
+from datetime import timedelta as _td
+_LIVE_OVERLAP_BUFFER = {
+    "position_history": _td(hours=2),
 }
 
 # Events that get one chunk PER TOKEN (instead of one multi-token chunk).
@@ -194,7 +207,12 @@ async def main(job_id):
             log.info("force purge: %s WHERE %s", table, where)
             await ch.command(f"ALTER TABLE {table} DELETE WHERE {where}")
 
-    ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
+    # Generous per-request timeout — matches the live worker
+    # (streams/_hl_common.py:51). The SDK default is 600s, which DS
+    # consistently fails to meet for heavy position_history chunks when
+    # the API is under load. 1800s lets a slow-but-progressing response
+    # finish streaming instead of dying at the 10-minute mark.
+    ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY, timeout=1800.0)
     try:
         for (ev, tok, cs, ce) in chunks:
             if _stop:

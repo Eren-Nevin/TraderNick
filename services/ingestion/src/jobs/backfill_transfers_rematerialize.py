@@ -27,10 +27,7 @@ import sys
 from datetime import datetime, timezone
 
 from clickhouse import async_client
-from scripts.bootstrap_wallets import (
-    _refresh_exchange_flow_worker,
-    _rematerialize_worker,
-)
+from scripts.bootstrap_wallets import _rematerialize_worker
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [backfill_transfers_remat] %(levelname)s %(message)s")
@@ -89,19 +86,40 @@ async def main(job_id: str):
                         status="running", progress=0.0, started_at=started_at)
     log.info("job %s starting transfers rematerialize on %s "
              "(refresh_exchange_flow=%s)", job_id, table, refresh_flow)
+
+    # Throttle progress writes so the long MATERIALIZE COLUMN wait doesn't
+    # flood ingestion_jobs with sub-percent updates. We poll mutations every
+    # 5s inside `_wait_for_mutations`; persist at most one row every ~30s.
+    _last_write_at = 0.0
+    _last_progress = -1.0
+
+    async def progress_cb(stage: str, p: float):
+        nonlocal _last_write_at, _last_progress
+        now = _utcnow().timestamp()
+        # Always write on first call and on coarse milestones; otherwise
+        # rate-limit by elapsed wall-clock + progress delta.
+        if (now - _last_write_at < 30.0 and abs(p - _last_progress) < 0.02
+                and 0.0 < _last_progress < 1.0):
+            return
+        _last_write_at = now
+        _last_progress = p
+        args["stage"] = stage
+        try:
+            await _write_status(job_id=job_id, job_type=job_type, args=args,
+                                status="running", progress=p,
+                                started_at=started_at)
+        except Exception:  # noqa: BLE001
+            log.exception("progress write failed (continuing)")
+
     try:
-        await _rematerialize_worker(table)
-        await _write_status(job_id=job_id, job_type=job_type, args=args,
-                            status="running", progress=0.6, started_at=started_at)
-        if refresh_flow:
-            log.info("job %s rebuilding exchange_flow_minute", job_id)
-            result = await _refresh_exchange_flow_worker()
-            args["exchange_flow_rebuild"] = {
-                "ok": bool(result.get("ok")),
-                "rows_after": int(result.get("rows_after") or 0),
-                "duration_s": float(result.get("duration_s") or 0.0),
-                "reason": result.get("reason"),
-            }
+        # _rematerialize_worker kicks the exchange_flow rebuild internally
+        # (always, regardless of `refresh_flow`). The old job-wrapper kick
+        # here was a duplicate that spawned a redundant backfill_data_processor
+        # job — REPLACE PARTITION made it harmless but wasteful. Flag is
+        # preserved in args for visibility; the worker kick can't be turned
+        # off without a code edit to bootstrap_wallets.py.
+        args["refresh_exchange_flow"] = refresh_flow
+        await _rematerialize_worker(table, progress_cb=progress_cb)
         await _write_status(job_id=job_id, job_type=job_type, args=args,
                             status="completed", progress=1.0,
                             started_at=started_at, finished_at=_utcnow())

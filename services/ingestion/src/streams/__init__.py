@@ -25,9 +25,10 @@ class StreamSpec:
 
 
 # HL event cadences mirror _CADENCE in groups/hyperliquid_events.py.
+# All non-funding/vault events moved to 15m on 2026-06-11.
 _HL_CADENCE = {
-    "ohlcv": 300, "trades": 300, "fills": 300,
-    "position_history": 300, "trade_history": 300, "transfers": 300,
+    "ohlcv": 900, "trades": 900, "fills": 900,
+    "position_history": 900, "trade_history": 900, "transfers": 900,
     "funding": 1800, "vaults": 1800,
 }
 
@@ -185,15 +186,24 @@ STREAMS: list[StreamSpec] = [
     StreamSpec("gmx.borrowing",         "streams.gmx_borrowing",         "GMX", 300),
     StreamSpec("gmx.fees_collected",    "streams.gmx_fees_collected",    "GMX", 300),
 
-    # Data process — derived-MV refresh ticks. Not DeFiStream pollers;
-    # they read from raw tables and rebuild MV targets. Ships disabled
-    # by default so the monolith's identical loop stays in charge until
-    # the per-provider data_process_live service is enabled.
+    # Data process — derived-MV materializer worker. Replaces both the
+    # old `exchange_flow_self_heal` 15-min rebuild loop AND the seven
+    # push MVs (mv_exchange_flow, hl_position_history_*_mv, hl_fills_*_mv,
+    # hl_funding_daily_mv). Single process, all seven materializers,
+    # tiered rebuild via atomic REPLACE PARTITION.
+    #
+    # cadence_s shown in the admin UI is the SHORTEST recent-tier cadence
+    # across the registry (5 min — exchange_flow). Per-materializer
+    # cadence comes from data_processor.registry.REGISTRY.
+    #
+    # Ships disabled by default during rollout. Enable from the admin
+    # panel after the schema migration runs and a parallel-validation
+    # window confirms output matches the old MVs.
     StreamSpec(
-        "data_process.exchange_flow_self_heal",
-        "streams.data_process_exchange_flow",
+        "data_process.processor_live",
+        "data_processor.live",
         "Data process",
-        15 * 60,
+        5 * 60,
         enabled_default=False,
     ),
 ]

@@ -38,6 +38,12 @@ JOB_TYPE_BACKFILL_HYPERLIQUID_EVENTS = "backfill_hyperliquid_events"
 # data_process — derived-MV maintenance jobs.
 JOB_TYPE_BACKFILL_EXCHANGE_FLOW_MINUTE = "backfill_exchange_flow_minute"
 JOB_TYPE_BACKFILL_TRANSFERS_REMATERIALIZE = "backfill_transfers_rematerialize"
+# Unified materializer backfill — single job_type that takes a
+# `materializers` list in args and rebuilds the requested derived
+# partitions. Replaces the per-MV backfill_exchange_flow_minute /
+# backfill_hl_position_history_mv / backfill_hl_fills_pnl_daily
+# placeholders.
+JOB_TYPE_BACKFILL_DATA_PROCESSOR = "backfill_data_processor"
 JOB_MODULES = {
     JOB_TYPE_BACKFILL_OHLCV: "jobs.backfill_binance_ohlcv",
     JOB_TYPE_BACKFILL_RAW_TRADES: "jobs.backfill_binance_raw_trades",
@@ -65,12 +71,47 @@ JOB_MODULES = {
     JOB_TYPE_BACKFILL_HYPERLIQUID_EVENTS: "jobs.backfill_hyperliquid_events",
     JOB_TYPE_BACKFILL_EXCHANGE_FLOW_MINUTE: "jobs.backfill_exchange_flow_minute",
     JOB_TYPE_BACKFILL_TRANSFERS_REMATERIALIZE: "jobs.backfill_transfers_rematerialize",
+    JOB_TYPE_BACKFILL_DATA_PROCESSOR: "data_processor.backfill",
     # Legacy aliases — keep old job_type strings mapped to the same module
     # so in-flight rows from before a rename can still be resumed.
     "backfill_aave_events": "jobs.backfill_aave_events",
     "backfill_uniswap_events": "jobs.backfill_uniswap_events",
     "backfill_aero_events": "jobs.backfill_aero_events",
     "backfill_gmx_events": "jobs.backfill_gmx_events",
+}
+
+
+# Map source-backfill job_type → list of derived materializer names that
+# should be rebuilt for the same [since, until) window once the parent
+# job completes successfully. Empty / missing → no downstream trigger.
+#
+# Live data_processor would converge eventually via its sweep tier, but
+# we want post-backfill convergence in minutes rather than ~6h, hence
+# the explicit auto-spawn.
+_BACKFILL_DOWNSTREAMS: dict[str, list[str]] = {
+    # All transfer backfills feed exchange_flow_minute. The window is
+    # the same as the source job's [since, until); data_processor's
+    # source-FINAL pass reads whatever the source backfill landed.
+    "backfill_evm_erc20_transfers":   ["exchange_flow_minute"],
+    "backfill_evm_native_transfers":  ["exchange_flow_minute"],
+    "backfill_btc_transfers":         ["exchange_flow_minute"],
+    "backfill_tron_native_transfers": ["exchange_flow_minute"],
+    "backfill_tron_trc20_transfers":  ["exchange_flow_minute"],
+
+    # Hyperliquid backfill covers a configurable subset of HL events.
+    # We over-trigger by rebuilding all 6 HL materializers regardless of
+    # which events the parent job touched — the per-partition cost is
+    # tiny on days with no source changes (REPLACE PARTITION of an
+    # already-correct partition is a no-op-shaped operation) and over-
+    # triggering is safer than under-triggering.
+    "backfill_hyperliquid_events": [
+        "hl_position_history_15m",
+        "hl_position_history_1h",
+        "hl_position_history_eod_wallet",
+        "hl_fills_pnl_daily",
+        "hl_fills_vol_daily",
+        "hl_funding_daily",
+    ],
 }
 
 
@@ -190,6 +231,61 @@ class JobManager:
         self._procs.pop(job_id, None)
         self._waiters.pop(job_id, None)
         log.info("job %s subprocess exited code=%s", job_id, code)
+        if code == 0:
+            try:
+                await self._maybe_spawn_downstream(job_id)
+            except Exception:  # noqa: BLE001
+                log.exception("downstream spawn for parent %s failed (continuing)", job_id)
+
+    async def _maybe_spawn_downstream(self, parent_job_id: str):
+        """If the just-completed parent job has a downstream materializer
+        list in `_BACKFILL_DOWNSTREAMS`, enqueue a `backfill_data_processor`
+        for the same [since, until) window. No-op when nothing is mapped
+        or the parent didn't complete cleanly.
+
+        Same-provider only: if this container doesn't own
+        `backfill_data_processor` (e.g. we're the `transfers` provider
+        and `data_process` runs elsewhere), we silently skip — the
+        admin server's dashboard fan-out is responsible for cross-
+        container coordination. In the monolith case `_owned_types`
+        covers everything so the spawn proceeds inline."""
+        parent = await self.get(parent_job_id)
+        if parent is None:
+            return
+        if parent.get("status") != "completed":
+            return
+        downstreams = _BACKFILL_DOWNSTREAMS.get(parent.get("job_type") or "")
+        if not downstreams:
+            return
+        if JOB_TYPE_BACKFILL_DATA_PROCESSOR not in self._owned_types:
+            log.info(
+                "parent %s would trigger data_processor backfill but this "
+                "provider doesn't own it — skipping",
+                parent_job_id,
+            )
+            return
+        args = parent.get("args") or {}
+        since_iso = args.get("since")
+        until_iso = args.get("until")
+        if not since_iso or not until_iso:
+            log.warning(
+                "parent %s missing since/until in args — cannot trigger downstream",
+                parent_job_id,
+            )
+            return
+        since_dt = datetime.fromisoformat(since_iso.replace("Z", ""))
+        until_dt = datetime.fromisoformat(until_iso.replace("Z", ""))
+        await self.create_backfill_args(
+            JOB_TYPE_BACKFILL_DATA_PROCESSOR,
+            since_dt, until_dt,
+            {"materializers": downstreams,
+             "triggered_by_job_id": parent_job_id,
+             "triggered_by_job_type": parent.get("job_type")},
+        )
+        log.info(
+            "parent %s (type=%s) → spawned data_processor backfill for materializers=%s",
+            parent_job_id, parent.get("job_type"), downstreams,
+        )
 
     async def cancel(self, job_id: str) -> bool:
         proc = self._procs.get(job_id)

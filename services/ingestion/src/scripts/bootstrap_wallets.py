@@ -170,18 +170,29 @@ _TRANSFERS_WALLET_INDEXES: tuple[tuple[str, str, str, int], ...] = (
 )
 
 
-async def _wait_for_mutations(ch, *, table: str, prefix: str, timeout_s: float = 7200.0):
+async def _wait_for_mutations(ch, *, table: str, prefix: str, timeout_s: float = 7200.0,
+                              progress_cb=None, progress_low: float = 0.0,
+                              progress_high: float = 1.0):
     """Poll system.mutations until every recent mutation matching `prefix` is
     done. Used between the column-rewrite and index-rebuild phases so DROP
     INDEX doesn't bounce off in-flight column mutations.
+
+    If `progress_cb` is supplied, it's called each poll with a value
+    linearly interpolated between `progress_low` and `progress_high` based
+    on the fraction of parts already migrated. Lets long-running waits
+    surface a moving progress bar instead of a frozen number.
     """
     import asyncio as _asyncio  # local import — module is asyncio-aware
     db, tbl = table.split(".", 1)
     deadline = _asyncio.get_event_loop().time() + timeout_s
+    # Snapshot the initial parts_to_do once so each poll computes a stable
+    # fraction. Without this the denominator would keep shrinking and the
+    # progress bar would never reach 100%.
+    initial_total = None
     while True:
         rows = await ch.query(
             """
-            SELECT countIf(NOT is_done)
+            SELECT countIf(NOT is_done), sum(parts_to_do)
             FROM system.mutations
             WHERE database = {db:String}
               AND table = {tbl:String}
@@ -191,6 +202,18 @@ async def _wait_for_mutations(ch, *, table: str, prefix: str, timeout_s: float =
             parameters={"db": db, "tbl": tbl, "pref": prefix + "%"},
         )
         n = int(rows.result_rows[0][0]) if rows.result_rows else 0
+        parts_remaining = int(rows.result_rows[0][1] or 0) if rows.result_rows else 0
+        if initial_total is None:
+            # First sample becomes the denominator. If the mutation table
+            # was already at zero on entry we treat the stage as complete.
+            initial_total = max(parts_remaining, 1)
+        if progress_cb is not None:
+            done_frac = max(0.0, min(1.0, 1.0 - parts_remaining / initial_total))
+            cur = progress_low + (progress_high - progress_low) * done_frac
+            try:
+                await progress_cb(f"{prefix.strip()} ({parts_remaining} parts left)", cur)
+            except Exception:  # noqa: BLE001
+                log.exception("progress_cb failed (continuing)")
         if n == 0:
             return
         if _asyncio.get_event_loop().time() > deadline:
@@ -198,16 +221,33 @@ async def _wait_for_mutations(ch, *, table: str, prefix: str, timeout_s: float =
         await _asyncio.sleep(5)
 
 
-async def _rematerialize_worker(table: str):
+async def _rematerialize_worker(table: str, progress_cb=None):
     """The long-running half of rematerialize_transfers — runs as a Sanic
-    background task so the POST endpoint returns immediately."""
+    background task so the POST endpoint returns immediately.
+
+    `progress_cb` is an optional `async (stage_label: str, progress: float) -> None`
+    callback. Called at every stage boundary, plus inside the long
+    MATERIALIZE COLUMN wait (`_wait_for_mutations` linearly maps
+    parts_to_do → fraction). When None, no progress is reported (preserves
+    the original behaviour used by the wallet-upload code path)."""
     ch = await async_client()
+
+    async def _emit(stage: str, p: float):
+        if progress_cb is None:
+            return
+        try:
+            await progress_cb(stage, p)
+        except Exception:  # noqa: BLE001
+            log.exception("progress_cb failed (continuing)")
+
     try:
+        await _emit("reloading wallet_labels dictionary", 0.02)
         log.info("rematerialize[worker]: reloading wallet_labels dictionary")
         await ch.command("SYSTEM RELOAD DICTIONARY tradernick.wallet_labels")
 
         materialize_cols = ", ".join(f"MATERIALIZE COLUMN {c}" for c in _TRANSFERS_WALLET_COLUMNS)
         log.info("rematerialize[worker]: kicking MATERIALIZE COLUMN ×%d", len(_TRANSFERS_WALLET_COLUMNS))
+        await _emit(f"kicking MATERIALIZE COLUMN ×{len(_TRANSFERS_WALLET_COLUMNS)}", 0.05)
         await ch.command(
             f"ALTER TABLE {table} {materialize_cols} SETTINGS mutations_sync = 0, alter_sync = 0"
         )
@@ -215,22 +255,26 @@ async def _rematerialize_worker(table: str):
         # Wait for the column rewrites to settle before touching the indexes —
         # DROP INDEX will block on any in-flight mutation against the same
         # table, and we'd rather hold that wait inside this background task
-        # than inside the HTTP request.
+        # than inside the HTTP request. Progress between 0.05 → 0.60 maps to
+        # the fraction of MATERIALIZE COLUMN parts that have already migrated.
         log.info("rematerialize[worker]: waiting for MATERIALIZE COLUMN to finish")
-        await _wait_for_mutations(ch, table=table, prefix="MATERIALIZE COLUMN ")
+        await _wait_for_mutations(
+            ch, table=table, prefix="MATERIALIZE COLUMN ",
+            progress_cb=progress_cb, progress_low=0.05, progress_high=0.60,
+        )
+        await _emit("MATERIALIZE COLUMN done", 0.60)
 
-        # exchange_flow_minute (SummingMergeTree fed by mv_exchange_flow) is
-        # downstream of the sender/receiver_categories + sender_entity
-        # materialized columns we just rewrote. The MV fires on INSERT only,
-        # so retroactive column changes don't propagate — we must drop +
-        # backfill the rollup to bring it in sync with the refreshed dict.
-        # Runs sequentially here so the rematerialize/status endpoint reflects
-        # the end-to-end state (column rewrite → index rebuild → rollup
-        # refresh) in a single mutation queue.
+        # exchange_flow_minute is downstream of the sender/receiver_categories
+        # + sender_entity materialized columns we just rewrote. The
+        # data_processor worker is the sole maintainer of that rollup now;
+        # it would converge on its own via the next sweep cycle (≤6h) but
+        # we want post-rematerialize freshness in minutes — so kick a
+        # one-shot backfill_data_processor job covering the last 30 days.
         try:
-            await _refresh_exchange_flow_worker(ch)
+            await _kick_exchange_flow_rebuild()
         except Exception:
-            log.exception("rematerialize[worker]: exchange_flow refresh failed (continuing)")
+            log.exception("rematerialize[worker]: exchange_flow rebuild kick failed (continuing)")
+        await _emit("exchange_flow rebuild kicked", 0.65)
 
         # Index reset — DROP every one, then ADD them back, then MATERIALIZE.
         # `alter_sync = 0` so the DDL returns once metadata is applied (no
@@ -243,12 +287,14 @@ async def _rematerialize_worker(table: str):
                 log.info("rematerialize[worker]: dropped %s", name)
             except Exception as exc:
                 log.info("rematerialize[worker]: skip DROP INDEX %s (%s)", name, exc)
+        await _emit("indexes dropped", 0.75)
         adds = ", ".join(
             f"ADD INDEX {name} {col} TYPE {t} GRANULARITY {g}"
             for name, col, t, g in _TRANSFERS_WALLET_INDEXES
         )
         await ch.command(f"ALTER TABLE {table} {adds} SETTINGS alter_sync = 0")
         log.info("rematerialize[worker]: re-added %d indexes", len(_TRANSFERS_WALLET_INDEXES))
+        await _emit("indexes re-added", 0.85)
 
         materialize_idx = ", ".join(
             f"MATERIALIZE INDEX {n}" for n, _c, _t, _g in _TRANSFERS_WALLET_INDEXES
@@ -257,8 +303,10 @@ async def _rematerialize_worker(table: str):
             f"ALTER TABLE {table} {materialize_idx} SETTINGS mutations_sync = 0, alter_sync = 0"
         )
         log.info("rematerialize[worker]: kicked MATERIALIZE INDEX ×%d", len(_TRANSFERS_WALLET_INDEXES))
+        await _emit(f"MATERIALIZE INDEX ×{len(_TRANSFERS_WALLET_INDEXES)} kicked", 0.95)
     except Exception:
         log.exception("rematerialize[worker]: failed")
+        raise
 
 
 async def rematerialize_transfers(*, table: str = "tradernick.transfers") -> dict:
@@ -339,206 +387,111 @@ async def rematerialize_status(*, table: str = "tradernick.transfers") -> dict:
 
 
 # ---- exchange_flow rollup refresh ----------------------------------------
-# Mirrors the predicate baked into tradernick.mv_exchange_flow (see
-# clickhouse/init/01_schema.sql). Kept inline so the worker has no dependency
-# on the data_server service; the schema file is the single source of truth
-# but rebuild-by-INSERT-SELECT needs to repeat the predicate here.
+# The dedicated staging-swap refresh worker that used to live here has been
+# replaced by the unified `data_processor` module (services/ingestion/src/
+# data_processor/). The two public surfaces preserved for compatibility are:
 #
-# CRITICAL: reads `tradernick.transfers FINAL`. The source is a
-# ReplacingMergeTree, but the MV target downstream is SummingMergeTree —
-# any unmerged duplicates (from live-stream retries, backfill re-runs,
-# or partial completion replays) get summed N times if FINAL is omitted,
-# producing inflated rollups (verified once at ~5× for hyperliquid). The
-# extra FINAL pass costs ~20-30s on the 30d window but is run as a
-# background task so latency to the chart layer is unaffected.
-_EXCHANGE_FLOW_REFRESH_SQL = """
-INSERT INTO tradernick.exchange_flow_minute
-SELECT
-    classified.1 AS direction,
-    classified.2 AS exchange,
-    chain,
-    token,
-    toStartOfMinute(time) AS time,
-    sum(amount) AS sum_amount,
-    sum(if(token IN ('USDC', 'USDT', 'DAI', 'USDE'),
-           amount,
-           coalesce(value_usd, 0.0))) AS sum_value_usd,
-    count() AS count
-FROM tradernick.transfers FINAL
-ARRAY JOIN arrayConcat(
-    if(has(receiver_categories, 'binance-deposit')     AND NOT has(sender_categories, 'cex'),  [('in', 'binance')],     CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(receiver_categories, 'coinbase-deposit')    AND NOT has(sender_categories, 'cex'),  [('in', 'coinbase')],    CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(receiver_categories, 'okx-deposit')         AND NOT has(sender_categories, 'cex'),  [('in', 'okx')],         CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(receiver_categories, 'bybit-deposit')       AND NOT has(sender_categories, 'cex'),  [('in', 'bybit')],       CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(receiver_categories, 'hyperliquid-deposit') AND NOT has(sender_categories, 'perp'), [('in', 'hyperliquid')], CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'binance'     AND NOT has(receiver_categories, 'cex'),         [('out', 'binance')],     CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'coinbase'    AND NOT has(receiver_categories, 'cex'),         [('out', 'coinbase')],    CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'okx'         AND NOT has(receiver_categories, 'cex'),         [('out', 'okx')],         CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'bybit'       AND NOT has(receiver_categories, 'cex'),         [('out', 'bybit')],       CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'hyperliquid' AND coalesce(receiver_entity, '') != 'hyperliquid', [('out', 'hyperliquid')], CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String)))))
-) AS classified
-GROUP BY direction, exchange, chain, token, time
-SETTINGS max_execution_time = 1800
-"""
+#   refresh_exchange_flow()           — POST /admin/exchange-flow/refresh
+#                                       Enqueues a backfill_data_processor
+#                                       job for materializers=
+#                                       ["exchange_flow_minute"], window =
+#                                       last 30 days.
+#
+#   exchange_flow_refresh_status()    — GET /admin/exchange-flow/refresh/status
+#                                       Returns the most recent
+#                                       backfill_data_processor job whose
+#                                       args.materializers is just
+#                                       ["exchange_flow_minute"].
+#
+# Same behaviour is also called inline at the end of `_rematerialize_worker`
+# via `_kick_exchange_flow_rebuild()` so a wallet-labels reload still
+# converges the rollup automatically.
+
+# Backfill window for refresh/rematerialize-triggered rebuilds. The
+# data_processor's own sweep tier covers 30d in the background; matching
+# that here means the on-demand rebuild always covers the full TTL window.
+_REBUILD_LOOKBACK_DAYS = 30
 
 
-# Live state for /admin/exchange-flow/refresh/status. Single concurrent run
-# guarded by the `running` flag; consecutive POSTs while running are no-ops.
-_EXCHANGE_FLOW_STATE: dict = {
-    "running": False,
-    "started_at": None,
-    "finished_at": None,
-    "duration_s": None,
-    "rows_after": None,
-    "error": None,
-}
+async def _kick_exchange_flow_rebuild() -> dict:
+    """Enqueue a one-shot backfill_data_processor job that rebuilds
+    exchange_flow_minute over the last `_REBUILD_LOOKBACK_DAYS` days.
+    Returns the job row dict (same shape as POST /jobs/backfill/<type>).
 
-
-async def _refresh_exchange_flow_worker(ch=None) -> dict:
-    """Rebuild tradernick.exchange_flow_minute from the current state of
-    tradernick.transfers + its materialized category/entity columns. Called
-    automatically after every rematerialize, on a 15-min self-heal tick from
-    ingestion startup, and exposed as POST /admin/exchange-flow/refresh.
-
-    Strategy: build into a staging table then atomically EXCHANGE TABLES,
-    so the chart never sees an empty rollup mid-rebuild. The earlier
-    TRUNCATE-then-INSERT path was simpler but blanked the chart for the
-    full INSERT window (~5 min on a hot source with unmerged duplicates).
-
-      1. DROP IF EXISTS + CREATE staging table with the same schema.
-      2. INSERT INTO staging SELECT … FROM transfers FINAL — runs while
-         the live MV (`mv_exchange_flow`) keeps populating the still-named
-         original. Both tables are real and writable; the chart serves
-         from the original throughout.
-      3. EXCHANGE TABLES — atomic swap. After this, the original name
-         points at the clean rebuild and the MV writes there going
-         forward. The (renamed) staging now holds the pre-rebuild
-         over-counted data plus whatever live trickle landed during the
-         rebuild window.
-      4. Copy back the live trickle: INSERT … FROM staging WHERE
-         time >= rebuild_cutoff. The rebuild's own SELECT excluded
-         time >= cutoff (so it never reads the still-moving recent
-         minute), so this restores those few minutes without double-
-         counting older buckets.
-      5. DROP the staging.
-
-    Worst case during the swap: a single minute's bucket may be summed
-    twice if the live MV happens to write to both the old name (pre-
-    EXCHANGE) and the new name (post-EXCHANGE) for the same minute.
-    SummingMergeTree merges them additively, so the per-minute sum
-    equals all events that occurred in that minute — correct, just
-    distributed across two rows that get merged in the background.
-    """
-    import asyncio as _asyncio
+    Falls back to a synchronous in-process rebuild only when the Sanic app
+    isn't reachable (CLI / test path) — in that mode we just call the
+    backfill main() inline."""
     from datetime import datetime as _dt, timezone as _tz, timedelta as _td
-    if _EXCHANGE_FLOW_STATE["running"]:
-        log.info("exchange_flow refresh: already running, skipping")
-        return {"ok": False, "reason": "already_running"}
-    _EXCHANGE_FLOW_STATE.update(
-        running=True,
-        started_at=_asyncio.get_event_loop().time(),
-        finished_at=None,
-        duration_s=None,
-        rows_after=None,
-        error=None,
-    )
-    t0 = _asyncio.get_event_loop().time()
-    # Cutoff: the rebuild's SELECT skips time >= cutoff so it doesn't
-    # collide with the live MV on the current minute. The recovery step
-    # uses the same cutoff to copy back what got buffered into the old
-    # (now-staging) table during the rebuild window.
-    cutoff_dt = _dt.now(_tz.utc) - _td(minutes=5)
-    cutoff_sql = cutoff_dt.strftime("%Y-%m-%d %H:%M:%S")
-    staging = "tradernick.exchange_flow_minute_staging"
-    target = "tradernick.exchange_flow_minute"
-    # Run the canonical rebuild SELECT against the staging table.
-    staging_insert_sql = _EXCHANGE_FLOW_REFRESH_SQL.replace(
-        "INSERT INTO tradernick.exchange_flow_minute",
-        f"INSERT INTO {staging}",
-        1,
-    ).replace(
-        "(now() - INTERVAL 5 MINUTE)",
-        f"toDateTime('{cutoff_sql}')",
-        1,
-    )
-    try:
-        if ch is None:
-            ch = await async_client()
-        log.info("exchange_flow refresh: prepare staging table %s", staging)
-        await ch.command(f"DROP TABLE IF EXISTS {staging}")
-        # `CREATE … AS …` (without a SELECT) clones schema + engine + ORDER BY
-        # + TTL but leaves the table empty. Confirmed in CH 24.8.
-        await ch.command(f"CREATE TABLE {staging} AS {target}")
 
-        log.info("exchange_flow refresh: INSERT into staging (30d FINAL, cutoff=%s)", cutoff_sql)
-        await ch.command(staging_insert_sql)
+    until = _dt.now(_tz.utc).replace(tzinfo=None)
+    since = until - _td(days=_REBUILD_LOOKBACK_DAYS)
 
-        log.info("exchange_flow refresh: EXCHANGE TABLES (atomic swap)")
-        await ch.command(f"EXCHANGE TABLES {target} AND {staging}")
-
-        # After EXCHANGE, the MV is now writing to the just-rebuilt clean
-        # table (whatever has the original name). The staging name now
-        # holds: pre-rebuild over-counted data + live trickle that landed
-        # while the rebuild ran. Recover only the trickle.
-        log.info("exchange_flow refresh: recover live trickle (time >= %s)", cutoff_sql)
-        await ch.command(
-            f"INSERT INTO {target} "
-            f"SELECT * FROM {staging} WHERE time >= toDateTime('{cutoff_sql}')"
-        )
-
-        log.info("exchange_flow refresh: drop staging")
-        await ch.command(f"DROP TABLE IF EXISTS {staging}")
-
-        rows = await ch.query(f"SELECT count() FROM {target}")
-        n = int(rows.result_rows[0][0]) if rows.result_rows else 0
-        dt = _asyncio.get_event_loop().time() - t0
-        _EXCHANGE_FLOW_STATE.update(
-            running=False,
-            finished_at=_asyncio.get_event_loop().time(),
-            duration_s=dt,
-            rows_after=n,
-        )
-        log.info("exchange_flow refresh: done in %.1fs, %d rows", dt, n)
-        return {"ok": True, "rows_after": n, "duration_s": dt}
-    except Exception as exc:
-        # Best-effort cleanup so a failed run doesn't leave the staging
-        # table hanging around to confuse the next attempt.
-        try:
-            if ch is not None:
-                await ch.command(f"DROP TABLE IF EXISTS {staging}")
-        except Exception:
-            pass
-        _EXCHANGE_FLOW_STATE.update(
-            running=False,
-            finished_at=_asyncio.get_event_loop().time(),
-            duration_s=_asyncio.get_event_loop().time() - t0,
-            error=str(exc),
-        )
-        log.exception("exchange_flow refresh: failed")
-        raise
-
-
-async def refresh_exchange_flow() -> dict:
-    """Dispatch the rollup refresh as a Sanic background task so the POST
-    returns immediately. Caller polls /admin/exchange-flow/refresh/status."""
     try:
         from sanic import Sanic
         app = Sanic.get_app("tradernick_ingestion")
-        app.add_task(_refresh_exchange_flow_worker())
-        dispatch = "background_task"
+        jobs = app.ctx.jobs
     except Exception:
-        await _refresh_exchange_flow_worker()
-        dispatch = "inline"
+        log.warning("no Sanic app — exchange_flow rebuild kick skipped")
+        return {"ok": False, "reason": "no_app"}
+
+    from jobs.manager import JOB_TYPE_BACKFILL_DATA_PROCESSOR
+    job = await jobs.create_backfill_args(
+        JOB_TYPE_BACKFILL_DATA_PROCESSOR,
+        since, until,
+        {"materializers": ["exchange_flow_minute"],
+         "triggered_by": "rematerialize"},
+    )
+    log.info("exchange_flow rebuild enqueued: job_id=%s window=[%s, %s)",
+             job.get("job_id"), since, until)
+    return {"ok": True, "job_id": job.get("job_id")}
+
+
+async def refresh_exchange_flow() -> dict:
+    """Public entry point for POST /admin/exchange-flow/refresh — kicks a
+    data_processor backfill for the last 30d and returns immediately.
+    Caller polls /admin/exchange-flow/refresh/status to watch progress."""
+    res = await _kick_exchange_flow_rebuild()
     return {
-        "ok": True,
+        "ok": bool(res.get("ok")),
         "table": "tradernick.exchange_flow_minute",
-        "dispatch": dispatch,
+        "job_id": res.get("job_id"),
         "note": "poll /admin/exchange-flow/refresh/status for progress",
     }
 
 
-def exchange_flow_refresh_status() -> dict:
-    return dict(_EXCHANGE_FLOW_STATE)
+async def exchange_flow_refresh_status() -> dict:
+    """Return the most-recent backfill_data_processor job that touches
+    materializers=['exchange_flow_minute']. Shape matches what the old
+    in-memory _EXCHANGE_FLOW_STATE dict exposed so existing dashboard
+    code doesn't need to change."""
+    from jobs.manager import JOB_TYPE_BACKFILL_DATA_PROCESSOR
+    ch = await async_client()
+    rows = await ch.query(
+        """
+        SELECT job_id, status, progress, started_at, finished_at, error, updated_at, args
+        FROM tradernick.ingestion_jobs FINAL
+        WHERE job_type = {jt:String}
+          AND args LIKE '%"exchange_flow_minute"%'
+        ORDER BY started_at DESC
+        LIMIT 1
+        """,
+        parameters={"jt": JOB_TYPE_BACKFILL_DATA_PROCESSOR},
+    )
+    if not rows.result_rows:
+        return {"running": False, "started_at": None, "finished_at": None,
+                "error": None, "job_id": None}
+    r = rows.result_rows[0]
+    job_id, status, progress, started_at, finished_at, error, _updated_at, _args = r
+    running = status in ("pending", "running")
+    return {
+        "running": running,
+        "started_at": started_at.isoformat() if started_at else None,
+        "finished_at": finished_at.isoformat() if finished_at else None,
+        "error": error,
+        "progress": float(progress) if progress is not None else None,
+        "job_id": job_id,
+        "status": status,
+    }
 
 
 async def main_async(argv: list[str] | None = None):

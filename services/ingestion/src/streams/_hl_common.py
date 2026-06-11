@@ -50,12 +50,29 @@ async def run(stream_name: str, event: str) -> None:
     # DeFiStream is still streaming the parquet body.
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY, timeout=1800.0)
     tick_s, _ = _CADENCE[event]
-    # Sweep cadence override — position_history responses are heavy
-    # (~50K rows per 5 min × 26 tokens), so the default 10× live cadence
-    # (50 min) ends up assembling a several-hundred-MB payload per fire.
-    # A tighter 30-min cadence keeps each individual sweep cheaper at
-    # DeFiStream's expense and avoids long read stalls.
-    _SWEEP_CADENCE_OVERRIDES = {"position_history": 1800.0}  # 30 min
+    # Per-event sweep cadence overrides — the default is
+    # sweep.sweep_cadence_s(live) = live × SWEEP_MULTIPLIER (10×). For the
+    # 15m HL streams that default works out to 2h30m, which on heavy
+    # endpoints (ohlcv / trades / fills / trade_history / transfers)
+    # produces multi-hundred-MB sweep responses that DeFiStream sometimes
+    # rejects with "Time range too large" or 500s under load. Cap them at
+    # **1 h** (2026-06-11) so each sweep covers a smaller, predictable
+    # window even if the live tick missed a few minutes — the ReplacingMT
+    # source table absorbs the re-fetched rows for free, so a tighter
+    # cadence costs nothing on correctness.
+    #
+    # position_history stays at 30 min (its responses are heaviest per
+    # bucket — see the 2026-06-06 OOM incident).
+    # funding / vaults stay at the 10× default (5h) — they're sparse
+    # endpoints where the longer window is cheap.
+    _SWEEP_CADENCE_OVERRIDES = {
+        "ohlcv":             3600.0,  # 1 h
+        "trades":            3600.0,
+        "fills":             3600.0,
+        "trade_history":     3600.0,
+        "transfers":         3600.0,
+        "position_history":  1800.0,  # 30 min — preserved from prior override
+    }
     sweep_cadence = _SWEEP_CADENCE_OVERRIDES.get(event, sweep.sweep_cadence_s(tick_s))
     _method, table, _cols, _tf = HL_EVENTS[event]
     per_token = event in _PER_TOKEN_TABLE
