@@ -296,18 +296,49 @@
         .attr('stroke-dasharray', v.dash ?? '1,4');
     }
 
+    // Viewport-slice the data for the line path. d3.line() walks every
+    // input point, runs the curve interpolator on each (curveMonotoneX
+    // is the dominant pan/zoom cost in profiles), and emits a path
+    // string the SVG clip-path then trims. At 180d×1h that's 4320 points
+    // even when only ~336 are visible — ~93% wasted work per redraw.
+    // Slice to first-before-viewport … last-after-viewport so the curve
+    // continues smoothly past the clip edge. `compute(d, i, data)`
+    // semantics are preserved by remapping `i` back to the original
+    // index (MAs etc. read other rows in `data` by index).
+    let lineSliceStart = 0;
+    let lineSliceEnd = data.length;
+    if (data.length > 2) {
+      let lo = 0;
+      let hi = data.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (data[mid].time < v0) lo = mid + 1;
+        else hi = mid;
+      }
+      lineSliceStart = Math.max(0, lo - 1);
+      lo = 0;
+      hi = data.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >>> 1;
+        if (data[mid].time > v1) hi = mid - 1;
+        else lo = mid;
+      }
+      lineSliceEnd = Math.min(data.length, lo + 2);
+    }
+    const lineData = data.slice(lineSliceStart, lineSliceEnd);
+
     const lineLayer = g.append('g').attr('class', 'lines').attr('clip-path', `url(#${clipId})`);
     for (const ln of lines) {
       const scale = ln.axis === 'secondary' && yScale2 ? yScale2 : yScale;
       const gen = d3
         .line<Datum>()
         .x((d) => xScale(new Date(d.time * 1000)))
-        .y((d, i) => scale(ln.compute(d, i, data)))
-        .defined((d, i) => Number.isFinite(ln.compute(d, i, data)))
+        .y((d, i) => scale(ln.compute(d, lineSliceStart + i, data)))
+        .defined((d, i) => Number.isFinite(ln.compute(d, lineSliceStart + i, data)))
         .curve(d3.curveMonotoneX);
       const path = lineLayer
         .append('path')
-        .datum(data)
+        .datum(lineData)
         .attr('fill', 'none')
         .attr('stroke', ln.color)
         .attr('stroke-width', 1.5)

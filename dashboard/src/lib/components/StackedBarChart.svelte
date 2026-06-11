@@ -232,6 +232,33 @@
     }
 
     if (lines.length) {
+      // Viewport-slice the data before generating the line path —
+      // d3.line() + curveMonotoneX walks every point and dominates
+      // pan/zoom CPU. Slice with a one-point pad so the curve continues
+      // smoothly under the SVG clip. `compute(d, i, data)` semantics are
+      // preserved by remapping `i` to the original index.
+      let lineSliceStart = 0;
+      let lineSliceEnd = data.length;
+      if (data.length > 2) {
+        let lo = 0;
+        let hi = data.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (data[mid].time < v0) lo = mid + 1;
+          else hi = mid;
+        }
+        lineSliceStart = Math.max(0, lo - 1);
+        lo = 0;
+        hi = data.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >>> 1;
+          if (data[mid].time > v1) hi = mid - 1;
+          else lo = mid;
+        }
+        lineSliceEnd = Math.min(data.length, lo + 2);
+      }
+      const lineData = data.slice(lineSliceStart, lineSliceEnd);
+
       const lineLayer = g
         .append('g')
         .attr('class', 'lines')
@@ -241,12 +268,12 @@
         const gen = d3
           .line<Datum>()
           .x((d) => xScale(new Date(d.time * 1000)))
-          .y((d, i) => yForLine(ln.compute(d, i, data)))
-          .defined((d, i) => Number.isFinite(ln.compute(d, i, data)))
+          .y((d, i) => yForLine(ln.compute(d, lineSliceStart + i, data)))
+          .defined((d, i) => Number.isFinite(ln.compute(d, lineSliceStart + i, data)))
           .curve(d3.curveMonotoneX);
         const path = lineLayer
           .append('path')
-          .datum(data)
+          .datum(lineData)
           .attr('fill', 'none')
           .attr('stroke', ln.color)
           .attr('stroke-width', 1.5)

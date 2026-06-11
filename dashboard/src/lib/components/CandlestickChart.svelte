@@ -297,17 +297,46 @@
     }
 
     if (lines.length) {
+      // Viewport-slice the candles before generating the indicator path.
+      // d3.line() walks every input point and curveMonotoneX is the
+      // dominant pan/zoom cost in profiles — at 180d×1h that's 4320
+      // points even when only ~336 are visible. Slice to a small pad
+      // outside the viewport so the curve continues smoothly past the
+      // SVG clip edge, and remap `i` so `ln.compute(d, i, candles)`
+      // still reads from the original array.
+      let lineSliceStart = 0;
+      let lineSliceEnd = candles.length;
+      if (candles.length > 2) {
+        let lo = 0;
+        let hi = candles.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi) >>> 1;
+          if (candles[mid].time < v0) lo = mid + 1;
+          else hi = mid;
+        }
+        lineSliceStart = Math.max(0, lo - 1);
+        lo = 0;
+        hi = candles.length - 1;
+        while (lo < hi) {
+          const mid = (lo + hi + 1) >>> 1;
+          if (candles[mid].time > v1) hi = mid - 1;
+          else lo = mid;
+        }
+        lineSliceEnd = Math.min(candles.length, lo + 2);
+      }
+      const lineData = candles.slice(lineSliceStart, lineSliceEnd);
+
       const lineLayer = g.append('g').attr('class', 'lines').attr('clip-path', `url(#${clipId})`);
       for (const ln of lines) {
         const gen = d3
           .line<Candle>()
           .x((d) => xScale(new Date(d.time * 1000)))
-          .y((d, i) => yScale(ln.compute(d, i, candles)))
-          .defined((d, i) => Number.isFinite(ln.compute(d, i, candles)))
+          .y((d, i) => yScale(ln.compute(d, lineSliceStart + i, candles)))
+          .defined((d, i) => Number.isFinite(ln.compute(d, lineSliceStart + i, candles)))
           .curve(d3.curveMonotoneX);
         const path = lineLayer
           .append('path')
-          .datum(candles)
+          .datum(lineData)
           .attr('fill', 'none')
           .attr('stroke', ln.color)
           .attr('stroke-width', 1.5)
