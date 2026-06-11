@@ -97,18 +97,28 @@
     if (!svgEl || !chartXScale) return;
     const g = d3.select(svgEl).select<SVGGElement>('g.chart-root');
     if (g.empty()) return;
-    g.select('.crosshair').remove();
-    if (hoverDatum === null) return;
+    // Reuse the existing crosshair <line> across hover frames — see the
+    // LineChart equivalent for the rationale.
+    let line = g.select<SVGLineElement>('line.crosshair');
+    if (line.empty()) {
+      line = g
+        .append('line')
+        .attr('class', 'crosshair')
+        .attr('pointer-events', 'none')
+        .attr('stroke-dasharray', '3,3');
+    }
+    if (hoverDatum === null) {
+      line.style('display', 'none');
+      return;
+    }
     const cx = chartXScale(new Date(hoverDatum.time * 1000));
-    g.append('line')
-      .attr('class', 'crosshair')
-      .attr('pointer-events', 'none')
+    line
+      .style('display', null)
+      .attr('stroke', cssVar('--chart-crosshair', '#71717a'))
       .attr('x1', cx)
       .attr('x2', cx)
       .attr('y1', 0)
-      .attr('y2', chartPlotH)
-      .attr('stroke', cssVar('--chart-crosshair', '#71717a'))
-      .attr('stroke-dasharray', '3,3');
+      .attr('y2', chartPlotH);
   }
 
   function draw() {

@@ -94,28 +94,38 @@
     if (!svgEl || !chartXScale || !chartYScale) return;
     const g = d3.select(svgEl).select<SVGGElement>('g.chart-root');
     if (g.empty()) return;
-    g.select('.crosshair').remove();
-    if (hoverCandle === null) return;
+    // Reuse the existing crosshair <g> and its two lines instead of
+    // tearing them down + recreating per hover frame. See LineChart for
+    // the rationale; OHLCV has a horizontal price line in addition to
+    // the vertical time line.
+    let cross = g.select<SVGGElement>('g.crosshair');
+    let vline: d3.Selection<SVGLineElement, unknown, SVGElement | null, unknown>;
+    let hline: d3.Selection<SVGLineElement, unknown, SVGElement | null, unknown>;
+    if (cross.empty()) {
+      cross = g.append('g').attr('class', 'crosshair').attr('pointer-events', 'none');
+      vline = cross
+        .append('line')
+        .attr('class', 'v')
+        .attr('stroke-dasharray', '3,3');
+      hline = cross
+        .append('line')
+        .attr('class', 'h')
+        .attr('stroke-dasharray', '3,3');
+    } else {
+      vline = cross.select<SVGLineElement>('line.v');
+      hline = cross.select<SVGLineElement>('line.h');
+    }
+    if (hoverCandle === null) {
+      cross.style('display', 'none');
+      return;
+    }
     const c = hoverCandle;
     const cx = chartXScale(new Date(c.time * 1000));
     const cy = chartYScale(c.close);
-    const cross = g.append('g').attr('class', 'crosshair').attr('pointer-events', 'none');
-    cross
-      .append('line')
-      .attr('x1', cx)
-      .attr('x2', cx)
-      .attr('y1', 0)
-      .attr('y2', chartPlotH)
-      .attr('stroke', cssVar('--chart-crosshair', '#71717a'))
-      .attr('stroke-dasharray', '3,3');
-    cross
-      .append('line')
-      .attr('x1', 0)
-      .attr('x2', chartPlotW)
-      .attr('y1', cy)
-      .attr('y2', cy)
-      .attr('stroke', cssVar('--chart-crosshair', '#71717a'))
-      .attr('stroke-dasharray', '3,3');
+    const stroke = cssVar('--chart-crosshair', '#71717a');
+    cross.style('display', null);
+    vline.attr('stroke', stroke).attr('x1', cx).attr('x2', cx).attr('y1', 0).attr('y2', chartPlotH);
+    hline.attr('stroke', stroke).attr('x1', 0).attr('x2', chartPlotW).attr('y1', cy).attr('y2', cy);
   }
 
   function draw() {
