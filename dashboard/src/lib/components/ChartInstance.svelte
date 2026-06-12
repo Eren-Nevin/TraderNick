@@ -1,14 +1,14 @@
 <script lang="ts">
-  import CandlestickChart from '$lib/components/CandlestickChart.svelte';
-  import StackedBarChart from '$lib/components/StackedBarChart.svelte';
-  import LineChart from '$lib/components/LineChart.svelte';
+  import CandlestickChart from '$lib/components/charts/lwc/LwcCandlestickChart.svelte';
+  import StackedBarChart from '$lib/components/charts/lwc/LwcStackedBarChart.svelte';
+  import LineChart from '$lib/components/charts/lwc/LwcLineChart.svelte';
   import TableChart from '$lib/components/TableChart.svelte';
   import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
   import HlTopVaultsTable from '$lib/components/HlTopVaultsTable.svelte';
   import HlTopVaultLpsTable from '$lib/components/HlTopVaultLpsTable.svelte';
   import HlVaultDetailChart from '$lib/components/HlVaultDetailChart.svelte';
   import WalletLeaderboardTable from '$lib/components/WalletLeaderboardTable.svelte';
-  import SignedBarChart from '$lib/components/SignedBarChart.svelte';
+  import SignedBarChart from '$lib/components/charts/lwc/LwcSignedBarChart.svelte';
   import { onMount, untrack } from 'svelte';
   import {
     INTERVALS,

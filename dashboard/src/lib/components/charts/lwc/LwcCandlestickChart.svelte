@@ -1,0 +1,325 @@
+<script lang="ts">
+  import { onMount } from 'svelte';
+  import {
+    createChart,
+    LineStyle,
+    type CandlestickData,
+    type HistogramData,
+    type IChartApi,
+    type ISeriesApi,
+    type LineData,
+    type UTCTimestamp
+  } from 'lightweight-charts';
+  import { themeStore } from '$lib/stores/theme.svelte';
+  import { fmtUtcTime } from '$lib/components/charts/config';
+  import type { Candle } from '$lib/api';
+  import { type View } from '$lib/chart-zoom';
+  import { lwcChartOptions } from './theme';
+  import { VRefLinesPrimitive } from './primitives/vRefLine';
+  import { timeToLogical, logicalToTime } from './logical';
+
+  type Line = {
+    key: string;
+    label: string;
+    color: string;
+    compute: (d: Candle, i: number, data: Candle[]) => number;
+    dash?: string;
+    /** Compound overlay lines call `compute` with a *remapped* value so the
+     *  drawn path fits the primary chart's Y range. When set, the tooltip
+     *  shows `rawValue` instead so the user sees the line's native unit. */
+    rawValue?: (d: Candle, i: number, data: Candle[]) => number;
+    rawFormat?: (v: number) => string;
+  };
+
+  /** Vertical reference line at a specific Unix-second timestamp. */
+  type VRefLine = { time: number; color?: string; dash?: string };
+
+  let {
+    candles = [] as Candle[],
+    lines = [] as Line[],
+    vRefLines = [] as VRefLine[],
+    showCandles = true,
+    formatVolume = (v: number) => v.toFixed(2),
+    height = 540,
+    xExtent,
+    view = null as View,
+    onView,
+    hoverTime = null,
+    onHover
+  }: {
+    candles: Candle[];
+    lines?: Line[];
+    vRefLines?: VRefLine[];
+    showCandles?: boolean;
+    formatVolume?: (v: number) => string;
+    height?: number;
+    xExtent?: [number, number];
+    view?: View;
+    onView?: (v: View) => void;
+    hoverTime?: number | null;
+    onHover?: (t: number | null) => void;
+  } = $props();
+
+  let wrapper = $state<HTMLDivElement | null>(null);
+
+  // Lightweight Charts instances — held outside reactive state so $effects
+  // don't trigger on identity changes.
+  let chart: IChartApi | null = null;
+  let candleSeries: ISeriesApi<'Candlestick'> | null = null;
+  let volumeSeries: ISeriesApi<'Histogram'> | null = null;
+  const lineSeries = new Map<string, ISeriesApi<'Line'>>();
+  let vRefPrimitive: VRefLinesPrimitive | null = null;
+  // Prevents the parent → chart `setVisibleRange` from re-emitting an
+  // identical view back upstream and ping-ponging.
+  let suppressViewEmit = false;
+  // Last range we emitted via subscribeVisibleTimeRangeChange. When the
+  // parent's `view` propagates back identical to this, we skip re-applying
+  // it. Without this check, every reactive re-render (theme toggle, hover,
+  // etc.) would re-issue setVisibleRange on our own pan state, fighting
+  // the user's current scroll position.
+  let lastEmittedFrom: number | null = null;
+  let lastEmittedTo: number | null = null;
+
+  // Snap-to-nearest hover index — same binary-search shape as the old
+  // CandlestickChart's hot path. Drives the top-left tooltip card and the
+  // synced crosshair we push back into Lightweight when the parent steers
+  // hover via `hoverTime`.
+  const hoverIdx = $derived.by<number | null>(() => {
+    if (hoverTime === null || !candles.length) return null;
+    let lo = 0;
+    let hi = candles.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (candles[mid].time < hoverTime) lo = mid + 1;
+      else hi = mid;
+    }
+    if (lo === 0) return 0;
+    const a = candles[lo - 1].time;
+    const b = candles[lo].time;
+    return Math.abs(b - hoverTime) < Math.abs(hoverTime - a) ? lo : lo - 1;
+  });
+  const hoverCandle = $derived(hoverIdx !== null ? candles[hoverIdx] : null);
+
+  onMount(() => {
+    if (!wrapper) return;
+    const c = createChart(wrapper, { ...lwcChartOptions(), height, autoSize: true });
+    chart = c;
+
+    candleSeries = c.addCandlestickSeries({
+      upColor: '#22c55e',
+      downColor: '#ef4444',
+      borderUpColor: '#22c55e',
+      borderDownColor: '#ef4444',
+      wickUpColor: '#22c55e',
+      wickDownColor: '#ef4444',
+      visible: showCandles
+    });
+    candleSeries.priceScale().applyOptions({ scaleMargins: { top: 0.05, bottom: 0.25 } });
+
+    volumeSeries = c.addHistogramSeries({
+      priceFormat: { type: 'volume' },
+      priceScaleId: 'volume_scale',
+      priceLineVisible: false,
+      lastValueVisible: false
+    });
+    c.priceScale('volume_scale').applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+
+    vRefPrimitive = new VRefLinesPrimitive(vRefLines.slice());
+    candleSeries.attachPrimitive(vRefPrimitive);
+
+    c.subscribeCrosshairMove((p) => {
+      if (!p.time) {
+        onHover?.(null);
+      } else {
+        onHover?.(p.time as unknown as number);
+      }
+    });
+
+    c.timeScale().subscribeVisibleTimeRangeChange((r) => {
+      if (suppressViewEmit || !r) return;
+      let from = r.from as unknown as number;
+      let to = r.to as unknown as number;
+      // subscribeVisibleTimeRangeChange clamps the emitted range to data
+      // ("cannot extrapolate time"). Synthesize the past-data portion from
+      // getVisibleLogicalRange so cross-chart sync follows the pan into
+      // the right-edge whitespace.
+      const lr = c.timeScale().getVisibleLogicalRange();
+      if (lr && candles.length >= 2) {
+        if (lr.from < 0) from = logicalToTime(lr.from, candles);
+        if (lr.to > candles.length - 1) to = logicalToTime(lr.to, candles);
+      }
+      lastEmittedFrom = from;
+      lastEmittedTo = to;
+      onView?.([from, to]);
+    });
+
+    return () => {
+      c.remove();
+      chart = null;
+      candleSeries = null;
+      volumeSeries = null;
+      lineSeries.clear();
+      vRefPrimitive = null;
+    };
+  });
+
+  // Theme reactive — themeStore.theme is the rune subscription; the cached
+  // CSS vars inside `lwcChartOptions()` are cleared by themeStore.set().
+  $effect(() => {
+    void themeStore.theme;
+    chart?.applyOptions(lwcChartOptions());
+  });
+
+  $effect(() => {
+    candleSeries?.applyOptions({ visible: showCandles });
+  });
+
+  $effect(() => {
+    if (!candleSeries || !volumeSeries) return;
+    const candleData: CandlestickData[] = candles.map((c) => ({
+      time: c.time as UTCTimestamp,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close
+    }));
+    candleSeries.setData(candleData);
+    const volumeData: HistogramData[] = candles.map((c) => ({
+      time: c.time as UTCTimestamp,
+      value: c.volume,
+      color: c.close >= c.open ? '#22c55e' : '#ef4444'
+    }));
+    volumeSeries.setData(volumeData);
+  });
+
+  // Indicator line series — diff against `lines` prop. Remove gone keys,
+  // upsert kept keys, recompute and setData() each frame.
+  $effect(() => {
+    if (!chart) return;
+    const wanted = new Set(lines.map((l) => l.key));
+    for (const [k, s] of lineSeries) {
+      if (!wanted.has(k)) {
+        chart.removeSeries(s);
+        lineSeries.delete(k);
+      }
+    }
+    for (const ln of lines) {
+      let s = lineSeries.get(ln.key);
+      if (!s) {
+        s = chart.addLineSeries({
+          color: ln.color,
+          lineWidth: 1,
+          lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false
+        });
+        lineSeries.set(ln.key, s);
+      } else {
+        s.applyOptions({
+          color: ln.color,
+          lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid
+        });
+      }
+      const data: LineData[] = [];
+      for (let i = 0; i < candles.length; i++) {
+        const v = ln.compute(candles[i], i, candles);
+        if (Number.isFinite(v)) data.push({ time: candles[i].time as UTCTimestamp, value: v });
+      }
+      s.setData(data);
+    }
+  });
+
+  $effect(() => {
+    vRefPrimitive?.setRefs(vRefLines.slice());
+  });
+
+  // View sync with echo-skip. When the user pans, Lightweight emits the
+  // new range; the parent stores it; the parent re-renders; we receive our
+  // own view back. Without the lastEmitted check we'd re-issue
+  // setVisibleRange on our own pan state — which clamps and stomps on the
+  // user's mid-pan scroll position (the original "aggressive zoom on
+  // pan-into-recent-past" bug).
+  //
+  // setVisibleRange can't extrapolate past data, so when the target range
+  // falls outside the data extent (cross-chart sync from a chart that
+  // panned into whitespace) we apply via setVisibleLogicalRange instead.
+  $effect(() => {
+    if (!chart || !candles.length) return;
+    const target = view ?? xExtent;
+    if (!target) return;
+    if (lastEmittedFrom === target[0] && lastEmittedTo === target[1]) return;
+    suppressViewEmit = true;
+    const first = candles[0].time;
+    const last = candles[candles.length - 1].time;
+    if (target[1] > last || target[0] < first) {
+      chart.timeScale().setVisibleLogicalRange({
+        from: timeToLogical(target[0], candles),
+        to: timeToLogical(target[1], candles)
+      });
+    } else {
+      chart.timeScale().setVisibleRange({
+        from: target[0] as UTCTimestamp,
+        to: target[1] as UTCTimestamp
+      });
+    }
+    lastEmittedFrom = target[0];
+    lastEmittedTo = target[1];
+    queueMicrotask(() => {
+      suppressViewEmit = false;
+    });
+  });
+
+  // Parent → chart crosshair. `hoverCandle` is the snap-to-nearest result;
+  // we draw the crosshair on the candle's close price.
+  $effect(() => {
+    if (!chart || !candleSeries) return;
+    if (hoverCandle === null) {
+      chart.clearCrosshairPosition();
+    } else {
+      chart.setCrosshairPosition(
+        hoverCandle.close,
+        hoverCandle.time as UTCTimestamp,
+        candleSeries
+      );
+    }
+  });
+</script>
+
+<div bind:this={wrapper} class="relative w-full" style="height: {height}px;">
+  {#if hoverCandle}
+    <div
+      class="absolute top-2 left-2 px-3 py-2 rounded border border-zinc-700/70 bg-zinc-900/70 text-xs font-mono text-zinc-100 pointer-events-none shadow z-10"
+    >
+      <div class="text-zinc-400">
+        {fmtUtcTime(hoverCandle.time)}
+      </div>
+      <div>
+        <span class="text-zinc-400">O</span>
+        {hoverCandle.open.toFixed(4)}
+        <span class="text-zinc-400 ml-2">H</span>
+        {hoverCandle.high.toFixed(4)}
+      </div>
+      <div>
+        <span class="text-zinc-400">L</span>
+        {hoverCandle.low.toFixed(4)}
+        <span class="text-zinc-400 ml-2">C</span>
+        {hoverCandle.close.toFixed(4)}
+      </div>
+      <div><span class="text-zinc-400">V</span> {formatVolume(hoverCandle.volume)}</div>
+      {#if lines.length && hoverIdx !== null}
+        <div class="mt-1 pt-1 border-t border-zinc-800"></div>
+        {#each lines as ln (ln.key)}
+          {@const v = ln.rawValue
+            ? ln.rawValue(hoverCandle, hoverIdx, candles)
+            : ln.compute(hoverCandle, hoverIdx, candles)}
+          <div class="flex items-center gap-2">
+            <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
+            <span class="text-zinc-400 w-24">{ln.label}</span>
+            <span class="w-20 text-right">{ln.rawFormat ? ln.rawFormat(v) : v.toFixed(4)}</span>
+          </div>
+        {/each}
+      {/if}
+    </div>
+  {/if}
+</div>
