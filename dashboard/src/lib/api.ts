@@ -66,6 +66,20 @@ export type FundingRateRow = {
   rate: number;
 };
 
+/** One time bucket of Binance book depth. `d_*` are average depth (token
+ *  units), `v_*` are average notional (USD) at each percentage level off
+ *  mid-price. Bid side = m{500,400,300,200,100,020} bps;
+ *  ask side = p{020,100,200,300,400,500} bps. The dashboard pivots into
+ *  totals / per-level / imbalance / stacked depending on the
+ *  `bookDepthMode` selected on the chart instance. */
+export type BookDepthBucket = {
+  time: number;
+  d_m500: number; d_m400: number; d_m300: number; d_m200: number; d_m100: number; d_m020: number;
+  d_p020: number; d_p100: number; d_p200: number; d_p300: number; d_p400: number; d_p500: number;
+  v_m500: number; v_m400: number; v_m300: number; v_m200: number; v_m100: number; v_m020: number;
+  v_p020: number; v_p100: number; v_p200: number; v_p300: number; v_p400: number; v_p500: number;
+};
+
 export type TransferBucket = {
   time: number;
   sum_amount: number;

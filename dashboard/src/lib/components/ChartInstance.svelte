@@ -746,7 +746,7 @@
         : (instance.chain ?? '');
       return `${effectiveKind}|${cPart}|${instance.interval}`;
     }
-    if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'ls') {
+    if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'ls' || instance.kind === 'book_depth') {
       // Exchange selector busts the cache so flipping Binance ↔ HL re-fetches.
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
@@ -2369,6 +2369,15 @@
           pickArr = (b) => (b.series ?? []) as AnyDatum[];
           break;
         }
+        case 'book_depth': {
+          // Binance-only — HL doesn't publish an equivalent depth feed.
+          // The server returns 24 numeric columns per bucket (d_*/v_* per
+          // percentage level); the chart pivots into one of four modes
+          // (totals / per_level / imbalance / stacked) client-side.
+          url = `/api/book_depth?${new URLSearchParams(baseQS)}`;
+          pickArr = (b) => (b.series ?? []) as AnyDatum[];
+          break;
+        }
         case 'tt':
           // Top-trader L/S is Binance-only — the "top trader" tier is a
           // Binance Futures product concept with no clean HL analog.
@@ -3521,6 +3530,91 @@
   ]);
   let frLinesD = $derived(cumulativeLines);
 
+  // ---- book_depth ----------------------------------------------------------
+  // Bid side = negative percentage levels (m500 .. m020 bps off mid).
+  // Ask side = positive percentage levels (p020 .. p500 bps off mid).
+  // Order each list from deepest -> tightest; the stacked mode reads from
+  // the bottom up, so bids deepest-first puts the tightest bid against the
+  // ask wall in the middle and the deepest bid at the band's bottom.
+  const BID_LEVELS = ['m500','m400','m300','m200','m100','m020'] as const;
+  const ASK_LEVELS = ['p020','p100','p200','p300','p400','p500'] as const;
+  // Diverging palette: deep red for far asks → orange near asks → pale near bids
+  // → deep green for far bids. Read off Tailwind 500/600/700 emerald + red ramps.
+  const BID_COLORS = ['#14532d', '#166534', '#15803d', '#16a34a', '#22c55e', '#4ade80'] as const;
+  const ASK_COLORS = ['#fca5a5', '#f87171', '#ef4444', '#dc2626', '#b91c1c', '#7f1d1d'] as const;
+  // Pretty label for a level suffix — used in tooltips/legends.
+  function bdLevelLabel(sfx: string): string {
+    const pct = (sfx.startsWith('m') ? -1 : 1) * Number(sfx.slice(1));
+    const sign = pct > 0 ? '+' : '';
+    return `${sign}${pct}bps`;
+  }
+  // Sum of bid (or ask) `value` columns at a single bucket.
+  function bdSumSide(d: Record<string, number>, levels: readonly string[]): number {
+    let s = 0;
+    for (const l of levels) s += d['v_' + l] ?? 0;
+    return s;
+  }
+  // Imbalance series — recomputed only for that mode.
+  let bdImbalanceData = $derived(
+    instance.kind === 'book_depth' && (instance.bookDepthMode ?? 'totals') === 'imbalance'
+      ? (data as unknown as Record<string, number>[]).map((d) => {
+          const bid = bdSumSide(d, BID_LEVELS);
+          const ask = bdSumSide(d, ASK_LEVELS);
+          const total = bid + ask;
+          return { time: d.time, imb: total > 0 ? (bid - ask) / total : 0 };
+        })
+      : []
+  );
+  // Totals mode — two lines summing each side's notional. Both on the primary axis.
+  let bdTotalsLines = $derived([
+    {
+      key: 'bd_bid', label: 'Bid', color: '#22c55e',
+      compute: (d: Record<string, number>) => bdSumSide(d, BID_LEVELS)
+    },
+    {
+      key: 'bd_ask', label: 'Ask', color: '#ef4444',
+      compute: (d: Record<string, number>) => bdSumSide(d, ASK_LEVELS)
+    },
+    ...cumulativeLines
+  ]);
+  // Per-level mode — one line per percentage level (12 lines).
+  let bdPerLevelLines = $derived([
+    ...BID_LEVELS.map((sfx, i) => ({
+      key: 'bd_v_' + sfx,
+      label: 'Bid ' + bdLevelLabel(sfx),
+      color: BID_COLORS[i],
+      compute: (d: Record<string, number>) => d['v_' + sfx] ?? 0
+    })),
+    ...ASK_LEVELS.map((sfx, i) => ({
+      key: 'bd_v_' + sfx,
+      label: 'Ask ' + bdLevelLabel(sfx),
+      color: ASK_COLORS[i],
+      compute: (d: Record<string, number>) => d['v_' + sfx] ?? 0
+    })),
+    ...cumulativeLines
+  ]);
+  // Stacked mode — same 12 fields but rendered by StackedBarChart, which takes
+  // a `series` list (keyed against the data record) rather than `lines`.
+  let bdStackedSeries = $derived([
+    ...BID_LEVELS.map((sfx, i) => ({
+      key: 'v_' + sfx,
+      label: 'Bid ' + bdLevelLabel(sfx),
+      color: BID_COLORS[i]
+    })),
+    ...ASK_LEVELS.map((sfx, i) => ({
+      key: 'v_' + sfx,
+      label: 'Ask ' + bdLevelLabel(sfx),
+      color: ASK_COLORS[i]
+    }))
+  ]);
+  // Active line set for the per-mode primary-range fallback (overlays).
+  let bdLinesD = $derived.by(() => {
+    const mode = instance.bookDepthMode ?? 'totals';
+    if (mode === 'totals') return bdTotalsLines;
+    if (mode === 'per_level') return bdPerLevelLines;
+    return cumulativeLines;
+  });
+
   // ---- sz threshold apply ----
   function applySzThresholds() {
     const u = Number(instance.underInput);
@@ -3949,6 +4043,7 @@
     let primaryLines: typeof aaveLinesD = [];
     if (instance.kind === 'oi' || instance.kind === 'hl_smart_oi') primaryLines = oiLinesD;
     else if (instance.kind === 'fr') primaryLines = frLinesD;
+    else if (instance.kind === 'book_depth') primaryLines = bdLinesD;
     else if (instance.kind === 'tt') primaryLines = ttLinesD;
     else if (instance.kind === 'ls') primaryLines = lsLinesD;
     else if (instance.kind === 'bs') primaryLines = bsLines;
@@ -4074,6 +4169,8 @@
   let ohlcvLinesM        = $derived(overlayLinesD.length === 0 ? ohlcvLinesD : [...ohlcvLinesD, ...overlayLinesD]);
   let oiLinesM           = $derived(overlayLinesD.length === 0 ? oiLinesD : [...oiLinesD, ...overlayLinesD]);
   let frLinesM           = $derived(overlayLinesD.length === 0 ? frLinesD : [...frLinesD, ...overlayLinesD]);
+  let bdTotalsLinesM     = $derived(overlayLinesD.length === 0 ? bdTotalsLines : [...bdTotalsLines, ...overlayLinesD]);
+  let bdPerLevelLinesM   = $derived(overlayLinesD.length === 0 ? bdPerLevelLines : [...bdPerLevelLines, ...overlayLinesD]);
   let bsLinesM           = $derived(overlayLinesD.length === 0 ? bsLines : [...bsLines, ...overlayLinesD]);
   let szLinesM           = $derived(overlayLinesD.length === 0 ? szLinesD : [...szLinesD, ...overlayLinesD]);
   let ttLinesM           = $derived(overlayLinesD.length === 0 ? ttLinesD : [...ttLinesD, ...overlayLinesD]);
@@ -4974,6 +5071,22 @@
             <option value="net_pct">Net OI %</option>
           </select>
         {/if}
+        {#if instance.kind === 'book_depth'}
+          <!-- Book-depth mode selector. The /book_depth response carries
+               24 numeric columns per bucket (d_*/v_* per percentage level);
+               this picks the visualization the chart pivots into. -->
+          <select
+            value={instance.bookDepthMode ?? 'totals'}
+            onchange={(e) => (instance.bookDepthMode = e.currentTarget.value as 'totals' | 'per_level' | 'imbalance' | 'stacked')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="How to render the book depth time series"
+          >
+            <option value="totals">Totals</option>
+            <option value="per_level">Per-level</option>
+            <option value="imbalance">Imbalance</option>
+            <option value="stacked">Stacked</option>
+          </select>
+        {/if}
         {#if (instance.kind === 'oi' || instance.kind === 'hl_smart_oi') && !((instance.kind === 'hl_smart_oi' || (instance.exchange ?? 'binance') === 'hl') && ((instance.oiHlDisplay ?? 'total') === 'long_to_short' || (instance.oiHlDisplay ?? 'total') === 'net_pct'))}
           <!-- USD vs token-amount unit selector for OI. Hidden in the Long/Short
                ratio mode where the unit cancels out. -->
@@ -5678,6 +5791,61 @@
         formatY={(v) => v.toFixed(2)}
         formatTooltip={(v) => `${v.toFixed(2)} ${frIsApr ? '%' : 'bps/8h'}`}
         minBarWidthPx={3}
+      />
+    {:else if instance.kind === 'book_depth' && (instance.bookDepthMode ?? 'totals') === 'totals'}
+      <LineChart
+        data={data as Record<string, number>[]}
+        lines={bdTotalsLinesM}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
+      />
+    {:else if instance.kind === 'book_depth' && instance.bookDepthMode === 'per_level'}
+      <LineChart
+        data={data as Record<string, number>[]}
+        lines={bdPerLevelLinesM}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
+      />
+    {:else if instance.kind === 'book_depth' && instance.bookDepthMode === 'imbalance'}
+      <SignedBarChart
+        data={bdImbalanceData}
+        valueKey="imb"
+        showBars={instance.showPoint}
+        valueLabel="Imbalance"
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={(v) => v.toFixed(2)}
+        formatTooltip={(v) => v.toFixed(3)}
+      />
+    {:else if instance.kind === 'book_depth' && instance.bookDepthMode === 'stacked'}
+      <StackedBarChart
+        data={data as Record<string, number>[]}
+        series={bdStackedSeries}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
       />
     {:else if instance.kind === 'bs'}
       <StackedBarChart

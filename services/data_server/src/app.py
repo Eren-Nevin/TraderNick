@@ -20,6 +20,7 @@ from routes.spark import bp as spark_bp
 from routes.gmx import bp as gmx_bp
 from routes.hyperliquid import bp as hyperliquid_bp
 from routes.exchange_flow import bp as exchange_flow_bp
+from routes.book_depth import bp as book_depth_bp
 from throttle import register_health_endpoint
 
 app = Sanic("tradernick_data_server")
@@ -46,6 +47,7 @@ app.blueprint(spark_bp)
 app.blueprint(gmx_bp)
 app.blueprint(hyperliquid_bp)
 app.blueprint(exchange_flow_bp)
+app.blueprint(book_depth_bp)
 
 
 @app.listener("before_server_start")

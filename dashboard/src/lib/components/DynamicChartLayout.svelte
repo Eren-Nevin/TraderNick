@@ -762,6 +762,13 @@
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
         inst.frDisplay = r.frDisplay === 'apr' ? 'apr' : 'rate8h';
       }
+      if (inst.kind === 'book_depth') {
+        // Binance-only; the mode selector flips the same dataset between
+        // totals / per_level / imbalance / stacked visualizations.
+        inst.exchange = 'binance';
+        inst.bookDepthMode = (r.bookDepthMode === 'per_level' || r.bookDepthMode === 'imbalance' || r.bookDepthMode === 'stacked')
+          ? r.bookDepthMode : 'totals';
+      }
       if (inst.kind === 'oi') {
         // OI: Binance reads from binance_open_interest; HL sums per-wallet
         // size across long+short from hl_position_history. The hl-only

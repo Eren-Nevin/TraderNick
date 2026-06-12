@@ -289,6 +289,7 @@ export type ChartKind =
   | 'oi'
   | 'vol_oi'
   | 'fr'
+  | 'book_depth'
   | 'bs'
   | 'sz'
   | 'tt'
@@ -415,6 +416,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   oi: 'Open Interest',
   vol_oi: 'Vol / OI',
   fr: 'Funding Rate',
+  book_depth: 'Book Depth',
   bs: 'Taker Buyer vs Seller',
   sz: 'Volume by Size',
   tt: 'Top Traders L/S',
@@ -1166,6 +1168,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // selector lets the user flip these to Hyperliquid in place, so we list
   // them once under Exchange rather than duplicating under Perp.
   if (kind === 'ohlcv' || kind === 'price' || kind === 'price_ratio' || kind === 'pc' || kind === 'oi' || kind === 'vol_oi' || kind === 'fr'
+      || kind === 'book_depth'
       || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls') {
     return 'Exchange';
   }
@@ -1448,6 +1451,12 @@ export type ChartInstance = {
    *  HL's per-hour rate × 8 so both exchanges show comparable per-8h bps —
    *  matches the Coinglass convention. 'apr' annualizes to percent-per-year. */
   frDisplay?: 'rate8h' | 'apr';
+  /** book_depth only: which visualization to render. 'totals' (default) plots
+   *  bid vs ask USD; 'per_level' draws one line per percentage level; 'imbalance'
+   *  plots (bid - ask) / (bid + ask) as a signed bar; 'stacked' is a stacked-band
+   *  chart of every level. The four modes share the same `/book_depth` response
+   *  — the chart pivots client-side. */
+  bookDepthMode?: 'totals' | 'per_level' | 'imbalance' | 'stacked';
   /** For event-driven chart kinds (AAVE / Lido) that emit both a USD value
    *  AND a raw token amount per row: which one to plot. Default 'usd'. The
    *  toggle is hidden for Uniswap kinds because the amount field mixes
@@ -2181,6 +2190,10 @@ export function newChartInstance(
   }
   if (kind === 'fr') {
     base.frDisplay = 'rate8h';
+  }
+  if (kind === 'book_depth') {
+    base.exchange = 'binance';
+    base.bookDepthMode = 'totals';
   }
   if (kind === 'pc') {
     base.overlayTokens = [];
