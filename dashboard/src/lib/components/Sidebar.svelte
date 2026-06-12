@@ -16,6 +16,9 @@
   let editingName = $state('');
   let editingIsNew = $state(false);
 
+  // Active state for the Filters nav entry (route /filters).
+  let filtersActive = $derived($page.url.pathname.startsWith('/filters'));
+
   onMount(() => {
     themeStore.hydrate();
     pagesStore.hydrate();
@@ -215,6 +218,22 @@
       {collapsed ? '+' : '+ Add page'}
     </button>
   </nav>
+
+  <!-- =========================================================
+       First-class wallet filters (create / compose / reuse).
+       ========================================================= -->
+  <div class="px-2 py-3 border-t border-zinc-800">
+    <a
+      href="/filters"
+      title="Wallet filters"
+      class="w-full flex items-center gap-2 rounded text-sm transition-colors {filtersActive
+        ? 'bg-zinc-800 text-zinc-50'
+        : 'text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100'} {collapsed ? 'px-0 py-2 justify-center' : 'px-3 py-2'}"
+    >
+      <span class="text-base leading-none">⛃</span>
+      {#if !collapsed}<span>Filters</span>{/if}
+    </a>
+  </div>
 
   <div class="px-2 py-3 border-t border-zinc-800">
     <button

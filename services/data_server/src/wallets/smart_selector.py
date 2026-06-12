@@ -29,10 +29,51 @@ column suffix should go). The selector wires the rest.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
+
+# Composable filters: a node may reference child filter nodes (`refs`). Guard
+# against pathological nesting / fan-out from a hand-crafted `filter` param.
+MAX_FILTER_DEPTH = 6
+MAX_FILTER_NODES = 64
+
+# Every per-node CTE name and parameter key is suffixed with the node's
+# content hash so multiple filter nodes can coexist in one statement without
+# colliding. `sel_token` is intentionally excluded — the chart token is
+# request-global, so a single shared param is correct (and shrinks the set).
+# Word boundaries keep `sided_pnl` from matching inside `sided_pnl_daily`,
+# `trailing` inside `vol_trailing`, etc.; longest-first ordering is belt-and-
+# suspenders on top of that.
+_SUFFIXABLE_NAMES = sorted([
+    "data_min", "target_days", "daily_per_wallet", "trailing",
+    "unrealized_eod", "sided_pnl_daily", "sided_pnl",
+    "funding_per_wallet_day", "funding_trailing",
+    "vol_per_wallet_day", "vol_trailing",
+    "oi_snapshots", "oi_per_bucket", "oi_per_day", "oi_trailing",
+    "combined", "ranked", "own_wallets",
+    "sel_since", "sel_until", "sel_top_n",
+], key=len, reverse=True)
+_SUFFIX_RE = re.compile(
+    r"\b(" + "|".join(_SUFFIXABLE_NAMES)
+    + r"|sel_crit_min_\d+|sel_crit_max_\d+)\b"
+)
+
+
+def _suffix_sql(text: str, suffix: str) -> str:
+    """Append `_{suffix}` to every per-node CTE name / param placeholder."""
+    return _SUFFIX_RE.sub(lambda m: m.group(0) + "_" + suffix, text)
+
+
+def _suffix_params(params: dict[str, Any], suffix: str) -> dict[str, Any]:
+    """Suffix every param key except the shared, request-global `sel_token`."""
+    out: dict[str, Any] = {}
+    for k, v in params.items():
+        out[k if k == "sel_token" else f"{k}_{suffix}"] = v
+    return out
 
 
 SRC_TRADE_HISTORY = "trade_history"
@@ -256,6 +297,11 @@ class SmartCriterion:
     # or 'token' here overrides per-criterion — lets the user mix scopes
     # (e.g. "global PnL ≥ 50K AND token-specific volume ≥ 1M").
     scope: str | None = None
+    # None means "inherit the node's lookback". A per-criterion lookback lets
+    # the user window each metric independently, e.g. "volume ≥ 100K over 10d
+    # AND realized PnL ≥ 10K over 3d". The trailing CTEs compute every
+    # referenced lookback in one pass via conditional aggregation.
+    lookback: int | None = None
     # Soft-disable: the criterion stays in the list but its min/max bounds
     # don't filter and its source CTE isn't materialised (unless something
     # else references it). Lets the user A/B different criteria without
@@ -272,6 +318,10 @@ class SmartSelector:
     sort_by: str
     criteria: list[SmartCriterion] = field(default_factory=list)
     token: str | None = None
+    # Child filter nodes AND-ed (per-day set-intersected) into this node's own
+    # ranked result. A node with `criteria == []` contributes no own ranking
+    # and is purely the intersection of its refs. See build_cte / _emit.
+    refs: list["SmartSelector"] = field(default_factory=list)
 
     # ── parsing / validation ────────────────────────────────────────────
 
@@ -285,23 +335,55 @@ class SmartSelector:
             raise ValueError(f"selector is not valid JSON: {e}")
         if not isinstance(obj, dict):
             raise ValueError("selector must be a JSON object")
+        return cls._from_obj(obj, token, depth=0, counter=[0])
 
-        lookback = obj.get("lookback")
-        if not isinstance(lookback, int) or not (1 <= lookback <= 180):
-            raise ValueError("selector.lookback must be int in [1, 180]")
-        top_n = obj.get("top_n")
-        if not isinstance(top_n, int) or not (1 <= top_n <= 500):
-            raise ValueError("selector.top_n must be int in [1, 500]")
-        scope = obj.get("scope", "global")
-        if scope not in ("global", "token"):
-            raise ValueError("selector.scope must be 'global' or 'token'")
-        sort_by = obj.get("sort_by")
-        if not isinstance(sort_by, str) or sort_by not in METRIC_REGISTRY:
-            raise ValueError(f"selector.sort_by must be one of: {list(METRIC_REGISTRY)}")
+    @classmethod
+    def _from_obj(cls, obj: Any, token: str | None,
+                  depth: int, counter: list[int]) -> "SmartSelector":
+        """Parse one (possibly nested) filter node. `counter` is a shared
+        single-element list used as a mutable node count across the tree."""
+        if not isinstance(obj, dict):
+            raise ValueError("selector node must be a JSON object")
+        if depth > MAX_FILTER_DEPTH:
+            raise ValueError(f"selector nesting exceeds max depth {MAX_FILTER_DEPTH}")
+        counter[0] += 1
+        if counter[0] > MAX_FILTER_NODES:
+            raise ValueError(f"selector exceeds max node count {MAX_FILTER_NODES}")
 
         raw_criteria = obj.get("criteria", [])
         if not isinstance(raw_criteria, list):
             raise ValueError("selector.criteria must be a JSON array")
+        raw_refs = obj.get("refs", [])
+        if not isinstance(raw_refs, list):
+            raise ValueError("selector.refs must be a JSON array")
+        has_criteria = len(raw_criteria) > 0
+        if not has_criteria and not raw_refs:
+            raise ValueError("selector node must have at least one criterion or ref")
+
+        # lookback / top_n / sort_by govern this node's OWN ranking. They are
+        # only meaningful when the node has criteria; a pure-composite node
+        # (refs only) ignores them, so we accept defaults there rather than
+        # forcing the client to send dummy values.
+        lookback = obj.get("lookback")
+        if not isinstance(lookback, int) or not (1 <= lookback <= 180):
+            if has_criteria:
+                raise ValueError("selector.lookback must be int in [1, 180]")
+            lookback = 1
+        top_n = obj.get("top_n")
+        if not isinstance(top_n, int) or not (1 <= top_n <= 500):
+            if has_criteria:
+                raise ValueError("selector.top_n must be int in [1, 500]")
+            top_n = 1
+        scope = obj.get("scope", "global")
+        if scope not in ("global", "token"):
+            raise ValueError("selector.scope must be 'global' or 'token'")
+        sort_by = obj.get("sort_by")
+        if has_criteria:
+            if not isinstance(sort_by, str) or sort_by not in METRIC_REGISTRY:
+                raise ValueError(f"selector.sort_by must be one of: {list(METRIC_REGISTRY)}")
+        elif not (isinstance(sort_by, str) and sort_by in METRIC_REGISTRY):
+            sort_by = "realized_pnl"  # unused; keep the dataclass field valid
+
         criteria: list[SmartCriterion] = []
         for i, c in enumerate(raw_criteria):
             if not isinstance(c, dict):
@@ -318,6 +400,9 @@ class SmartSelector:
             cscope = c.get("scope")
             if cscope is not None and cscope not in ("global", "token"):
                 raise ValueError(f"selector.criteria[{i}].scope must be 'global', 'token', or null")
+            clookback = c.get("lookback")
+            if clookback is not None and (not isinstance(clookback, int) or not (1 <= clookback <= 180)):
+                raise ValueError(f"selector.criteria[{i}].lookback must be int in [1, 180] or null")
             cdisabled = c.get("disabled", False)
             if not isinstance(cdisabled, bool):
                 raise ValueError(f"selector.criteria[{i}].disabled must be a boolean")
@@ -326,8 +411,11 @@ class SmartSelector:
                 min=float(cmin) if cmin is not None else None,
                 max=float(cmax) if cmax is not None else None,
                 scope=cscope,
+                lookback=clookback,
                 disabled=cdisabled,
             ))
+
+        refs = [cls._from_obj(r, token, depth + 1, counter) for r in raw_refs]
 
         return cls(
             lookback_days=lookback,
@@ -336,12 +424,70 @@ class SmartSelector:
             sort_by=sort_by,
             criteria=criteria,
             token=token,
+            refs=refs,
         )
+
+    # ── content hashing (per-node dedup + cache key) ─────────────────────
+
+    def _own_canonical(self) -> dict[str, Any]:
+        """Canonical form of this node's OWN ranking config (excludes refs).
+        Mirrors the FE smartSelectorCacheKey so the two layers agree."""
+        return {
+            "lookback": self.lookback_days,
+            "top_n": self.top_n,
+            "scope": self.scope,
+            "sort_by": self.sort_by,
+            "criteria": [
+                {"metric": c.metric, "min": c.min, "max": c.max,
+                 "scope": c.scope, "lookback": c.lookback, "disabled": c.disabled}
+                for c in self.criteria
+            ],
+        }
+
+    def _full_canonical(self) -> dict[str, Any]:
+        """Own config plus refs (children sorted so order doesn't matter)."""
+        d = self._own_canonical()
+        d["refs"] = sorted(
+            (c._full_canonical() for c in self.refs),
+            key=lambda x: json.dumps(x, sort_keys=True),
+        )
+        return d
+
+    @staticmethod
+    def _suffix_of(canonical: dict[str, Any]) -> str:
+        raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+        return "n" + hashlib.sha1(raw.encode()).hexdigest()[:10]
+
+    def _own_suffix(self) -> str:
+        return self._suffix_of(self._own_canonical())
+
+    def _full_suffix(self) -> str:
+        return self._suffix_of(self._full_canonical())
+
+    def cache_key(self) -> str:
+        """Full (collision-safe) content hash of this filter, used as the
+        wallet-set cache key. Window-independent on purpose — a day's wallet
+        set depends only on the filter + that day, not the chart's range."""
+        raw = json.dumps(self._full_canonical(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(raw.encode()).hexdigest()
+
+    def uses_token_scope(self) -> bool:
+        """True if any node (this one or a ref) resolves a metric in token
+        scope — i.e. the wallet set genuinely depends on the chart token."""
+        if any(self._effective_scope(c.scope) == "token"
+               for c in self.criteria if not c.disabled):
+            return True
+        if not self.criteria and self.scope == "token":
+            return True
+        return any(r.uses_token_scope() for r in self.refs)
 
     # ── scope resolution ────────────────────────────────────────────────
 
     def _effective_scope(self, criterion_scope: str | None) -> str:
         return criterion_scope or self.scope
+
+    def _effective_lookback(self, criterion_lookback: int | None) -> int:
+        return criterion_lookback or self.lookback_days
 
     def _sort_scope(self) -> str:
         """Scope to use when ordering by `sort_by`. If sort_by matches a
@@ -353,21 +499,30 @@ class SmartSelector:
                 return self._effective_scope(c.scope)
         return self.scope
 
-    def _needs(self) -> dict[tuple[str, str], bool]:
-        """Map of (source, scope) → True for every combo any active metric
-        references. Disabled criteria don't pull their source in (the
-        ranked CTE skips their WHERE clause too); the sort metric always
-        counts regardless of any criterion's disabled state."""
-        needs: dict[tuple[str, str], bool] = {}
-        ss = self._sort_scope()
+    def _sort_lookback(self) -> int:
+        """Lookback for the sort metric — the matching criterion's effective
+        lookback if present, else the node default."""
+        for c in self.criteria:
+            if c.metric == self.sort_by:
+                return self._effective_lookback(c.lookback)
+        return self.lookback_days
+
+    def _needs(self) -> set[tuple[str, str, int]]:
+        """Set of (source, scope, lookback) every active metric references.
+        Disabled criteria don't pull their source in (the ranked CTE skips
+        their WHERE clause too); the sort metric always counts regardless of
+        any criterion's disabled state."""
+        needs: set[tuple[str, str, int]] = set()
+        ss, sl = self._sort_scope(), self._sort_lookback()
         for src in METRIC_REGISTRY[self.sort_by].requires:
-            needs[(src, ss)] = True
+            needs.add((src, ss, sl))
         for c in self.criteria:
             if c.disabled:
                 continue
             eff = self._effective_scope(c.scope)
+            lb = self._effective_lookback(c.lookback)
             for src in METRIC_REGISTRY[c.metric].requires:
-                needs[(src, eff)] = True
+                needs.add((src, eff, lb))
         return needs
 
     @staticmethod
@@ -375,18 +530,26 @@ class SmartSelector:
         return "g" if scope == "global" else "t"
 
     @classmethod
-    def _metric_expr(cls, metric_key: str, scope: str) -> str:
+    def _metric_expr(cls, metric_key: str, scope: str, lookback: int) -> str:
+        """Concrete column expression for a metric at a (scope, lookback).
+        `{s}` in the registry template expands to e.g. `g_l3` so it lands on
+        the lookback-tagged `combined` columns (`realized_pnl_g_l3`, …)."""
         return METRIC_REGISTRY[metric_key].column_sql.replace(
-            "{s}", cls._suffix(scope))
+            "{s}", f"{cls._suffix(scope)}_l{lookback}")
 
     # ── CTE emission ────────────────────────────────────────────────────
 
-    def build_cte(
+    def _build_node_ctes(
         self, since_dt: datetime, until_dt: datetime
-    ) -> tuple[str, str, dict[str, Any]]:
-        """Returns (cte_sql, cte_name, params). See module docstring."""
+    ) -> tuple[list[str], dict[str, Any]]:
+        """Emit this node's OWN ranking CTE chain (unsuffixed). Returns
+        (ctes, params); the final CTE is `own_wallets(day, wallets[])`. The
+        driver `build_cte` suffixes names/params per node and composes the
+        intersection with child refs. Only called when the node has criteria."""
         needs = self._needs()
-        # Per-source presence of each scope
+        # Per-source: the union of scopes referenced (drives the scope-only
+        # daily CTEs via proj_pair) and the set of (scope-letter, lookback)
+        # combos (drives the lookback-windowed trailing columns).
         scopes_for: dict[str, set[str]] = {
             SRC_TRADE_HISTORY: set(),
             SRC_EOD: set(),
@@ -395,18 +558,29 @@ class SmartSelector:
             SRC_VOL: set(),
             SRC_FUNDING: set(),
         }
-        for (src, sc) in needs:
+        combos_for: dict[str, set[tuple[str, int]]] = {k: set() for k in scopes_for}
+        for (src, sc, lb) in needs:
             scopes_for[src].add(sc)
-        any_source = (scopes_for[SRC_TRADE_HISTORY]
-                      or scopes_for[SRC_EOD]
-                      or scopes_for[SRC_SIDED]
-                      or scopes_for[SRC_OI]
-                      or scopes_for[SRC_VOL]
-                      or scopes_for[SRC_FUNDING])
+            combos_for[src].add((self._suffix(sc), lb))
+        any_source = any(combos_for[s] for s in scopes_for)
         if not any_source:
             raise ValueError(
                 "selector references no sources — at least one metric "
                 "(criterion or sort) must be defined")
+
+        def src_max_lb(src: str) -> int:
+            return max((lb for (_, lb) in combos_for[src]), default=1)
+        # The day-spine gate uses the longest referenced lookback: a chart day
+        # is only valid when even the widest window has data behind it.
+        gate_lb = max((lb for (_, _, lb) in needs), default=1)
+
+        VOL_COLS = [
+            "vol_token", "vol_usd",
+            "long_vol_token", "long_vol_usd",
+            "short_vol_token", "short_vol_usd",
+            "taker_buy_vol_token", "taker_buy_vol_usd",
+            "taker_sell_vol_token", "taker_sell_vol_usd",
+        ]
 
         # SQL fragment builders ─────────────────────────────────────────
         def proj_pair(global_expr: str, token_expr: str, src: str,
@@ -451,12 +625,13 @@ class SmartSelector:
             "                FROM numbers(0, dateDiff('day', toDate({sel_since:DateTime}), toDate({sel_until:DateTime})) + 1)\n"
             "            ) d_set\n"
             "            CROSS JOIN data_min\n"
-            "            WHERE d_set.d - {sel_lookback:UInt32} >= data_min.min_d\n"
+            "            WHERE d_set.d - " + str(gate_lb) + " >= data_min.min_d\n"
             "        )"
         )
 
         # ── trade_history ───────────────────────────────────────────
-        if scopes_for[SRC_TRADE_HISTORY]:
+        if combos_for[SRC_TRADE_HISTORY]:
+            th_max = src_max_lb(SRC_TRADE_HISTORY)
             daily_proj = proj_pair(
                 "sum(net_pnl)",
                 "sumIf(net_pnl, token = {sel_token:String})",
@@ -469,34 +644,37 @@ class SmartSelector:
                 "sum(trade_count)",
                 "sumIf(trade_count, token = {sel_token:String})",
                 SRC_TRADE_HISTORY, "daily_trades_g", "daily_trades_t")
+            # Token prefilter when no global-scope metric needs the source —
+            # drops every non-chart-token row before the GROUP BY and the
+            # downstream trailing CROSS JOIN (the leaderboard's hot path).
+            # Same trick the oi/vol/funding sources already use.
+            th_token_filter = ""
+            if "global" not in scopes_for[SRC_TRADE_HISTORY] and "token" in scopes_for[SRC_TRADE_HISTORY]:
+                th_token_filter = "              AND token = {sel_token:String}\n"
             ctes.append(
-                f"daily_per_wallet AS (\n"
-                f"            SELECT toDate(time) AS d, wallet,\n"
-                f"                   {daily_proj}\n"
-                f"            FROM tradernick.hl_trade_history\n"
-                f"            WHERE time >= {{sel_since:DateTime}} - INTERVAL {{sel_lookback:UInt32}} DAY\n"
-                f"              AND time <  {{sel_until:DateTime}}\n"
+                "daily_per_wallet AS (\n"
+                "            SELECT toDate(time) AS d, wallet,\n"
+                "                   " + daily_proj + "\n"
+                "            FROM tradernick.hl_trade_history\n"
+                "            WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max) + " DAY\n"
+                "              AND time <  {sel_until:DateTime}\n"
+                + th_token_filter +
                 f"              {HIP3_EXCLUDE}\n"
-                f"            GROUP BY d, wallet\n"
-                f"        )"
+                "            GROUP BY d, wallet\n"
+                "        )"
             )
 
-            # trailing — sum the per-day aggregates across the lookback
-            # window, retaining a per-day PnL array for Sharpe.
+            # trailing — one windowed aggregate per (scope, lookback) combo,
+            # gated by sumIf/groupArrayIf so a single CROSS JOIN over the max
+            # window serves every lookback. daily_pnls_* feeds Sharpe.
             trailing_parts: list[str] = []
-            if "global" in scopes_for[SRC_TRADE_HISTORY]:
+            for (s, L) in sorted(combos_for[SRC_TRADE_HISTORY]):
+                w = f"src.d >= target.d - {L}"
                 trailing_parts += [
-                    "sum(src.daily_pnl_g) AS realized_pnl_g",
-                    "sum(src.daily_vol_g) AS vol_g",
-                    "sum(src.daily_trades_g) AS trade_count_g",
-                    "groupArray(src.daily_pnl_g) AS daily_pnls_g",
-                ]
-            if "token" in scopes_for[SRC_TRADE_HISTORY]:
-                trailing_parts += [
-                    "sum(src.daily_pnl_t) AS realized_pnl_t",
-                    "sum(src.daily_vol_t) AS vol_t",
-                    "sum(src.daily_trades_t) AS trade_count_t",
-                    "groupArray(src.daily_pnl_t) AS daily_pnls_t",
+                    f"sumIf(src.daily_pnl_{s}, {w}) AS realized_pnl_{s}_l{L}",
+                    f"sumIf(src.daily_vol_{s}, {w}) AS vol_{s}_l{L}",
+                    f"sumIf(src.daily_trades_{s}, {w}) AS trade_count_{s}_l{L}",
+                    f"groupArrayIf(src.daily_pnl_{s}, {w}) AS daily_pnls_{s}_l{L}",
                 ]
             ctes.append(
                 "trailing AS (\n"
@@ -504,7 +682,7 @@ class SmartSelector:
                 "                   " + ",\n                   ".join(trailing_parts) + "\n"
                 "            FROM target_days target\n"
                 "            CROSS JOIN daily_per_wallet src\n"
-                "            WHERE src.d >= target.d - {sel_lookback:UInt32}\n"
+                "            WHERE src.d >= target.d - " + str(th_max) + "\n"
                 "              AND src.d <  target.d\n"
                 "            GROUP BY target.d, src.wallet\n"
                 "        )"
@@ -538,35 +716,36 @@ class SmartSelector:
             )
 
         # ── sided_pnl ───────────────────────────────────────────────
-        if scopes_for[SRC_SIDED]:
+        if combos_for[SRC_SIDED]:
+            sided_max = src_max_lb(SRC_SIDED)
             sided_day_parts: list[str] = []
             if "global" in scopes_for[SRC_SIDED]:
                 sided_day_parts.append("sumMerge(pnl_state) AS day_pnl_g")
             if "token" in scopes_for[SRC_SIDED]:
                 sided_day_parts.append(
                     "sumMergeIf(pnl_state, token = {sel_token:String}) AS day_pnl_t")
+            sided_token_filter = ""
+            if "global" not in scopes_for[SRC_SIDED] and "token" in scopes_for[SRC_SIDED]:
+                sided_token_filter = "              AND token = {sel_token:String}\n"
             ctes.append(
                 "sided_pnl_daily AS (\n"
                 "            SELECT day, wallet, side,\n"
                 "                   " + ",\n                   ".join(sided_day_parts) + "\n"
                 "            FROM tradernick.hl_fills_pnl_daily\n"
-                "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL {sel_lookback:UInt32} DAY\n"
+                "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(sided_max) + " DAY\n"
                 "              AND day <  toDate({sel_until:DateTime})\n"
+                + sided_token_filter +
                 f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY day, wallet, side\n"
                 "        )"
             )
 
             sided_trail_parts: list[str] = []
-            if "global" in scopes_for[SRC_SIDED]:
+            for (s, L) in sorted(combos_for[SRC_SIDED]):
+                w = f"src.day >= target.d - {L}"
                 sided_trail_parts += [
-                    "sumIf(src.day_pnl_g, src.side='long')  AS long_pnl_g",
-                    "sumIf(src.day_pnl_g, src.side='short') AS short_pnl_g",
-                ]
-            if "token" in scopes_for[SRC_SIDED]:
-                sided_trail_parts += [
-                    "sumIf(src.day_pnl_t, src.side='long')  AS long_pnl_t",
-                    "sumIf(src.day_pnl_t, src.side='short') AS short_pnl_t",
+                    f"sumIf(src.day_pnl_{s}, src.side='long'  AND {w}) AS long_pnl_{s}_l{L}",
+                    f"sumIf(src.day_pnl_{s}, src.side='short' AND {w}) AS short_pnl_{s}_l{L}",
                 ]
             ctes.append(
                 "sided_pnl AS (\n"
@@ -574,14 +753,15 @@ class SmartSelector:
                 "                   " + ",\n                   ".join(sided_trail_parts) + "\n"
                 "            FROM target_days target\n"
                 "            CROSS JOIN sided_pnl_daily src\n"
-                "            WHERE src.day >= target.d - {sel_lookback:UInt32}\n"
+                "            WHERE src.day >= target.d - " + str(sided_max) + "\n"
                 "              AND src.day <  target.d\n"
                 "            GROUP BY target.d, src.wallet\n"
                 "        )"
             )
 
         # ── funding (per-day per-wallet accrued funding PnL) ────────
-        if scopes_for[SRC_FUNDING]:
+        if combos_for[SRC_FUNDING]:
+            fund_max = src_max_lb(SRC_FUNDING)
             # Daily per-wallet collapse — sum across tokens for global,
             # sumIf to one token for token scope. Prefilter on token when
             # only token scope is requested (hl_funding_daily ORDER BY is
@@ -600,7 +780,7 @@ class SmartSelector:
                 "            SELECT day, wallet,\n"
                 "                   " + fund_day_proj + "\n"
                 "            FROM tradernick.hl_funding_daily\n"
-                "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL {sel_lookback:UInt32} DAY\n"
+                "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(fund_max) + " DAY\n"
                 "              AND day <  toDate({sel_until:DateTime})\n"
                 f"{fund_inner_token_filter}"
                 f"              {HIP3_EXCLUDE}\n"
@@ -608,24 +788,25 @@ class SmartSelector:
                 "        )"
             )
             fund_trail_parts: list[str] = []
-            if "global" in scopes_for[SRC_FUNDING]:
-                fund_trail_parts.append("sum(src.funding_pnl_g) AS funding_pnl_g")
-            if "token" in scopes_for[SRC_FUNDING]:
-                fund_trail_parts.append("sum(src.funding_pnl_t) AS funding_pnl_t")
+            for (s, L) in sorted(combos_for[SRC_FUNDING]):
+                w = f"src.day >= target.d - {L}"
+                fund_trail_parts.append(
+                    f"sumIf(src.funding_pnl_{s}, {w}) AS funding_pnl_{s}_l{L}")
             ctes.append(
                 "funding_trailing AS (\n"
                 "            SELECT target.d AS day, src.wallet AS wallet,\n"
                 "                   " + ",\n                   ".join(fund_trail_parts) + "\n"
                 "            FROM target_days target\n"
                 "            CROSS JOIN funding_per_wallet_day src\n"
-                "            WHERE src.day >= target.d - {sel_lookback:UInt32}\n"
+                "            WHERE src.day >= target.d - " + str(fund_max) + "\n"
                 "              AND src.day <  target.d\n"
                 "            GROUP BY target.d, src.wallet\n"
                 "        )"
             )
 
         # ── vol_daily / vol (sided + taker fill volumes) ────────────
-        if scopes_for[SRC_VOL]:
+        if combos_for[SRC_VOL]:
+            vol_max = src_max_lb(SRC_VOL)
             # Per-(day, wallet) collapse — sum across (token, position_side)
             # for global; sumIf for token; per-direction columns derived
             # via sumStateIf merging. Six volume dimensions emitted per
@@ -681,40 +862,35 @@ class SmartSelector:
                 "            SELECT day, wallet,\n"
                 "                   " + ",\n                   ".join(vol_day_parts) + "\n"
                 "            FROM tradernick.hl_fills_vol_daily\n"
-                "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL {sel_lookback:UInt32} DAY\n"
+                "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(vol_max) + " DAY\n"
                 "              AND day <  toDate({sel_until:DateTime})\n"
                 f"{vol_inner_token_filter}"
                 f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY day, wallet\n"
                 "        )"
             )
-            # Trailing sum over the lookback window.
+            # Trailing sum per (scope, lookback) combo.
             vol_trail_parts: list[str] = []
-            for col_name in [
-                "vol_token", "vol_usd",
-                "long_vol_token", "long_vol_usd",
-                "short_vol_token", "short_vol_usd",
-                "taker_buy_vol_token", "taker_buy_vol_usd",
-                "taker_sell_vol_token", "taker_sell_vol_usd",
-            ]:
-                if "global" in scopes_for[SRC_VOL]:
-                    vol_trail_parts.append(f"sum(src.{col_name}_g) AS {col_name}_g")
-                if "token" in scopes_for[SRC_VOL]:
-                    vol_trail_parts.append(f"sum(src.{col_name}_t) AS {col_name}_t")
+            for (s, L) in sorted(combos_for[SRC_VOL]):
+                w = f"src.day >= target.d - {L}"
+                for col_name in VOL_COLS:
+                    vol_trail_parts.append(
+                        f"sumIf(src.{col_name}_{s}, {w}) AS {col_name}_{s}_l{L}")
             ctes.append(
                 "vol_trailing AS (\n"
                 "            SELECT target.d AS day, src.wallet AS wallet,\n"
                 "                   " + ",\n                   ".join(vol_trail_parts) + "\n"
                 "            FROM target_days target\n"
                 "            CROSS JOIN vol_per_wallet_day src\n"
-                "            WHERE src.day >= target.d - {sel_lookback:UInt32}\n"
+                "            WHERE src.day >= target.d - " + str(vol_max) + "\n"
                 "              AND src.day <  target.d\n"
                 "            GROUP BY target.d, src.wallet\n"
                 "        )"
             )
 
         # ── avg OI over hourly snapshots ────────────────────────────
-        if scopes_for[SRC_OI]:
+        if combos_for[SRC_OI]:
+            oi_max = src_max_lb(SRC_OI)
             # Inner: argMaxMerge the hourly snapshot per (bucket, token,
             # side, wallet). Middle: collapse to per-(bucket, wallet)
             # totals + sided sums; emit per-scope projections of both
@@ -738,7 +914,7 @@ class SmartSelector:
                 "                   argMaxMerge(size_state)   AS sz,\n"
                 "                   argMaxMerge(pnl_state)    AS pnl\n"
                 "            FROM tradernick.hl_position_history_1h\n"
-                "            WHERE bucket >= {sel_since:DateTime} - INTERVAL {sel_lookback:UInt32} DAY\n"
+                "            WHERE bucket >= {sel_since:DateTime} - INTERVAL " + str(oi_max) + " DAY\n"
                 "              AND bucket <  {sel_until:DateTime}\n"
                 f"{oi_inner_token_filter}"
                 f"              {HIP3_EXCLUDE}\n"
@@ -791,153 +967,103 @@ class SmartSelector:
                 "            GROUP BY bucket, wallet\n"
                 "        )"
             )
-            # Trailing: avg per-bucket wallet OI over the lookback ending
-            # at target.d (exclusive). One row per (target.d, wallet).
-            # avg_roe_pct: per-snapshot 100×pnl/OI averaged across
-            # buckets (not the bulk pnl/OI ratio — the user wants the
-            # time-weighted view). Buckets where OI is 0 contribute 0.
+            # Roll the hourly buckets up to one row per (day, wallet) FIRST —
+            # the per-day sums + bucket count are sufficient to reconstruct the
+            # exact trailing average (avg over buckets = Σ bucket values / Σ
+            # bucket count). This shrinks the trailing CROSS JOIN input ~24× vs
+            # joining target_days against hourly buckets directly.
+            oi_letters = sorted({s for (s, _) in combos_for[SRC_OI]})
+            oi_day_parts: list[str] = []
+            OI_AVG_COLS = ["total_oi_token", "long_oi_token", "short_oi_token",
+                           "total_oi_usd", "long_oi_usd", "short_oi_usd"]
+            for s in oi_letters:
+                for col_name in OI_AVG_COLS:
+                    oi_day_parts.append(f"sum({col_name}_{s}) AS s_{col_name}_{s}")
+                oi_day_parts.append(
+                    f"sum(if(total_oi_usd_{s} > 0, "
+                    f"unrealized_pnl_usd_{s} / total_oi_usd_{s}, 0)) AS s_roe_{s}")
+            ctes.append(
+                "oi_per_day AS (\n"
+                "            SELECT toDate(bucket) AS d, wallet,\n"
+                "                   " + ",\n                   ".join(oi_day_parts) + ",\n"
+                "                   count() AS n_buckets\n"
+                "            FROM oi_per_bucket\n"
+                "            GROUP BY d, wallet\n"
+                "        )"
+            )
+            # Trailing: avg per-bucket wallet OI over the lookback ending at
+            # target.d (exclusive), per (scope, lookback) combo. avg over the
+            # window = Σ(per-day bucket sums) / Σ(per-day bucket counts).
+            # avg_roe_pct is the per-snapshot ratio averaged the same way.
             oi_trail_parts: list[str] = []
-            for col_name in [
-                "total_oi_token", "long_oi_token", "short_oi_token",
-                "total_oi_usd",   "long_oi_usd",   "short_oi_usd",
-            ]:
-                if "global" in scopes_for[SRC_OI]:
-                    oi_trail_parts.append(f"avg(src.{col_name}_g) AS avg_{col_name}_g")
-                if "token" in scopes_for[SRC_OI]:
-                    oi_trail_parts.append(f"avg(src.{col_name}_t) AS avg_{col_name}_t")
-            # Ratio (0.15 = 15%) to match the existing pct convention used
-            # by pnl_pct / unrealized_pnl_pct / total_pnl_pct. The UI's
-            # min/max placeholder ("0.10 = 10%") is the cue for users.
-            if "global" in scopes_for[SRC_OI]:
+            for (s, L) in sorted(combos_for[SRC_OI]):
+                w = f"src.d >= target.d - {L}"
+                denom = f"sumIf(src.n_buckets, {w})"
+                for col_name in OI_AVG_COLS:
+                    oi_trail_parts.append(
+                        f"if({denom} > 0, sumIf(src.s_{col_name}_{s}, {w}) / {denom}, 0) "
+                        f"AS avg_{col_name}_{s}_l{L}")
                 oi_trail_parts.append(
-                    "avg(if(src.total_oi_usd_g > 0, "
-                    "src.unrealized_pnl_usd_g / src.total_oi_usd_g, 0)) "
-                    "AS avg_roe_pct_g")
-            if "token" in scopes_for[SRC_OI]:
-                oi_trail_parts.append(
-                    "avg(if(src.total_oi_usd_t > 0, "
-                    "src.unrealized_pnl_usd_t / src.total_oi_usd_t, 0)) "
-                    "AS avg_roe_pct_t")
+                    f"if({denom} > 0, sumIf(src.s_roe_{s}, {w}) / {denom}, 0) "
+                    f"AS avg_roe_pct_{s}_l{L}")
             ctes.append(
                 "oi_trailing AS (\n"
                 "            SELECT target.d AS day, src.wallet AS wallet,\n"
                 "                   " + ",\n                   ".join(oi_trail_parts) + "\n"
                 "            FROM target_days target\n"
-                "            CROSS JOIN oi_per_bucket src\n"
-                "            WHERE toDate(src.bucket) >= target.d - {sel_lookback:UInt32}\n"
-                "              AND toDate(src.bucket) <  target.d\n"
+                "            CROSS JOIN oi_per_day src\n"
+                "            WHERE src.d >= target.d - " + str(oi_max) + "\n"
+                "              AND src.d <  target.d\n"
                 "            GROUP BY target.d, src.wallet\n"
                 "        )"
             )
 
         # ── combined ────────────────────────────────────────────────
-        # Spine table is whichever exists; trailing is biggest when it does.
-        # Subsequent sources LEFT JOIN onto the spine so wallets missing
-        # from those sources show 0.
-        combined_cols: list[str] = []
-        combined_from = ""
-        if scopes_for[SRC_TRADE_HISTORY]:
-            combined_cols += ["r.day AS day", "r.wallet AS wallet"]
-            if "global" in scopes_for[SRC_TRADE_HISTORY]:
-                combined_cols += [
-                    "r.realized_pnl_g AS realized_pnl_g",
-                    "r.vol_g AS vol_g",
-                    "r.trade_count_g AS trade_count_g",
-                    "r.daily_pnls_g AS daily_pnls_g",
-                ]
-            if "token" in scopes_for[SRC_TRADE_HISTORY]:
-                combined_cols += [
-                    "r.realized_pnl_t AS realized_pnl_t",
-                    "r.vol_t AS vol_t",
-                    "r.trade_count_t AS trade_count_t",
-                    "r.daily_pnls_t AS daily_pnls_t",
-                ]
-            combined_from = "FROM trailing r"
-            spine_alias = "r"
-        elif scopes_for[SRC_EOD]:
-            combined_cols += ["u.day AS day", "u.wallet AS wallet"]
-            combined_from = "FROM unrealized_eod u"
-            spine_alias = "u"
-        elif scopes_for[SRC_SIDED]:
-            combined_cols += ["s.day AS day", "s.wallet AS wallet"]
-            combined_from = "FROM sided_pnl s"
-            spine_alias = "s"
-        elif scopes_for[SRC_VOL]:
-            combined_cols += ["v.day AS day", "v.wallet AS wallet"]
-            combined_from = "FROM vol_trailing v"
-            spine_alias = "v"
-        elif scopes_for[SRC_FUNDING]:
-            combined_cols += ["f.day AS day", "f.wallet AS wallet"]
-            combined_from = "FROM funding_trailing f"
-            spine_alias = "f"
-        else:
-            combined_cols += ["o.day AS day", "o.wallet AS wallet"]
-            combined_from = "FROM oi_trailing o"
-            spine_alias = "o"
-
-        if scopes_for[SRC_EOD]:
-            if spine_alias != "u":
+        # One row per (day, wallet) with a column per referenced
+        # (base, scope, lookback) → `{base}_{scope}_l{L}`. The spine is the
+        # first present source (priority order below, matching the legacy
+        # behaviour); every other source LEFT JOINs on (day, wallet) so its
+        # columns coalesce to 0 for wallets it lacks. The eod snapshot is
+        # lookback-independent, so its single column is aliased to each
+        # referenced lookback (so metrics like total_pnl that mix a windowed
+        # realized-PnL with the current unrealized-PnL line up by suffix).
+        # (src, alias, cte_name, base_cols, windowed?)
+        src_info = [
+            (SRC_TRADE_HISTORY, "r", "trailing",
+             ["realized_pnl", "vol", "trade_count", "daily_pnls"], True),
+            (SRC_EOD, "u", "unrealized_eod", ["unrealized_pnl"], False),
+            (SRC_SIDED, "s", "sided_pnl", ["long_pnl", "short_pnl"], True),
+            (SRC_VOL, "v", "vol_trailing", VOL_COLS, True),
+            (SRC_FUNDING, "f", "funding_trailing", ["funding_pnl"], True),
+            (SRC_OI, "o", "oi_trailing",
+             ["avg_total_oi_token", "avg_long_oi_token", "avg_short_oi_token",
+              "avg_total_oi_usd", "avg_long_oi_usd", "avg_short_oi_usd",
+              "avg_roe_pct"], True),
+        ]
+        spine = next(si for si in src_info if combos_for[si[0]])
+        spine_alias = spine[1]
+        combined_cols = [f"{spine_alias}.day AS day", f"{spine_alias}.wallet AS wallet"]
+        combined_from = f"FROM {spine[2]} {spine_alias}"
+        for (src, alias, cte_name, bases, windowed) in src_info:
+            if not combos_for[src]:
+                continue
+            is_spine = src == spine[0]
+            if not is_spine:
                 combined_from += (
-                    f"\n            LEFT JOIN unrealized_eod u "
-                    f"ON u.day = {spine_alias}.day AND u.wallet = {spine_alias}.wallet")
-            if "global" in scopes_for[SRC_EOD]:
-                combined_cols.append("coalesce(u.unrealized_pnl_g, 0) AS unrealized_pnl_g")
-            if "token" in scopes_for[SRC_EOD]:
-                combined_cols.append("coalesce(u.unrealized_pnl_t, 0) AS unrealized_pnl_t")
-
-        if scopes_for[SRC_SIDED]:
-            if spine_alias != "s":
-                combined_from += (
-                    f"\n            LEFT JOIN sided_pnl s "
-                    f"ON s.day = {spine_alias}.day AND s.wallet = {spine_alias}.wallet")
-            if "global" in scopes_for[SRC_SIDED]:
-                combined_cols.append("coalesce(s.long_pnl_g, 0) AS long_pnl_g")
-                combined_cols.append("coalesce(s.short_pnl_g, 0) AS short_pnl_g")
-            if "token" in scopes_for[SRC_SIDED]:
-                combined_cols.append("coalesce(s.long_pnl_t, 0) AS long_pnl_t")
-                combined_cols.append("coalesce(s.short_pnl_t, 0) AS short_pnl_t")
-
-        if scopes_for[SRC_VOL]:
-            if spine_alias != "v":
-                combined_from += (
-                    f"\n            LEFT JOIN vol_trailing v "
-                    f"ON v.day = {spine_alias}.day AND v.wallet = {spine_alias}.wallet")
-            for col_name in [
-                "vol_token", "vol_usd",
-                "long_vol_token", "long_vol_usd",
-                "short_vol_token", "short_vol_usd",
-                "taker_buy_vol_token", "taker_buy_vol_usd",
-                "taker_sell_vol_token", "taker_sell_vol_usd",
-            ]:
-                if "global" in scopes_for[SRC_VOL]:
-                    combined_cols.append(f"coalesce(v.{col_name}_g, 0) AS {col_name}_g")
-                if "token" in scopes_for[SRC_VOL]:
-                    combined_cols.append(f"coalesce(v.{col_name}_t, 0) AS {col_name}_t")
-
-        if scopes_for[SRC_OI]:
-            if spine_alias != "o":
-                combined_from += (
-                    f"\n            LEFT JOIN oi_trailing o "
-                    f"ON o.day = {spine_alias}.day AND o.wallet = {spine_alias}.wallet")
-            for col_name in [
-                "avg_total_oi_token", "avg_long_oi_token", "avg_short_oi_token",
-                "avg_total_oi_usd",   "avg_long_oi_usd",   "avg_short_oi_usd",
-                "avg_roe_pct",
-            ]:
-                if "global" in scopes_for[SRC_OI]:
-                    combined_cols.append(f"coalesce(o.{col_name}_g, 0) AS {col_name}_g")
-                if "token" in scopes_for[SRC_OI]:
-                    combined_cols.append(f"coalesce(o.{col_name}_t, 0) AS {col_name}_t")
-
-        if scopes_for[SRC_FUNDING]:
-            if spine_alias != "f":
-                combined_from += (
-                    f"\n            LEFT JOIN funding_trailing f "
-                    f"ON f.day = {spine_alias}.day AND f.wallet = {spine_alias}.wallet")
-            if "global" in scopes_for[SRC_FUNDING]:
-                combined_cols.append("coalesce(f.funding_pnl_g, 0) AS funding_pnl_g")
-            if "token" in scopes_for[SRC_FUNDING]:
-                combined_cols.append("coalesce(f.funding_pnl_t, 0) AS funding_pnl_t")
+                    f"\n            LEFT JOIN {cte_name} {alias} "
+                    f"ON {alias}.day = {spine_alias}.day "
+                    f"AND {alias}.wallet = {spine_alias}.wallet")
+            for (s, L) in sorted(combos_for[src]):
+                for base in bases:
+                    srccol = f"{alias}.{base}_{s}" + (f"_l{L}" if windowed else "")
+                    tgt = f"{base}_{s}_l{L}"
+                    # daily_pnls is an Array (Sharpe input) and only exists when
+                    # trade_history is present — which makes it the spine — so
+                    # it's never coalesced. Numeric non-spine columns coalesce.
+                    if is_spine or base == "daily_pnls":
+                        combined_cols.append(f"{srccol} AS {tgt}")
+                    else:
+                        combined_cols.append(f"coalesce({srccol}, 0) AS {tgt}")
 
         ctes.append(
             "combined AS (\n"
@@ -953,13 +1079,15 @@ class SmartSelector:
                 continue
             if c.min is None and c.max is None:
                 continue
-            expr = self._metric_expr(c.metric, self._effective_scope(c.scope))
+            expr = self._metric_expr(
+                c.metric, self._effective_scope(c.scope), self._effective_lookback(c.lookback))
             if c.min is not None:
                 where_clauses.append(f"({expr}) >= {{sel_crit_min_{i}:Float64}}")
             if c.max is not None:
                 where_clauses.append(f"({expr}) <= {{sel_crit_max_{i}:Float64}}")
         where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
-        sort_expr = self._metric_expr(self.sort_by, self._sort_scope())
+        sort_expr = self._metric_expr(
+            self.sort_by, self._sort_scope(), self._sort_lookback())
 
         ctes.append(
             f"ranked AS (\n"
@@ -970,7 +1098,7 @@ class SmartSelector:
             f"        )"
         )
         ctes.append(
-            "smart_wallets AS (\n"
+            "own_wallets AS (\n"
             "            SELECT day, groupArray(wallet) AS wallets\n"
             "            FROM ranked\n"
             "            WHERE rk <= {sel_top_n:UInt32}\n"
@@ -978,17 +1106,14 @@ class SmartSelector:
             "        )"
         )
 
-        cte_sql = "WITH\n        " + ",\n        ".join(ctes)
-
         params: dict[str, Any] = {
             "sel_since":    since_dt,
             "sel_until":    until_dt,
-            "sel_lookback": self.lookback_days,
             "sel_top_n":    self.top_n,
         }
         # sel_token is required whenever ANY token-scoped projection is used
         # (whether from a criterion override or the overall scope).
-        token_used = any(sc == "token" for (_, sc) in needs.keys())
+        token_used = any(sc == "token" for (_, sc, _) in needs)
         if token_used:
             if not self.token:
                 raise ValueError("a criterion or the overall scope is 'token' but no token was provided")
@@ -1001,10 +1126,92 @@ class SmartSelector:
             if c.max is not None:
                 params[f"sel_crit_max_{i}"] = c.max
 
-        return cte_sql, "smart_wallets", params
+        return ctes, params
+
+    # ── composition driver ───────────────────────────────────────────────
+
+    @staticmethod
+    def _intersection_cte(name: str, operands: list[str]) -> str:
+        """`name(day, wallets)` = per-day arrayIntersect of >=2 operand CTEs.
+        INNER JOIN on day: a day missing from any operand drops out, which is
+        the correct AND semantic and matches the downstream day-join."""
+        arrays = ", ".join(f"t{i}.wallets" for i in range(len(operands)))
+        joins = "".join(
+            f"\n            INNER JOIN {operands[i]} t{i} ON t{i}.day = t0.day"
+            for i in range(1, len(operands))
+        )
+        return (
+            f"{name} AS (\n"
+            f"            SELECT t0.day AS day,\n"
+            f"                   arrayIntersect({arrays}) AS wallets\n"
+            f"            FROM {operands[0]} t0{joins}\n"
+            f"        )"
+        )
+
+    def _emit(self, since_dt: datetime, until_dt: datetime,
+              blocks: dict[str, str], params: dict[str, Any],
+              memo: dict[str, str], depth: int) -> str:
+        """Recursively emit this node's CTEs into `blocks` (post-order, so the
+        WITH list stays dependency-ordered) and return the node's final
+        wallet-array CTE name. Dedups identical subtrees by content hash."""
+        full_suffix = self._full_suffix()
+        if full_suffix in memo:
+            return memo[full_suffix]
+
+        child_finals = [
+            child._emit(since_dt, until_dt, blocks, params, memo, depth + 1)
+            for child in self.refs
+        ]
+
+        operands: list[str] = []
+        if self.criteria:
+            own_suffix = self._own_suffix()
+            own_ctes, own_params = self._build_node_ctes(since_dt, until_dt)
+            for cte in own_ctes:
+                sc = _suffix_sql(cte, own_suffix)
+                cname = sc.split(" AS", 1)[0].strip()
+                if cname not in blocks:
+                    blocks[cname] = sc
+            params.update(_suffix_params(own_params, own_suffix))
+            operands.append(f"own_wallets_{own_suffix}")
+        operands.extend(child_finals)
+
+        if not operands:  # guarded at parse time; defensive only
+            raise ValueError("filter node has neither criteria nor refs")
+        if len(operands) == 1:
+            final = operands[0]
+        else:
+            final = f"node_wallets_{full_suffix}"
+            if final not in blocks:
+                blocks[final] = self._intersection_cte(final, operands)
+
+        memo[full_suffix] = final
+        return final
+
+    def build_cte(
+        self, since_dt: datetime, until_dt: datetime,
+        final_name: str = "smart_wallets",
+    ) -> tuple[str, str, dict[str, Any]]:
+        """Returns (cte_sql, cte_name, params). The root is always wrapped as
+        a `<final_name>(day, wallets[])` CTE so downstream consumers are
+        unchanged. `final_name` lets the cache layer compose a live sub-CTE
+        (`smart_wallets_live`) alongside a cache read. A single node with no
+        refs emits behaviour identical to the pre-composition selector."""
+        blocks: dict[str, str] = {}
+        params: dict[str, Any] = {}
+        memo: dict[str, str] = {}
+        root_final = self._emit(since_dt, until_dt, blocks, params, memo, depth=0)
+        if root_final != final_name:
+            blocks[final_name] = (
+                f"{final_name} AS (\n"
+                f"            SELECT day, wallets FROM {root_final}\n"
+                "        )"
+            )
+        cte_sql = "WITH\n        " + ",\n        ".join(blocks.values())
+        return cte_sql, final_name, params
 
     def summary(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "lookback": self.lookback_days,
             "top_n": self.top_n,
             "scope": self.scope,
@@ -1020,3 +1227,6 @@ class SmartSelector:
                 for c in self.criteria
             ],
         }
+        if self.refs:
+            out["refs"] = [r.summary() for r in self.refs]
+        return out

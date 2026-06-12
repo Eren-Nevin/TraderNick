@@ -5,7 +5,7 @@ import type {
   OpenInterestRow,
   VolumeBucket
 } from '$lib/api';
-import { defaultSmartSelectorState, sanitizeSmartSelectorState } from './smartSelector';
+import { sanitizeSmartSelectorState } from './smartSelector';
 
 export type MAType = 'sma' | 'ema' | 'wma';
 
@@ -1522,10 +1522,14 @@ export type ChartInstance = {
    *  The Long/Short ratio mode ignores this — it's mathematically the same
    *  in either unit, since longs and shorts mark at the same price. */
   oiUnit?: 'usd' | 'token';
-  /** hl_smart_oi only: full wallet-selection state — lookback + top_n +
-   *  scope + sort metric + list of (metric, min, max) criteria. Mirrors
-   *  the `selector` JSON the backend expects 1:1. See
-   *  $lib/components/charts/smartSelector for the schema and defaults. */
+  /** hl_smart_oi only: ids of the saved wallet filters this chart draws —
+   *  one OI series group per filter. Filters live in the filters store
+   *  (localStorage) and are inline-expanded into the `filter=` param at
+   *  fetch time. See $lib/components/charts/filters. */
+  filterIds?: string[];
+  /** @deprecated hl_smart_oi legacy inline selector. Charts now reference
+   *  saved filters via `filterIds`; this is read once on load and migrated
+   *  into an auto-created saved filter, then dropped. */
   smartSelector?: import('./smartSelector').SmartSelectorState;
   /** hl_smart_oi only: when true, overlay a secondary-axis line showing
    *  the number of wallets that passed the selector each day. Lets the
@@ -2009,7 +2013,9 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
   }
   // Smart-wallet selector — legacy smartPnl* fields are dropped on load
   // (hard cut). sanitizeSmartSelectorState handles missing / invalid
-  // shapes by substituting defaults.
+  // shapes by substituting defaults. (Overlays keep their own inline
+  // selector; chart instances use saved-filter references — see
+  // DynamicChartLayout's per-instance hydration.)
   if (r.smartSelector !== undefined) {
     o.smartSelector = sanitizeSmartSelectorState(r.smartSelector);
   }
@@ -2179,7 +2185,9 @@ export function newChartInstance(
     base.exchange = 'hl';
     base.oiHlDisplay = 'total';
     base.oiUnit = 'usd';
-    base.smartSelector = defaultSmartSelectorState();
+    // No filters by default — the user picks saved filters in chart settings
+    // (or creates one on the Filters page). One OI series renders per filter.
+    base.filterIds = [];
   }
   if (kind === 'ls') {
     base.exchange = 'binance';

@@ -5,7 +5,7 @@ import type { RequestHandler } from './$types';
 // Companion proxy for /hyperliquid/smart_oi — returns the wallet list
 // the selector picked on a specific day, for the wallet-count line's
 // click-through dialog.
-const PASSTHROUGH = ['token', 'day', 'selector'];
+const PASSTHROUGH = ['token', 'day', 'selector', 'filter'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

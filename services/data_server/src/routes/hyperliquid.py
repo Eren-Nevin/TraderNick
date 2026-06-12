@@ -20,6 +20,7 @@ from clickhouse import client
 from routes.ohlcv import INTERVAL_SECONDS
 from throttle import throttled
 from wallets.smart_selector import SmartSelector
+from wallets import cache as wallets_cache
 
 bp = Blueprint("hyperliquid")
 
@@ -369,7 +370,9 @@ async def smart_oi(request):
     since = request.args.get("since")
     until = request.args.get("until")
     limit = int(request.args.get("limit", "10000"))
-    selector_raw = request.args.get("selector")
+    # `filter` is the composable (possibly nested) form; `selector` is the
+    # legacy flat form. from_json handles both — a flat object just has no refs.
+    selector_raw = request.args.get("filter") or request.args.get("selector")
 
     if not token:
         return response.json({"error": "missing token"}, status=400)
@@ -404,7 +407,9 @@ async def smart_oi(request):
         oi_amount_expr = "argMax(amount, time)"
         oi_size_expr   = "argMax(size,   time)"
 
-    selector_cte_sql, smart_cte_name, selector_params = selector.build_cte(since_dt, until_dt)
+    ch = await client()
+    selector_cte_sql, smart_cte_name, selector_params = await wallets_cache.resolve(
+        ch, selector, token, since_dt, until_dt)
     params: dict = {
         "seconds": seconds, "token": token,
         "since": since_dt, "until": until_dt, "limit": limit,
@@ -489,7 +494,7 @@ async def smart_wallets(request):
     """
     token = request.args.get("token")
     day_arg = request.args.get("day")
-    selector_raw = request.args.get("selector")
+    selector_raw = request.args.get("filter") or request.args.get("selector")
     if not day_arg:
         return response.json({"error": "missing day (YYYY-MM-DD)"}, status=400)
     try:
@@ -506,7 +511,9 @@ async def smart_wallets(request):
     except ValueError as e:
         return response.json({"error": str(e)}, status=400)
 
-    selector_cte_sql, smart_cte_name, selector_params = selector.build_cte(since_dt, until_dt)
+    ch = await client()
+    selector_cte_sql, smart_cte_name, selector_params = await wallets_cache.resolve(
+        ch, selector, token, since_dt, until_dt)
     params: dict = {**selector_params, "day": day_dt.date()}
 
     # Pull the wallets array for the requested day. groupArray inside

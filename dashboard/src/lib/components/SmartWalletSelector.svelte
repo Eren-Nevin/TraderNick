@@ -14,11 +14,16 @@
     onChange,
     /** Display only — when set, used to label "Token" scope option as
      *  "Token (BTC)" so the user knows which token is being scoped to. */
-    tokenLabel = ''
+    tokenLabel = '',
+    /** Hide the legacy server-side preset load/save/manage UI. Set false
+     *  when embedding inside the first-class Filters builder, where saving
+     *  is owned by the filters store, not the smart_selector_presets table. */
+    showPresets = true
   }: {
     value?: SmartSelectorState;
     onChange: (v: SmartSelectorState) => void;
     tokenLabel?: string;
+    showPresets?: boolean;
   } = $props();
 
   // When exactly one criterion is active (not disabled), the sort metric
@@ -170,7 +175,7 @@
   // Lazy-load on first render. $effect runs after mount; the list is
   // small and the dropdown shows "Loading…" until it lands.
   $effect(() => {
-    if (presets.length === 0 && !presetsLoading && !presetsError) {
+    if (showPresets && presets.length === 0 && !presetsLoading && !presetsError) {
       loadPresetList();
     }
   });
@@ -208,6 +213,7 @@
     <!-- Saved presets — load + save + delete. Pushed to the right so
          the per-chart knobs stay grouped on the left. -->
     <span class="flex-1"></span>
+    {#if showPresets}
     <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Preset</span>
     <select
       onchange={(e) => {
@@ -223,17 +229,13 @@
         <option value={p.name}>{p.name}</option>
       {/each}
     </select>
-    {#if value.criteria.length > 0}
-      <!-- Per-preset delete: only enabled when a preset is currently
-           applied (loosely — we just need a name in scope). Surface as
-           a small ✕ next to the dropdown matching by current selection. -->
-    {/if}
     <button
       type="button"
       onclick={() => { saveOpen = !saveOpen; if (saveOpen) saveName = ''; }}
       class="bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded px-2 py-0.5 text-zinc-200 text-[11px]"
       title="Save the current criteria group as a named preset"
     >Save</button>
+    {/if}
     <button
       type="button"
       onclick={() => {
@@ -247,7 +249,7 @@
       class="bg-zinc-800 hover:bg-zinc-700 disabled:bg-zinc-900 disabled:text-zinc-600 border border-zinc-700 rounded px-2 py-0.5 text-zinc-200 text-[11px]"
       title="Remove all criteria (lookback / scope / sort stay)"
     >Reset</button>
-    {#if presets.length > 0}
+    {#if showPresets && presets.length > 0}
       <button
         type="button"
         onclick={() => (manageOpen = !manageOpen)}
@@ -358,6 +360,18 @@
           <option value="global">Global</option>
           <option value="token">{tokenLabel ? `Token (${tokenLabel})` : 'Token'}</option>
         </select>
+        <input
+          type="number" min="1" max="180" step="1"
+          value={c.lookback ?? ''}
+          placeholder={`${value.lookback}d`}
+          onchange={(e) => {
+            const n = numOrUndef((e.target as HTMLInputElement).value);
+            setCriterion(i, { lookback: n === undefined ? undefined : Math.round(n) });
+          }}
+          class="w-12 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 text-right ml-1"
+          title={`Lookback (days) for this criterion. Blank = inherit the selector's ${value.lookback}d.`}
+        />
+        <span class="text-zinc-500 text-[11px]">d</span>
         <label class="flex items-center gap-1 cursor-pointer ml-1">
           <input
             type="radio"
