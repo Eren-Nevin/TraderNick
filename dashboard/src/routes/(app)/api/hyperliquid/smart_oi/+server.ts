@@ -7,8 +7,9 @@ const PASSTHROUGH = [
   // Wallet selection — one JSON-encoded blob defined by smart_selector.py.
   // The legacy per-knob params (pnl_lookback_days, pnl_floor_usd, top_n,
   // leaderboard_scope, pnl_filter) were dropped along with the route's
-  // backward-compat layer.
-  'selector'
+  // backward-compat layer. `filter` is the composable (nested-refs) form;
+  // `selector` is the flat legacy form — the backend accepts either.
+  'selector', 'filter'
 ];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {

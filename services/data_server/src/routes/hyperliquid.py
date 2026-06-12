@@ -369,7 +369,9 @@ async def smart_oi(request):
     since = request.args.get("since")
     until = request.args.get("until")
     limit = int(request.args.get("limit", "10000"))
-    selector_raw = request.args.get("selector")
+    # `filter` is the composable (possibly nested) form; `selector` is the
+    # legacy flat form. from_json handles both — a flat object just has no refs.
+    selector_raw = request.args.get("filter") or request.args.get("selector")
 
     if not token:
         return response.json({"error": "missing token"}, status=400)
@@ -489,7 +491,7 @@ async def smart_wallets(request):
     """
     token = request.args.get("token")
     day_arg = request.args.get("day")
-    selector_raw = request.args.get("selector")
+    selector_raw = request.args.get("filter") or request.args.get("selector")
     if not day_arg:
         return response.json({"error": "missing day (YYYY-MM-DD)"}, status=400)
     try:

@@ -29,10 +29,51 @@ column suffix should go). The selector wires the rest.
 """
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Literal
+
+# Composable filters: a node may reference child filter nodes (`refs`). Guard
+# against pathological nesting / fan-out from a hand-crafted `filter` param.
+MAX_FILTER_DEPTH = 6
+MAX_FILTER_NODES = 64
+
+# Every per-node CTE name and parameter key is suffixed with the node's
+# content hash so multiple filter nodes can coexist in one statement without
+# colliding. `sel_token` is intentionally excluded — the chart token is
+# request-global, so a single shared param is correct (and shrinks the set).
+# Word boundaries keep `sided_pnl` from matching inside `sided_pnl_daily`,
+# `trailing` inside `vol_trailing`, etc.; longest-first ordering is belt-and-
+# suspenders on top of that.
+_SUFFIXABLE_NAMES = sorted([
+    "data_min", "target_days", "daily_per_wallet", "trailing",
+    "unrealized_eod", "sided_pnl_daily", "sided_pnl",
+    "funding_per_wallet_day", "funding_trailing",
+    "vol_per_wallet_day", "vol_trailing",
+    "oi_snapshots", "oi_per_bucket", "oi_trailing",
+    "combined", "ranked", "own_wallets",
+    "sel_since", "sel_until", "sel_lookback", "sel_top_n",
+], key=len, reverse=True)
+_SUFFIX_RE = re.compile(
+    r"\b(" + "|".join(_SUFFIXABLE_NAMES)
+    + r"|sel_crit_min_\d+|sel_crit_max_\d+)\b"
+)
+
+
+def _suffix_sql(text: str, suffix: str) -> str:
+    """Append `_{suffix}` to every per-node CTE name / param placeholder."""
+    return _SUFFIX_RE.sub(lambda m: m.group(0) + "_" + suffix, text)
+
+
+def _suffix_params(params: dict[str, Any], suffix: str) -> dict[str, Any]:
+    """Suffix every param key except the shared, request-global `sel_token`."""
+    out: dict[str, Any] = {}
+    for k, v in params.items():
+        out[k if k == "sel_token" else f"{k}_{suffix}"] = v
+    return out
 
 
 SRC_TRADE_HISTORY = "trade_history"
@@ -272,6 +313,10 @@ class SmartSelector:
     sort_by: str
     criteria: list[SmartCriterion] = field(default_factory=list)
     token: str | None = None
+    # Child filter nodes AND-ed (per-day set-intersected) into this node's own
+    # ranked result. A node with `criteria == []` contributes no own ranking
+    # and is purely the intersection of its refs. See build_cte / _emit.
+    refs: list["SmartSelector"] = field(default_factory=list)
 
     # ── parsing / validation ────────────────────────────────────────────
 
@@ -285,23 +330,55 @@ class SmartSelector:
             raise ValueError(f"selector is not valid JSON: {e}")
         if not isinstance(obj, dict):
             raise ValueError("selector must be a JSON object")
+        return cls._from_obj(obj, token, depth=0, counter=[0])
 
-        lookback = obj.get("lookback")
-        if not isinstance(lookback, int) or not (1 <= lookback <= 180):
-            raise ValueError("selector.lookback must be int in [1, 180]")
-        top_n = obj.get("top_n")
-        if not isinstance(top_n, int) or not (1 <= top_n <= 500):
-            raise ValueError("selector.top_n must be int in [1, 500]")
-        scope = obj.get("scope", "global")
-        if scope not in ("global", "token"):
-            raise ValueError("selector.scope must be 'global' or 'token'")
-        sort_by = obj.get("sort_by")
-        if not isinstance(sort_by, str) or sort_by not in METRIC_REGISTRY:
-            raise ValueError(f"selector.sort_by must be one of: {list(METRIC_REGISTRY)}")
+    @classmethod
+    def _from_obj(cls, obj: Any, token: str | None,
+                  depth: int, counter: list[int]) -> "SmartSelector":
+        """Parse one (possibly nested) filter node. `counter` is a shared
+        single-element list used as a mutable node count across the tree."""
+        if not isinstance(obj, dict):
+            raise ValueError("selector node must be a JSON object")
+        if depth > MAX_FILTER_DEPTH:
+            raise ValueError(f"selector nesting exceeds max depth {MAX_FILTER_DEPTH}")
+        counter[0] += 1
+        if counter[0] > MAX_FILTER_NODES:
+            raise ValueError(f"selector exceeds max node count {MAX_FILTER_NODES}")
 
         raw_criteria = obj.get("criteria", [])
         if not isinstance(raw_criteria, list):
             raise ValueError("selector.criteria must be a JSON array")
+        raw_refs = obj.get("refs", [])
+        if not isinstance(raw_refs, list):
+            raise ValueError("selector.refs must be a JSON array")
+        has_criteria = len(raw_criteria) > 0
+        if not has_criteria and not raw_refs:
+            raise ValueError("selector node must have at least one criterion or ref")
+
+        # lookback / top_n / sort_by govern this node's OWN ranking. They are
+        # only meaningful when the node has criteria; a pure-composite node
+        # (refs only) ignores them, so we accept defaults there rather than
+        # forcing the client to send dummy values.
+        lookback = obj.get("lookback")
+        if not isinstance(lookback, int) or not (1 <= lookback <= 180):
+            if has_criteria:
+                raise ValueError("selector.lookback must be int in [1, 180]")
+            lookback = 1
+        top_n = obj.get("top_n")
+        if not isinstance(top_n, int) or not (1 <= top_n <= 500):
+            if has_criteria:
+                raise ValueError("selector.top_n must be int in [1, 500]")
+            top_n = 1
+        scope = obj.get("scope", "global")
+        if scope not in ("global", "token"):
+            raise ValueError("selector.scope must be 'global' or 'token'")
+        sort_by = obj.get("sort_by")
+        if has_criteria:
+            if not isinstance(sort_by, str) or sort_by not in METRIC_REGISTRY:
+                raise ValueError(f"selector.sort_by must be one of: {list(METRIC_REGISTRY)}")
+        elif not (isinstance(sort_by, str) and sort_by in METRIC_REGISTRY):
+            sort_by = "realized_pnl"  # unused; keep the dataclass field valid
+
         criteria: list[SmartCriterion] = []
         for i, c in enumerate(raw_criteria):
             if not isinstance(c, dict):
@@ -329,6 +406,8 @@ class SmartSelector:
                 disabled=cdisabled,
             ))
 
+        refs = [cls._from_obj(r, token, depth + 1, counter) for r in raw_refs]
+
         return cls(
             lookback_days=lookback,
             top_n=top_n,
@@ -336,7 +415,45 @@ class SmartSelector:
             sort_by=sort_by,
             criteria=criteria,
             token=token,
+            refs=refs,
         )
+
+    # ── content hashing (per-node dedup + cache key) ─────────────────────
+
+    def _own_canonical(self) -> dict[str, Any]:
+        """Canonical form of this node's OWN ranking config (excludes refs).
+        Mirrors the FE smartSelectorCacheKey so the two layers agree."""
+        return {
+            "lookback": self.lookback_days,
+            "top_n": self.top_n,
+            "scope": self.scope,
+            "sort_by": self.sort_by,
+            "criteria": [
+                {"metric": c.metric, "min": c.min, "max": c.max,
+                 "scope": c.scope, "disabled": c.disabled}
+                for c in self.criteria
+            ],
+        }
+
+    def _full_canonical(self) -> dict[str, Any]:
+        """Own config plus refs (children sorted so order doesn't matter)."""
+        d = self._own_canonical()
+        d["refs"] = sorted(
+            (c._full_canonical() for c in self.refs),
+            key=lambda x: json.dumps(x, sort_keys=True),
+        )
+        return d
+
+    @staticmethod
+    def _suffix_of(canonical: dict[str, Any]) -> str:
+        raw = json.dumps(canonical, sort_keys=True, separators=(",", ":"))
+        return "n" + hashlib.sha1(raw.encode()).hexdigest()[:10]
+
+    def _own_suffix(self) -> str:
+        return self._suffix_of(self._own_canonical())
+
+    def _full_suffix(self) -> str:
+        return self._suffix_of(self._full_canonical())
 
     # ── scope resolution ────────────────────────────────────────────────
 
@@ -381,10 +498,13 @@ class SmartSelector:
 
     # ── CTE emission ────────────────────────────────────────────────────
 
-    def build_cte(
+    def _build_node_ctes(
         self, since_dt: datetime, until_dt: datetime
-    ) -> tuple[str, str, dict[str, Any]]:
-        """Returns (cte_sql, cte_name, params). See module docstring."""
+    ) -> tuple[list[str], dict[str, Any]]:
+        """Emit this node's OWN ranking CTE chain (unsuffixed). Returns
+        (ctes, params); the final CTE is `own_wallets(day, wallets[])`. The
+        driver `build_cte` suffixes names/params per node and composes the
+        intersection with child refs. Only called when the node has criteria."""
         needs = self._needs()
         # Per-source presence of each scope
         scopes_for: dict[str, set[str]] = {
@@ -970,15 +1090,13 @@ class SmartSelector:
             f"        )"
         )
         ctes.append(
-            "smart_wallets AS (\n"
+            "own_wallets AS (\n"
             "            SELECT day, groupArray(wallet) AS wallets\n"
             "            FROM ranked\n"
             "            WHERE rk <= {sel_top_n:UInt32}\n"
             "            GROUP BY day\n"
             "        )"
         )
-
-        cte_sql = "WITH\n        " + ",\n        ".join(ctes)
 
         params: dict[str, Any] = {
             "sel_since":    since_dt,
@@ -1001,10 +1119,90 @@ class SmartSelector:
             if c.max is not None:
                 params[f"sel_crit_max_{i}"] = c.max
 
+        return ctes, params
+
+    # ── composition driver ───────────────────────────────────────────────
+
+    @staticmethod
+    def _intersection_cte(name: str, operands: list[str]) -> str:
+        """`name(day, wallets)` = per-day arrayIntersect of >=2 operand CTEs.
+        INNER JOIN on day: a day missing from any operand drops out, which is
+        the correct AND semantic and matches the downstream day-join."""
+        arrays = ", ".join(f"t{i}.wallets" for i in range(len(operands)))
+        joins = "".join(
+            f"\n            INNER JOIN {operands[i]} t{i} ON t{i}.day = t0.day"
+            for i in range(1, len(operands))
+        )
+        return (
+            f"{name} AS (\n"
+            f"            SELECT t0.day AS day,\n"
+            f"                   arrayIntersect({arrays}) AS wallets\n"
+            f"            FROM {operands[0]} t0{joins}\n"
+            f"        )"
+        )
+
+    def _emit(self, since_dt: datetime, until_dt: datetime,
+              blocks: dict[str, str], params: dict[str, Any],
+              memo: dict[str, str], depth: int) -> str:
+        """Recursively emit this node's CTEs into `blocks` (post-order, so the
+        WITH list stays dependency-ordered) and return the node's final
+        wallet-array CTE name. Dedups identical subtrees by content hash."""
+        full_suffix = self._full_suffix()
+        if full_suffix in memo:
+            return memo[full_suffix]
+
+        child_finals = [
+            child._emit(since_dt, until_dt, blocks, params, memo, depth + 1)
+            for child in self.refs
+        ]
+
+        operands: list[str] = []
+        if self.criteria:
+            own_suffix = self._own_suffix()
+            own_ctes, own_params = self._build_node_ctes(since_dt, until_dt)
+            for cte in own_ctes:
+                sc = _suffix_sql(cte, own_suffix)
+                cname = sc.split(" AS", 1)[0].strip()
+                if cname not in blocks:
+                    blocks[cname] = sc
+            params.update(_suffix_params(own_params, own_suffix))
+            operands.append(f"own_wallets_{own_suffix}")
+        operands.extend(child_finals)
+
+        if not operands:  # guarded at parse time; defensive only
+            raise ValueError("filter node has neither criteria nor refs")
+        if len(operands) == 1:
+            final = operands[0]
+        else:
+            final = f"node_wallets_{full_suffix}"
+            if final not in blocks:
+                blocks[final] = self._intersection_cte(final, operands)
+
+        memo[full_suffix] = final
+        return final
+
+    def build_cte(
+        self, since_dt: datetime, until_dt: datetime
+    ) -> tuple[str, str, dict[str, Any]]:
+        """Returns (cte_sql, cte_name, params). The root is always wrapped as
+        a `smart_wallets(day, wallets[])` CTE so downstream consumers are
+        unchanged. A single node with no refs emits behaviour identical to the
+        pre-composition selector (just suffixed names + an inlined wrapper)."""
+        blocks: dict[str, str] = {}
+        params: dict[str, Any] = {}
+        memo: dict[str, str] = {}
+        root_final = self._emit(since_dt, until_dt, blocks, params, memo, depth=0)
+        if root_final != "smart_wallets":
+            blocks["smart_wallets"] = (
+                "smart_wallets AS (\n"
+                f"            SELECT day, wallets FROM {root_final}\n"
+                "        )"
+            )
+        cte_sql = "WITH\n        " + ",\n        ".join(blocks.values())
         return cte_sql, "smart_wallets", params
 
     def summary(self) -> dict[str, Any]:
-        return {
+        out: dict[str, Any] = {
             "lookback": self.lookback_days,
             "top_n": self.top_n,
             "scope": self.scope,
@@ -1020,3 +1218,6 @@ class SmartSelector:
                 for c in self.criteria
             ],
         }
+        if self.refs:
+            out["refs"] = [r.summary() for r in self.refs]
+        return out

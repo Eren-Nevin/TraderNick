@@ -25,6 +25,7 @@
     type MAConfig
   } from '$lib/components/charts/config';
   import { sanitizeSmartSelectorState } from '$lib/components/charts/smartSelector';
+  import { filtersStore } from '$lib/stores/filters.svelte';
   import type { ChainGroup, Interval, TokenGroup, TransferStream } from '$lib/api';
   import type { View } from '$lib/chart-zoom';
 
@@ -839,18 +840,28 @@
           inst.hlSelectedVault = typeof r.hlSelectedVault === 'string' ? r.hlSelectedVault : '';
         }
         if (inst.kind === 'hl_smart_oi') {
-          // Shared OI selectors (display + unit) plus the criteria-based
-          // wallet selector. Legacy smartPnl* fields are dropped on load
-          // (hard cut) — sanitizeSmartSelectorState substitutes defaults
-          // for any layout that doesn't carry a `smartSelector`.
+          // Shared OI selectors (display + unit) plus saved-filter references
+          // (one OI series per filter). A legacy inline `smartSelector` is
+          // migrated into an auto-created saved filter so existing charts
+          // keep working after the saved-filters-only switch.
           inst.exchange = 'hl';
           inst.oiHlDisplay = (r.oiHlDisplay === 'long' || r.oiHlDisplay === 'short'
             || r.oiHlDisplay === 'long_short' || r.oiHlDisplay === 'long_to_short'
-            || r.oiHlDisplay === 'net_pct')
+            || r.oiHlDisplay === 'net' || r.oiHlDisplay === 'net_pct')
             ? r.oiHlDisplay : 'total';
           inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
-          inst.smartSelector = sanitizeSmartSelectorState(r.smartSelector);
           inst.smartShowWalletCount = r.smartShowWalletCount === true;
+          filtersStore.hydrate();
+          if (Array.isArray(r.filterIds)) {
+            inst.filterIds = (r.filterIds as unknown[]).filter(
+              (x): x is string => typeof x === 'string',
+            );
+          } else if (r.smartSelector !== undefined) {
+            const sel = sanitizeSmartSelectorState(r.smartSelector);
+            inst.filterIds = [filtersStore.findOrCreateFromSelector(sel)];
+          } else {
+            inst.filterIds = [];
+          }
         }
       }
       // Lido chart kinds need a `chain` but no token / pool. L1 kinds are

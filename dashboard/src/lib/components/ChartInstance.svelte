@@ -115,12 +115,9 @@
   } from '$lib/components/charts/config';
   import { fetchOverlayData, type OverlayPoint } from '$lib/components/charts/overlay-fetch';
   import AddOverlayDialog from '$lib/components/AddOverlayDialog.svelte';
-  import SmartWalletSelector from '$lib/components/SmartWalletSelector.svelte';
   import SmartWalletsDialog from '$lib/components/SmartWalletsDialog.svelte';
-  import {
-    defaultSmartSelectorState,
-    smartSelectorCacheKey
-  } from '$lib/components/charts/smartSelector';
+  import { filtersStore } from '$lib/stores/filters.svelte';
+  import { expandFilter, filterWireKey, type FilterWire } from '$lib/components/charts/filters';
   import Pencil from '@lucide/svelte/icons/pencil';
   import PlusCircle from '@lucide/svelte/icons/plus-circle';
   import type { View } from '$lib/chart-zoom';
@@ -752,12 +749,16 @@
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
     }
     if (instance.kind === 'hl_smart_oi') {
-      // The smart-money OI series materially changes when any selector
-      // knob moves — fold the full selector state into the cache key.
-      const selKey = smartSelectorCacheKey(
-        instance.smartSelector ?? defaultSmartSelectorState()
-      );
-      return `${instance.kind}|${instance.token}|${instance.interval}|${selKey}`;
+      // One series per referenced filter — fold each filter's fully-expanded
+      // wire hash into the key so editing a filter (or anything it
+      // transitively references) busts the cache and re-fetches.
+      const key = (instance.filterIds ?? [])
+        .map((id) => {
+          const w = filtersStore.getById(id) ? expandFilter(id, filtersStore.getById) : null;
+          return w ? filterWireKey(w) : `x:${id}`;
+        })
+        .join(',');
+      return `${instance.kind}|${instance.token}|${instance.interval}|${key}`;
     }
     return `${instance.kind}|${instance.token}|${instance.interval}`;
   }
@@ -766,7 +767,7 @@
     // Drag-reorder guard: svelte-dnd-action briefly replaces the dragged
     // item with a "shadow" placeholder that lacks the chart's config
     // fields. Without this guard, loadKey() returns a different value
-    // (e.g. instance.smartSelector becomes undefined → defaults kick
+    // (e.g. instance.filterIds becomes undefined → defaults kick
     // in) and the effect re-fetches mid-drag, plus once more after the
     // drop when the real instance returns. The shadow object has the
     // SHADOW_ITEM_MARKER_PROPERTY_NAME flag; skip the effect while it's
@@ -2343,13 +2344,23 @@
           }
           break;
         case 'hl_smart_oi': {
-          // Same payload shape as /oi_split (long/short/total in token + USD)
-          // but filtered to the rolling-PnL leaderboard. Smart-money params
-          // ride as extra query string entries.
+          // ONE request for ONE effective wallet set. Multiple selected filters
+          // are AND-combined client-side into a single composite wire
+          // (smartCombinedWire); the backend intersects them per day and
+          // returns the same /oi_split-shaped payload as a single filter.
+          const wire = smartCombinedWire;
+          if (wire === null || wire === 'broken') {
+            // Nothing selected, or a selected filter is missing/broken — render
+            // the empty placeholder rather than a stale or partial series.
+            data = [] as unknown as AnyDatum[];
+            since = sinceIso; until = untilIso;
+            loadedKey = loadKey();
+            localView = defaultView(sinceIso, untilIso);
+            loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+            return;
+          }
           const sQs = new URLSearchParams(baseQS);
-          sQs.set('selector', JSON.stringify(
-            instance.smartSelector ?? defaultSmartSelectorState()
-          ));
+          sQs.set('filter', JSON.stringify(wire));
           url = `/api/hyperliquid/smart_oi?${sQs}`;
           pickArr = (b) => {
             const rows = (b.series ?? []) as Array<Record<string, number>>;
@@ -3362,6 +3373,32 @@
   // dollar notional (`*_oi_value` on HL, `open_interest_value` on Binance)
   // vs token amount (`*_oi`, `open_interest`).
   let oiIsToken = $derived((instance.oiUnit ?? 'usd') === 'token');
+
+  // hl_smart_oi: the chart shows ONE OI series for ONE effective wallet set.
+  // When several saved filters are selected, they're AND-combined on the fly
+  // into a single composite (empty-criteria node intersecting each filter's
+  // wire) so the user can test combinations without first saving a combined
+  // filter. Returns null if nothing is selected, or 'broken' if any selected
+  // filter is missing / unresolvable (we never silently drop a constraint).
+  let smartCombinedWire = $derived.by((): FilterWire | null | 'broken' => {
+    if (instance.kind !== 'hl_smart_oi') return null;
+    const ids = instance.filterIds ?? [];
+    if (ids.length === 0) return null;
+    const wires = ids.map((id) =>
+      filtersStore.getById(id) ? expandFilter(id, filtersStore.getById) : null,
+    );
+    if (wires.some((w) => w === null)) return 'broken';
+    const valid = wires as FilterWire[];
+    if (valid.length === 1) return valid[0];
+    // Combine: an empty-criteria composite whose refs are the selected
+    // filters — the backend intersects them per day (mirrors a hand-built
+    // AND filter). lookback/top_n are unused for an empty-criteria node.
+    return { lookback: 1, top_n: 1, scope: 'token', sort_by: 'realized_pnl', criteria: [], refs: valid };
+  });
+  let smartHasValidFilter = $derived(
+    smartCombinedWire !== null && smartCombinedWire !== 'broken',
+  );
+
   let oiHlPrimary = $derived.by(() => {
     // hl_smart_oi is HL-only with no exchange field — treat it as HL.
     if (instance.kind !== 'hl_smart_oi'
@@ -3403,7 +3440,7 @@
     if (!instance.showPoint) return [...cumulativeLines];
     // hl_smart_oi is HL-only by construction (no exchange field on the
     // instance), so treat it as `ex === 'hl'` for every mode branch below
-    // — otherwise the dropdown silently falls through to the Binance shape.
+    // — it renders one OI series for the (possibly combined) wallet set.
     const ex = instance.kind === 'hl_smart_oi'
       ? 'hl'
       : (instance.exchange ?? 'binance');
@@ -3451,11 +3488,8 @@
       base = [...OI_LINES, ...cumulativeLines];
     }
     // Smart-money OI: optional "wallets passing filter" line on the
-    // secondary (right-side) axis. Independent scale so it doesn't fight
-    // the OI line for vertical space. Rendered as a short-dashed amber
-    // line so it reads as supplementary context — the OI lines are the
-    // primary read; the wallet count is a "is the filter too tight?"
-    // sanity check. Integer formatter via formatY2.
+    // secondary (right-side) axis — the count of wallets in the (combined)
+    // set each day. Short-dashed amber so it reads as supplementary context.
     if (instance.kind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)) {
       base.push({
         key: 'wallet_count', label: 'Wallets', color: '#fbbf24',
@@ -3703,11 +3737,14 @@
     if (walletsFetchCtl) walletsFetchCtl.abort();
     walletsFetchCtl = new AbortController();
     try {
-      const selector = JSON.stringify(instance.smartSelector ?? {});
+      // Wallet-count click → the day's wallets for the chart's effective
+      // (combined) filter set.
+      const wire = smartCombinedWire;
+      if (wire === null || wire === 'broken') throw new Error('no resolvable filter for this chart');
       const qs = new URLSearchParams({
         token: instance.token ?? '',
         day: dayIso,
-        selector,
+        filter: JSON.stringify(wire),
       });
       const res = await fetch(`/api/hyperliquid/smart_wallets?${qs}`, { signal: walletsFetchCtl.signal });
       if (!res.ok) throw new Error(`smart_wallets ${res.status}`);
@@ -5289,25 +5326,43 @@
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
       {#if instance.kind === 'hl_smart_oi'}
-        <!-- Wallet-selection knobs live in their own widget so any future
-             smart-wallet chart can drop the same component in. The Apply
-             button explicitly triggers a refetch so the user can compose
-             a multi-criterion query without hitting the server on every
-             keystroke (number inputs that lose focus already cost a
-             rebuild — Apply gates the actual chart update). -->
-        <div class="basis-full flex items-start gap-2">
-          <div class="flex-1">
-            <SmartWalletSelector
-              value={instance.smartSelector ?? defaultSmartSelectorState()}
-              onChange={(v) => (instance.smartSelector = v)}
-              tokenLabel={instance.token ?? ''}
-            />
+        <!-- Saved-filter picker: selecting several AND-combines them into one
+             effective wallet set (per-day intersection) and the chart shows a
+             single OI series for it. Filters are created / edited on the
+             Filters page; editing one re-fetches this chart automatically. -->
+        <div class="basis-full flex flex-col gap-1.5 rounded-md border border-zinc-700 bg-zinc-900/40 p-2.5 text-xs">
+          <div class="flex items-center gap-2">
+            <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Filters</span>
+            <span class="w-px h-4 bg-zinc-800"></span>
+            <span class="text-zinc-500">multiple = AND (intersection)</span>
+            <span class="flex-1"></span>
+            <a
+              href="/filters"
+              class="text-zinc-400 hover:text-zinc-100 underline decoration-dotted"
+              title="Create or edit filters"
+            >Manage filters →</a>
           </div>
-          <button
-            type="button"
-            onclick={() => reload()}
-            class="self-start mt-1 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-md px-3 py-1 text-xs text-zinc-100"
-          >Apply</button>
+          {#if filtersStore.filters.length === 0}
+            <div class="text-zinc-500">
+              No saved filters yet. <a href="/filters" class="underline decoration-dotted hover:text-zinc-200">Create one</a> to plot smart-money OI.
+            </div>
+          {:else}
+            <div class="flex flex-wrap gap-1.5">
+              {#each filtersStore.filters as f (f.id)}
+                {@const on = (instance.filterIds ?? []).includes(f.id)}
+                <button
+                  type="button"
+                  onclick={() => {
+                    const cur = instance.filterIds ?? [];
+                    instance.filterIds = on ? cur.filter((x) => x !== f.id) : [...cur, f.id];
+                  }}
+                  class="rounded border px-2 py-1 transition-colors {on
+                    ? 'border-emerald-600 bg-emerald-700/30 text-emerald-200'
+                    : 'border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800'}"
+                >{on ? '✓ ' : ''}{f.name}</button>
+              {/each}
+            </div>
+          {/if}
         </div>
         <label
           class="flex items-center gap-1.5 text-zinc-300 cursor-pointer"
@@ -5703,7 +5758,15 @@
       </div>
     {:else if data.length === 0}
       <div class="p-4 text-sm text-zinc-400">
-        {#if instance.token && instance.chain && (instance.kind === 'transfer' || instance.kind === 'exchange_flow')}
+        {#if instance.kind === 'hl_smart_oi' && !smartHasValidFilter}
+          {#if (instance.filterIds ?? []).length === 0}
+            No filter selected. Pick one or more saved filters in this chart's
+            settings, or <a href="/filters" class="underline decoration-dotted hover:text-zinc-200">create a filter</a>.
+          {:else}
+            The selected filter{(instance.filterIds ?? []).length > 1 ? 's are' : ' is'} missing or broken
+            (a referenced filter was deleted). Fix it on the <a href="/filters" class="underline decoration-dotted hover:text-zinc-200">Filters page</a>.
+          {/if}
+        {:else if instance.token && instance.chain && (instance.kind === 'transfer' || instance.kind === 'exchange_flow')}
           No data available for {activeTokenGroup ? `Σ ${tokenGroups.find((g) => g.name === activeTokenGroup)?.label ?? activeTokenGroup}` : instance.token} on {activeChainGroup ? `Σ ${activeChainGroup.label}` : instance.chain}{instance.kind === 'exchange_flow' ? ` for ${EXCHANGE_LABEL[instance.exchangeFlowExchange ?? 'binance'] ?? (instance.exchangeFlowExchange ?? 'binance')}` : ''}.
         {:else if chartKindGroup(effectiveKind)}
           No data for {chartKindGroup(effectiveKind)} {chartKindShortLabel(effectiveKind)}.
