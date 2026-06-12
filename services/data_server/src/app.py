@@ -22,6 +22,8 @@ from routes.hyperliquid import bp as hyperliquid_bp
 from routes.exchange_flow import bp as exchange_flow_bp
 from routes.book_depth import bp as book_depth_bp
 from throttle import register_health_endpoint
+from clickhouse import client
+from wallets.cache import ensure_table as ensure_wallets_cache
 
 app = Sanic("tradernick_data_server")
 app.config.RESPONSE_TIMEOUT = 180
@@ -55,6 +57,8 @@ async def _warm_caches(_app):
     # Prime the transfers/streams catalogue cache before serving traffic
     # so the first dashboard page-load skips the ~30s DISTINCT scan.
     await warm_streams_cache()
+    # Create the smart-wallet leaderboard cache table if absent.
+    await ensure_wallets_cache(await client())
 
 
 @app.get("/health")

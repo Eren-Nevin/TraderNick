@@ -464,6 +464,23 @@ class SmartSelector:
     def _full_suffix(self) -> str:
         return self._suffix_of(self._full_canonical())
 
+    def cache_key(self) -> str:
+        """Full (collision-safe) content hash of this filter, used as the
+        wallet-set cache key. Window-independent on purpose — a day's wallet
+        set depends only on the filter + that day, not the chart's range."""
+        raw = json.dumps(self._full_canonical(), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha1(raw.encode()).hexdigest()
+
+    def uses_token_scope(self) -> bool:
+        """True if any node (this one or a ref) resolves a metric in token
+        scope — i.e. the wallet set genuinely depends on the chart token."""
+        if any(self._effective_scope(c.scope) == "token"
+               for c in self.criteria if not c.disabled):
+            return True
+        if not self.criteria and self.scope == "token":
+            return True
+        return any(r.uses_token_scope() for r in self.refs)
+
     # ── scope resolution ────────────────────────────────────────────────
 
     def _effective_scope(self, criterion_scope: str | None) -> str:
@@ -1172,24 +1189,26 @@ class SmartSelector:
         return final
 
     def build_cte(
-        self, since_dt: datetime, until_dt: datetime
+        self, since_dt: datetime, until_dt: datetime,
+        final_name: str = "smart_wallets",
     ) -> tuple[str, str, dict[str, Any]]:
         """Returns (cte_sql, cte_name, params). The root is always wrapped as
-        a `smart_wallets(day, wallets[])` CTE so downstream consumers are
-        unchanged. A single node with no refs emits behaviour identical to the
-        pre-composition selector (just suffixed names + an inlined wrapper)."""
+        a `<final_name>(day, wallets[])` CTE so downstream consumers are
+        unchanged. `final_name` lets the cache layer compose a live sub-CTE
+        (`smart_wallets_live`) alongside a cache read. A single node with no
+        refs emits behaviour identical to the pre-composition selector."""
         blocks: dict[str, str] = {}
         params: dict[str, Any] = {}
         memo: dict[str, str] = {}
         root_final = self._emit(since_dt, until_dt, blocks, params, memo, depth=0)
-        if root_final != "smart_wallets":
-            blocks["smart_wallets"] = (
-                "smart_wallets AS (\n"
+        if root_final != final_name:
+            blocks[final_name] = (
+                f"{final_name} AS (\n"
                 f"            SELECT day, wallets FROM {root_final}\n"
                 "        )"
             )
         cte_sql = "WITH\n        " + ",\n        ".join(blocks.values())
-        return cte_sql, "smart_wallets", params
+        return cte_sql, final_name, params
 
     def summary(self) -> dict[str, Any]:
         out: dict[str, Any] = {
