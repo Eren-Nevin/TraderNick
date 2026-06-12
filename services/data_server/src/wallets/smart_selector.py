@@ -53,7 +53,7 @@ _SUFFIXABLE_NAMES = sorted([
     "unrealized_eod", "sided_pnl_daily", "sided_pnl",
     "funding_per_wallet_day", "funding_trailing",
     "vol_per_wallet_day", "vol_trailing",
-    "oi_snapshots", "oi_per_bucket", "oi_trailing",
+    "oi_snapshots", "oi_per_bucket", "oi_per_day", "oi_trailing",
     "combined", "ranked", "own_wallets",
     "sel_since", "sel_until", "sel_top_n",
 ], key=len, reverse=True)
@@ -627,6 +627,13 @@ class SmartSelector:
                 "sum(trade_count)",
                 "sumIf(trade_count, token = {sel_token:String})",
                 SRC_TRADE_HISTORY, "daily_trades_g", "daily_trades_t")
+            # Token prefilter when no global-scope metric needs the source —
+            # drops every non-chart-token row before the GROUP BY and the
+            # downstream trailing CROSS JOIN (the leaderboard's hot path).
+            # Same trick the oi/vol/funding sources already use.
+            th_token_filter = ""
+            if "global" not in scopes_for[SRC_TRADE_HISTORY] and "token" in scopes_for[SRC_TRADE_HISTORY]:
+                th_token_filter = "              AND token = {sel_token:String}\n"
             ctes.append(
                 "daily_per_wallet AS (\n"
                 "            SELECT toDate(time) AS d, wallet,\n"
@@ -634,6 +641,7 @@ class SmartSelector:
                 "            FROM tradernick.hl_trade_history\n"
                 "            WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max) + " DAY\n"
                 "              AND time <  {sel_until:DateTime}\n"
+                + th_token_filter +
                 f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY d, wallet\n"
                 "        )"
@@ -699,6 +707,9 @@ class SmartSelector:
             if "token" in scopes_for[SRC_SIDED]:
                 sided_day_parts.append(
                     "sumMergeIf(pnl_state, token = {sel_token:String}) AS day_pnl_t")
+            sided_token_filter = ""
+            if "global" not in scopes_for[SRC_SIDED] and "token" in scopes_for[SRC_SIDED]:
+                sided_token_filter = "              AND token = {sel_token:String}\n"
             ctes.append(
                 "sided_pnl_daily AS (\n"
                 "            SELECT day, wallet, side,\n"
@@ -706,6 +717,7 @@ class SmartSelector:
                 "            FROM tradernick.hl_fills_pnl_daily\n"
                 "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(sided_max) + " DAY\n"
                 "              AND day <  toDate({sel_until:DateTime})\n"
+                + sided_token_filter +
                 f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY day, wallet, side\n"
                 "        )"
@@ -938,34 +950,53 @@ class SmartSelector:
                 "            GROUP BY bucket, wallet\n"
                 "        )"
             )
-            # Trailing: avg per-bucket wallet OI over the lookback ending
-            # at target.d (exclusive). One row per (target.d, wallet).
-            # avg_roe_pct: per-snapshot 100×pnl/OI averaged across
-            # buckets (not the bulk pnl/OI ratio — the user wants the
-            # time-weighted view). Buckets where OI is 0 contribute 0.
-            # avg per (scope, lookback) combo, gated by avgIf on the bucket day.
-            # avg_roe_pct stays the per-snapshot ratio averaged over the window.
+            # Roll the hourly buckets up to one row per (day, wallet) FIRST —
+            # the per-day sums + bucket count are sufficient to reconstruct the
+            # exact trailing average (avg over buckets = Σ bucket values / Σ
+            # bucket count). This shrinks the trailing CROSS JOIN input ~24× vs
+            # joining target_days against hourly buckets directly.
+            oi_letters = sorted({s for (s, _) in combos_for[SRC_OI]})
+            oi_day_parts: list[str] = []
+            OI_AVG_COLS = ["total_oi_token", "long_oi_token", "short_oi_token",
+                           "total_oi_usd", "long_oi_usd", "short_oi_usd"]
+            for s in oi_letters:
+                for col_name in OI_AVG_COLS:
+                    oi_day_parts.append(f"sum({col_name}_{s}) AS s_{col_name}_{s}")
+                oi_day_parts.append(
+                    f"sum(if(total_oi_usd_{s} > 0, "
+                    f"unrealized_pnl_usd_{s} / total_oi_usd_{s}, 0)) AS s_roe_{s}")
+            ctes.append(
+                "oi_per_day AS (\n"
+                "            SELECT toDate(bucket) AS d, wallet,\n"
+                "                   " + ",\n                   ".join(oi_day_parts) + ",\n"
+                "                   count() AS n_buckets\n"
+                "            FROM oi_per_bucket\n"
+                "            GROUP BY d, wallet\n"
+                "        )"
+            )
+            # Trailing: avg per-bucket wallet OI over the lookback ending at
+            # target.d (exclusive), per (scope, lookback) combo. avg over the
+            # window = Σ(per-day bucket sums) / Σ(per-day bucket counts).
+            # avg_roe_pct is the per-snapshot ratio averaged the same way.
             oi_trail_parts: list[str] = []
             for (s, L) in sorted(combos_for[SRC_OI]):
-                w = f"toDate(src.bucket) >= target.d - {L}"
-                for col_name in [
-                    "total_oi_token", "long_oi_token", "short_oi_token",
-                    "total_oi_usd",   "long_oi_usd",   "short_oi_usd",
-                ]:
+                w = f"src.d >= target.d - {L}"
+                denom = f"sumIf(src.n_buckets, {w})"
+                for col_name in OI_AVG_COLS:
                     oi_trail_parts.append(
-                        f"avgIf(src.{col_name}_{s}, {w}) AS avg_{col_name}_{s}_l{L}")
+                        f"if({denom} > 0, sumIf(src.s_{col_name}_{s}, {w}) / {denom}, 0) "
+                        f"AS avg_{col_name}_{s}_l{L}")
                 oi_trail_parts.append(
-                    f"avgIf(if(src.total_oi_usd_{s} > 0, "
-                    f"src.unrealized_pnl_usd_{s} / src.total_oi_usd_{s}, 0), {w}) "
+                    f"if({denom} > 0, sumIf(src.s_roe_{s}, {w}) / {denom}, 0) "
                     f"AS avg_roe_pct_{s}_l{L}")
             ctes.append(
                 "oi_trailing AS (\n"
                 "            SELECT target.d AS day, src.wallet AS wallet,\n"
                 "                   " + ",\n                   ".join(oi_trail_parts) + "\n"
                 "            FROM target_days target\n"
-                "            CROSS JOIN oi_per_bucket src\n"
-                "            WHERE toDate(src.bucket) >= target.d - " + str(oi_max) + "\n"
-                "              AND toDate(src.bucket) <  target.d\n"
+                "            CROSS JOIN oi_per_day src\n"
+                "            WHERE src.d >= target.d - " + str(oi_max) + "\n"
+                "              AND src.d <  target.d\n"
                 "            GROUP BY target.d, src.wallet\n"
                 "        )"
             )
