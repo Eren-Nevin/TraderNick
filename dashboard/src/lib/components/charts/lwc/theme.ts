@@ -30,7 +30,11 @@ export function lwcChartOptions(): DeepPartial<ChartOptions> {
       // which silently suppresses it.
       rightOffset: 8,
       barSpacing: 6,
-      minBarSpacing: 0.5
+      // Was Lightweight's default 0.5 — capped zoom-out at ~3 months of
+      // 1h data on a typical chart. 0.2 lets the full 180-day TTL window
+      // fit on screen before hitting the data wall. Bump back to 0.5 for
+      // readable-at-max-zoom-out individual bars.
+      minBarSpacing: 0.2
     },
     crosshair: {
       mode: CrosshairMode.Normal,
