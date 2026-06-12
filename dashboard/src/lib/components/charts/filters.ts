@@ -167,6 +167,7 @@ export function filterWireKey(wire: FilterWire): string {
       min: c.min ?? null,
       max: c.max ?? null,
       scope: c.scope ?? null,
+      lookback: c.lookback ?? null,
       disabled: c.disabled ?? false,
     })),
     refs: (w.refs ?? [])

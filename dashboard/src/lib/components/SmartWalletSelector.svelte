@@ -360,6 +360,18 @@
           <option value="global">Global</option>
           <option value="token">{tokenLabel ? `Token (${tokenLabel})` : 'Token'}</option>
         </select>
+        <input
+          type="number" min="1" max="180" step="1"
+          value={c.lookback ?? ''}
+          placeholder={`${value.lookback}d`}
+          onchange={(e) => {
+            const n = numOrUndef((e.target as HTMLInputElement).value);
+            setCriterion(i, { lookback: n === undefined ? undefined : Math.round(n) });
+          }}
+          class="w-12 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 text-right ml-1"
+          title={`Lookback (days) for this criterion. Blank = inherit the selector's ${value.lookback}d.`}
+        />
+        <span class="text-zinc-500 text-[11px]">d</span>
         <label class="flex items-center gap-1 cursor-pointer ml-1">
           <input
             type="radio"

@@ -103,6 +103,10 @@ export interface SmartCriterionState {
    *  it's always explicit in persisted state — see defaultSmartSelector
    *  and the add-criterion handler in SmartWalletSelector). */
   scope?: 'global' | 'token';
+  /** Per-criterion lookback (days). When unset, inherits the selector's
+   *  overall lookback. Lets each metric use its own window, e.g.
+   *  "volume ≥ 100K / 10d AND realized PnL ≥ 10K / 3d". */
+  lookback?: number;
   /** Soft-disable: criterion stays in the UI list but its min/max bounds
    *  are skipped server-side. Lets the user A/B configurations without
    *  losing the saved values. Default false (criterion is active). */
@@ -156,6 +160,9 @@ export function sanitizeSmartSelectorState(raw: unknown): SmartSelectorState {
       if (typeof cc.max === 'number' && isFinite(cc.max)) item.max = cc.max;
       if (cc.scope === 'global' || cc.scope === 'token') item.scope = cc.scope;
       else item.scope = out.scope;  // inherit from overall when missing/invalid
+      if (typeof cc.lookback === 'number' && cc.lookback >= 1 && cc.lookback <= 180) {
+        item.lookback = Math.round(cc.lookback);
+      }
       if (cc.disabled === true) item.disabled = true;
       out.criteria.push(item);
     }
@@ -176,6 +183,7 @@ export function smartSelectorCacheKey(s: SmartSelectorState): string {
       min: c.min ?? null,
       max: c.max ?? null,
       scope: c.scope ?? null,
+      lookback: c.lookback ?? null,
       disabled: c.disabled ?? false
     })),
   };
