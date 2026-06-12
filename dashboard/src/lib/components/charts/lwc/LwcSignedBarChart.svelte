@@ -83,6 +83,12 @@
   let suppressViewEmit = false;
   let lastEmittedFrom: number | null = null;
   let lastEmittedTo: number | null = null;
+  // First/last bar time at the last view application. A data-extent change
+  // (dynamic-loading prepends older history) would otherwise let Lightweight
+  // hold the logical range and shift the window; detecting it lets us
+  // re-assert the absolute-time view to pin the visible range.
+  let lastAppliedFirst: number | null = null;
+  let lastAppliedLast: number | null = null;
 
   // Symmetric y range. Mutable closure read by autoscaleInfoProvider on
   // every redraw; updated before any setData() call.
@@ -249,10 +255,14 @@
     if (!chart || !data.length) return;
     const target = view ?? xExtent;
     if (!target) return;
-    if (lastEmittedFrom === target[0] && lastEmittedTo === target[1]) return;
-    suppressViewEmit = true;
     const first = data[0].time;
     const last = data[data.length - 1].time;
+    // Re-apply when the view changed OR when the data extent shifted under us
+    // (prepend/append) — the latter keeps a dynamic-loading backfill from
+    // jumping the visible window.
+    const extentChanged = first !== lastAppliedFirst || last !== lastAppliedLast;
+    if (!extentChanged && lastEmittedFrom === target[0] && lastEmittedTo === target[1]) return;
+    suppressViewEmit = true;
     if (target[1] > last || target[0] < first) {
       chart.timeScale().setVisibleLogicalRange({
         from: timeToLogical(target[0], data),
@@ -266,6 +276,8 @@
     }
     lastEmittedFrom = target[0];
     lastEmittedTo = target[1];
+    lastAppliedFirst = first;
+    lastAppliedLast = last;
     queueMicrotask(() => {
       suppressViewEmit = false;
     });

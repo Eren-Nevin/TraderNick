@@ -85,6 +85,12 @@
   // emission narrows the visible window each frame the user drags.
   let lastEmittedFrom: number | null = null;
   let lastEmittedTo: number | null = null;
+  // First/last bar time at the last view application. When the data extent
+  // changes (e.g. dynamic-loading prepends older history), Lightweight would
+  // otherwise hold the logical range and visually shift the window; detecting
+  // the extent change lets us re-assert the absolute-time view to pin it.
+  let lastAppliedFirst: number | null = null;
+  let lastAppliedLast: number | null = null;
 
   const hoverIdx = $derived.by<number | null>(() => {
     if (hoverTime === null || !data.length) return null;
@@ -257,10 +263,14 @@
     if (!chart || !data.length) return;
     const target = view ?? xExtent;
     if (!target) return;
-    if (lastEmittedFrom === target[0] && lastEmittedTo === target[1]) return;
-    suppressViewEmit = true;
     const first = data[0].time;
     const last = data[data.length - 1].time;
+    // Re-apply when the view changed OR when the data extent shifted under us
+    // (prepend/append) — the latter is what keeps a dynamic-loading backfill
+    // from jumping the visible window.
+    const extentChanged = first !== lastAppliedFirst || last !== lastAppliedLast;
+    if (!extentChanged && lastEmittedFrom === target[0] && lastEmittedTo === target[1]) return;
+    suppressViewEmit = true;
     if (target[1] > last || target[0] < first) {
       chart.timeScale().setVisibleLogicalRange({
         from: timeToLogical(target[0], data),
@@ -274,6 +284,8 @@
     }
     lastEmittedFrom = target[0];
     lastEmittedTo = target[1];
+    lastAppliedFirst = first;
+    lastAppliedLast = last;
     queueMicrotask(() => {
       suppressViewEmit = false;
     });

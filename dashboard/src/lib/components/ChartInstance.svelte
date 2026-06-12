@@ -543,6 +543,30 @@
     instance.filter = {};
   }
 
+  // ---- dynamic ("chunked") loading ----
+  // Some kinds are expensive to resolve over the full window — hl_smart_oi
+  // (per-day wallet leaderboard + OI rollup), HL open interest (oi_split), and
+  // exchange flow. Instead of fetching the whole window up front we load the
+  // most recent CHUNK and backfill older CHUNK-day windows on demand as the
+  // user pans / zooms toward the loaded floor. Absolute-time views mean a
+  // prepend never shifts the chart; backend caches make the re-pans cheap.
+  // The oldest reachable day is the kind's normal full-window floor, captured
+  // per-load in `dynFloor` (so per-interval caps like 1m→30d still hold).
+  const DYN_CHUNK_DAYS = 60;
+  // Start backfilling once the view's left edge comes within this many days of
+  // the loaded floor, so data is already there by the time the user reaches it.
+  const DYN_PREFETCH_DAYS = 12;
+
+  /** True when this instance should load in chunks. hl_smart_oi always;
+   *  open interest only on Hyperliquid (Binance OI is a fast dedicated
+   *  endpoint); exchange flow always. */
+  function isDynamicChunkKind(): boolean {
+    if (instance.kind === 'hl_smart_oi') return true;
+    if (instance.kind === 'oi') return (instance.exchange ?? 'binance') === 'hl';
+    if (instance.kind === 'exchange_flow') return true;
+    return false;
+  }
+
   // ---- transient state (not persisted) ----
   let data = $state<AnyDatum[]>([]);
   // Overlay token candle arrays, keyed by token symbol. Populated for the
@@ -561,6 +585,15 @@
   // (selector change, refresh button) we abort this so the prior fetch frees
   // its queue slot immediately instead of dragging the queue with stale work.
   let currentLoad: AbortController | null = null;
+  // hl_smart_oi backfill: a second in-flight slot independent of the main
+  // load(), so panning-triggered older-chunk fetches don't cancel (or get
+  // cancelled by) the primary load. `loadingMore` guards against overlap.
+  let currentChunkLoad: AbortController | null = null;
+  let loadingMore = $state(false);
+  // Oldest day (unix-sec) the current dynamic load may backfill to — the kind's
+  // full-window floor, captured when the primary load runs. null = not a
+  // chunked load (don't backfill).
+  let dynFloor: number | null = null;
   let localView = $state<View>(null);
   let localHoverTime = $state<number | null>(null);
   let error = $state<string | null>(null);
@@ -687,9 +720,12 @@
       const mPart = instance.gmxMarket ? `m:${instance.gmxMarket}` : 'all';
       return `${effectiveKind}|${cPart}|${mPart}|${instance.interval}`;
     }
-    if (isHlKind(instance.kind)) {
+    if (isHlKind(instance.kind) && instance.kind !== 'hl_smart_oi') {
       // HL: per-token + optional wallet OR wallet_category filter (mutually
       // exclusive). Empty wallet filter = aggregate across all traders.
+      // hl_smart_oi is excluded here — it has its own filter-aware key below
+      // (isHlKind matches it since it startsWith 'hl_', so without this guard
+      // this branch would shadow the dedicated one and drop the filter hash).
       // hl_top_vaults adds its sort selector to the key so flipping the
       // sort triggers a re-fetch.
       const wPart = instance.hlWallet
@@ -894,6 +930,11 @@
   async function load(forceFresh = false) {
     // Cancel any prior load so it frees its queue slot immediately.
     if (currentLoad) currentLoad.abort();
+    // A fresh primary load (token / interval / filter change) invalidates any
+    // in-flight smart-OI backfill — abort it and reset so it can't prepend
+    // stale history onto the new window.
+    if (currentChunkLoad) { currentChunkLoad.abort(); currentChunkLoad = null; }
+    loadingMore = false;
     const controller = new AbortController();
     currentLoad = controller;
     const signal = controller.signal;
@@ -933,6 +974,19 @@
         const w = lookbackWindow(instance.interval);
         sinceIso = w.since.toISOString();
         untilIso = w.until.toISOString();
+      }
+      // Dynamic kinds: keep the full window as the backfill floor, but only
+      // fetch the most recent chunk up front; older history is backfilled on
+      // demand (see loadOlderChunk / the pan-trigger effect). The chunk never
+      // expands past the natural window (e.g. 1m intervals stay at 30d).
+      if (isDynamicChunkKind()) {
+        const untilU = unixSec(untilIso);
+        const fullFloorU = unixSec(sinceIso);
+        dynFloor = fullFloorU;
+        const chunkU = Math.max(fullFloorU, untilU - DYN_CHUNK_DAYS * 86_400);
+        sinceIso = new Date(chunkU * 1000).toISOString();
+      } else {
+        dynFloor = null;
       }
       const baseQS = {
         token: instance.token,
@@ -2323,21 +2377,16 @@
         case 'oi':
           // HL OI rides on /hyperliquid/oi_split which carries long/short/
           // total in one payload; the long/short/total/all selector picks
-          // which line(s) to render without re-fetching. Binance OI keeps
-          // its dedicated endpoint.
+          // which line(s) to render without re-fetching. It's the slow side,
+          // so it loads in chunks (see fetchHlOiWindow). Binance OI keeps its
+          // fast dedicated endpoint and the full-window path.
           if ((instance.exchange ?? 'binance') === 'hl') {
-            url = `/api/hyperliquid/oi_split?${new URLSearchParams(baseQS)}`;
-            pickArr = (b) => {
-              // Keep open_interest_value populated (= total) so the
-              // cumulative MA branch — which always reads that field —
-              // continues to work without HL-specific branching.
-              const rows = (b.series ?? []) as Array<Record<string, number>>;
-              return rows.map((r) => ({
-                ...r,
-                open_interest: r.total_oi ?? 0,
-                open_interest_value: r.total_oi_value ?? 0
-              })) as unknown as AnyDatum[];
-            };
+            data = await fetchHlOiWindow(sinceIso, untilIso, signal);
+            since = sinceIso; until = untilIso;
+            loadedKey = loadKey();
+            localView = defaultView(sinceIso, untilIso);
+            loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+            return;
           } else {
             url = `/api/open_interest?${new URLSearchParams(baseQS)}`;
             pickArr = (b) => (b.series ?? []) as AnyDatum[];
@@ -2348,6 +2397,8 @@
           // are AND-combined client-side into a single composite wire
           // (smartCombinedWire); the backend intersects them per day and
           // returns the same /oi_split-shaped payload as a single filter.
+          // Only the most recent chunk is fetched here — see loadOlderSmartOi
+          // for the pan-driven backfill of older history.
           const wire = smartCombinedWire;
           if (wire === null || wire === 'broken') {
             // Nothing selected, or a selected filter is missing/broken — render
@@ -2359,18 +2410,12 @@
             loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
             return;
           }
-          const sQs = new URLSearchParams(baseQS);
-          sQs.set('filter', JSON.stringify(wire));
-          url = `/api/hyperliquid/smart_oi?${sQs}`;
-          pickArr = (b) => {
-            const rows = (b.series ?? []) as Array<Record<string, number>>;
-            return rows.map((r) => ({
-              ...r,
-              open_interest: r.total_oi ?? 0,
-              open_interest_value: r.total_oi_value ?? 0
-            })) as unknown as AnyDatum[];
-          };
-          break;
+          data = await fetchSmartOiWindow(wire, sinceIso, untilIso, signal);
+          since = sinceIso; until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          return;
         }
         case 'fr': {
           // Same Binance / HL exchange selector pattern as the ohlcv kind.
@@ -2442,70 +2487,10 @@
           return;
         }
         case 'exchange_flow': {
-          // Pre-rolled fast path: /exchange_flow/aggregate reads
-          // tradernick.exchange_flow_minute (SummingMergeTree fed by
-          // mv_exchange_flow). Same shape as /transfers/aggregate but the
-          // baked-in MV WHERE means All-chain queries finish in ms
-          // instead of ~80s. We still fire two requests — one per
-          // direction — so the render-time linesD can pick which series
-          // (inflow / outflow / netflow / all) to plot at toggle time
-          // without re-fetching.
-          const ex = instance.exchangeFlowExchange ?? 'binance';
-          const buildQS = (direction: 'in' | 'out') => {
-            const qs = new URLSearchParams({
-              direction,
-              exchange: ex,
-              interval: instance.interval,
-              since: sinceIso,
-              until: untilIso,
-              limit: '200000'
-            });
-            if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
-            else qs.set('chain', instance.chain ?? 'ETH');
-            if (activeTokenGroup !== null) qs.set('token_group', activeTokenGroup);
-            else qs.set('token', instance.token);
-            return qs;
-          };
-          const [inRes, outRes] = await Promise.all([
-            queuedFetch(`/api/exchange_flow/aggregate?${buildQS('in')}`, { signal }),
-            queuedFetch(`/api/exchange_flow/aggregate?${buildQS('out')}`, { signal })
-          ]);
-          if (!inRes.ok)  throw new Error(`exchange_flow inflow ${inRes.status}`);
-          if (!outRes.ok) throw new Error(`exchange_flow outflow ${outRes.status}`);
-          const inBody  = await inRes.json();
-          const outBody = await outRes.json();
-          const outByTime = new Map<number, { amount: number; usd: number }>();
-          for (const r of (outBody.series ?? []) as Array<Record<string, number>>) {
-            outByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd });
-          }
-          const out: Record<string, number>[] = [];
-          const seen = new Set<number>();
-          for (const r of (inBody.series ?? []) as Array<Record<string, number>>) {
-            const o = outByTime.get(r.time) ?? { amount: 0, usd: 0 };
-            out.push({
-              time: r.time,
-              sum_amount_in:     r.sum_amount,
-              sum_value_usd_in:  r.sum_value_usd,
-              sum_amount_out:    o.amount,
-              sum_value_usd_out: o.usd,
-              net_amount:        r.sum_amount - o.amount,
-              net_value_usd:     r.sum_value_usd - o.usd
-            });
-            seen.add(r.time);
-          }
-          for (const r of (outBody.series ?? []) as Array<Record<string, number>>) {
-            if (seen.has(r.time)) continue;
-            out.push({
-              time: r.time,
-              sum_amount_in: 0, sum_value_usd_in: 0,
-              sum_amount_out:    r.sum_amount,
-              sum_value_usd_out: r.sum_value_usd,
-              net_amount:    -r.sum_amount,
-              net_value_usd: -r.sum_value_usd
-            });
-          }
-          out.sort((a, b) => a.time - b.time);
-          data = out as unknown as AnyDatum[];
+          // Two requests (one per direction) merged by time so the render-time
+          // linesD can pick inflow / outflow / netflow / all without
+          // re-fetching. Loads in chunks (see fetchExchangeFlowWindow).
+          data = await fetchExchangeFlowWindow(sinceIso, untilIso, signal);
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
@@ -2544,6 +2529,228 @@
       }
     }
   }
+
+  // ---- dynamic ("chunked") loading ----
+
+  /** Fetch one smart-OI window for the given composite wire and map the rows
+   *  into the chart's datum shape. Shared by the initial load and the backfill
+   *  so both produce byte-identical rows. */
+  async function fetchSmartOiWindow(
+    wire: FilterWire,
+    sinceIso: string,
+    untilIso: string,
+    signal?: AbortSignal
+  ): Promise<AnyDatum[]> {
+    const qs = new URLSearchParams({
+      token: instance.token,
+      interval: instance.interval,
+      since: sinceIso,
+      until: untilIso,
+      limit: '200000'
+    });
+    qs.set('filter', JSON.stringify(wire));
+    const res = await queuedFetch(`/api/hyperliquid/smart_oi?${qs}`, { signal });
+    if (!res.ok) throw new Error(`hl_smart_oi ${res.status}`);
+    const b = await res.json();
+    const rows = (b.series ?? []) as Array<Record<string, number>>;
+    return rows.map((r) => ({
+      ...r,
+      open_interest: r.total_oi ?? 0,
+      open_interest_value: r.total_oi_value ?? 0
+    })) as unknown as AnyDatum[];
+  }
+
+  /** Fetch one HL open-interest window (oi_split) and map the rows. Keeps
+   *  open_interest_value populated (= total) so the cumulative MA branch works
+   *  without HL-specific branching. */
+  async function fetchHlOiWindow(
+    sinceIso: string,
+    untilIso: string,
+    signal?: AbortSignal
+  ): Promise<AnyDatum[]> {
+    const qs = new URLSearchParams({
+      token: instance.token,
+      interval: instance.interval,
+      since: sinceIso,
+      until: untilIso,
+      limit: '200000'
+    });
+    const res = await queuedFetch(`/api/hyperliquid/oi_split?${qs}`, { signal });
+    if (!res.ok) throw new Error(`oi ${res.status}`);
+    const b = await res.json();
+    const rows = (b.series ?? []) as Array<Record<string, number>>;
+    return rows.map((r) => ({
+      ...r,
+      open_interest: r.total_oi ?? 0,
+      open_interest_value: r.total_oi_value ?? 0
+    })) as unknown as AnyDatum[];
+  }
+
+  /** Fetch one exchange-flow window: two requests (in / out) merged by time
+   *  into the {sum_*_in, sum_*_out, net_*} shape the render-time linesD reads. */
+  async function fetchExchangeFlowWindow(
+    sinceIso: string,
+    untilIso: string,
+    signal?: AbortSignal
+  ): Promise<AnyDatum[]> {
+    const ex = instance.exchangeFlowExchange ?? 'binance';
+    const buildQS = (direction: 'in' | 'out') => {
+      const qs = new URLSearchParams({
+        direction,
+        exchange: ex,
+        interval: instance.interval,
+        since: sinceIso,
+        until: untilIso,
+        limit: '200000'
+      });
+      if (activeChainGroup) qs.set('chain_group', activeChainGroup.name);
+      else qs.set('chain', instance.chain ?? 'ETH');
+      if (activeTokenGroup !== null) qs.set('token_group', activeTokenGroup);
+      else qs.set('token', instance.token);
+      return qs;
+    };
+    const [inRes, outRes] = await Promise.all([
+      queuedFetch(`/api/exchange_flow/aggregate?${buildQS('in')}`, { signal }),
+      queuedFetch(`/api/exchange_flow/aggregate?${buildQS('out')}`, { signal })
+    ]);
+    if (!inRes.ok)  throw new Error(`exchange_flow inflow ${inRes.status}`);
+    if (!outRes.ok) throw new Error(`exchange_flow outflow ${outRes.status}`);
+    const inBody  = await inRes.json();
+    const outBody = await outRes.json();
+    const outByTime = new Map<number, { amount: number; usd: number }>();
+    for (const r of (outBody.series ?? []) as Array<Record<string, number>>) {
+      outByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd });
+    }
+    const out: Record<string, number>[] = [];
+    const seen = new Set<number>();
+    for (const r of (inBody.series ?? []) as Array<Record<string, number>>) {
+      const o = outByTime.get(r.time) ?? { amount: 0, usd: 0 };
+      out.push({
+        time: r.time,
+        sum_amount_in:     r.sum_amount,
+        sum_value_usd_in:  r.sum_value_usd,
+        sum_amount_out:    o.amount,
+        sum_value_usd_out: o.usd,
+        net_amount:        r.sum_amount - o.amount,
+        net_value_usd:     r.sum_value_usd - o.usd
+      });
+      seen.add(r.time);
+    }
+    for (const r of (outBody.series ?? []) as Array<Record<string, number>>) {
+      if (seen.has(r.time)) continue;
+      out.push({
+        time: r.time,
+        sum_amount_in: 0, sum_value_usd_in: 0,
+        sum_amount_out:    r.sum_amount,
+        sum_value_usd_out: r.sum_value_usd,
+        net_amount:    -r.sum_amount,
+        net_value_usd: -r.sum_value_usd
+      });
+    }
+    out.sort((a, b) => a.time - b.time);
+    return out as unknown as AnyDatum[];
+  }
+
+  /** Resolve the window-fetcher for the current dynamic kind, or null when the
+   *  instance isn't a chunked kind / isn't ready (e.g. smart-OI with no valid
+   *  filter). The returned fn fetches one [since, until) window of rows. */
+  function dynamicFetcher():
+    | ((sinceIso: string, untilIso: string, signal?: AbortSignal) => Promise<AnyDatum[]>)
+    | null {
+    if (instance.kind === 'hl_smart_oi') {
+      const wire = smartCombinedWire;
+      if (wire === null || wire === 'broken') return null;
+      return (s, u, sig) => fetchSmartOiWindow(wire, s, u, sig);
+    }
+    if (instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl') {
+      return (s, u, sig) => fetchHlOiWindow(s, u, sig);
+    }
+    if (instance.kind === 'exchange_flow') {
+      return (s, u, sig) => fetchExchangeFlowWindow(s, u, sig);
+    }
+    return null;
+  }
+
+  /** Decide whether the current view warrants backfilling older history, and
+   *  if so kick off a single fetch sized to cover the view (so a big jump
+   *  needs one request, not a chain of chunk hops). Reads state directly —
+   *  call it from `untrack` so it doesn't register the heavy state as effect
+   *  dependencies. */
+  function maybeBackfillDynamic(viewLeftSec: number) {
+    if (!isDynamicChunkKind()) return;
+    if (loading || loadingMore) return;
+    if (!data.length || !loadedKey || dynFloor === null) return;
+    const fetchFn = dynamicFetcher();
+    if (!fetchFn) return;
+
+    const sinceU = unixSec(since);
+    if (sinceU <= dynFloor) return;                   // already at full-window floor
+    if (viewLeftSec >= sinceU + DYN_PREFETCH_DAYS * 86_400) return; // not near floor yet
+
+    // Cover the view's left edge (plus a buffer), at least one chunk older,
+    // capped at the full-window floor.
+    const desiredFloor = Math.min(
+      sinceU - DYN_CHUNK_DAYS * 86_400,
+      viewLeftSec - DYN_PREFETCH_DAYS * 86_400
+    );
+    const newFloorU = Math.max(desiredFloor, dynFloor);
+    if (newFloorU >= sinceU) return;                  // nothing older to fetch
+    void loadOlderChunk(newFloorU, sinceU, fetchFn);
+  }
+
+  /** Fetch [newFloorU, oldFloorU) and prepend it to `data`, pinning the view.
+   *  Failures are non-fatal — we keep whatever is already loaded. */
+  async function loadOlderChunk(
+    newFloorU: number,
+    oldFloorU: number,
+    fetchFn: (sinceIso: string, untilIso: string, signal?: AbortSignal) => Promise<AnyDatum[]>
+  ) {
+    if (currentChunkLoad) currentChunkLoad.abort();
+    const controller = new AbortController();
+    currentChunkLoad = controller;
+    const signal = controller.signal;
+    loadingMore = true;
+    const keyAtStart = loadedKey;
+    try {
+      const newSinceIso = new Date(newFloorU * 1000).toISOString();
+      const oldFloorIso = new Date(oldFloorU * 1000).toISOString();
+      const older = await fetchFn(newSinceIso, oldFloorIso, signal);
+      // Bail if the chart reloaded under us (token / interval / filter change).
+      if (signal.aborted || loadedKey !== keyAtStart) return;
+      // Prepend + dedup by time — the boundary bucket can appear in both
+      // windows, and we never want to double-count a bucket.
+      const seen = new Set(data.map((d) => (d as { time: number }).time));
+      const merged = older.filter((d) => !seen.has((d as { time: number }).time)).concat(data);
+      merged.sort((a, b) => (a as { time: number }).time - (b as { time: number }).time);
+      data = merged as AnyDatum[];
+      since = newSinceIso;
+      loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+    } catch (e) {
+      if (signal.aborted) return;
+      // Swallow — backfill is best-effort; the chart keeps its current data.
+    } finally {
+      if (currentChunkLoad === controller) {
+        currentChunkLoad = null;
+        loadingMore = false;
+      }
+    }
+    // The user may have panned further while we were fetching; re-check against
+    // the live view. Guards in maybeBackfillDynamic stop this at the floor.
+    if (currentChunkLoad === null) {
+      const v = effectiveView;
+      if (v) maybeBackfillDynamic(v[0]);
+    }
+  }
+
+  // Pan / zoom trigger: whenever the effective view's left edge moves, see if
+  // we need to backfill older history. effectiveView is the only tracked dep so
+  // a backfill's own state writes can't re-enter this effect.
+  $effect(() => {
+    const v = effectiveView;
+    if (!v) return;
+    const left = v[0];
+    untrack(() => maybeBackfillDynamic(left));
+  });
 
   /** Force a fresh fetch — bypasses the `loadedKey === key` short-circuit,
    *  evicts this chart's entry from the remount cache, and sends `?fresh=1`
@@ -5738,9 +5945,11 @@
     </div>
   {/if}
 
-    <!-- Indeterminate load strip — visible whenever a fetch is in flight (chain/token/interval/filter change). -->
+    <!-- Indeterminate load strip — visible whenever a fetch is in flight: a
+         primary load (chain/token/interval/filter change) or an hl_smart_oi
+         backfill of older history (loadingMore). -->
     <div class="loadbar h-0.5 overflow-hidden bg-blue-500/10" aria-hidden="true">
-      {#if loading}
+      {#if loading || loadingMore}
         <div class="loadbar-track"></div>
       {/if}
     </div>
@@ -6157,6 +6366,19 @@
       />
     {/if}
 
+  {#if loadingMore}
+    <!-- hl_smart_oi backfill indicator. Sits bottom-left (the FAB owns
+         bottom-right) so the user knows older history is streaming in while
+         they pan/zoom; the chart stays interactive underneath. -->
+    <div class="backfill-pill" aria-live="polite">
+      <svg class="animate-spin h-3 w-3" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-opacity="0.25"/>
+        <path d="M22 12a10 10 0 0 1-10 10" stroke="currentColor" stroke-width="3" stroke-linecap="round"/>
+      </svg>
+      Loading older history…
+    </div>
+  {/if}
+
   {#if canHaveOverlays}
     <!-- Add-overlay FAB. Only visible while the chart card is hovered (so it
          doesn't sit on top of the chart at rest). Click opens the two-step
@@ -6203,6 +6425,28 @@
 />
 
 <style>
+  /* hl_smart_oi backfill pill — a small translucent badge in the bottom-left
+     of the chart canvas, shown while older history is being fetched. Bottom-
+     left so it clears the overlay FAB (bottom-right). */
+  .backfill-pill {
+    position: absolute;
+    bottom: 0.5rem;
+    left: 0.5rem;
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.6875rem;                            /* text-[11px] */
+    line-height: 1;
+    color: rgb(212 212 216);                         /* zinc-300 */
+    background: rgb(24 24 27 / 0.85);                /* zinc-900/85 */
+    border: 1px solid rgb(63 63 70);                 /* zinc-700 */
+    border-radius: 9999px;
+    pointer-events: none;                            /* never block pan/zoom */
+    z-index: 15;
+    backdrop-filter: blur(2px);
+  }
+
   /* Indeterminate progress strip — a coloured segment slides left→right→left
      across a translucent track. Lives in scoped CSS because Tailwind ships no
      ready-made indeterminate keyframes. */
