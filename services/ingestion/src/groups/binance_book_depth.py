@@ -6,6 +6,16 @@
 token, distinguished by the `token` column.
 
 DeFiStream caps book_depth at 31 days/request, same as OI/funding/LSR.
+
+Coverage caveat (2026-06): book_depth is served from Binance's
+authoritative next-day dataset. The current (not-yet-settled) day comes
+from a live feed that only publishes a symbol's current-day rows once
+its order book genuinely reaches ±5%. Deep-book majors (BTC, ETH, BNB,
+...) therefore appear only after the ~1-day settlement. Multi-token
+requests just omit uncovered symbols for the current day — except when
+*none* of the requested symbols have current-day coverage, in which
+case the API returns HTTP 422 with a `vision_through` date. We catch
+that, clip `until` to vision_through, and retry.
 """
 import asyncio
 import logging
@@ -14,6 +24,7 @@ import time
 from datetime import datetime, timezone
 
 from defistream import AsyncDeFiStream
+from defistream.exceptions import DeFiStreamError
 
 import ch_status
 import config
@@ -31,7 +42,24 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-async def fetch_and_insert(ds: AsyncDeFiStream, tokens: list[str], since: datetime, until: datetime) -> int:
+def _parse_vision_through(exc: DeFiStreamError) -> datetime | None:
+    """Pull `vision_through` from a 422 response, as naive UTC."""
+    if exc.status_code != 422 or exc.response is None:
+        return None
+    try:
+        data = exc.response.json()
+    except Exception:
+        return None
+    s = data.get("vision_through") if isinstance(data, dict) else None
+    if not isinstance(s, str):
+        return None
+    try:
+        return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
+    except ValueError:
+        return None
+
+
+async def _do_fetch_and_insert(ds: AsyncDeFiStream, tokens: list[str], since: datetime, until: datetime) -> int:
     df = await (
         ds.exchange.binance.book_depth()
         .token(*tokens)
@@ -44,6 +72,18 @@ async def fetch_and_insert(ds: AsyncDeFiStream, tokens: list[str], since: dateti
     ch = await async_client()
     await ch.insert("tradernick.binance_book_depth", rows, column_names=BOOK_DEPTH_COLUMNS)
     return len(rows)
+
+
+async def fetch_and_insert(ds: AsyncDeFiStream, tokens: list[str], since: datetime, until: datetime) -> int:
+    try:
+        return await _do_fetch_and_insert(ds, tokens, since, until)
+    except DeFiStreamError as exc:
+        vt = _parse_vision_through(exc)
+        if vt is None or vt <= since:
+            log.warning("book_depth window %s..%s rejected; no coverage (vision_through=%s)", since, until, vt)
+            return 0
+        log.info("book_depth clipping until %s -> %s (vision_through)", until, vt)
+        return await _do_fetch_and_insert(ds, tokens, since, vt)
 
 
 async def main(stream_name: str | None = None):
