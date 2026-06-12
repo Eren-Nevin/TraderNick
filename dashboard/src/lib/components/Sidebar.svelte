@@ -16,20 +16,6 @@
   let editingName = $state('');
   let editingIsNew = $state(false);
 
-  // The Examples section is the static curated category pages — each
-  // hosts one consolidated picker for a single category.
-  type ExampleLink = { href: string; label: string; short: string };
-  const examples: ExampleLink[] = [
-    { href: '/trades',  label: 'Trades',  short: 'T' },
-    { href: '/flows',   label: 'Flows',   short: 'F' },
-    { href: '/lending', label: 'Lending', short: 'L' },
-    // DeX uses 'X' (collapsed letter) so it doesn't collide with Dashboard's
-    // 'D' chip when the sidebar is in icon-only mode.
-    { href: '/dex',     label: 'DeX',     short: 'X' },
-    { href: '/perp',    label: 'Perp',    short: 'P' },
-    { href: '/staking', label: 'Staking', short: 'S' }
-  ];
-
   onMount(() => {
     themeStore.hydrate();
     pagesStore.hydrate();
@@ -228,32 +214,6 @@
     >
       {collapsed ? '+' : '+ Add page'}
     </button>
-
-    <!-- =========================================================
-         Separator + Examples section.
-         ========================================================= -->
-    <div class="mx-2 my-2 border-t border-zinc-800"></div>
-
-    {#if !collapsed}
-      <div class="px-3 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 select-none">
-        Examples
-      </div>
-    {/if}
-
-    {#each examples as link (link.href)}
-      {@const active = $page.url.pathname.startsWith(link.href)}
-      <a
-        href={link.href}
-        title={link.label}
-        class="block rounded text-sm transition-colors {active
-          ? 'bg-zinc-800 text-zinc-50'
-          : 'text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100'} {collapsed
-          ? 'px-0 py-2 text-center'
-          : 'px-3 py-2'}"
-      >
-        {collapsed ? link.short : link.label}
-      </a>
-    {/each}
   </nav>
 
   <div class="px-2 py-3 border-t border-zinc-800">

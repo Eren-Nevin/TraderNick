@@ -1,13 +1,16 @@
-"""Backfill: rebuild tradernick.exchange_flow_minute from transfers FINAL.
+"""Backfill: rebuild tradernick.exchange_flow_minute.
 
-One-shot job. Wraps scripts.bootstrap_wallets._refresh_exchange_flow_worker
-so the operation appears in the standard ingestion_jobs table with the
-same lifecycle (running → completed / failed) as a DeFiStream backfill.
+LEGACY SHIM. The actual rebuild work now lives in `data_processor.backfill`
+and is parameterized by a `materializers` list in `args`. This module
+remains so existing operator runbooks / dashboard endpoints that target
+`JOB_TYPE_BACKFILL_EXCHANGE_FLOW_MINUTE` keep working: a job of this
+type simply forwards to the unified backfill with
+`materializers=['exchange_flow_minute']`.
 
-Used by:
-- the admin UI's "Rebuild exchange_flow" button on the Data process page
-- automated triggers (e.g. tradernick_admin firing this after a wallet
-  parquet upload, so the rollup picks up the new entity mapping)
+The forwarded job_id is NOT the same as this job's id — instead, this
+job records the spawned child's id in its `args.forwarded_to_job_id`
+and then waits on the child's status. From the user's perspective the
+two are stitched together by the admin UI's job table.
 """
 import asyncio
 import json
@@ -17,7 +20,6 @@ import sys
 from datetime import datetime, timezone
 
 from clickhouse import async_client
-from scripts.bootstrap_wallets import _refresh_exchange_flow_worker
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s [backfill_exchange_flow] %(levelname)s %(message)s")
@@ -63,34 +65,36 @@ async def _write_status(*, job_id, job_type, args, status, progress,
 
 
 async def main(job_id: str):
+    """Forward to data_processor.backfill main() directly. We're already
+    inside an `ingestion_jobs` row of type `backfill_exchange_flow_minute`,
+    so rather than spawning a child job we just rebuild this job's args
+    in-place to look like a backfill_data_processor job and run it.
+    """
     signal.signal(signal.SIGTERM, _on_sigterm)
     signal.signal(signal.SIGINT, _on_sigterm)
     job = await _load_job(job_id)
     job_type = job["job_type"]
     args = job["args"]
     started_at = job["started_at"]
+
+    # The legacy job_type didn't carry materializers. Default to the
+    # single exchange_flow_minute target plus the same since/until.
+    args.setdefault("materializers", ["exchange_flow_minute"])
+    # since/until are already present on the row (every backfill row has
+    # them via create_backfill_args), so data_processor.backfill can run
+    # against `args` directly.
     await _write_status(job_id=job_id, job_type=job_type, args=args,
                         status="running", progress=0.0, started_at=started_at)
-    log.info("job %s starting exchange_flow rebuild", job_id)
+    log.info("job %s legacy exchange_flow rebuild — forwarding to data_processor.backfill",
+             job_id)
     try:
-        result = await _refresh_exchange_flow_worker()
-        if not result.get("ok") and result.get("reason") == "already_running":
-            # The monolith's self-heal loop happens to be mid-flight. Don't
-            # treat as failure — the rebuild is happening, just not by us.
-            args["rebuild_result"] = result
-            await _write_status(job_id=job_id, job_type=job_type, args=args,
-                                status="completed", progress=1.0,
-                                started_at=started_at, finished_at=_utcnow())
-            log.info("job %s no-op: another rebuild was already running", job_id)
-            return
-        args["rebuild_result"] = {
-            "rows_after": int(result.get("rows_after") or 0),
-            "duration_s": float(result.get("duration_s") or 0.0),
-        }
-        await _write_status(job_id=job_id, job_type=job_type, args=args,
-                            status="completed", progress=1.0,
-                            started_at=started_at, finished_at=_utcnow())
-        log.info("job %s completed: %s", job_id, args["rebuild_result"])
+        from data_processor.backfill import main as dp_main
+        await dp_main(job_id)
+        log.info("job %s completed via data_processor.backfill", job_id)
+    except SystemExit:
+        # data_processor.backfill calls sys.exit(1) on failure; let that
+        # propagate so the supervisor surfaces the bad exit code.
+        raise
     except Exception as exc:
         log.exception("job %s failed", job_id)
         await _write_status(job_id=job_id, job_type=job_type, args=args,

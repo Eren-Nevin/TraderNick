@@ -52,11 +52,29 @@ _CHUNK_HOURS = {
     "ohlcv":            6,
     "trades":           6,
     "fills":            6,
-    "position_history": 1,   # already finer — keep as-is
+    # position_history: 2h chunks are fine for historical windows
+    # (~5s/chunk, ~300k rows). The recurring "last chunk hangs" failures
+    # are not a chunk-size issue — they're a live-overlap contention
+    # issue handled by `_LIVE_OVERLAP_BUFFER` below.
+    "position_history": 2,
     "trade_history":    6,
     "transfers":        6,
     "funding":          6,
     "vaults":           6,
+}
+
+# Per-event "freshness buffer" — the backfill won't fetch chunks whose
+# end-time is within this window of `now`. Lets the live worker own that
+# recent zone and prevents the backfill from queueing the identical
+# request behind a still-streaming live response on the same API key.
+# Three jobs in a row (de1d2fa19, a4cd69dd, 91278d03) hung on the
+# position_history chunk that included the most recent few hours
+# while the live position_history sweep was simultaneously hitting DS
+# for the same window. Without a buffer, every backfill `until ≈ now`
+# request keeps reproducing the same hang.
+from datetime import timedelta as _td
+_LIVE_OVERLAP_BUFFER = {
+    "position_history": _td(hours=2),
 }
 
 # Events that get one chunk PER TOKEN (instead of one multi-token chunk).
@@ -138,7 +156,10 @@ async def _fetch_chunk(ds, *, event, tokens, since, until):
             if event == "ohlcv":
                 b = b.window("1m")
             elif event == "position_history":
-                b = b.window("5m")
+                # Mirrors the live group: 15m grid + $1000 min position size.
+                b = b.window("15m").min_size(1000)
+            elif event == "trade_history":
+                b = b.window("1h")
             df = await b.as_df("polars")
             if df.is_empty(): return 0
             rows = transform(df)
@@ -165,6 +186,11 @@ async def main(job_id):
     completed_set = {tuple(k) if isinstance(k, list) else k for k in args.get("completed_chunks", [])}
     chunks = _planned_chunks(events, tokens, since, until)
     total = len(chunks)
+    # Surface the exact planned total so the dashboard can render "X / Y
+    # chunks done" instead of just X. The figure is stable for the life of
+    # the job — chunk count only depends on (events, tokens, since, until)
+    # and the per-event _CHUNK_HOURS map, none of which mutate post-launch.
+    args["total_chunks"] = total
     def _chunk_key(ev: str, tok, cs):
         return f"{ev}|{tok}|{cs.isoformat()}" if tok else f"{ev}|{cs.isoformat()}"
     done = sum(1 for (ev, tok, cs, _) in chunks if _chunk_key(ev, tok, cs) in completed_set)
@@ -181,7 +207,12 @@ async def main(job_id):
             log.info("force purge: %s WHERE %s", table, where)
             await ch.command(f"ALTER TABLE {table} DELETE WHERE {where}")
 
-    ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
+    # Generous per-request timeout — matches the live worker
+    # (streams/_hl_common.py:51). The SDK default is 600s, which DS
+    # consistently fails to meet for heavy position_history chunks when
+    # the API is under load. 1800s lets a slow-but-progressing response
+    # finish streaming instead of dying at the 10-minute mark.
+    ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY, timeout=1800.0)
     try:
         for (ev, tok, cs, ce) in chunks:
             if _stop:

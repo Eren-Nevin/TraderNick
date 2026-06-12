@@ -299,40 +299,19 @@ CREATE TABLE IF NOT EXISTS tradernick.exchange_flow_minute
     count         UInt64            CODEC(T64, ZSTD(3))
 )
 ENGINE = SummingMergeTree
-PARTITION BY toYYYYMM(time)
+-- Hourly partitions so the data_processor.live recent tier can rebuild
+-- the last few hours atomically via REPLACE PARTITION. Replaces the
+-- previous toYYYYMM(time) — see scripts/migrate_derived_partitions.py
+-- for the one-shot in-place migration.
+PARTITION BY toStartOfHour(time)
 ORDER BY (direction, exchange, chain, token, time)
 TTL time + INTERVAL 270 DAY;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.mv_exchange_flow
-TO tradernick.exchange_flow_minute AS
-SELECT
-    classified.1 AS direction,
-    classified.2 AS exchange,
-    chain,
-    token,
-    toStartOfMinute(time) AS time,
-    sum(amount) AS sum_amount,
-    -- Stablecoins are pegged $1 so sum_value_usd = sum_amount; otherwise trust
-    -- DeFiStream's stored value_usd. Mirrors the /transfers/aggregate stable
-    -- override so chart numbers match byte-for-byte across the two endpoints.
-    sum(if(token IN ('USDC', 'USDT', 'DAI', 'USDE'),
-           amount,
-           coalesce(value_usd, 0.0))) AS sum_value_usd,
-    count() AS count
-FROM tradernick.transfers
-ARRAY JOIN arrayConcat(
-    if(has(receiver_categories, 'binance-deposit')     AND NOT has(sender_categories, 'cex'),  [('in', 'binance')],     CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(receiver_categories, 'coinbase-deposit')    AND NOT has(sender_categories, 'cex'),  [('in', 'coinbase')],    CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(receiver_categories, 'okx-deposit')         AND NOT has(sender_categories, 'cex'),  [('in', 'okx')],         CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(receiver_categories, 'bybit-deposit')       AND NOT has(sender_categories, 'cex'),  [('in', 'bybit')],       CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(receiver_categories, 'hyperliquid-deposit') AND NOT has(sender_categories, 'perp'), [('in', 'hyperliquid')], CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'binance'     AND NOT has(receiver_categories, 'cex'),         [('out', 'binance')],     CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'coinbase'    AND NOT has(receiver_categories, 'cex'),         [('out', 'coinbase')],    CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'okx'         AND NOT has(receiver_categories, 'cex'),         [('out', 'okx')],         CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'bybit'       AND NOT has(receiver_categories, 'cex'),         [('out', 'bybit')],       CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String))))),
-    if(has(sender_categories, 'hot-wallet') AND coalesce(sender_entity, '') = 'hyperliquid' AND coalesce(receiver_entity, '') != 'hyperliquid', [('out', 'hyperliquid')], CAST([] AS Array(Tuple(LowCardinality(String), LowCardinality(String)))))
-) AS classified
-GROUP BY direction, exchange, chain, token, time;
+-- Note: the push MV `mv_exchange_flow` (which fed exchange_flow_minute on
+-- every transfers INSERT) has been removed — see data_processor/registry.py
+-- for the equivalent SELECT, now run on a tiered schedule via REPLACE
+-- PARTITION instead of as an INSERT trigger. Idempotent under backfill
+-- replays because the rebuild reads `transfers FINAL`.
 
 -- AAVE v3 events — six tables, one per event type, populated by DeFiStream's
 -- /evm/aave_v3/events/<type> endpoints. Column names match DeFiStream's CSV
@@ -2057,30 +2036,15 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_15m
     size_state      AggregateFunction(argMax, Float64, DateTime64(3)),
     pnl_state       AggregateFunction(argMax, Float64, DateTime64(3))
 ) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(bucket)
+-- Daily partitions for atomic data_processor REPLACE PARTITION. The push
+-- MV `hl_position_history_15m_mv` is gone — see data_processor/registry.py.
+PARTITION BY toDate(bucket)
 ORDER BY (token, bucket, side, wallet)
 TTL bucket + INTERVAL 270 DAY;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_15m_mv
-TO tradernick.hl_position_history_15m
-AS
-SELECT
-    toStartOfInterval(time, INTERVAL 15 MINUTE) AS bucket,
-    token, side, wallet,
-    argMaxState(amount,         time) AS amount_state,
-    argMaxState(size,           time) AS size_state,
-    argMaxState(unrealized_pnl, time) AS pnl_state
-FROM tradernick.hl_position_history
-GROUP BY bucket, token, side, wallet;
-
 -- 1-hour rollup of hl_position_history. Same argMaxState pattern as the
--- 15m MV — idempotent under re-ingest (re-emitting the same row produces
--- the same argMax value, so argMaxMerge collapses N states to the correct
--- single value regardless of how many times a row was inserted). 4× fewer
--- rows than the 15m MV, but the chart's most common window is 30d × 1h, so
--- this is the right layer for that path. The 15m MV stays in place for
--- 15m/30m queries; routes pick the coarsest MV whose bucket divides the
--- query interval (see oi_split / unrealized_pnl).
+-- 15m rollup; 4× fewer rows. Routes pick the coarsest rollup whose bucket
+-- divides the query interval (see oi_split / unrealized_pnl).
 CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_1h
 (
     bucket          DateTime       CODEC(DoubleDelta, ZSTD(3)),
@@ -2091,34 +2055,16 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_1h
     size_state      AggregateFunction(argMax, Float64, DateTime64(3)),
     pnl_state       AggregateFunction(argMax, Float64, DateTime64(3))
 ) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(bucket)
+-- Daily partitions for atomic data_processor REPLACE PARTITION. The push
+-- MV `hl_position_history_1h_mv` is gone — see data_processor/registry.py.
+PARTITION BY toDate(bucket)
 ORDER BY (token, bucket, side, wallet)
 TTL bucket + INTERVAL 270 DAY;
 
-CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_1h_mv
-TO tradernick.hl_position_history_1h
-AS
-SELECT
-    toStartOfInterval(time, INTERVAL 1 HOUR) AS bucket,
-    token, side, wallet,
-    argMaxState(amount,         time) AS amount_state,
-    argMaxState(size,           time) AS size_state,
-    argMaxState(unrealized_pnl, time) AS pnl_state
-FROM tradernick.hl_position_history
-GROUP BY bucket, token, side, wallet;
-
--- End-of-day per-(wallet, token, side) unrealized PnL snapshot. Same
--- argMaxState pattern as the 15m / 1h MVs but bucketed at day granularity
--- — argMaxState picks the latest snapshot per (day, wallet, token, side)
--- which by construction is the wallet's position state at end-of-day for
--- that token/side. Read pattern sums across (token, side) per (day,
--- wallet) to get the wallet's total EOD unrealized — what /smart_oi's
--- 'unrealized' and 'sum' modes need for daily leaderboard ranking.
---
--- Idempotent under re-ingest: argMaxMerge across N replays of the same
--- (day, wallet, token, side, time) row picks the max-time entry, which
--- is identical regardless of replay count. Re-emission from DeFiStream
--- sweep loops doesn't drift this MV. Same lever as the 15m / 1h MVs.
+-- End-of-day per-(wallet, token, side) unrealized PnL snapshot. argMaxState
+-- picks the latest snapshot per (day, wallet, token, side) — the wallet's
+-- position state at end-of-day for that token/side. Read pattern sums
+-- across (token, side) per (day, wallet) for the smart_oi leaderboards.
 CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_eod_wallet
 (
     day         Date           CODEC(DoubleDelta, ZSTD(3)),
@@ -2127,30 +2073,24 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_eod_wallet
     side        LowCardinality(String),
     pnl_state   AggregateFunction(argMax, Float64, DateTime64(3))
 ) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(day)
+-- One partition per day so the data_processor recent tier rebuilds today
+-- + a few trailing days atomically. The push MV
+-- `hl_position_history_eod_wallet_mv` is gone — see
+-- data_processor/registry.py.
+PARTITION BY day
 ORDER BY (day, wallet, token, side)
--- 181 not 180: TTL with `day + INTERVAL N DAY` is Date-typed and expires
+-- 271 not 180: TTL with `day + INTERVAL N DAY` is Date-typed and expires
 -- at the resulting date's MIDNIGHT (00:00:00), so on the day a row hits
 -- its 180-day mark anything written that day before midnight passes was
--- already eligible for the next TTL merge — the eod MV silently lost its
--- youngest row on every backfill. One extra day of padding sidesteps the
--- date/datetime granularity mismatch without further code changes.
+-- already eligible for the next TTL merge — the eod table silently lost
+-- its youngest row on every backfill. One extra day of padding sidesteps
+-- the date/datetime granularity mismatch without further code changes.
 TTL day + INTERVAL 271 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_position_history_eod_wallet_mv
-TO tradernick.hl_position_history_eod_wallet
-AS
-SELECT
-    toDate(time) AS day,
-    wallet, token, side,
-    argMaxState(unrealized_pnl, time) AS pnl_state
-FROM tradernick.hl_position_history
-GROUP BY day, wallet, token, side;
 
 -- Sided realized PnL per (day, wallet, side) derived from hl_fills'
 -- closed_pnl. Used by the smart-wallet selector when a criterion targets
 -- a specific side (long_pnl / short_pnl) — direct hl_fills scans would
--- cost 5-15s; this MV brings sided queries to ~50ms.
+-- cost 5-15s; this rollup brings sided queries to ~50ms.
 --
 -- Side mapping from hl_fills.dir:
 --   'Close Long'   → 'long'   (long position closed)
@@ -2159,15 +2099,8 @@ GROUP BY day, wallet, token, side;
 --   'Short > Long' → 'short'
 -- Opens carry zero realized PnL (closed_pnl is only populated on the
 -- closing side of a fill pair) and Net Child Vaults aren't trading PnL,
--- so both are excluded from the MV's filter.
---
--- sumState idempotency caveat: re-ingest of a (token, time, tid, wallet)
--- fill is rare but possible (DeFiStream sweep loop). The underlying
--- hl_fills ReplacingMergeTree dedups on its ORDER BY tuple in the
--- background, so by the time the MV's source query runs a dup is
--- already collapsed. Periodic ReplacingMT merge keeps drift bounded;
--- if it ever becomes a problem the same self-heal-rebuild pattern
--- (exchange_flow_rollup_self_heal) applies.
+-- so both are excluded from the rebuild filter (see
+-- data_processor/registry.py).
 CREATE TABLE IF NOT EXISTS tradernick.hl_fills_pnl_daily
 (
     day       Date           CODEC(DoubleDelta, ZSTD(3)),
@@ -2176,31 +2109,15 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_fills_pnl_daily
     side      LowCardinality(String),
     pnl_state AggregateFunction(sum, Float64)
 ) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(day)
+-- Daily partitions for atomic REPLACE PARTITION. The push MV
+-- `hl_fills_pnl_daily_mv` is gone — sumState targets like this one were
+-- the most exposed to backfill-replay drift under the old MV cascade.
+PARTITION BY day
 ORDER BY (day, wallet, token, side)
--- 181 not 180: TTL with `day + INTERVAL N DAY` is Date-typed and expires
--- at the resulting date's MIDNIGHT (00:00:00), so on the day a row hits
--- its 180-day mark anything written that day before midnight passes was
--- already eligible for the next TTL merge — the eod MV silently lost its
--- youngest row on every backfill. One extra day of padding sidesteps the
--- date/datetime granularity mismatch without further code changes.
+-- 271 not 180: TTL with `day + INTERVAL N DAY` is Date-typed and expires
+-- at the resulting date's MIDNIGHT (00:00:00). One extra day of padding
+-- sidesteps the date/datetime granularity mismatch.
 TTL day + INTERVAL 271 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_fills_pnl_daily_mv
-TO tradernick.hl_fills_pnl_daily
-AS
-SELECT
-    toDate(time) AS day,
-    wallet, token,
-    multiIf(
-        dir IN ('Close Long',  'Long > Short'), 'long',
-        dir IN ('Close Short', 'Short > Long'), 'short',
-        ''
-    ) AS side,
-    sumState(closed_pnl) AS pnl_state
-FROM tradernick.hl_fills
-WHERE dir IN ('Close Long', 'Close Short', 'Long > Short', 'Short > Long')
-GROUP BY day, wallet, token, side;
 
 -- ───────────────────────────────────────────────────────────────────
 -- Per-(day, wallet, token, position_side) fill volume.
@@ -2218,9 +2135,9 @@ GROUP BY day, wallet, token, side;
 -- Vault-transfer fills (dir = 'Net Child Vaults') and unknown dirs are
 -- excluded; they aren't real perp volume.
 --
--- Powers the SmartSelector volume-style criteria (long/short volume in
--- token + USD, plus taker buy/sell variants). Same idempotency / TTL
--- pattern as hl_fills_pnl_daily.
+-- Powers the SmartSelector volume-style criteria. Maintained by the
+-- data_processor worker on the same atomic-REPLACE-PARTITION schedule as
+-- hl_fills_pnl_daily.
 CREATE TABLE IF NOT EXISTS tradernick.hl_fills_vol_daily
 (
     day                          Date            CODEC(DoubleDelta, ZSTD(3)),
@@ -2234,31 +2151,10 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_fills_vol_daily
     taker_sell_vol_token_state   AggregateFunction(sum, Float64),
     taker_sell_vol_usd_state     AggregateFunction(sum, Float64)
 ) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(day)
+-- Daily partitions for atomic REPLACE PARTITION; push MV removed.
+PARTITION BY day
 ORDER BY (day, wallet, token, position_side)
 TTL day + INTERVAL 271 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_fills_vol_daily_mv
-TO tradernick.hl_fills_vol_daily
-AS
-SELECT
-    toDate(time) AS day,
-    wallet, token,
-    multiIf(
-        dir IN ('Open Long',  'Close Long',  'Long > Short'), 'long',
-        dir IN ('Open Short', 'Close Short', 'Short > Long'), 'short',
-        ''
-    ) AS position_side,
-    sumState(size)                                            AS vol_token_state,
-    sumState(size * price)                                    AS vol_usd_state,
-    sumStateIf(size,         crossed = 1 AND side = 'B')      AS taker_buy_vol_token_state,
-    sumStateIf(size * price, crossed = 1 AND side = 'B')      AS taker_buy_vol_usd_state,
-    sumStateIf(size,         crossed = 1 AND side = 'A')      AS taker_sell_vol_token_state,
-    sumStateIf(size * price, crossed = 1 AND side = 'A')      AS taker_sell_vol_usd_state
-FROM tradernick.hl_fills
-WHERE dir IN ('Open Long', 'Close Long', 'Long > Short',
-              'Open Short', 'Close Short', 'Short > Long')
-GROUP BY day, wallet, token, position_side;
 
 -- ───────────────────────────────────────────────────────────────────
 -- Per-(day, wallet, token) accrued funding PnL.
@@ -2278,20 +2174,10 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_funding_daily
     token             LowCardinality(String),
     funding_pnl_state AggregateFunction(sum, Float64)
 ) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(day)
+-- Daily partitions for atomic REPLACE PARTITION; push MV removed.
+PARTITION BY day
 ORDER BY (day, wallet, token)
 TTL day + INTERVAL 271 DAY;
-
-CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_funding_daily_mv
-TO tradernick.hl_funding_daily
-AS
-SELECT
-    toDate(time) AS day,
-    wallet,
-    token,
-    sumState(amount) AS funding_pnl_state
-FROM tradernick.hl_funding
-GROUP BY day, wallet, token;
 
 -- Pre-aggregated per-(wallet, token, bucket) trader performance. The right
 -- table for leaderboard queries — small + already summed. net_pnl = pnl - fees.
@@ -2303,6 +2189,7 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history
     pnl           Float64        CODEC(Gorilla, ZSTD(3)),
     fees          Float64        CODEC(Gorilla, ZSTD(3)),
     net_pnl       Float64        CODEC(Gorilla, ZSTD(3)),
+    funding       Float64        CODEC(Gorilla, ZSTD(3)),
     volume        Float64        CODEC(Gorilla, ZSTD(3)),
     buy_volume    Float64        CODEC(Gorilla, ZSTD(3)),
     sell_volume   Float64        CODEC(Gorilla, ZSTD(3)),

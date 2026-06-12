@@ -36,8 +36,23 @@
     eventKey: string;
     label: string;
     days?: number;           // display window. Default 180.
+    // Optional per-chain selector. When present (length >= 2) a
+    // dropdown is rendered; selecting a chain refetches with
+    // `&chain=<x>`. Default = 'ETH' if present, else chains[0].
+    // No "All" view — multi-chain aggregation masked single-chain
+    // blackouts and made the picture harder to read, not easier.
+    chains?: string[];
   };
-  let { eventKey, label, days: windowDays = 180 }: Props = $props();
+  let { eventKey, label, days: windowDays = 180, chains }: Props = $props();
+
+  // Selected chain. Empty string only for single-chain events
+  // (chains undefined) — those don't render a selector and the URL
+  // omits `&chain=`.
+  let chain = $state<string>(
+    chains && chains.length > 0
+      ? (chains.includes('ETH') ? 'ETH' : chains[0])
+      : ''
+  );
 
   let loading = $state(true);
   let err = $state<string | null>(null);
@@ -48,7 +63,10 @@
     loading = true;
     err = null;
     try {
-      const url = `/api/admin/gaps/calendar?event=${encodeURIComponent(eventKey)}`;
+      let url = `/api/admin/gaps/calendar?event=${encodeURIComponent(eventKey)}`;
+      if (chain) {
+        url += `&chain=${encodeURIComponent(chain)}`;
+      }
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
       data = (await res.json()) as CalendarPayload;
@@ -60,6 +78,11 @@
   }
 
   onMount(load);
+
+  function onChainChange(e: Event) {
+    chain = (e.currentTarget as HTMLSelectElement).value;
+    load();
+  }
 
   // Group days into weeks (Mon-Sun). Each "column" is a week. We pad
   // the start with empty cells so day-of-week aligns vertically.
@@ -109,9 +132,11 @@
 </script>
 
 <div class="border border-zinc-800 rounded-md p-3 bg-zinc-950">
-  <div class="flex items-baseline justify-between mb-2">
-    <div>
-      <h3 class="text-sm font-semibold text-zinc-200">{label}</h3>
+  <div class="flex items-baseline justify-between gap-2 mb-2">
+    <div class="min-w-0">
+      <h3 class="text-sm font-semibold text-zinc-200">
+        {label}{chain ? ` · ${chain}` : ''}
+      </h3>
       {#if data}
         <div class="text-[10px] text-zinc-500 uppercase tracking-widest">
           {data.mode === 'regular_cadence' ? 'regular cadence' : 'event driven'}
@@ -124,13 +149,35 @@
         </div>
       {/if}
     </div>
-    {#if loading}
-      <span class="text-[10px] text-zinc-500">loading…</span>
-    {/if}
+    <div class="flex items-center gap-2 shrink-0">
+      {#if chains && chains.length >= 2}
+        <select
+          value={chain}
+          onchange={onChainChange}
+          disabled={loading}
+          class="text-[11px] bg-zinc-900 border border-zinc-700 rounded px-1 py-0.5 text-zinc-200 disabled:opacity-50"
+        >
+          {#each chains as c (c)}
+            <option value={c}>{c}</option>
+          {/each}
+        </select>
+      {/if}
+      {#if loading}
+        <span class="text-[10px] text-zinc-500">loading…</span>
+      {/if}
+    </div>
   </div>
 
   {#if err}
-    <div class="text-xs text-rose-300 bg-rose-950/30 p-2 rounded">{err}</div>
+    <div class="text-xs text-rose-300 bg-rose-950/30 p-2 rounded flex items-start gap-2">
+      <span class="flex-1 min-w-0 break-words">{err}</span>
+      <button
+        type="button"
+        onclick={load}
+        disabled={loading}
+        class="shrink-0 px-2 py-0.5 rounded border border-rose-700/50 text-rose-200 hover:bg-rose-900/40 disabled:opacity-50"
+      >retry</button>
+    </div>
   {:else if !data}
     <div class="text-xs text-zinc-500 py-4 text-center">no data</div>
   {:else}

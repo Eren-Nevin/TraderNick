@@ -86,18 +86,23 @@
   let chartBaseStart = 0;
   let chartBaseEnd = 0;
 
+  // O(log N) hover hit-test. `data` is time-sorted; bisect to the
+  // insertion point then snap to whichever neighbour is closer. The
+  // old O(N) linear scan ran on every mouse-move per chart and dominated
+  // hover self-time on pages with many charts.
   let hoverIdx = $derived.by(() => {
     if (hoverTime === null || !data.length) return null;
-    let best = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < data.length; i++) {
-      const dd = Math.abs(data[i].time - hoverTime);
-      if (dd < bestDist) {
-        bestDist = dd;
-        best = i;
-      }
+    let lo = 0;
+    let hi = data.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (data[mid].time < hoverTime) lo = mid + 1;
+      else hi = mid;
     }
-    return best;
+    if (lo === 0) return 0;
+    const a = data[lo - 1].time;
+    const b = data[lo].time;
+    return Math.abs(b - hoverTime) < Math.abs(hoverTime - a) ? lo : lo - 1;
   });
   let hoverDatum = $derived(hoverIdx !== null ? data[hoverIdx] : null);
 
@@ -105,18 +110,32 @@
     if (!svgEl || !chartXScale) return;
     const g = d3.select(svgEl).select<SVGGElement>('g.chart-root');
     if (g.empty()) return;
-    g.select('.crosshair').remove();
-    if (hoverDatum === null) return;
+    // Reuse the existing crosshair <line> instead of removing+appending
+    // on every mouse-move. Old path created and destroyed ~one DOM node
+    // per chart per hover frame; profile shows that dominated chart-side
+    // hover cost. The line is hidden via display:none when there's no
+    // hovered point, so we don't even pay for the attribute updates in
+    // the "moved off the plot" case.
+    let line = g.select<SVGLineElement>('line.crosshair');
+    if (line.empty()) {
+      line = g
+        .append('line')
+        .attr('class', 'crosshair')
+        .attr('pointer-events', 'none')
+        .attr('stroke-dasharray', '3,3');
+    }
+    if (hoverDatum === null) {
+      line.style('display', 'none');
+      return;
+    }
     const cx = chartXScale(new Date(hoverDatum.time * 1000));
-    g.append('line')
-      .attr('class', 'crosshair')
-      .attr('pointer-events', 'none')
+    line
+      .style('display', null)
+      .attr('stroke', cssVar('--chart-crosshair', '#71717a'))
       .attr('x1', cx)
       .attr('x2', cx)
       .attr('y1', 0)
-      .attr('y2', chartPlotH)
-      .attr('stroke', cssVar('--chart-crosshair', '#71717a'))
-      .attr('stroke-dasharray', '3,3');
+      .attr('y2', chartPlotH);
   }
 
   function draw() {
@@ -277,18 +296,49 @@
         .attr('stroke-dasharray', v.dash ?? '1,4');
     }
 
+    // Viewport-slice the data for the line path. d3.line() walks every
+    // input point, runs the curve interpolator on each (curveMonotoneX
+    // is the dominant pan/zoom cost in profiles), and emits a path
+    // string the SVG clip-path then trims. At 180d×1h that's 4320 points
+    // even when only ~336 are visible — ~93% wasted work per redraw.
+    // Slice to first-before-viewport … last-after-viewport so the curve
+    // continues smoothly past the clip edge. `compute(d, i, data)`
+    // semantics are preserved by remapping `i` back to the original
+    // index (MAs etc. read other rows in `data` by index).
+    let lineSliceStart = 0;
+    let lineSliceEnd = data.length;
+    if (data.length > 2) {
+      let lo = 0;
+      let hi = data.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (data[mid].time < v0) lo = mid + 1;
+        else hi = mid;
+      }
+      lineSliceStart = Math.max(0, lo - 1);
+      lo = 0;
+      hi = data.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >>> 1;
+        if (data[mid].time > v1) hi = mid - 1;
+        else lo = mid;
+      }
+      lineSliceEnd = Math.min(data.length, lo + 2);
+    }
+    const lineData = data.slice(lineSliceStart, lineSliceEnd);
+
     const lineLayer = g.append('g').attr('class', 'lines').attr('clip-path', `url(#${clipId})`);
     for (const ln of lines) {
       const scale = ln.axis === 'secondary' && yScale2 ? yScale2 : yScale;
       const gen = d3
         .line<Datum>()
         .x((d) => xScale(new Date(d.time * 1000)))
-        .y((d, i) => scale(ln.compute(d, i, data)))
-        .defined((d, i) => Number.isFinite(ln.compute(d, i, data)))
+        .y((d, i) => scale(ln.compute(d, lineSliceStart + i, data)))
+        .defined((d, i) => Number.isFinite(ln.compute(d, lineSliceStart + i, data)))
         .curve(d3.curveMonotoneX);
       const path = lineLayer
         .append('path')
-        .datum(data)
+        .datum(lineData)
         .attr('fill', 'none')
         .attr('stroke', ln.color)
         .attr('stroke-width', 1.5)

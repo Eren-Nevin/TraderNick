@@ -44,15 +44,19 @@ _PER_TOKEN_TABLE = {"ohlcv", "trades", "fills", "funding", "position_history", "
 # Per-endpoint live tick + gap-fill chunk size.
 _CADENCE: dict[str, tuple[int, int]] = {
     # event:  (tick_seconds, gap_fill_chunk_hours)
-    "ohlcv":            (60,    6),
-    "trades":           (60,    6),
-    "fills":            (60,    6),
-    # position_history: 5m tick matches the snapshot window. Gap-fill chunks
-    # are kept at 1h because each fetch returns ~1.76M rows (147K wallets/
-    # snap × 12 snaps); larger chunks risk HTTP timeouts.
-    "position_history": (300,   1),
-    "trade_history":    (300,  24),
-    "transfers":        (300,  24),
+    # All non-funding/vault events moved to 15m (2026-06-11). ohlcv /
+    # trades / fills were previously at 1m, which produced ~60× the live
+    # request volume of the new rate for downstream charts that the
+    # dashboard already buckets at >= 1m. position_history / trade_history
+    # / transfers were already moved earlier the same day for the same
+    # reason. Gap-fill chunks (second tuple element) are unchanged — they
+    # govern the sweep tier and don't track the live cadence.
+    "ohlcv":            (900,   6),
+    "trades":           (900,   6),
+    "fills":            (900,   6),
+    "position_history": (900,   1),
+    "trade_history":    (900,  24),
+    "transfers":        (900,  24),
     "funding":          (1800, 24),
     "vaults":           (1800, 24),
 }
@@ -68,7 +72,7 @@ _CADENCE: dict[str, tuple[int, int]] = {
 # self-heals on the next live tick.
 _OVERLAP_MINUTES = {
     60:    3,
-    300:   15,
+    900:   45,    # 3× the new 15m cadence — same shape as the old 300→15
     1800:  1440,
 }
 
@@ -98,7 +102,15 @@ async def _fetch_and_insert(ds, *, event, tokens, since, until) -> int:
             if event == "ohlcv":
                 b = b.window("1m")
             elif event == "position_history":
-                b = b.window("5m")
+                # 15m snapshot grid (was 5m) — 3× fewer rows per token-day at
+                # the cost of coarser carry-forward granularity. min_size=1000
+                # drops dust positions, focusing the table on wallets worth
+                # tracking.
+                b = b.window("15m").min_size(1000)
+            elif event == "trade_history":
+                # Explicit 1h bucket — matches the canonical leaderboard
+                # cadence and keeps gap detection at hour granularity.
+                b = b.window("1h")
             df = await b.as_df("polars")
             if df.is_empty():
                 return 0

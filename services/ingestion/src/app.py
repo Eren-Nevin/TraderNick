@@ -8,7 +8,6 @@ from datetime import datetime, timedelta, timezone
 from sanic import Sanic, response
 
 from scripts.bootstrap_wallets import (
-    _refresh_exchange_flow_worker,
     exchange_flow_refresh_status,
     load_into_clickhouse,
     refresh_exchange_flow,
@@ -98,46 +97,53 @@ async def startup(app_, _loop):
     await app_.ctx.supervisor.start_from_registry()
 
     app_.ctx.jobs = JobManager()
-    try:
-        await app_.ctx.jobs.resume_inflight()
-    except Exception:
-        log.exception("resume_inflight failed (continuing)")
+    # Run resume in the background with retries. On PC reboot the
+    # backfill containers race ClickHouse for DNS resolution / readiness;
+    # the first attempt routinely fails with gaierror. Without retries,
+    # in-flight jobs are silently abandoned and become zombies.
+    app_.add_task(_resume_inflight_with_retry(app_.ctx.jobs))
 
-    # Self-healing tick for exchange_flow_minute. The push MV
-    # (mv_exchange_flow) compounds whenever the source `transfers` table
-    # has unmerged duplicates (live-stream retries / backfill re-runs /
-    # crashed-mid-chunk replays). The push MV stays in place so the chart
-    # is real-time accurate between ticks; this background rebuild runs
-    # FROM transfers FINAL on a 15-minute cadence so any drift heals on
-    # its own. One run = one TRUNCATE + ~30-50s 30d-window INSERT.
-    #
-    # In the per-provider split this tick moves to `data_process_live`
-    # (Phase B). Keep it running on the monolith for backward compat —
-    # the env kill-switch lets the operator silence it once the
-    # data_process service is taking over.
-    if role == "monolith" and os.environ.get("EXCHANGE_FLOW_SELF_HEAL_ENABLED", "1") == "1":
-        app_.add_task(_exchange_flow_refresh_loop())
-    else:
-        log.info("exchange_flow self-heal disabled (role=%s, env kill-switch=%s)",
-                 role, os.environ.get("EXCHANGE_FLOW_SELF_HEAL_ENABLED", "1"))
+    # Self-heal for exchange_flow_minute and the 6 HL derived rollups now
+    # lives in the unified `data_processor.live` stream (registered in
+    # streams/__init__.py as `data_process.processor_live`). No app-side
+    # background loop is needed — the supervisor spawns the stream just
+    # like any other registered worker, and it tiers its rebuild cadence
+    # per-materializer from data_processor.registry.REGISTRY.
 
 
-async def _exchange_flow_refresh_loop():
-    """Periodically rebuild tradernick.exchange_flow_minute from
-    `transfers FINAL`. Single-flight: the existing helper short-circuits
-    when a refresh is already running (e.g. after a wallet rematerialize).
-    Cadence is generous — drift accumulates slowly, and the rebuild itself
-    touches the entire 30-day window so we don't want to run it too often."""
+async def _resume_inflight_with_retry(jobs):
+    """Drive `jobs.resume_inflight()` from a background task with
+    exponential backoff. On container restart (especially PC reboot)
+    ClickHouse may not be reachable for the first several seconds —
+    DNS resolution returns NXDOMAIN, or the port hasn't bound yet.
+    Without retries, in-flight rows are silently abandoned and the
+    jobs become zombies (status='running', subprocess_alive=false).
+
+    The loop exits on first success. We keep retrying for ~15 minutes
+    of total wall-clock; beyond that something is very wrong and the
+    operator should look at the logs."""
     import asyncio
-    # Initial delay so it doesn't fight startup work — supervisor + jobs
-    # resume usually wraps in < 30s.
-    await asyncio.sleep(60)
+    delay = 2.0
+    attempt = 0
+    deadline = 60 * 15  # seconds of total retry budget
+    elapsed = 0.0
     while True:
+        attempt += 1
         try:
-            await _refresh_exchange_flow_worker()
-        except Exception:
-            log.exception("exchange_flow refresh tick failed (continuing)")
-        await asyncio.sleep(15 * 60)
+            await jobs.resume_inflight()
+            log.info("resume_inflight succeeded on attempt %d", attempt)
+            return
+        except Exception as exc:  # noqa: BLE001
+            if elapsed >= deadline:
+                log.exception(
+                    "resume_inflight failed after %d attempts (%.0fs); giving up — "
+                    "in-flight jobs will be left as zombies", attempt, elapsed)
+                return
+            log.warning("resume_inflight attempt %d failed (%s); retrying in %.1fs",
+                        attempt, exc.__class__.__name__, delay)
+            await asyncio.sleep(delay)
+            elapsed += delay
+            delay = min(delay * 1.6, 30.0)
 
 
 @app.get("/health")
@@ -198,7 +204,11 @@ async def get_gaps_calendar(request):
         return response.json({"error": f"invalid since/until: {exc}"}, status=400)
     if since_dt >= until_dt:
         return response.json({"error": "since must be earlier than until"}, status=400)
-    result = await gap_detection.find_calendar(event_key, since_dt, until_dt)
+    chain = request.args.get("chain") or None
+    raw_chains = request.args.get("chains") or ""
+    chains_list = [c for c in (s.strip() for s in raw_chains.split(",")) if c] or None
+    result = await gap_detection.find_calendar(event_key, since_dt, until_dt,
+                                                chain=chain, chains=chains_list)
     return response.json(result)
 
 
@@ -483,8 +493,12 @@ async def _create_unwindowed_backfill(request, job_type: str, args_extra: dict |
 
 @app.post("/jobs/backfill/exchange_flow_minute")
 async def backfill_exchange_flow_minute(request):
-    return await _create_unwindowed_backfill(
-        request, JOB_TYPE_BACKFILL_EXCHANGE_FLOW_MINUTE,
+    # Now a windowed backfill — under the hood the job module forwards to
+    # data_processor.backfill which walks the affected hourly partitions
+    # in [since, until). Without a real window every job would complete
+    # instantly with progress=1.0 (no partitions in zero-width range).
+    return await _create_transfer_backfill(
+        request, JOB_TYPE_BACKFILL_EXCHANGE_FLOW_MINUTE, _extract_empty,
     )
 
 
@@ -493,6 +507,32 @@ async def backfill_transfers_rematerialize(request):
     return await _create_unwindowed_backfill(
         request, JOB_TYPE_BACKFILL_TRANSFERS_REMATERIALIZE,
     )
+
+
+# Unified materializer backfill — single endpoint for every derived table
+# (exchange_flow_minute + 6 HL aggregates). Body shape:
+#   {since, until?, force?, materializers: [...]}
+# `materializers` is a list of names from data_processor.registry.ALL_NAMES.
+@app.post("/jobs/backfill/data_processor")
+async def backfill_data_processor(request):
+    from jobs.manager import JOB_TYPE_BACKFILL_DATA_PROCESSOR
+    body = request.json or {}
+    materializers = body.get("materializers")
+    if not isinstance(materializers, list) or not materializers:
+        return response.json({"error": "missing materializers (list)"}, status=400)
+    materializers = [str(m) for m in materializers]
+    force = bool(body.get("force", False))
+    since_dt, until_dt, err = _parse_backfill_window(body)
+    if err:
+        return response.json({"error": err}, status=400)
+    args_extra = {"materializers": materializers, "force": force}
+    try:
+        job = await request.app.ctx.jobs.create_backfill_args(
+            JOB_TYPE_BACKFILL_DATA_PROCESSOR, since_dt, until_dt, args_extra,
+        )
+    except RuntimeError as exc:
+        return response.json({"error": str(exc)}, status=429)
+    return response.json(job, status=202)
 
 
 async def _create_transfer_backfill(request, job_type: str, extract_args):
@@ -1025,17 +1065,21 @@ async def admin_rematerialize_status(_request):
 
 @app.post("/admin/exchange-flow/refresh")
 async def admin_exchange_flow_refresh(_request):
-    """Force a TRUNCATE + 30-day backfill of tradernick.exchange_flow_minute.
+    """Force a 30-day rebuild of tradernick.exchange_flow_minute.
 
     Auto-called as the final step of /admin/wallets/rematerialize so the
     rollup stays consistent with the freshly-rewritten sender/receiver
     categories on the transfers table. Exposed standalone here for manual
-    re-runs (e.g. after a filter-logic change in mv_exchange_flow that
-    requires a backfill but not a wallet-side rematerialize).
+    re-runs (e.g. after a filter-logic change in data_processor.registry
+    that requires a backfill but not a wallet-side rematerialize).
+
+    Under the hood this enqueues a backfill_data_processor job for
+    materializers=['exchange_flow_minute'] — the data_processor worker
+    rebuilds the affected partitions atomically via REPLACE PARTITION.
     """
     return response.json(await refresh_exchange_flow())
 
 
 @app.get("/admin/exchange-flow/refresh/status")
 async def admin_exchange_flow_refresh_status(_request):
-    return response.json(exchange_flow_refresh_status())
+    return response.json(await exchange_flow_refresh_status())

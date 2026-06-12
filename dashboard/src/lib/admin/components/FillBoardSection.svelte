@@ -19,7 +19,7 @@
   </h2>
   <div class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-3">
     {#each events as ev (ev.event_key)}
-      <FillBoard eventKey={ev.event_key} label={ev.label} />
+      <FillBoard eventKey={ev.event_key} label={ev.label} chains={ev.chains} />
     {/each}
   </div>
 </section>

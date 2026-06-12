@@ -332,9 +332,10 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
   {
     type: 'exchange_flow_minute',
     label: 'Exchange flow rebuild',
-    description: 'Rebuild tradernick.exchange_flow_minute from transfers FINAL ' +
-      'using the staging-swap-recover pattern. The chart never sees an empty ' +
-      'rollup during the rebuild. Idempotent — re-running is safe.',
+    description: 'Rebuild tradernick.exchange_flow_minute over [since, until) ' +
+      'from transfers FINAL via REPLACE PARTITION (one hourly partition at a ' +
+      'time). Idempotent — re-running is safe. Pick a wide window to fix a ' +
+      'long-standing gap or a narrow window for a recent fix.',
     fields: []
   },
   {
@@ -344,7 +345,40 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
       'categories + entity) + DROP/ADD/MATERIALIZE INDEX ×4 on transfers. ' +
       'Fire this after uploading a new wallet_labels parquet so historical ' +
       'rows pick up the new mapping. Also rebuilds exchange_flow_minute by ' +
-      'default (uncheck to skip).',
+      'default (uncheck to skip). This is a monolithic operation — no ' +
+      'chunk progress, may take hours on the 971M-row transfers table.',
     fields: []
+  },
+  // Data processor — rebuild any combination of the 7 derived tables for
+  // a specific window via REPLACE PARTITION from source FINAL. The single
+  // job_type covers exchange_flow_minute + all 6 HL aggregates; pick which
+  // ones to rebuild via the multiselect.
+  {
+    type: 'data_processor',
+    label: 'Data processor rebuild (derived tables)',
+    description: 'Rebuild selected derived-table partitions from the source ' +
+      'FINAL via REPLACE PARTITION. Idempotent — partitions outside the ' +
+      'window are untouched. Window narrows to the partitions overlapping ' +
+      'since/until. Force has no effect (REPLACE PARTITION is always full).',
+    fields: [
+      { name: 'materializers', label: 'Materializers', kind: 'multiselect',
+        options: [
+          'exchange_flow_minute',
+          'hl_position_history_15m',
+          'hl_position_history_1h',
+          'hl_position_history_eod_wallet',
+          'hl_fills_pnl_daily',
+          'hl_fills_vol_daily',
+          'hl_funding_daily',
+        ],
+        defaultSelected: [
+          'hl_position_history_15m',
+          'hl_position_history_1h',
+          'hl_position_history_eod_wallet',
+          'hl_fills_pnl_daily',
+          'hl_fills_vol_daily',
+          'hl_funding_daily',
+        ] }
+    ]
   }
 ];

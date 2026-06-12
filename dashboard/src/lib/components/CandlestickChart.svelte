@@ -70,18 +70,23 @@
   let chartBaseStart = 0;
   let chartBaseEnd = 0;
 
+  // O(log N) hover hit-test. `candles` is time-sorted; bisect to the
+  // insertion point then snap to whichever neighbour is closer. The
+  // old O(N) linear scan ran on every mouse-move per chart and dominated
+  // hover self-time on pages with many charts.
   let hoverIdx = $derived.by(() => {
     if (hoverTime === null || !candles.length) return null;
-    let best = 0;
-    let bestDist = Infinity;
-    for (let i = 0; i < candles.length; i++) {
-      const dd = Math.abs(candles[i].time - hoverTime);
-      if (dd < bestDist) {
-        bestDist = dd;
-        best = i;
-      }
+    let lo = 0;
+    let hi = candles.length - 1;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (candles[mid].time < hoverTime) lo = mid + 1;
+      else hi = mid;
     }
-    return best;
+    if (lo === 0) return 0;
+    const a = candles[lo - 1].time;
+    const b = candles[lo].time;
+    return Math.abs(b - hoverTime) < Math.abs(hoverTime - a) ? lo : lo - 1;
   });
   let hoverCandle = $derived(hoverIdx !== null ? candles[hoverIdx] : null);
 
@@ -89,35 +94,58 @@
     if (!svgEl || !chartXScale || !chartYScale) return;
     const g = d3.select(svgEl).select<SVGGElement>('g.chart-root');
     if (g.empty()) return;
-    g.select('.crosshair').remove();
-    if (hoverCandle === null) return;
+    // Reuse the existing crosshair <g> and its two lines instead of
+    // tearing them down + recreating per hover frame. See LineChart for
+    // the rationale; OHLCV has a horizontal price line in addition to
+    // the vertical time line.
+    let cross = g.select<SVGGElement>('g.crosshair');
+    let vline: d3.Selection<SVGLineElement, unknown, SVGElement | null, unknown>;
+    let hline: d3.Selection<SVGLineElement, unknown, SVGElement | null, unknown>;
+    if (cross.empty()) {
+      cross = g.append('g').attr('class', 'crosshair').attr('pointer-events', 'none');
+      vline = cross
+        .append('line')
+        .attr('class', 'v')
+        .attr('stroke-dasharray', '3,3');
+      hline = cross
+        .append('line')
+        .attr('class', 'h')
+        .attr('stroke-dasharray', '3,3');
+    } else {
+      vline = cross.select<SVGLineElement>('line.v');
+      hline = cross.select<SVGLineElement>('line.h');
+    }
+    if (hoverCandle === null) {
+      cross.style('display', 'none');
+      return;
+    }
     const c = hoverCandle;
     const cx = chartXScale(new Date(c.time * 1000));
     const cy = chartYScale(c.close);
-    const cross = g.append('g').attr('class', 'crosshair').attr('pointer-events', 'none');
-    cross
-      .append('line')
-      .attr('x1', cx)
-      .attr('x2', cx)
-      .attr('y1', 0)
-      .attr('y2', chartPlotH)
-      .attr('stroke', cssVar('--chart-crosshair', '#71717a'))
-      .attr('stroke-dasharray', '3,3');
-    cross
-      .append('line')
-      .attr('x1', 0)
-      .attr('x2', chartPlotW)
-      .attr('y1', cy)
-      .attr('y2', cy)
-      .attr('stroke', cssVar('--chart-crosshair', '#71717a'))
-      .attr('stroke-dasharray', '3,3');
+    const stroke = cssVar('--chart-crosshair', '#71717a');
+    cross.style('display', null);
+    vline.attr('stroke', stroke).attr('x1', cx).attr('x2', cx).attr('y1', 0).attr('y2', chartPlotH);
+    hline.attr('stroke', stroke).attr('x1', 0).attr('x2', chartPlotW).attr('y1', cy).attr('y2', cy);
   }
+
+  // Stable clip-path id per component instance. Used to be a fresh
+  // Math.random() per draw, which forced the <defs>/<clipPath> to be
+  // rebuilt every redraw. With persistent layers we set it once on the
+  // first mount and reuse forever.
+  const _clipId = `clip-${Math.random().toString(36).slice(2, 9)}`;
+  // True once the static SVG skeleton (chart-root, defs, layer groups,
+  // overlay rect) has been laid down. Subsequent draws skip the setup
+  // and only update data layers via d3 .data().join().
+  let _structureBuilt = false;
 
   function draw() {
     if (!svgEl) return;
     const root = d3.select(svgEl);
-    root.selectAll('*').remove();
-    if (!candles.length) return;
+    if (!candles.length) {
+      // Hide everything but keep the structure so the next draw is fast.
+      if (_structureBuilt) root.select<SVGGElement>('g.chart-root').style('display', 'none');
+      return;
+    }
 
     const plotW = Math.max(0, width - MARGIN.left - MARGIN.right);
     const plotH = Math.max(0, height - MARGIN.top - MARGIN.bottom);
@@ -211,151 +239,230 @@
     chartBaseStart = baseStart;
     chartBaseEnd = baseEnd;
 
-    const g = root
-      .append('g')
-      .attr('class', 'chart-root')
-      .attr('transform', `translate(${MARGIN.left},${MARGIN.top})`);
+    // ── persistent SVG skeleton ─────────────────────────────────────
+    // Build once; every subsequent draw just updates positions/data.
+    // The old code called `root.selectAll('*').remove()` + re-appended
+    // ~1000 nodes per zoom rAF; profiles showed that pattern eating
+    // 25% of total CPU on a single 4320-candle chart. With persistent
+    // layers + d3 .data().join(), only candles entering/leaving the
+    // viewport touch the DOM; the rest get attribute updates only.
+    let g = root.select<SVGGElement>('g.chart-root');
+    if (!_structureBuilt) {
+      root.selectAll('*').remove();
+      g = root
+        .append('g')
+        .attr('class', 'chart-root')
+        .attr('transform', `translate(${MARGIN.left},${MARGIN.top})`);
+      const clip = g
+        .append('defs')
+        .append('clipPath')
+        .attr('id', _clipId)
+        .append('rect');
+      clip.attr('width', plotW).attr('height', plotH);
+      g.append('g').attr('class', 'grid');
+      g.append('g').attr('class', 'vrefs').attr('clip-path', `url(#${_clipId})`);
+      g.append('g').attr('class', 'candles-wicks').attr('clip-path', `url(#${_clipId})`);
+      g.append('g').attr('class', 'candles-bodies').attr('clip-path', `url(#${_clipId})`);
+      g.append('g').attr('class', 'lines').attr('clip-path', `url(#${_clipId})`);
+      g.append('g').attr('class', 'y-axis');
+      g.append('g').attr('class', 'volume').attr('clip-path', `url(#${_clipId})`);
+      g.append('g').attr('class', 'x-axis');
+      const overlay = g
+        .append('rect')
+        .attr('class', 'overlay')
+        .attr('fill', 'transparent')
+        .style('cursor', 'crosshair');
+      overlay.on('mousemove', function (event: MouseEvent) {
+        const [mx, my] = d3.pointer(event, this);
+        if (mx < 0 || mx > chartPlotW || my < 0 || my > chartPlotH) {
+          onHover?.(null);
+          return;
+        }
+        onHover?.(chartXScale!.invert(mx).getTime() / 1000);
+      });
+      overlay.on('mouseleave', () => onHover?.(null));
+      _structureBuilt = true;
+    } else {
+      g.style('display', null);
+      g.select<SVGRectElement>(`#${_clipId} rect`).attr('width', plotW).attr('height', plotH);
+    }
 
-    const clipId = `clip-${Math.random().toString(36).slice(2, 9)}`;
-    g.append('defs')
-      .append('clipPath')
-      .attr('id', clipId)
-      .append('rect')
-      .attr('width', plotW)
-      .attr('height', plotH);
-
-    g.append('g')
-      .attr('class', 'grid')
+    // ── grid (cheap to re-render via axis call) ─────────────────────
+    const gridSel = g.select<SVGGElement>('g.grid');
+    gridSel
       .call(
         d3
-          .axisRight(yScale)
+          .axisRight<number>(yScale)
           .tickSize(plotW)
-          .tickFormat(() => '')
+          .tickFormat(() => '') as never
       )
-      .call((sel) => sel.select('.domain').remove())
-      .selectAll('line')
+      .call((sel) => sel.select('.domain').remove());
+    gridSel
+      .selectAll<SVGLineElement, unknown>('line')
       .attr('stroke', cssVar('--chart-grid', '#27272a'))
       .attr('stroke-dasharray', '2,3');
 
-    // Vertical reference lines (e.g. week markers). Clip to plot area.
-    if (vRefLines.length > 0) {
-      const vLayer = g.append('g').attr('class', 'vrefs').attr('clip-path', `url(#${clipId})`);
-      for (const v of vRefLines) {
-        const x = xScale(new Date(v.time * 1000));
-        if (x < -1 || x > plotW + 1) continue;
-        vLayer
-          .append('line')
-          .attr('x1', x)
-          .attr('x2', x)
-          .attr('y1', 0)
-          .attr('y2', plotH)
-          .attr('stroke', v.color ?? cssVar('--chart-grid', '#3f3f46'))
-          .attr('stroke-width', 1)
-          .attr('stroke-dasharray', v.dash ?? '1,4');
-      }
-    }
-
-    if (showCandles) {
-      const gCandles = g.append('g').attr('class', 'candles').attr('clip-path', `url(#${clipId})`);
-      for (const c of candles) {
-        const x = xScale(new Date(c.time * 1000));
-        if (x < -bw || x > plotW + bw) continue;
-        const up = c.close >= c.open;
-        const color = up ? '#22c55e' : '#ef4444';
-        gCandles
-          .append('line')
-          .attr('x1', x)
-          .attr('x2', x)
-          .attr('y1', yScale(c.high))
-          .attr('y2', yScale(c.low))
-          .attr('stroke', color);
-        const yTop = yScale(Math.max(c.open, c.close));
-        const yBot = yScale(Math.min(c.open, c.close));
-        gCandles
-          .append('rect')
-          .attr('x', x - bw / 2)
-          .attr('y', yTop)
-          .attr('width', bw)
-          .attr('height', Math.max(1, yBot - yTop))
-          .attr('fill', color);
-      }
-    }
-
-    if (lines.length) {
-      const lineLayer = g.append('g').attr('class', 'lines').attr('clip-path', `url(#${clipId})`);
-      for (const ln of lines) {
-        const gen = d3
-          .line<Candle>()
-          .x((d) => xScale(new Date(d.time * 1000)))
-          .y((d, i) => yScale(ln.compute(d, i, candles)))
-          .defined((d, i) => Number.isFinite(ln.compute(d, i, candles)))
-          .curve(d3.curveMonotoneX);
-        const path = lineLayer
-          .append('path')
-          .datum(candles)
-          .attr('fill', 'none')
-          .attr('stroke', ln.color)
-          .attr('stroke-width', 1.5)
-          .attr('d', gen);
-        if (ln.dash) path.attr('stroke-dasharray', ln.dash);
-      }
-    }
-
-    g.append('g')
-      .attr('transform', `translate(${plotW},0)`)
-      .call(d3.axisRight(yScale).ticks(6))
-      .call((sel) => {
-        sel.select('.domain').remove();
-        sel.selectAll('text').attr('fill', cssVar('--chart-axis-text', '#a1a1aa')).attr('font-size', '10px');
-        sel.selectAll('line').attr('stroke', cssVar('--chart-axis-line', '#3f3f46'));
-      });
-
-    if (showCandles) {
-      const gVol = g
-        .append('g')
-        .attr('transform', `translate(0,${priceH + GAP})`)
-        .attr('clip-path', `url(#${clipId})`);
-      for (const c of candles) {
-        const x = xScale(new Date(c.time * 1000));
-        if (x < -bw || x > plotW + bw) continue;
-        const up = c.close >= c.open;
-        gVol
-          .append('rect')
-          .attr('x', x - bw / 2)
-          .attr('y', yVol(c.volume))
-          .attr('width', bw)
-          .attr('height', volH - yVol(c.volume))
-          .attr('fill', up ? '#22c55e' : '#ef4444')
-          .attr('fill-opacity', 0.55);
-      }
-    }
-
-    g.append('g')
-      .attr('transform', `translate(0,${priceH + GAP + volH})`)
-      .call(d3.axisBottom(xScale).ticks(Math.max(2, Math.floor(plotW / 110))))
-      .call((sel) => {
-        sel.select('.domain').remove();
-        sel.selectAll('text').attr('fill', cssVar('--chart-axis-text', '#a1a1aa')).attr('font-size', '10px');
-        sel.selectAll('line').attr('stroke', cssVar('--chart-axis-line', '#3f3f46'));
-      });
-
-    const overlay = g
-      .append('rect')
-      .attr('class', 'overlay')
-      .attr('width', plotW)
-      .attr('height', plotH)
-      .attr('fill', 'transparent')
-      .style('cursor', 'crosshair');
-
-    overlay.on('mousemove', function (event: MouseEvent) {
-      const [mx, my] = d3.pointer(event, this);
-      if (mx < 0 || mx > plotW || my < 0 || my > priceH) {
-        onHover?.(null);
-        return;
-      }
-      onHover?.(xScale.invert(mx).getTime() / 1000);
+    // ── vertical reference lines (week markers etc.) ────────────────
+    const visibleVrefs = vRefLines.filter((v) => {
+      const x = xScale(new Date(v.time * 1000));
+      return x >= -1 && x <= plotW + 1;
     });
-    overlay.on('mouseleave', () => onHover?.(null));
+    const vrefGrid = cssVar('--chart-grid', '#3f3f46');
+    g.select<SVGGElement>('g.vrefs')
+      .selectAll<SVGLineElement, VRefLine>('line')
+      .data(visibleVrefs, (d) => d.time)
+      .join(
+        (enter) => enter.append('line').attr('stroke-width', 1),
+        (update) => update,
+        (exit) => exit.remove()
+      )
+      .attr('x1', (d) => xScale(new Date(d.time * 1000)))
+      .attr('x2', (d) => xScale(new Date(d.time * 1000)))
+      .attr('y1', 0)
+      .attr('y2', plotH)
+      .attr('stroke', (d) => d.color ?? vrefGrid)
+      .attr('stroke-dasharray', (d) => d.dash ?? '1,4');
+
+    // ── candles: wicks (<line>) + bodies (<rect>) via data-join ─────
+    // Filter to the viewport ± one bar so partially-visible candles
+    // still render. Keyed by candle.time so the same DOM element keeps
+    // tracking the same candle across pan/zoom — d3 only diff-updates.
+    const visibleCandles: Candle[] = showCandles
+      ? candles.filter((c) => {
+          const x = xScale(new Date(c.time * 1000));
+          return x >= -bw && x <= plotW + bw;
+        })
+      : [];
+    const wickKey = (c: Candle) => c.time;
+    g.select<SVGGElement>('g.candles-wicks')
+      .selectAll<SVGLineElement, Candle>('line')
+      .data(visibleCandles, wickKey)
+      .join(
+        (enter) => enter.append('line'),
+        (update) => update,
+        (exit) => exit.remove()
+      )
+      .attr('x1', (c) => xScale(new Date(c.time * 1000)))
+      .attr('x2', (c) => xScale(new Date(c.time * 1000)))
+      .attr('y1', (c) => yScale(c.high))
+      .attr('y2', (c) => yScale(c.low))
+      .attr('stroke', (c) => (c.close >= c.open ? '#22c55e' : '#ef4444'));
+    g.select<SVGGElement>('g.candles-bodies')
+      .selectAll<SVGRectElement, Candle>('rect')
+      .data(visibleCandles, wickKey)
+      .join(
+        (enter) => enter.append('rect'),
+        (update) => update,
+        (exit) => exit.remove()
+      )
+      .attr('x', (c) => xScale(new Date(c.time * 1000)) - bw / 2)
+      .attr('y', (c) => yScale(Math.max(c.open, c.close)))
+      .attr('width', bw)
+      .attr('height', (c) =>
+        Math.max(1, yScale(Math.min(c.open, c.close)) - yScale(Math.max(c.open, c.close)))
+      )
+      .attr('fill', (c) => (c.close >= c.open ? '#22c55e' : '#ef4444'));
+
+    // ── indicator overlays ──────────────────────────────────────────
+    // Always run the data-join (with an empty array when there are no
+    // indicators) so previously-drawn paths get cleaned up.
+    let lineSliceStart = 0;
+    let lineSliceEnd = candles.length;
+    if (candles.length > 2) {
+      let lo = 0;
+      let hi = candles.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi) >>> 1;
+        if (candles[mid].time < v0) lo = mid + 1;
+        else hi = mid;
+      }
+      lineSliceStart = Math.max(0, lo - 1);
+      lo = 0;
+      hi = candles.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >>> 1;
+        if (candles[mid].time > v1) hi = mid - 1;
+        else lo = mid;
+      }
+      lineSliceEnd = Math.min(candles.length, lo + 2);
+    }
+    const lineData = candles.slice(lineSliceStart, lineSliceEnd);
+    const gen = d3
+      .line<Candle>()
+      .x((d) => xScale(new Date(d.time * 1000)))
+      .curve(d3.curveMonotoneX);
+    g.select<SVGGElement>('g.lines')
+      .selectAll<SVGPathElement, Line>('path')
+      .data(lines, (ln) => ln.key)
+      .join(
+        (enter) =>
+          enter
+            .append('path')
+            .attr('fill', 'none')
+            .attr('stroke-width', 1.5),
+        (update) => update,
+        (exit) => exit.remove()
+      )
+      .attr('stroke', (ln) => ln.color)
+      .attr('stroke-dasharray', (ln) => ln.dash ?? null)
+      .attr('d', (ln) =>
+        gen
+          .y((d, i) => yScale(ln.compute(d, lineSliceStart + i, candles)))
+          .defined((d, i) => Number.isFinite(ln.compute(d, lineSliceStart + i, candles)))(
+            lineData
+          )
+      );
+
+    // ── y-axis (right side) ─────────────────────────────────────────
+    const yAxisSel = g.select<SVGGElement>('g.y-axis').attr('transform', `translate(${plotW},0)`);
+    yAxisSel.call(d3.axisRight(yScale).ticks(6) as never).call((sel) => {
+      sel.select('.domain').remove();
+      sel
+        .selectAll<SVGTextElement, unknown>('text')
+        .attr('fill', cssVar('--chart-axis-text', '#a1a1aa'))
+        .attr('font-size', '10px');
+      sel
+        .selectAll<SVGLineElement, unknown>('line')
+        .attr('stroke', cssVar('--chart-axis-line', '#3f3f46'));
+    });
+
+    // ── volume pane ─────────────────────────────────────────────────
+    const volSel = g
+      .select<SVGGElement>('g.volume')
+      .attr('transform', `translate(0,${priceH + GAP})`);
+    volSel
+      .selectAll<SVGRectElement, Candle>('rect')
+      .data(visibleCandles, wickKey)
+      .join(
+        (enter) => enter.append('rect').attr('fill-opacity', 0.55),
+        (update) => update,
+        (exit) => exit.remove()
+      )
+      .attr('x', (c) => xScale(new Date(c.time * 1000)) - bw / 2)
+      .attr('y', (c) => yVol(c.volume))
+      .attr('width', bw)
+      .attr('height', (c) => volH - yVol(c.volume))
+      .attr('fill', (c) => (c.close >= c.open ? '#22c55e' : '#ef4444'));
+
+    // ── x-axis ──────────────────────────────────────────────────────
+    const xAxisSel = g
+      .select<SVGGElement>('g.x-axis')
+      .attr('transform', `translate(0,${priceH + GAP + volH})`);
+    xAxisSel
+      .call(d3.axisBottom(xScale).ticks(Math.max(2, Math.floor(plotW / 110))) as never)
+      .call((sel) => {
+        sel.select('.domain').remove();
+        sel
+          .selectAll<SVGTextElement, unknown>('text')
+          .attr('fill', cssVar('--chart-axis-text', '#a1a1aa'))
+          .attr('font-size', '10px');
+        sel
+          .selectAll<SVGLineElement, unknown>('line')
+          .attr('stroke', cssVar('--chart-axis-line', '#3f3f46'));
+      });
+
+    // ── interaction overlay sizing ──────────────────────────────────
+    g.select<SVGRectElement>('rect.overlay').attr('width', plotW).attr('height', plotH);
 
     drawCrosshair();
   }
