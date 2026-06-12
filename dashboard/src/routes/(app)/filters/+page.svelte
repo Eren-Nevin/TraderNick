@@ -25,6 +25,21 @@
     errorMsg = null;
     dialog = { filter: f };
   }
+  // Duplicate a filter: create "<name>_copy" with the same config + refs
+  // (deep-cloned so the two don't share state), then open it for editing.
+  function copy(f: SavedFilter) {
+    errorMsg = null;
+    try {
+      const created = filtersStore.add(
+        `${f.name}_copy`,
+        structuredClone($state.snapshot(f.config)),
+        [...f.refs],
+      );
+      dialog = { filter: created };
+    } catch (e) {
+      errorMsg = e instanceof Error ? e.message : String(e);
+    }
+  }
 
   function handleSave(patch: { name: string; config: FilterConfig; refs: string[] }) {
     // Drop refs to filters that no longer exist.
@@ -126,6 +141,12 @@
             onclick={() => openEdit(f)}
             class="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-700"
           >Edit</button>
+          <button
+            type="button"
+            onclick={() => copy(f)}
+            title="Duplicate this filter and edit the copy"
+            class="rounded border border-zinc-700 bg-zinc-800 px-2 py-1 text-xs text-zinc-200 hover:bg-zinc-700"
+          >Copy</button>
           <button
             type="button"
             onclick={() => del(f)}
