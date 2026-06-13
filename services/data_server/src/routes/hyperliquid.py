@@ -535,6 +535,166 @@ async def smart_wallets(request):
     })
 
 
+@bp.get("/hyperliquid/wallet_pnl")
+@throttled("heavy")
+async def wallet_pnl(request):
+    """Per-wallet daily PnL time series + summary stats.
+
+    Powers the collapsible PnL view in the Smart Wallets dialog. Returns,
+    per day d, two cumulative curves the client can switch between:
+
+        realized_day(d) = Σ net_pnl on day d        (price PnL net of fees)
+        unrealized(d)   = EOD mark-to-market of open positions at day d
+        realized(d)     = cumsum(realized_day) up to and including day d
+        total(d)        = realized(d) + unrealized(d)
+
+    `realized` is the cumulative realized-PnL equity curve; `total` adds the
+    end-of-day unrealized snapshot on top. Funding is excluded from both.
+    realized PnL is GLOBAL: summed across all HL tokens for the wallet, not
+    scoped to any single token.
+
+    hl_trade_history is a ReplacingMergeTree — read with FINAL so re-backfilled
+    duplicate (wallet, token, time) rows collapse to their latest version
+    instead of summing (which otherwise massively inflates PnL/volume).
+
+    Stats are computed from the DAILY series regardless of display timeframe:
+
+        realized_pnl   — Σ realized over the window (= realized at last day)
+        unrealized_pnl — latest EOD unrealized snapshot
+        sharpe         — mean / stddevPop of daily realized returns
+        volatility     — stddevPop of daily realized returns ($)
+
+    Query params:
+      wallet — required, the address (lowercased to match the tables).
+      since  — ISO date (inclusive). Defaults to until − 180 days.
+      until  — ISO date (inclusive). Defaults to today (UTC).
+    """
+    wallet = request.args.get("wallet")
+    if not wallet:
+        return response.json({"error": "missing wallet"}, status=400)
+    wallet = wallet.lower()
+
+    until_arg = request.args.get("until")
+    since_arg = request.args.get("since")
+    try:
+        until_dt = (datetime.fromisoformat(until_arg).replace(tzinfo=None)
+                    if until_arg else datetime.utcnow())
+    except ValueError:
+        return response.json({"error": "invalid until; expected YYYY-MM-DD"}, status=400)
+    try:
+        since_dt = (datetime.fromisoformat(since_arg).replace(tzinfo=None)
+                    if since_arg else until_dt - timedelta(days=180))
+    except ValueError:
+        return response.json({"error": "invalid since; expected YYYY-MM-DD"}, status=400)
+    if since_dt > until_dt:
+        return response.json({"error": "since must be <= until"}, status=400)
+
+    # One row per day in [since, until]: realized flow (Σ net_pnl, GLOBAL —
+    # across all tokens) from hl_trade_history, and the EOD unrealized
+    # snapshot collapsed across (token, side). Funding is intentionally NOT
+    # read — the curve is realized PnL only. LEFT JOINs onto a dense day
+    # spine so gaps read 0.
+    sql = """
+        WITH
+        days AS (
+            SELECT toDate({since:DateTime}) + number AS day
+            FROM numbers(0, dateDiff('day', toDate({since:DateTime}), toDate({until:DateTime})) + 1)
+        ),
+        realized AS (
+            SELECT toDate(time) AS day,
+                   sum(net_pnl) AS realized
+            FROM tradernick.hl_trade_history FINAL
+            WHERE wallet = {wallet:String}
+              AND time >= {since:DateTime}
+              AND time <  {until:DateTime} + INTERVAL 1 DAY
+            GROUP BY day
+        ),
+        unreal AS (
+            SELECT day, sum(eod) AS unrealized
+            FROM (
+                SELECT day, token, side, argMaxMerge(pnl_state) AS eod
+                FROM tradernick.hl_position_history_eod_wallet
+                WHERE wallet = {wallet:String}
+                  AND day >= toDate({since:DateTime})
+                  AND day <= toDate({until:DateTime})
+                GROUP BY day, token, side
+            )
+            GROUP BY day
+        )
+        SELECT d.day AS day,
+               coalesce(r.realized, 0)   AS realized,
+               coalesce(u.unrealized, 0) AS unrealized
+        FROM days d
+        LEFT JOIN realized r ON r.day = d.day
+        LEFT JOIN unreal   u ON u.day = d.day
+        ORDER BY d.day
+    """
+    params = {"wallet": wallet, "since": since_dt, "until": until_dt}
+    ch = await client()
+    rows = await ch.query(sql, parameters=params)
+
+    series = []
+    cum_realized = 0.0
+    daily_returns: list[float] = []
+    last_unrealized = 0.0
+    # Skip the dead lead-in: a 180-day default window can start before the
+    # wallet's first activity (or before the data floor), which would show a
+    # long flat-zero stretch and dilute the volatility. Start emitting (and
+    # counting returns) at the first day with any realized / unrealized value.
+    started = False
+    for r in rows.result_rows:
+        day, realized, unrealized = r
+        realized = float(realized)
+        unrealized = float(unrealized)
+        if not started:
+            if realized == 0.0 and unrealized == 0.0:
+                continue
+            started = True
+        cum_realized += realized
+        last_unrealized = unrealized
+        # Unix seconds at UTC midnight — Lightweight Charts time format.
+        t = int(datetime(day.year, day.month, day.day,
+                         tzinfo=timezone.utc).timestamp())
+        series.append({
+            "time": t,
+            # Two switchable cumulative curves.
+            "realized": cum_realized,
+            "total": cum_realized + unrealized,
+            # Per-day components (for reference / future tooltips).
+            "realized_day": realized,
+            "unrealized": unrealized,
+        })
+        # Daily return = that day's realized PnL (= Δ of the realized curve).
+        daily_returns.append(realized)
+
+    # Sharpe / volatility from daily realized returns (population stddev to
+    # match the smart_selector Sharpe definition). Volatility is reported as
+    # a plain number — the daily-returns standard deviation — not a currency.
+    n = len(daily_returns)
+    if n > 0:
+        mean = sum(daily_returns) / n
+        var = sum((x - mean) ** 2 for x in daily_returns) / n
+        vol = var ** 0.5
+        sharpe = mean / vol if vol > 0 else 0.0
+    else:
+        vol = 0.0
+        sharpe = 0.0
+
+    stats = {
+        "realized_pnl": cum_realized,
+        "unrealized_pnl": last_unrealized,
+        "sharpe": sharpe,
+        "volatility": vol,
+    }
+    return response.json({
+        "wallet": wallet,
+        "since": since_dt.date().isoformat(),
+        "until": until_dt.date().isoformat(),
+        "series": series,
+        "stats": stats,
+    })
+
+
 # ── SmartSelector presets ────────────────────────────────────────────
 # Persistence layer for "criteria groups" — a saved SmartSelectorState
 # (lookback / top_n / scope / sort_by / criteria[…]) under a name. Lets

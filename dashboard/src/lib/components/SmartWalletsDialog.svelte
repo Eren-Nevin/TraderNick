@@ -2,10 +2,22 @@
   // Modal showing the wallets a SmartSelector picked on one day. Triggered
   // by clicking on the wallet-count line on an hl_smart_oi chart. Each
   // wallet row:
-  //   - left-click → copy address to clipboard (toast feedback inline)
+  //   - left-click on the address → copy address to clipboard
   //   - middle-click → open https://www.coinglass.com/hyperliquid/<address>
-  //     in a new tab (browser default — we just provide the link target)
+  //   - chevron (right) → expand a collapsible per-wallet PnL view
+  //
+  // Expandable view (accordion — only one open at a time):
+  //   - lazy: the PnL series is fetched only when a row is expanded, and
+  //     the cached data is dropped the moment it collapses (or another row
+  //     opens), so we never hold stale series for closed rows.
+  //   - a total-PnL (unrealized + realized − funding) equity-curve chart
+  //     with a daily/weekly timeframe toggle, plus realized / unrealized /
+  //     Sharpe / volatility stats.
+  //
   // Hide via the ✕, the backdrop, or Escape.
+  import WalletPnlChart from '$lib/components/WalletPnlChart.svelte';
+  import { stopDragEvents } from '$lib/actions/stopDragEvents';
+  import { fmtUsdTooltip, fmtAmountTooltip } from '$lib/components/charts/config';
 
   type Props = {
     open: boolean;
@@ -15,7 +27,7 @@
     loading?: boolean;
     /** Error message if the fetch failed. */
     error?: string | null;
-    /** ISO date the wallets are for (display label only). */
+    /** ISO date the wallets are for (display label + PnL window end). */
     day?: string;
     /** Token context (shown for clarity). */
     token?: string;
@@ -52,26 +64,126 @@
   }
 
   function coinglassUrl(w: string): string {
-    // Coinglass HL wallet page — same URL shape the user requested. The
-    // anchor target="_blank" + middle-click both honour this.
     return `https://www.coinglass.com/hyperliquid/${w}`;
   }
+
+  // The "as-of" cutoff day (header day) as Unix seconds at UTC midnight —
+  // drawn as a dashed vertical marker on the PnL chart. null when no day.
+  let cutoff = $derived.by<number | null>(() => {
+    if (!day) return null;
+    const t = Date.parse(`${day}T00:00:00Z`);
+    return Number.isFinite(t) ? Math.floor(t / 1000) : null;
+  });
+
+  // ── Expandable per-wallet PnL view (accordion, lazy, drop-on-collapse) ──
+  type Point = { time: number; value: number };
+  type PnlStats = {
+    realized_pnl: number;
+    unrealized_pnl: number;
+    sharpe: number;
+    volatility: number;
+  };
+  type RawPoint = { time: number; realized: number; total: number };
+
+  let expanded = $state<string | null>(null);     // the single open wallet
+  let tf = $state<'daily' | 'weekly'>('daily');
+  // Which cumulative curve to plot: realized only, or realized + EOD
+  // unrealized snapshot ("total").
+  let pnlMode = $state<'realized' | 'total'>('realized');
+  let pnlLoading = $state(false);
+  let pnlError = $state<string | null>(null);
+  let pnlSeries = $state<RawPoint[]>([]);          // full daily series
+  let pnlStats = $state<PnlStats | null>(null);
+  let pnlCtl: AbortController | null = null;
+
+  function clearPnl() {
+    if (pnlCtl) { pnlCtl.abort(); pnlCtl = null; }
+    pnlSeries = [];
+    pnlStats = null;
+    pnlError = null;
+    pnlLoading = false;
+  }
+
+  function toggleExpand(w: string) {
+    if (expanded === w) {
+      // Collapse → drop cached data for this wallet.
+      expanded = null;
+      clearPnl();
+      return;
+    }
+    // Opening a (different) wallet collapses any other and drops its data.
+    expanded = w;
+    tf = 'daily';
+    clearPnl();
+    void loadPnl(w);
+  }
+
+  async function loadPnl(w: string) {
+    pnlLoading = true;
+    pnlError = null;
+    pnlCtl = new AbortController();
+    try {
+      const qs = new URLSearchParams({ wallet: w });
+      // Intentionally NOT pinned to the clicked day — the PnL view shows the
+      // wallet's full recent history (server defaults to a 180-day window
+      // ending today), not just up to the bucket that opened the dialog.
+      const res = await fetch(`/api/hyperliquid/wallet_pnl?${qs}`, { signal: pnlCtl.signal });
+      if (!res.ok) throw new Error(`wallet_pnl ${res.status}`);
+      const body = await res.json();
+      // Guard against a late response after the row was collapsed / swapped.
+      if (expanded !== w) return;
+      pnlSeries = ((body.series ?? []) as Array<{ time: number; realized: number; total: number }>).map((r) => ({
+        time: r.time,
+        realized: r.realized,
+        total: r.total
+      }));
+      pnlStats = (body.stats ?? null) as PnlStats | null;
+    } catch (e) {
+      if ((e as DOMException)?.name !== 'AbortError') {
+        pnlError = e instanceof Error ? e.message : String(e);
+      }
+    } finally {
+      if (expanded === w) pnlLoading = false;
+    }
+  }
+
+  // Daily → weekly downsample of the cumulative equity curve: take the last
+  // point in each 7-day (UTC) bucket. Sampling the cumulative total at week
+  // end is the correct weekly view of an equity curve.
+  let chartData = $derived.by<Point[]>(() => {
+    const src = pnlSeries;
+    if (tf === 'daily') return src.map((d) => ({ time: d.time, value: d[pnlMode] }));
+    const WEEK = 7 * 86_400;
+    const lastPerWeek = new Map<number, RawPoint>();
+    for (const d of src) lastPerWeek.set(Math.floor(d.time / WEEK), d);
+    return [...lastPerWeek.values()]
+      .sort((a, b) => a.time - b.time)
+      .map((d) => ({ time: d.time, value: d[pnlMode] }));
+  });
 
   function onKey(e: KeyboardEvent) {
     if (open && e.key === 'Escape') onClose();
   }
+
+  // Reset all expansion state whenever the dialog is closed or its wallet
+  // list changes (a new day was clicked).
+  $effect(() => {
+    void wallets;
+    if (!open) { expanded = null; clearPnl(); }
+  });
 </script>
 
 <svelte:window onkeydown={onKey} />
 
 {#if open}
   <div
-    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+    class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm cursor-default"
     role="dialog"
     aria-modal="true"
     onclick={(e) => { if (e.target === e.currentTarget) onClose(); }}
     onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}
     tabindex="-1"
+    use:stopDragEvents
   >
     <div class="w-[42rem] max-w-[90vw] max-h-[85vh] bg-zinc-950 border border-zinc-700 rounded-md shadow-2xl flex flex-col text-sm">
       <header class="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800">
@@ -82,7 +194,7 @@
         </div>
         <button
           type="button"
-          class="text-zinc-500 hover:text-zinc-200 px-1.5 py-0.5"
+          class="text-zinc-500 hover:text-zinc-200 px-1.5 py-0.5 cursor-pointer"
           onclick={onClose}
           aria-label="Close"
         >✕</button>
@@ -91,10 +203,10 @@
       <div class="px-4 py-2 text-[11px] text-zinc-500 border-b border-zinc-800">
         <span class="text-zinc-400">Click</span> to copy address ·
         <span class="text-zinc-400">middle-click</span> (or Ctrl-click)
-        to open on Coinglass in a new tab.
+        to open on Coinglass · <span class="text-zinc-400">chevron</span> for PnL.
       </div>
 
-      <div class="flex-1 overflow-auto">
+      <div class="flex-1 overflow-auto scrollbar-none">
         {#if loading}
           <div class="px-4 py-6 text-zinc-400 text-center">Loading wallets…</div>
         {:else if errMsg}
@@ -108,6 +220,7 @@
                 <th class="px-4 py-1.5 text-left">#</th>
                 <th class="px-4 py-1.5 text-left">Address</th>
                 <th class="px-2 py-1.5 text-right"></th>
+                <th class="pl-2 pr-5 py-1.5 text-right"></th>
               </tr>
             </thead>
             <tbody>
@@ -117,13 +230,12 @@
                   <td class="px-4 py-1.5">
                     <!-- Anchor so middle-click + Ctrl-click open the
                          Coinglass URL via the browser's default new-tab
-                         behaviour. Left-click is intercepted (preventDefault)
-                         and routed to copy-to-clipboard instead. -->
+                         behaviour. Left-click is intercepted and copies. -->
                     <a
                       href={coinglassUrl(w)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      class="text-zinc-100 hover:text-emerald-300 break-all"
+                      class="text-zinc-100 hover:text-emerald-300 break-all cursor-pointer"
                       onclick={(e) => { e.preventDefault(); copyAddress(w); }}
                       title="Click to copy · middle-click / Ctrl-click to open Coinglass"
                     >{w}</a>
@@ -133,11 +245,95 @@
                       href={coinglassUrl(w)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      class="text-zinc-500 hover:text-emerald-300"
+                      class="text-zinc-500 hover:text-emerald-300 cursor-pointer"
                       title="Open Coinglass in new tab"
                     >↗</a>
                   </td>
+                  <td class="pl-2 pr-5 py-1.5 text-right">
+                    <button
+                      type="button"
+                      class="text-zinc-500 hover:text-zinc-200 transition-transform inline-block cursor-pointer"
+                      class:rotate-90={expanded === w}
+                      onclick={() => toggleExpand(w)}
+                      aria-label={expanded === w ? 'Collapse PnL' : 'Show PnL'}
+                      aria-expanded={expanded === w}
+                    >›</button>
+                  </td>
                 </tr>
+                {#if expanded === w}
+                  <tr class="border-b border-zinc-800 bg-zinc-900/40">
+                    <td colspan="4" class="px-4 py-3">
+                      {#if pnlLoading}
+                        <div class="py-6 text-center text-zinc-400 text-xs">Loading PnL…</div>
+                      {:else if pnlError}
+                        <div class="py-6 text-center text-red-400 text-xs">{pnlError}</div>
+                      {:else}
+                        <div class="flex items-center justify-between mb-2">
+                          <div class="flex items-center gap-2">
+                            <div class="flex gap-1">
+                              {#each ['realized', 'total'] as const as m}
+                                <button
+                                  type="button"
+                                  class="px-2 py-0.5 rounded text-[10px] border cursor-pointer capitalize"
+                                  class:border-emerald-600={pnlMode === m}
+                                  class:text-emerald-300={pnlMode === m}
+                                  class:border-zinc-700={pnlMode !== m}
+                                  class:text-zinc-400={pnlMode !== m}
+                                  onclick={() => (pnlMode = m)}
+                                >{m}</button>
+                              {/each}
+                            </div>
+                            <span class="text-[10px] text-zinc-500">
+                              cumulative, all tokens{pnlMode === 'total' ? ' · + EOD unrealized' : ''}
+                            </span>
+                          </div>
+                          <div class="flex gap-1">
+                            {#each ['daily', 'weekly'] as const as t}
+                              <button
+                                type="button"
+                                class="px-2 py-0.5 rounded text-[10px] border cursor-pointer"
+                                class:border-emerald-600={tf === t}
+                                class:text-emerald-300={tf === t}
+                                class:border-zinc-700={tf !== t}
+                                class:text-zinc-400={tf !== t}
+                                onclick={() => (tf = t)}
+                              >{t}</button>
+                            {/each}
+                          </div>
+                        </div>
+                        {#if chartData.length === 0}
+                          <div class="py-6 text-center text-zinc-500 text-xs">No PnL history in range.</div>
+                        {:else}
+                          <WalletPnlChart data={chartData} height={200} {cutoff} label={pnlMode === 'total' ? 'Total' : 'Realized'} />
+                        {/if}
+                        {#if pnlStats}
+                          <div class="grid grid-cols-4 gap-2 mt-3 text-[11px]">
+                            <div class="rounded bg-zinc-900/70 px-2 py-1.5">
+                              <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Realized</div>
+                              <div class={pnlStats.realized_pnl >= 0 ? 'text-emerald-300' : 'text-red-300'}>
+                                {fmtUsdTooltip(pnlStats.realized_pnl)}
+                              </div>
+                            </div>
+                            <div class="rounded bg-zinc-900/70 px-2 py-1.5">
+                              <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Unrealized</div>
+                              <div class={pnlStats.unrealized_pnl >= 0 ? 'text-emerald-300' : 'text-red-300'}>
+                                {fmtUsdTooltip(pnlStats.unrealized_pnl)}
+                              </div>
+                            </div>
+                            <div class="rounded bg-zinc-900/70 px-2 py-1.5">
+                              <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Sharpe</div>
+                              <div class="text-zinc-200">{pnlStats.sharpe.toFixed(2)}</div>
+                            </div>
+                            <div class="rounded bg-zinc-900/70 px-2 py-1.5">
+                              <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Volatility</div>
+                              <div class="text-zinc-200">{fmtAmountTooltip(pnlStats.volatility)}</div>
+                            </div>
+                          </div>
+                        {/if}
+                      {/if}
+                    </td>
+                  </tr>
+                {/if}
               {/each}
             </tbody>
           </table>
