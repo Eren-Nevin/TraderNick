@@ -29,7 +29,7 @@ the tokens were fine.
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from enum import Enum
 import logging
 import re
@@ -730,12 +730,15 @@ async def _calendar_baseline_per_hour(ch, spec: CalendarEventSpec,
                                       chain: str | None = None) -> dict[int, float]:
     """Return {hour_of_day → expected_rows_per_hour}, 24 entries.
 
-    Both modes are now static (the dynamic-median EVENT_DRIVEN path was
+    Both modes are static (the dynamic-median EVENT_DRIVEN path was
     removed — it absorbed recent volume swings and retroactively
     repainted older valid periods as gaps):
 
-      REGULAR_CADENCE → (expected_per_day × current_token_count) / 24,
-      optionally concentrated on `hours_of_emit` for bursty feeds.
+      REGULAR_CADENCE → PER-TOKEN shape (expected_per_day / 24, optionally
+      concentrated on `hours_of_emit`). The per-day token-universe scaling
+      is applied in _classify_hours via _calendar_day_token_counts, so the
+      expectation tracks the tokens established each day (by first-seen) —
+      a later token-batch can't retroactively repaint pre-batch history.
 
       EVENT_DRIVEN → flat at spec.min_per_hour, or
       spec.per_chain_min_per_hour[chain] if the chain has an override.
@@ -750,39 +753,79 @@ async def _calendar_baseline_per_hour(ch, spec: CalendarEventSpec,
 
 async def _calendar_baseline_static(ch, spec: CalendarEventSpec,
                                      end: datetime) -> dict[int, float]:
-    """Static baseline for REGULAR_CADENCE specs with expected_per_day set.
+    """PER-TOKEN per-hour shape for REGULAR_CADENCE specs with
+    expected_per_day set: {hour_of_day → rows_per_hour_PER_TOKEN}.
 
-    Per-hour = (expected_per_day × n_tokens) / 24, same across hours.
-    n_tokens is the distinct token count over the last 24h of the
-    table (so the universe scales with whatever is currently being
-    polled). If the table is empty in that window we fall back to a
-    72h lookback; if still empty, baseline=0 → everything inactive,
-    matching the dynamic path's behavior on a dry table."""
-    where_extra = f"AND {spec.filter_sql}" if spec.filter_sql else ""
-    for lookback_h in (24, 72, 24 * 14):
-        start = end - timedelta(hours=lookback_h)
-        sql = f"""
-            SELECT uniqExact({spec.token_col})
-            FROM {spec.table}
-            WHERE {spec.time_col} >= toDateTime('{_format_dt(start)}')
-              AND {spec.time_col} <  toDateTime('{_format_dt(end)}')
-              {where_extra}
-        """
-        rs = await ch.query(sql)
-        n_tokens = int(rs.result_rows[0][0]) if rs.result_rows else 0
-        if n_tokens > 0:
-            break
-    if n_tokens == 0:
-        return {h: 0.0 for h in range(24)}
+    The token-universe scaling is applied separately, PER DAY, in
+    `_classify_hours` using `_calendar_day_token_counts` — so a day's
+    expectation reflects the tokens that actually existed *that day*
+    (by first-seen), not the current universe. This keeps a token-batch
+    expansion from retroactively repainting pre-batch history as gaps,
+    while still flagging a token that should be present but is missing.
+
+    Pure (no DB): an empty table yields per-token shape here but a
+    per-day token count of 0 in the classifier → baseline 0 → inactive,
+    matching the old empty-table fallback."""
     if spec.hours_of_emit:
         # Bursty regular feeds (e.g. funding @ 00/08/16 UTC): concentrate
-        # the day's expected row volume on the declared emit hours.
+        # the day's expected per-token volume on the declared emit hours.
         emit_hours = set(spec.hours_of_emit)
-        per_emit_hour = (spec.expected_per_day * n_tokens) / len(emit_hours)
+        per_emit_hour = spec.expected_per_day / len(emit_hours)
         return {h: (per_emit_hour if h in emit_hours else 0.0)
                 for h in range(24)}
-    per_hour = (spec.expected_per_day * n_tokens) / 24.0
+    per_hour = spec.expected_per_day / 24.0
     return {h: per_hour for h in range(24)}
+
+
+async def _calendar_day_token_counts(
+    ch, spec: CalendarEventSpec, since: datetime, until: datetime,
+) -> dict[datetime, int] | None:
+    """For a token-scaled REGULAR_CADENCE feed, return {day-midnight →
+    number of tokens *established by that day*} for every day in
+    [since, until). "Established" = first appearance in the table on or
+    before that day, so a token added in a later batch counts toward the
+    expectation only from its first-seen day onward — and the historical
+    universe is reconstructed exactly, batch additions and all.
+
+    Returns None for specs that aren't token-scaled (event-driven, or
+    regular without expected_per_day / token_col) → no scaling applied."""
+    if not (spec.mode == GapMode.REGULAR_CADENCE
+            and spec.expected_per_day > 0 and spec.token_col):
+        return None
+    where_extra = f"AND {spec.filter_sql}" if spec.filter_sql else ""
+    # First-appearance day per token (bounded by `until`), as a histogram
+    # {first_day → #tokens first seen that day}.
+    sql = f"""
+        SELECT first_day, count() AS n
+        FROM (
+            SELECT {spec.token_col} AS tok, toDate(min({spec.time_col})) AS first_day
+            FROM {spec.table}
+            WHERE {spec.time_col} < toDateTime('{_format_dt(until)}')
+              {where_extra}
+            GROUP BY tok
+        )
+        GROUP BY first_day
+        ORDER BY first_day
+    """
+    rs = await ch.query(sql)
+    hist: list[tuple, ...] = []
+    for r in rs.result_rows:
+        d = r[0]
+        d = d if isinstance(d, date) else datetime.fromisoformat(str(d)).date()
+        hist.append((d, int(r[1])))
+    # Running cumulative: tokens whose first_day <= each day in range.
+    out: dict[datetime, int] = {}
+    cur = since.replace(hour=0, minute=0, second=0, microsecond=0)
+    i = 0
+    running = 0
+    while cur < until:
+        cur_date = cur.date()
+        while i < len(hist) and hist[i][0] <= cur_date:
+            running += hist[i][1]
+            i += 1
+        out[cur] = running
+        cur += timedelta(days=1)
+    return out
 
 
 def _classify_hours(spec: CalendarEventSpec,
@@ -790,11 +833,18 @@ def _classify_hours(spec: CalendarEventSpec,
                     baseline_per_hod: dict[int, float],
                     since: datetime, until: datetime,
                     now: datetime,
-                    first_data: datetime | None = None) -> dict[datetime, str]:
+                    first_data: datetime | None = None,
+                    day_token_counts: dict[datetime, int] | None = None) -> dict[datetime, str]:
     """Walk every hour in [since, until) and classify it as one of:
     - 'filled'   : active and met threshold (actual >= baseline × threshold_ratio)
     - 'empty'    : active but below threshold (gap)
     - 'inactive' : future / in-progress / before first_data / baseline=0
+
+    For token-scaled regular feeds, `baseline_per_hod` is the PER-TOKEN
+    shape and `day_token_counts` gives the tokens established by each day;
+    the effective baseline is per-token × that day's token count. When
+    `day_token_counts` is None (event-driven, or non-token-scaled), the
+    baseline is used as-is.
     """
     current_hour = now.replace(minute=0, second=0, microsecond=0)
     first_hour = (first_data.replace(minute=0, second=0, microsecond=0)
@@ -805,6 +855,10 @@ def _classify_hours(spec: CalendarEventSpec,
         hod = hour.hour
         actual = hourly_counts.get(hour, 0)
         baseline = baseline_per_hod.get(hod, 0.0)
+        if day_token_counts is not None:
+            # Scale the per-token baseline by the tokens established that day.
+            day_key = hour.replace(hour=0, minute=0, second=0, microsecond=0)
+            baseline *= day_token_counts.get(day_key, 0)
         if hour >= current_hour:
             out[hour] = "inactive"  # future / in-progress
         elif first_hour and hour < first_hour:
@@ -920,13 +974,14 @@ async def find_calendar(event_key: str, since: datetime, until: datetime,
     # position_history paused since 2026-02-03, live disabled) classify
     # correctly instead of rendering a fully-gray 180-day grid.
     first_data, last_data = await _calendar_first_last(ch, spec)
-    hourly_counts, baseline_per_hod = await asyncio.gather(
+    hourly_counts, baseline_per_hod, day_token_counts = await asyncio.gather(
         _calendar_hourly_counts(ch, spec, since, until),
         _calendar_baseline_per_hour(ch, spec, now, chain=chain),
+        _calendar_day_token_counts(ch, spec, since, until),
     )
     hour_status = _classify_hours(
         spec, hourly_counts, baseline_per_hod, since, until, now,
-        first_data=first_data,
+        first_data=first_data, day_token_counts=day_token_counts,
     )
     days = _aggregate_days(hour_status, since, today)
     today_hours_payload = _today_hours(hour_status, today)
