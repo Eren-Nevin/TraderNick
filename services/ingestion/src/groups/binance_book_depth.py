@@ -21,7 +21,7 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from defistream import AsyncDeFiStream
 from defistream.exceptions import DeFiStreamError
@@ -36,6 +36,19 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [binance_book_depth]
 log = logging.getLogger(__name__)
 
 POLL_INTERVAL_SECONDS = 300
+
+# Daily settlement sweep. DeFiStream serves book_depth from Binance's
+# authoritative *next-day* dataset, so many symbols (deep-book majors like
+# BTC/ETH/BNB especially) only publish a given day's rows once that day has
+# settled, ~1 day later. The 5-min live poll and the ~50-min gap sweep both
+# ride the current edge and never look back far enough to pick those up, so
+# once a day we re-fetch a 2-day trailing window over the full token
+# universe. We don't need to enumerate which tokens are intraday-capable:
+# DeFiStream silently omits any symbol without coverage for the window
+# (live already relies on this), and the ReplacingMergeTree table dedups the
+# overlap against whatever the live/gap sweeps already inserted.
+DAILY_SWEEP_CADENCE_SECONDS = 24 * 3600
+DAILY_SWEEP_LOOKBACK = timedelta(days=2)
 
 
 def _iso(dt: datetime) -> str:
@@ -154,7 +167,28 @@ async def main(stream_name: str | None = None):
             await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, rows=_sweep_rows, error=_sweep_err) if stream_name else None
             await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
-    await asyncio.gather(live_loop(), sweep_loop())
+    async def daily_sweep_loop():
+        # One worker per stream, so the jitter here is only to avoid every
+        # service hammering DeFiStream at the same boot instant — keep it
+        # small so the first daily sweep fires shortly after startup rather
+        # than up to a day later.
+        jitter = sweep.sweep_jitter_s(POLL_INTERVAL_SECONDS)
+        log.info("daily_sweep_loop: waiting %.0fs before first fire (cadence=%ss, lookback=%s)",
+                 jitter, DAILY_SWEEP_CADENCE_SECONDS, DAILY_SWEEP_LOOKBACK)
+        await asyncio.sleep(jitter)
+        while True:
+            next_fire = time.monotonic() + DAILY_SWEEP_CADENCE_SECONDS
+            now = datetime.now(timezone.utc).replace(tzinfo=None)
+            since = now - DAILY_SWEEP_LOOKBACK
+            try:
+                n = await fetch_and_insert(ds, tokens, since, now)
+                log.info("binance_book_depth daily sweep window=%s..%s rows=%d (tokens=%d)",
+                         since, now, n, len(tokens))
+            except Exception as exc:
+                log.exception("binance_book_depth daily sweep failed: %s", exc)
+            await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
+
+    await asyncio.gather(live_loop(), sweep_loop(), daily_sweep_loop())
 
 
 if __name__ == "__main__":

@@ -10,7 +10,7 @@
 
   let { data }: { data: PageData } = $props();
 
-  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'pc', 'oi', 'fr', 'bs', 'sz', 'tt', 'ls'];
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'pc', 'oi', 'fr', 'book_depth', 'bs', 'sz', 'tt', 'ls'];
 
   function defaultLayout(): ChartInstanceT[] {
     const tk = data.tokens?.[0] ?? 'BTC';

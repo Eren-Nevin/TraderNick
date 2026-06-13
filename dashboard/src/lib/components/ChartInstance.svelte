@@ -2429,7 +2429,7 @@
           // Binance-only — HL doesn't publish an equivalent depth feed.
           // The server returns 24 numeric columns per bucket (d_*/v_* per
           // percentage level); the chart pivots into one of four modes
-          // (totals / per_level / imbalance / stacked) client-side.
+          // (totals / per_level_imbalance / imbalance / stacked) client-side.
           url = `/api/book_depth?${new URLSearchParams(baseQS)}`;
           pickArr = (b) => (b.series ?? []) as AnyDatum[];
           break;
@@ -3802,7 +3802,7 @@
           const bid = bdSumSide(d, BID_LEVELS);
           const ask = bdSumSide(d, ASK_LEVELS);
           const total = bid + ask;
-          return { time: d.time, imb: total > 0 ? (bid - ask) / total : 0 };
+          return { time: d.time, imb: total > 0 ? ((bid - ask) / total) * 100 : 0 };
         })
       : []
   );
@@ -3818,22 +3818,52 @@
     },
     ...cumulativeLines
   ]);
-  // Per-level mode — one line per percentage level (12 lines).
-  let bdPerLevelLines = $derived([
-    ...BID_LEVELS.map((sfx, i) => ({
-      key: 'bd_v_' + sfx,
-      label: 'Bid ' + bdLevelLabel(sfx),
-      color: BID_COLORS[i],
-      compute: (d: Record<string, number>) => d['v_' + sfx] ?? 0
-    })),
-    ...ASK_LEVELS.map((sfx, i) => ({
-      key: 'bd_v_' + sfx,
-      label: 'Ask ' + bdLevelLabel(sfx),
-      color: ASK_COLORS[i],
-      compute: (d: Record<string, number>) => d['v_' + sfx] ?? 0
-    })),
-    ...cumulativeLines
-  ]);
+  // Per-level imbalance mode — one (bid - ask) / (bid + ask) ratio line per
+  // matching percentage band (6 bands: ±20bps, ±1%, ±2%, ±3%, ±4%, ±5%),
+  // expressed as a signed percentage (×100, range [-100%, +100%]). bid = the
+  // negative band's notional (v_m*), ask = the positive band's (v_p*);
+  // positive ⇒ bid-heavy at that band. Bounded, so it rides its own axis —
+  // no USD overlays merged in. Colours are the six evenly-spaced hue-wheel
+  // primaries (red/yellow/green/cyan/blue/magenta) so all six series stay
+  // maximally distinguishable against each other and the dark canvas.
+  const BD_BANDS = [
+    { bid: 'm020', ask: 'p020', label: '±20bps' },
+    { bid: 'm100', ask: 'p100', label: '±1%' },
+    { bid: 'm200', ask: 'p200', label: '±2%' },
+    { bid: 'm300', ask: 'p300', label: '±3%' },
+    { bid: 'm400', ask: 'p400', label: '±4%' },
+    { bid: 'm500', ask: 'p500', label: '±5%' }
+  ] as const;
+  const BD_BAND_COLORS = ['#ef4444', '#eab308', '#22c55e', '#06b6d4', '#3b82f6', '#d946ef'] as const;
+  // Per-band visibility. undefined ⇒ all six on (default); the settings panel
+  // edits instance.bookDepthBands to select / deselect individual series.
+  function bdBandOn(bid: string): boolean {
+    return !instance.bookDepthBands || instance.bookDepthBands.includes(bid);
+  }
+  function bdToggleBand(bid: string): void {
+    const cur = instance.bookDepthBands ?? BD_BANDS.map((b) => b.bid);
+    const next = cur.includes(bid) ? cur.filter((x) => x !== bid) : [...cur, bid];
+    // Never let the user blank the chart — re-show all if they clear the last.
+    instance.bookDepthBands = next.length ? next : BD_BANDS.map((b) => b.bid);
+  }
+  // flatMap keeps each band's colour index stable as others are toggled off.
+  let bdPerLevelImbalanceLines = $derived(
+    BD_BANDS.flatMap((b, i) =>
+      bdBandOn(b.bid)
+        ? [{
+            key: 'bd_imb_' + b.bid,
+            label: b.label,
+            color: BD_BAND_COLORS[i],
+            compute: (d: Record<string, number>) => {
+              const bid = d['v_' + b.bid] ?? 0;
+              const ask = d['v_' + b.ask] ?? 0;
+              const t = bid + ask;
+              return t > 0 ? ((bid - ask) / t) * 100 : 0;
+            }
+          }]
+        : []
+    )
+  );
   // Stacked mode — same 12 fields but rendered by StackedBarChart, which takes
   // a `series` list (keyed against the data record) rather than `lines`.
   let bdStackedSeries = $derived([
@@ -3852,7 +3882,7 @@
   let bdLinesD = $derived.by(() => {
     const mode = instance.bookDepthMode ?? 'totals';
     if (mode === 'totals') return bdTotalsLines;
-    if (mode === 'per_level') return bdPerLevelLines;
+    if (mode === 'per_level_imbalance') return bdPerLevelImbalanceLines;
     return cumulativeLines;
   });
 
@@ -4414,7 +4444,8 @@
   let oiLinesM           = $derived(overlayLinesD.length === 0 ? oiLinesD : [...oiLinesD, ...overlayLinesD]);
   let frLinesM           = $derived(overlayLinesD.length === 0 ? frLinesD : [...frLinesD, ...overlayLinesD]);
   let bdTotalsLinesM     = $derived(overlayLinesD.length === 0 ? bdTotalsLines : [...bdTotalsLines, ...overlayLinesD]);
-  let bdPerLevelLinesM   = $derived(overlayLinesD.length === 0 ? bdPerLevelLines : [...bdPerLevelLines, ...overlayLinesD]);
+  // Per-level imbalance is a bounded-ratio axis — USD price/MA overlays don't
+  // belong on it, so it's passed through unmerged (already a stable $derived).
   let bsLinesM           = $derived(overlayLinesD.length === 0 ? bsLines : [...bsLines, ...overlayLinesD]);
   let szLinesM           = $derived(overlayLinesD.length === 0 ? szLinesD : [...szLinesD, ...overlayLinesD]);
   let ttLinesM           = $derived(overlayLinesD.length === 0 ? ttLinesD : [...ttLinesD, ...overlayLinesD]);
@@ -5321,12 +5352,12 @@
                this picks the visualization the chart pivots into. -->
           <select
             value={instance.bookDepthMode ?? 'totals'}
-            onchange={(e) => (instance.bookDepthMode = e.currentTarget.value as 'totals' | 'per_level' | 'imbalance' | 'stacked')}
+            onchange={(e) => (instance.bookDepthMode = e.currentTarget.value as 'totals' | 'per_level_imbalance' | 'imbalance' | 'stacked')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="How to render the book depth time series"
           >
             <option value="totals">Totals</option>
-            <option value="per_level">Per-level</option>
+            <option value="per_level_imbalance">Per-level imbalance</option>
             <option value="imbalance">Imbalance</option>
             <option value="stacked">Stacked</option>
           </select>
@@ -5604,6 +5635,25 @@
             >{instance.token ?? 'Token'}</button>
           </div>
         {/if}
+      {/if}
+      {#if instance.kind === 'book_depth' && instance.bookDepthMode === 'per_level_imbalance'}
+        <!-- Per-band series toggles. Each band's imbalance line can be shown /
+             hidden independently; colour swatch matches the plotted line.
+             Clearing the last one re-shows all (see bdToggleBand). -->
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Bands</span>
+        {#each BD_BANDS as b, i (b.bid)}
+          <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer" title="Toggle the {b.label} imbalance series">
+            <input
+              type="checkbox"
+              checked={bdBandOn(b.bid)}
+              onchange={() => bdToggleBand(b.bid)}
+              class="accent-zinc-400"
+            />
+            <span class="inline-block w-2.5 h-2.5 rounded-sm" style="background: {BD_BAND_COLORS[i]}; opacity: {bdBandOn(b.bid) ? 1 : 0.4}"></span>
+            {b.label}
+          </label>
+        {/each}
+        <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
       <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
         <input type="checkbox" bind:checked={instance.showPoint} class="accent-zinc-400" />
@@ -6078,10 +6128,11 @@
         formatY={fmtUsdAxis}
         formatTooltip={fmtUsdTooltip}
       />
-    {:else if instance.kind === 'book_depth' && instance.bookDepthMode === 'per_level'}
+    {:else if instance.kind === 'book_depth' && instance.bookDepthMode === 'per_level_imbalance'}
       <LineChart
         data={data as Record<string, number>[]}
-        lines={bdPerLevelLinesM}
+        lines={bdPerLevelImbalanceLines}
+        refLines={NEUTRAL_REF}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
@@ -6089,8 +6140,8 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={fmtUsdAxis}
-        formatTooltip={fmtUsdTooltip}
+        formatY={(v) => v.toFixed(0) + '%'}
+        formatTooltip={(v) => v.toFixed(2) + '%'}
       />
     {:else if instance.kind === 'book_depth' && instance.bookDepthMode === 'imbalance'}
       <SignedBarChart
@@ -6105,8 +6156,8 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={(v) => v.toFixed(2)}
-        formatTooltip={(v) => v.toFixed(3)}
+        formatY={(v) => v.toFixed(0) + '%'}
+        formatTooltip={(v) => v.toFixed(2) + '%'}
       />
     {:else if instance.kind === 'book_depth' && instance.bookDepthMode === 'stacked'}
       <StackedBarChart

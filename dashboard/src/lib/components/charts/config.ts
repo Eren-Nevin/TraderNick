@@ -1452,11 +1452,17 @@ export type ChartInstance = {
    *  matches the Coinglass convention. 'apr' annualizes to percent-per-year. */
   frDisplay?: 'rate8h' | 'apr';
   /** book_depth only: which visualization to render. 'totals' (default) plots
-   *  bid vs ask USD; 'per_level' draws one line per percentage level; 'imbalance'
-   *  plots (bid - ask) / (bid + ask) as a signed bar; 'stacked' is a stacked-band
-   *  chart of every level. The four modes share the same `/book_depth` response
-   *  — the chart pivots client-side. */
-  bookDepthMode?: 'totals' | 'per_level' | 'imbalance' | 'stacked';
+   *  bid vs ask USD; 'per_level_imbalance' draws one (bid - ask) / (bid + ask)
+   *  signed-percentage line per percentage band (6 bands → 6 series); 'imbalance' plots the
+   *  whole-book (bid - ask) / (bid + ask) as a single signed bar; 'stacked' is a
+   *  stacked-band chart of every level. The four modes share the same
+   *  `/book_depth` response — the chart pivots client-side. */
+  bookDepthMode?: 'totals' | 'per_level_imbalance' | 'imbalance' | 'stacked';
+  /** book_depth 'per_level_imbalance' mode only: which bands are visible, by
+   *  their bid-side suffix ('m020','m100','m200','m300','m400','m500').
+   *  undefined ⇒ all six on (default). Lets the settings panel select /
+   *  deselect individual band series without a refetch. */
+  bookDepthBands?: string[];
   /** For event-driven chart kinds (AAVE / Lido) that emit both a USD value
    *  AND a raw token amount per row: which one to plot. Default 'usd'. The
    *  toggle is hidden for Uniswap kinds because the amount field mixes
