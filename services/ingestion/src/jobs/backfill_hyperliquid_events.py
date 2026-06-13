@@ -201,9 +201,19 @@ async def main(job_id):
 
     if args.get("force") and done == 0:
         ch = await async_client()
+        # Scope the purge to the tokens being backfilled. Token-keyed tables
+        # (everything except transfers/vaults) get `AND token IN (...)` so a
+        # subset/batch force-backfill can NEVER wipe other tokens' rows in the
+        # window. Regression guard for the 2026-06-13 incident where a Batch-2
+        # force backfill purged Batch-1 ohlcv/trades/fills/funding because the
+        # DELETE was window-only. transfers/vaults have no `token` column
+        # (all-market), so they keep the window-only purge.
+        tok_in = ",".join("'" + str(t).replace("'", "''") + "'" for t in tokens)
         for ev in events:
             _, table, _, _ = HL_EVENTS[ev]
             where = f"time >= '{_sql_dt(since)}' AND time <  '{_sql_dt(until)}'"
+            if ev in _PER_TOKEN_TABLE and tok_in:
+                where += f" AND token IN ({tok_in})"
             log.info("force purge: %s WHERE %s", table, where)
             await ch.command(f"ALTER TABLE {table} DELETE WHERE {where}")
 
