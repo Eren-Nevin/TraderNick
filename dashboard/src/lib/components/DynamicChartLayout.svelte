@@ -764,11 +764,15 @@
         inst.frDisplay = r.frDisplay === 'apr' ? 'apr' : 'rate8h';
       }
       if (inst.kind === 'book_depth') {
-        // Binance-only; the mode selector flips the same dataset between
-        // totals / per_level / imbalance / stacked visualizations.
+        // Binance-only; the mode selector flips the same dataset between the
+        // totals / per_level_imbalance / imbalance / stacked / *_share views.
         inst.exchange = 'binance';
-        inst.bookDepthMode = (r.bookDepthMode === 'per_level' || r.bookDepthMode === 'imbalance' || r.bookDepthMode === 'stacked')
-          ? r.bookDepthMode : 'totals';
+        const bdModes = [
+          'totals', 'per_level_imbalance', 'imbalance', 'stacked',
+          'asks_share', 'bids_share', 'total_share', 'asks_bids_share'
+        ];
+        inst.bookDepthMode = bdModes.includes(r.bookDepthMode as string)
+          ? (r.bookDepthMode as typeof inst.bookDepthMode) : 'totals';
       }
       if (inst.kind === 'oi') {
         // OI: Binance reads from binance_open_interest; HL sums per-wallet

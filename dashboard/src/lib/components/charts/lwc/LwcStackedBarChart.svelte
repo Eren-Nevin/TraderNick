@@ -42,7 +42,9 @@
     view = null as View,
     onView,
     hoverTime = null,
-    onHover
+    onHover,
+    valueFormat = 'usd' as 'usd' | 'pct',
+    pctMax = 100
   }: {
     data: Datum[];
     series: Series[];
@@ -54,6 +56,14 @@
     onView?: (v: View) => void;
     hoverTime?: number | null;
     onHover?: (t: number | null) => void;
+    /** How the stacked series values are denominated. 'usd' (default) formats
+     *  the axis/tooltip as dollars and shows a separate %-of-total column.
+     *  'pct' means the values ARE percentages (e.g. a 100%-stack), so the axis
+     *  shows % and the tooltip drops the redundant dollar column. */
+    valueFormat?: 'usd' | 'pct';
+    /** pct-mode only: the fixed top of the pinned axis. 100 for a single
+     *  100%-stack; 200 for two stacks combined (e.g. asks-on-bids). */
+    pctMax?: number;
   } = $props();
 
   let wrapper = $state<HTMLDivElement | null>(null);
@@ -109,9 +119,13 @@
     const c = createChart(wrapper, { ...lwcChartOptions(), height, autoSize: true });
     chart = c;
 
-    c.priceScale('right').applyOptions({
-      visible: true
-    });
+    // In pct ('100%-stack') mode, pin the right axis floor to 0 so the stack
+    // sits on a true 0% base; autoscaleInfoProvider below pins the top to 100.
+    c.priceScale('right').applyOptions(
+      valueFormat === 'pct'
+        ? { visible: true, scaleMargins: { top: 0.06, bottom: 0 } }
+        : { visible: true }
+    );
     c.priceScale('left').applyOptions({
       visible: false // shown only if a pct line opts in
     });
@@ -185,7 +199,18 @@
         lineColor: ser.color,
         lineWidth: 1,
         priceScaleId: 'right',
-        priceFormat: { type: 'custom', formatter: fmtUsd, minMove: 0.01 },
+        priceFormat: {
+          type: 'custom',
+          formatter: valueFormat === 'pct' ? fmtPct : fmtUsd,
+          minMove: 0.01
+        },
+        // Pin the 100%-stack axis to a fixed 0..100 so band thicknesses are
+        // honest proportions and the base is always 0% (otherwise autoscale
+        // floats the floor up to the smallest band, compressing the stack).
+        autoscaleInfoProvider:
+          valueFormat === 'pct'
+            ? () => ({ priceRange: { minValue: 0, maxValue: pctMax } })
+            : undefined,
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false
@@ -328,15 +353,23 @@
           <div class="flex items-center gap-2">
             <span class="inline-block w-2 h-2 rounded-sm" style="background: {ser.color}"></span>
             <span class="text-zinc-400 w-20">{ser.label}</span>
-            <span class="w-20 text-right">{fmtUsd(v)}</span>
-            <span class="w-14 text-right text-zinc-500">{pct.toFixed(1)}%</span>
+            {#if valueFormat === 'pct'}
+              <span class="w-20 text-right">{v.toFixed(1)}%</span>
+            {:else}
+              <span class="w-20 text-right">{fmtUsd(v)}</span>
+              <span class="w-14 text-right text-zinc-500">{pct.toFixed(1)}%</span>
+            {/if}
           </div>
         {/each}
         <div class="mt-1 pt-1 border-t border-zinc-800 flex items-center gap-2">
           <span class="inline-block w-2 h-2"></span>
           <span class="text-zinc-400 w-20">Total</span>
-          <span class="w-20 text-right">{fmtUsd(hoverTotal)}</span>
-          <span class="w-14 text-right text-zinc-500">100.0%</span>
+          {#if valueFormat === 'pct'}
+            <span class="w-20 text-right">{hoverTotal.toFixed(1)}%</span>
+          {:else}
+            <span class="w-20 text-right">{fmtUsd(hoverTotal)}</span>
+            <span class="w-14 text-right text-zinc-500">100.0%</span>
+          {/if}
         </div>
       {/if}
       {#if lines.length && hoverIdx !== null}

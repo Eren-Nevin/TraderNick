@@ -2847,6 +2847,13 @@
       const color = MA_COLORS[idx] ?? '#fbbf24';
       const tag = `${ma.type.toUpperCase()}(${ma.length})`;
       switch (instance.kind) {
+        case 'book_depth':
+          // book_depth MAs (share modes only) are handled by the dedicated
+          // per-band stacked-MA path (bdShareMaData) — each band's share is
+          // smoothed then re-stacked. Never emit a generic overlay-MA line
+          // here (book_depth rows have no scalar value field, so the default
+          // branch would otherwise push a flat-zero line).
+          break;
         case 'ohlcv': {
           const arr = maArray((data as Candle[]).map((c) => c.close), ma.length, ma.type);
           out.push({
@@ -3878,6 +3885,180 @@
       color: ASK_COLORS[i]
     }))
   ]);
+  // 100%-stacked "share" modes — rendered by StackedBarChart on pre-normalized
+  // data so the visible series sum to 100 at every bucket. 'asks_share' = each
+  // ask band's notional as a % of all asks; 'bids_share' = each bid band as a %
+  // of all bids; 'total_share' = each band's (bid + ask) notional as a % of the
+  // whole book (both sides). Series keyed 's_<bid-suffix>' against the
+  // normalized records below.
+  const BD_SHARE_MODES = ['asks_share', 'bids_share', 'total_share', 'asks_bids_share'];
+  let bdAsksShareSeries = $derived(
+    ASK_LEVELS.map((sfx, i) => ({ key: 's_' + sfx, label: 'Ask ' + bdLevelLabel(sfx), color: ASK_COLORS[i] }))
+  );
+  let bdBidsShareSeries = $derived(
+    BID_LEVELS.map((sfx, i) => ({ key: 's_' + sfx, label: 'Bid ' + bdLevelLabel(sfx), color: BID_COLORS[i] }))
+  );
+  let bdTotalShareSeries = $derived(
+    BD_BANDS.map((b, i) => ({ key: 's_' + b.bid, label: b.label, color: BD_BAND_COLORS[i] }))
+  );
+  let bdShareSeries = $derived.by(() => {
+    const mode = instance.bookDepthMode ?? 'totals';
+    if (mode === 'asks_share') return bdAsksShareSeries;
+    if (mode === 'bids_share') return bdBidsShareSeries;
+    if (mode === 'total_share') return bdTotalShareSeries;
+    // asks_bids_share — bids form the bottom 0–100% stack, asks the top
+    // 100–200% stack. Bids deepest→tightest (m500…m020) then asks
+    // tightest→deepest (p020…p500) puts the two tightest bands either side of
+    // the 100% mid line.
+    if (mode === 'asks_bids_share') return [...bdBidsShareSeries, ...bdAsksShareSeries];
+    return [];
+  });
+  // Dashed divider at the 100% mid line for the combined asks+bids view.
+  const bdMidLine = [
+    { key: 'bd_mid', label: 'Bids ╱ Asks', color: '#71717a', dash: '4,3', compute: () => 100 }
+  ];
+  // The /book_depth `value` columns are CUMULATIVE depth within ±X% of mid —
+  // each deeper band already contains every tighter one (e.g. v_p500 = total
+  // notional out to +5%, and includes v_p020). Summing them would double-count
+  // wildly, so to build an honest 100%-stack we un-cumulate into non-overlapping
+  // rings: ring at distance i = cumulative(i) − cumulative(i−1). The rings
+  // partition the ±5% book exactly, so their shares sum to 100. `levels` must
+  // run tight → deep; Math.max guards against tiny non-monotonic avg noise.
+  function bdRings(d: Record<string, number>, levels: readonly string[]): number[] {
+    const rings: number[] = [];
+    let prev = 0;
+    for (const sfx of levels) {
+      const cum = d['v_' + sfx] ?? 0;
+      rings.push(Math.max(0, cum - prev));
+      prev = cum;
+    }
+    return rings;
+  }
+  let bdShareData = $derived.by(() => {
+    const mode = instance.bookDepthMode ?? 'totals';
+    if (instance.kind !== 'book_depth' || !BD_SHARE_MODES.includes(mode)) return [];
+    const rows = data as unknown as Record<string, number>[];
+    const askT = BD_BANDS.map((b) => b.ask); // tight → deep: p020 … p500
+    const bidT = BD_BANDS.map((b) => b.bid); // tight → deep: m020 … m500
+    const sum = (a: number[]) => a.reduce((s, x) => s + x, 0);
+    if (mode === 'asks_share') {
+      return rows.map((d) => {
+        const r = bdRings(d, askT);
+        const denom = sum(r);
+        const out: Record<string, number> = { time: d.time };
+        askT.forEach((sfx, i) => (out['s_' + sfx] = denom > 0 ? (r[i] / denom) * 100 : 0));
+        return out;
+      });
+    }
+    if (mode === 'bids_share') {
+      return rows.map((d) => {
+        const r = bdRings(d, bidT);
+        const denom = sum(r);
+        const out: Record<string, number> = { time: d.time };
+        bidT.forEach((sfx, i) => (out['s_' + sfx] = denom > 0 ? (r[i] / denom) * 100 : 0));
+        return out;
+      });
+    }
+    if (mode === 'asks_bids_share') {
+      // Both sides at once: each side normalized to its own 100%. Bids occupy
+      // 0–100%, asks stack on top to 100–200%.
+      return rows.map((d) => {
+        const ar = bdRings(d, askT);
+        const aDen = sum(ar);
+        const br = bdRings(d, bidT);
+        const bDen = sum(br);
+        const out: Record<string, number> = { time: d.time };
+        bidT.forEach((sfx, i) => (out['s_' + sfx] = bDen > 0 ? (br[i] / bDen) * 100 : 0));
+        askT.forEach((sfx, i) => (out['s_' + sfx] = aDen > 0 ? (ar[i] / aDen) * 100 : 0));
+        return out;
+      });
+    }
+    // total_share — each band's combined (bid ring + ask ring) over the whole book.
+    return rows.map((d) => {
+      const ar = bdRings(d, askT);
+      const br = bdRings(d, bidT);
+      const denom = sum(ar) + sum(br);
+      const out: Record<string, number> = { time: d.time };
+      BD_BANDS.forEach((b, i) => (out['s_' + b.bid] = denom > 0 ? ((ar[i] + br[i]) / denom) * 100 : 0));
+      return out;
+    });
+  });
+  // Share-mode moving average. When MA1 is enabled the share modes smooth each
+  // band's share *first*, then re-stack — i.e. MA is applied per bracket to the
+  // raw share series, not to the rendered stack. A moving average is linear so
+  // the smoothed bands still very nearly sum to 100, but the MA's leading-edge
+  // ramp can nudge the per-bucket total slightly off; we re-normalize each
+  // bucket so the stack stays a clean 100%. Only MA1 (instance.mas[0]) is used
+  // — share modes expose a single MA in the settings panel.
+  let bdShareMaData = $derived.by(() => {
+    const mode = instance.bookDepthMode ?? 'totals';
+    if (instance.kind !== 'book_depth' || !BD_SHARE_MODES.includes(mode)) return [];
+    const ma = instance.mas[0];
+    if (!ma?.enabled) return [];
+    const src = bdShareData;
+    if (!src.length) return [];
+    const keys = bdShareSeries.map((s) => s.key);
+    const smoothed: Record<string, number[]> = {};
+    for (const k of keys) smoothed[k] = maArray(src.map((d) => d[k] ?? 0), ma.length, ma.type);
+    // Re-normalize per side independently. Single-side modes have one group
+    // (→ 100%); the combined mode normalizes bids and asks separately so each
+    // keeps its own 100% (total 200%) after the MA's edge ramp.
+    const groups =
+      mode === 'asks_bids_share'
+        ? [BD_BANDS.map((b) => 's_' + b.bid), BD_BANDS.map((b) => 's_' + b.ask)]
+        : [keys];
+    return src.map((d, i) => {
+      const out: Record<string, number> = { time: d.time };
+      for (const grp of groups) {
+        let tot = 0;
+        for (const k of grp) tot += smoothed[k][i] ?? 0;
+        for (const k of grp) out[k] = tot > 0 ? ((smoothed[k][i] ?? 0) / tot) * 100 : 0;
+      }
+      return out;
+    });
+  });
+  // Is the share-mode MA currently driving the stack? (used by the render branch
+  // and the Point/MA mutual-exclusion in the settings panel)
+  let bdShareMaActive = $derived(
+    instance.kind === 'book_depth'
+      && BD_SHARE_MODES.includes(instance.bookDepthMode ?? '')
+      && !!instance.mas[0]?.enabled
+  );
+  // Imbalance mode: the same single MA, applied to the whole-book imbalance
+  // series. When active it replaces the bars with the MA line (Point/MA are
+  // mutually exclusive, as in the share modes).
+  let bdImbalanceMaActive = $derived(
+    instance.kind === 'book_depth'
+      && (instance.bookDepthMode ?? 'totals') === 'imbalance'
+      && !!instance.mas[0]?.enabled
+  );
+  let bdImbalanceMaLine = $derived.by(() => {
+    type ImbLine = {
+      key: string;
+      label: string;
+      color: string;
+      compute: (d: Record<string, number>, i: number) => number;
+    };
+    if (!bdImbalanceMaActive) return [] as ImbLine[];
+    const ma = instance.mas[0];
+    const arr = maArray(bdImbalanceData.map((d) => d.imb ?? 0), ma.length, ma.type);
+    return [
+      {
+        key: 'bd_imb_ma',
+        label: `Imbalance ${ma.type.toUpperCase()}(${ma.length})`,
+        color: MA_COLORS[0],
+        compute: (_d: Record<string, number>, i: number) => arr[i]
+      }
+    ] as ImbLine[];
+  });
+  // Mode shows the single-MA control (share stacks + imbalance), and whether
+  // that MA is currently active (drives Point/MA mutual exclusion).
+  let bdSingleMaMode = $derived(
+    instance.kind === 'book_depth'
+      && (BD_SHARE_MODES.includes(instance.bookDepthMode ?? '')
+        || (instance.bookDepthMode ?? 'totals') === 'imbalance')
+  );
+  let bdMaActive = $derived(bdShareMaActive || bdImbalanceMaActive);
   // Active line set for the per-mode primary-range fallback (overlays).
   let bdLinesD = $derived.by(() => {
     const mode = instance.bookDepthMode ?? 'totals';
@@ -5352,7 +5533,7 @@
                this picks the visualization the chart pivots into. -->
           <select
             value={instance.bookDepthMode ?? 'totals'}
-            onchange={(e) => (instance.bookDepthMode = e.currentTarget.value as 'totals' | 'per_level_imbalance' | 'imbalance' | 'stacked')}
+            onchange={(e) => (instance.bookDepthMode = e.currentTarget.value as NonNullable<typeof instance.bookDepthMode>)}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="How to render the book depth time series"
           >
@@ -5360,6 +5541,10 @@
             <option value="per_level_imbalance">Per-level imbalance</option>
             <option value="imbalance">Imbalance</option>
             <option value="stacked">Stacked</option>
+            <option value="asks_share">Asks share (100%)</option>
+            <option value="bids_share">Bids share (100%)</option>
+            <option value="total_share">Total share (100%)</option>
+            <option value="asks_bids_share">Asks + Bids share</option>
           </select>
         {/if}
         {#if (instance.kind === 'oi' || instance.kind === 'hl_smart_oi') && !((instance.kind === 'hl_smart_oi' || (instance.exchange ?? 'binance') === 'hl') && ((instance.oiHlDisplay ?? 'total') === 'long_to_short' || (instance.oiHlDisplay ?? 'total') === 'net_pct'))}
@@ -5656,7 +5841,16 @@
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
       <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
-        <input type="checkbox" bind:checked={instance.showPoint} class="accent-zinc-400" />
+        <input
+          type="checkbox"
+          bind:checked={instance.showPoint}
+          onchange={() => {
+            // book_depth single-MA modes (share stacks + imbalance): Point and
+            // MA are mutually exclusive — turning Point back on drops the MA.
+            if (instance.showPoint && bdMaActive) instance.mas[0].enabled = false;
+          }}
+          class="accent-zinc-400"
+        />
         Point
       </label>
       <label
@@ -5695,40 +5889,87 @@
           >Amount</button>
         </div>
       {/if}
-      <span class="w-px h-4 bg-zinc-800"></span>
-      {#each instance.mas as ma, idx}
-        <div class="flex items-center gap-1.5">
-          <label class="flex items-center gap-1.5 cursor-pointer">
+      {#if instance.kind === 'book_depth'}
+        {#if bdSingleMaMode}
+          <!-- Single moving average for the share stacks and the imbalance bar.
+               Share modes: applied per band to each band's share series, then
+               re-stacked (bdShareMaData) so the chart stays a 100% stack.
+               Imbalance: applied to the whole-book imbalance series, replacing
+               the bars with the MA line. Either way, enabling it deselects
+               Point (Point/MA are mutually exclusive). No Sum option. -->
+          <span class="w-px h-4 bg-zinc-800"></span>
+          <div class="flex items-center gap-1.5">
+            <label class="flex items-center gap-1.5 cursor-pointer" title="Smooth with a moving average; replaces the points/bars (mutually exclusive with Point)">
+              <input
+                type="checkbox"
+                checked={instance.mas[0].enabled}
+                onchange={(e) => {
+                  instance.mas[0].enabled = e.currentTarget.checked;
+                  instance.showPoint = !e.currentTarget.checked;
+                }}
+                class="accent-zinc-400"
+              />
+              <span
+                class="font-medium"
+                style="color: {MA_COLORS[0]}; opacity: {instance.mas[0].enabled ? 1 : 0.55}"
+              >MA</span>
+            </label>
             <input
-              type="checkbox"
-              bind:checked={instance.mas[idx].enabled}
-              class="accent-zinc-400"
+              type="number"
+              bind:value={instance.mas[0].length}
+              min="2"
+              max="500"
+              step="1"
+              title="Length"
+              class="w-14 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
             />
-            <span
-              class="font-medium"
-              style="color: {MA_COLORS[idx]}; opacity: {ma.enabled ? 1 : 0.55}"
-            >MA{idx + 1}</span>
-          </label>
-          <input
-            type="number"
-            bind:value={instance.mas[idx].length}
-            min="2"
-            max="500"
-            step="1"
-            title="Length"
-            class="w-14 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-          />
-          <select
-            bind:value={instance.mas[idx].type}
-            title="Type"
-            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-          >
-            <option value="sma">SMA</option>
-            <option value="ema">EMA</option>
-            <option value="wma">WMA</option>
-          </select>
-        </div>
-      {/each}
+            <select
+              bind:value={instance.mas[0].type}
+              title="Type"
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+            >
+              <option value="sma">SMA</option>
+              <option value="ema">EMA</option>
+              <option value="wma">WMA</option>
+            </select>
+          </div>
+        {/if}
+      {:else}
+        <span class="w-px h-4 bg-zinc-800"></span>
+        {#each instance.mas as ma, idx}
+          <div class="flex items-center gap-1.5">
+            <label class="flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="checkbox"
+                bind:checked={instance.mas[idx].enabled}
+                class="accent-zinc-400"
+              />
+              <span
+                class="font-medium"
+                style="color: {MA_COLORS[idx]}; opacity: {ma.enabled ? 1 : 0.55}"
+              >MA{idx + 1}</span>
+            </label>
+            <input
+              type="number"
+              bind:value={instance.mas[idx].length}
+              min="2"
+              max="500"
+              step="1"
+              title="Length"
+              class="w-14 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+            />
+            <select
+              bind:value={instance.mas[idx].type}
+              title="Type"
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
+            >
+              <option value="sma">SMA</option>
+              <option value="ema">EMA</option>
+              <option value="wma">WMA</option>
+            </select>
+          </div>
+        {/each}
+      {/if}
       {#if canSum}
         <!-- Cumulative-sum toggle. Plots the running total of the same field
              the main series plots, on a secondary y-axis so it doesn't squash
@@ -6147,7 +6388,8 @@
       <SignedBarChart
         data={bdImbalanceData}
         valueKey="imb"
-        showBars={instance.showPoint}
+        showBars={bdImbalanceMaActive ? false : instance.showPoint}
+        lines={bdImbalanceMaActive ? bdImbalanceMaLine : []}
         valueLabel="Imbalance"
         height={chartCanvasHeight}
         {xExtent}
@@ -6163,6 +6405,20 @@
       <StackedBarChart
         data={data as Record<string, number>[]}
         series={bdStackedSeries}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+      />
+    {:else if instance.kind === 'book_depth' && BD_SHARE_MODES.includes(instance.bookDepthMode ?? '')}
+      <StackedBarChart
+        data={bdShareMaActive ? bdShareMaData : bdShareData}
+        series={bdShareSeries}
+        valueFormat="pct"
+        pctMax={instance.bookDepthMode === 'asks_bids_share' ? 200 : 100}
+        lines={instance.bookDepthMode === 'asks_bids_share' ? bdMidLine : []}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}

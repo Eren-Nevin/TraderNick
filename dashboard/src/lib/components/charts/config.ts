@@ -1455,9 +1455,21 @@ export type ChartInstance = {
    *  bid vs ask USD; 'per_level_imbalance' draws one (bid - ask) / (bid + ask)
    *  signed-percentage line per percentage band (6 bands → 6 series); 'imbalance' plots the
    *  whole-book (bid - ask) / (bid + ask) as a single signed bar; 'stacked' is a
-   *  stacked-band chart of every level. The four modes share the same
-   *  `/book_depth` response — the chart pivots client-side. */
-  bookDepthMode?: 'totals' | 'per_level_imbalance' | 'imbalance' | 'stacked';
+   *  stacked-band chart of every level. 'asks_share' / 'bids_share' /
+   *  'total_share' are 100%-stacked views: each band as a % of all asks, all
+   *  bids, or the whole book (bid+ask per band over total) respectively.
+   *  'asks_bids_share' stacks the asks-share (0–100%) on top of the bids-share
+   *  (0–100%) in one column — axis 0–200%, mid at 100%. All modes share the
+   *  same `/book_depth` response — the chart pivots client-side. */
+  bookDepthMode?:
+    | 'totals'
+    | 'per_level_imbalance'
+    | 'imbalance'
+    | 'stacked'
+    | 'asks_share'
+    | 'bids_share'
+    | 'total_share'
+    | 'asks_bids_share';
   /** book_depth 'per_level_imbalance' mode only: which bands are visible, by
    *  their bid-side suffix ('m020','m100','m200','m300','m400','m500').
    *  undefined ⇒ all six on (default). Lets the settings panel select /
