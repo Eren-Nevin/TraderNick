@@ -147,13 +147,17 @@
       onView?.([from, to]);
     });
 
-    if (onClick) {
-      c.subscribeClick((p) => {
-        if (!p.time) return;
-        const evt = (p.sourceEvent as unknown as MouseEvent) ?? (new MouseEvent('click'));
-        onClick(p.time as unknown as number, evt);
-      });
-    }
+    // Subscribe unconditionally and read `onClick` at click time. Gating the
+    // subscription on `onClick` here in onMount meant that enabling wallet-count
+    // (which flips `onClick` from undefined to a handler) AFTER the chart had
+    // already mounted never bound a listener — onMount doesn't re-run — so the
+    // wallet number was unclickable until a full reload. Reading the prop in the
+    // callback makes it work whenever the handler is present.
+    c.subscribeClick((p) => {
+      if (!p.time || !onClick) return;
+      const evt = (p.sourceEvent as unknown as MouseEvent) ?? (new MouseEvent('click'));
+      onClick(p.time as unknown as number, evt);
+    });
 
     return () => {
       c.remove();
