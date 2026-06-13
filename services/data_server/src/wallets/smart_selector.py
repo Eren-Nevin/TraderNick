@@ -655,7 +655,13 @@ class SmartSelector:
                 "daily_per_wallet AS (\n"
                 "            SELECT toDate(time) AS d, wallet,\n"
                 "                   " + daily_proj + "\n"
-                "            FROM tradernick.hl_trade_history\n"
+                # FINAL: hl_trade_history is a ReplacingMergeTree. Without it,
+                # re-backfilled duplicate (wallet, token, time) rows are summed
+                # by sum(net_pnl)/sum(volume)/sum(trade_count) below, inflating
+                # every wallet's ranking metrics and corrupting the top-N
+                # selection. (argMax-based snapshot reads elsewhere are dedup-
+                # safe; sum() is not.)
+                "            FROM tradernick.hl_trade_history FINAL\n"
                 "            WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max) + " DAY\n"
                 "              AND time <  {sel_until:DateTime}\n"
                 + th_token_filter +

@@ -503,7 +503,7 @@ def evm_erc20_transfers(
     _transfers_filters(params, where, **filters)
     sql = f"""
         SELECT {_TRANSFER_PROJECTION}
-        FROM tradernick.transfers
+        FROM tradernick.transfers FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -529,7 +529,7 @@ def evm_native_transfers(
     _transfers_filters(params, where, **filters)
     sql = f"""
         SELECT {_TRANSFER_PROJECTION}
-        FROM tradernick.transfers
+        FROM tradernick.transfers FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -551,7 +551,7 @@ def tron_native_transfers(
     _transfers_filters(params, where, **filters)
     sql = f"""
         SELECT {_TRANSFER_PROJECTION}
-        FROM tradernick.transfers
+        FROM tradernick.transfers FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -577,7 +577,7 @@ def tron_trc20_transfers(
     _transfers_filters(params, where, **filters)
     sql = f"""
         SELECT {_TRANSFER_PROJECTION}
-        FROM tradernick.transfers
+        FROM tradernick.transfers FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -599,7 +599,7 @@ def btc_native_transfers(
     _transfers_filters(params, where, **filters)
     sql = f"""
         SELECT {_TRANSFER_PROJECTION}
-        FROM tradernick.transfers
+        FROM tradernick.transfers FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -657,7 +657,11 @@ def hl_ohlcv(since: str, until: str, *, tokens: list[str] | None = None,
                 sum(buyer_taker_volume)    AS buyer_taker_volume,
                 sum(seller_taker_volume)   AS seller_taker_volume,
                 toInt64(sum(trade_count))  AS trade_count
-            FROM tradernick.hl_ohlcv_1m
+            -- FINAL: hl_ohlcv_1m is a ReplacingMergeTree. The sum() columns
+            -- below would double-count a pre-merge duplicate 1m row into the
+            -- resampled bucket (drift up to ~2× until the background merge
+            -- runs) — same reasoning as the binance_ohlcv_1m resample above.
+            FROM tradernick.hl_ohlcv_1m FINAL
             WHERE {' AND '.join(where)}
             GROUP BY time, token
             ORDER BY time, token
@@ -668,7 +672,7 @@ def hl_ohlcv(since: str, until: str, *, tokens: list[str] | None = None,
                 {_time_us()}, token, open, close, high, low, volume,
                 buyer_taker_volume, seller_taker_volume,
                 toInt64(trade_count) AS trade_count
-            FROM tradernick.hl_ohlcv_1m
+            FROM tradernick.hl_ohlcv_1m FINAL
             WHERE {' AND '.join(where)}
             ORDER BY time, token
         """
@@ -694,7 +698,7 @@ def hl_trades(since: str, until: str, *, tokens: list[str] | None = None,
     sql = f"""
         SELECT {_time_us()}, token, price, amount, buy, id,
                buyer_wallet, seller_wallet, block_number
-        FROM tradernick.hl_trades
+        FROM tradernick.hl_trades FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, id
     """
@@ -719,7 +723,7 @@ def hl_fills(since: str, until: str, *, tokens: list[str] | None = None,
                wallet, token, price, size,
                side, dir, start_position, closed_pnl, fee, fee_token,
                builder_fee, toBool(crossed) AS crossed, tid, oid, hash
-        FROM tradernick.hl_fills
+        FROM tradernick.hl_fills FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, tid, wallet
     """
@@ -739,7 +743,7 @@ def hl_funding(since: str, until: str, *, tokens: list[str] | None = None,
     sql = f"""
         SELECT {_time_us()}, token, wallet, rate, amount,
                position_amount, block_number
-        FROM tradernick.hl_funding
+        FROM tradernick.hl_funding FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, wallet
     """
@@ -761,7 +765,7 @@ def hl_transfers(since: str, until: str, *,
     sql = f"""
         SELECT {_time_us()}, wallet, direction, amount,
                toBool(is_finalized) AS is_finalized, block_number
-        FROM tradernick.hl_transfers
+        FROM tradernick.hl_transfers FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, wallet
     """
@@ -783,7 +787,7 @@ def hl_vaults(since: str, until: str, *,
     sql = f"""
         SELECT {_time_us()}, vault, wallet, action, amount,
                commission, fee, block_number
-        FROM tradernick.hl_vaults
+        FROM tradernick.hl_vaults FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, wallet
     """
@@ -810,7 +814,7 @@ def hl_trade_history(since: str, until: str, *,
         SELECT {_time_us()}, wallet, token, pnl, fees, net_pnl,
                volume, buy_volume, sell_volume,
                toInt64(trade_count) AS trade_count
-        FROM tradernick.hl_trade_history
+        FROM tradernick.hl_trade_history FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, wallet, token
         {limit_clause}
@@ -841,7 +845,7 @@ def hl_position_history(since: str, until: str, *,
                toString(opened_at) AS opened_at,
                mark_price, size, unrealized_pnl, funding, fee,
                toBool(exact_avg_price) AS exact_avg_price
-        FROM tradernick.hl_position_history
+        FROM tradernick.hl_position_history FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, wallet, token
         {limit_clause}
