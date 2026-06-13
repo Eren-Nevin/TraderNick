@@ -9,7 +9,12 @@
 // Option lists for chains / events / etc. mirror the constants in
 // services/ingestion/src/config.py — kept in lockstep manually for now.
 
-export type FieldKind = 'multiselect' | 'pair-multiselect' | 'tokens-csv' | 'pools-csv';
+// 'token-batches' renders a multiselect of ingestion token BATCHES (fetched
+// at runtime from /api/admin/config/token_batches). The selected batches are
+// expanded to their union of tokens and sent as the existing `tokens` arg, so
+// the backend stays token-based. Lets an operator backfill e.g. just "Batch 2"
+// instead of all-or-none. See BackfillForm.svelte.
+export type FieldKind = 'multiselect' | 'pair-multiselect' | 'tokens-csv' | 'pools-csv' | 'token-batches';
 
 export type FieldSpec = {
   name: string;            // form field name + query payload key
@@ -52,13 +57,6 @@ const AERO_EVENTS = ['swap', 'deposit', 'withdraw', 'collect'];
 const AERO_BASIC_EVENTS = ['swap', 'deposit', 'withdraw', 'claim'];
 const HL_EVENTS = ['ohlcv', 'trades', 'fills', 'funding', 'position_history', 'trade_history', 'transfers', 'vaults'];
 
-const INGEST_TOKENS = [
-  'BTC', 'ETH', 'SOL', 'ARB', 'LINK', 'BNB', 'POL', 'LTC', 'TRX',
-  'AAVE', 'AERO', 'CAKE', 'COW', 'ENA', 'ETHFI', 'FET', 'FIL', 'HYPE',
-  'MORPHO', 'PENDLE', 'RENDER', 'SUSHI', 'UNI', 'WLD', 'VIRTUAL', 'PAXG', 'ZEC',
-  'TON', 'NEAR', 'DOGE', 'TAO'
-];
-
 // Universe of ERC-20 token symbols pickable in the backfill form. Wider than
 // the live-job set (which is just the 5 stables+majors actively polled) so
 // ad-hoc backfills can target other tokens we already track for prices/HL/
@@ -88,12 +86,11 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
   {
     type: 'hyperliquid_events',
     label: 'Hyperliquid events',
-    description: 'Defaults to all events × the live INGEST_TOKENS roster — same set the per-event live streams poll. Deselect to narrow.',
+    description: 'Defaults to all events × all token batches — same set the per-event live streams poll. Deselect a batch to narrow (e.g. backfill only a newly-added batch).',
     fields: [
       { name: 'events', label: 'Events', kind: 'multiselect',
         options: HL_EVENTS, defaultSelected: HL_EVENTS, required: true },
-      { name: 'tokens', label: 'Tokens', kind: 'multiselect',
-        options: INGEST_TOKENS, defaultSelected: INGEST_TOKENS }
+      { name: 'tokens', label: 'Token batches', kind: 'token-batches' }
     ]
   },
   {
@@ -265,18 +262,16 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
       { name: 'events', label: 'Events', kind: 'multiselect', options: AERO_BASIC_EVENTS, required: true }
     ]
   },
-  // Binance forms — all 5 use the same INGEST_TOKENS roster as the live
-  // workers (config.INGEST_TOKENS). Pre-select all so the default backfill
-  // mirrors live; deselect for narrower runs. Tokens field is no longer
-  // required — empty submission also falls back to the live set on the
-  // backend (app.py:_create_backfill).
+  // Binance forms — token selection is by batch (same batches as HL). All
+  // batches are pre-selected so the default backfill mirrors live; deselect a
+  // batch to narrow. Empty submission falls back to the full live roster on
+  // the backend (app.py:_create_backfill).
   {
     type: 'binance_ohlcv',
     label: 'Binance OHLCV',
     description: 'Defaults to the live INGEST_TOKENS roster. Leave empty / pre-selected to mirror live.',
     fields: [
-      { name: 'tokens', label: 'Tokens', kind: 'multiselect',
-        options: INGEST_TOKENS, defaultSelected: INGEST_TOKENS }
+      { name: 'tokens', label: 'Token batches', kind: 'token-batches' }
     ]
   },
   {
@@ -284,8 +279,7 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
     label: 'Binance raw trades',
     description: 'Defaults to the live INGEST_TOKENS roster.',
     fields: [
-      { name: 'tokens', label: 'Tokens', kind: 'multiselect',
-        options: INGEST_TOKENS, defaultSelected: INGEST_TOKENS }
+      { name: 'tokens', label: 'Token batches', kind: 'token-batches' }
     ]
   },
   {
@@ -293,8 +287,7 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
     label: 'Binance open interest',
     description: 'Defaults to the live INGEST_TOKENS roster.',
     fields: [
-      { name: 'tokens', label: 'Tokens', kind: 'multiselect',
-        options: INGEST_TOKENS, defaultSelected: INGEST_TOKENS }
+      { name: 'tokens', label: 'Token batches', kind: 'token-batches' }
     ]
   },
   {
@@ -302,8 +295,7 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
     label: 'Binance long/short ratios',
     description: 'Defaults to the live INGEST_TOKENS roster.',
     fields: [
-      { name: 'tokens', label: 'Tokens', kind: 'multiselect',
-        options: INGEST_TOKENS, defaultSelected: INGEST_TOKENS }
+      { name: 'tokens', label: 'Token batches', kind: 'token-batches' }
     ]
   },
   {
@@ -311,8 +303,7 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
     label: 'Binance funding rate',
     description: 'Defaults to the live INGEST_TOKENS roster.',
     fields: [
-      { name: 'tokens', label: 'Tokens', kind: 'multiselect',
-        options: INGEST_TOKENS, defaultSelected: INGEST_TOKENS }
+      { name: 'tokens', label: 'Token batches', kind: 'token-batches' }
     ]
   },
   {
@@ -322,8 +313,7 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
       'Quota cost is 100/day/token — much higher than the other Binance feeds. ' +
       'Live stream ships disabled by default; enable in Live streams when ready.',
     fields: [
-      { name: 'tokens', label: 'Tokens', kind: 'multiselect',
-        options: INGEST_TOKENS, defaultSelected: INGEST_TOKENS }
+      { name: 'tokens', label: 'Token batches', kind: 'token-batches' }
     ]
   },
 

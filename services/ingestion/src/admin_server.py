@@ -275,6 +275,20 @@ async def health(_request):
     return response.json({"ok": True, "service": "admin_server"})
 
 
+@app.get("/config/token_batches")
+async def get_token_batches(_request):
+    """Ingestion token batches (Batch 1 + any INGEST_TOKENS_BATCH_N), read
+    from this gateway's own config (admin_server loads the same .env). The
+    admin backfill UI uses this to target a batch instead of all-or-none.
+    Served locally — no provider fan-out — since batches are global config."""
+    return response.json({
+        "batches": [
+            {"name": name, "tokens": toks, "count": len(toks)}
+            for name, toks in config.INGEST_TOKEN_BATCHES
+        ],
+    })
+
+
 @app.get("/streams")
 async def list_streams(request):
     """Query each unique upstream URL once and slice the response by the

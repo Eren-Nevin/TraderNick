@@ -151,6 +151,20 @@ async def health(_request):
     return response.json({"ok": True})
 
 
+@app.get("/config/token_batches")
+async def get_token_batches(_request):
+    """Ingestion token batches — Batch 1 (original roster) plus any later
+    INGEST_TOKENS_BATCH_N. The admin backfill UI uses this to let an operator
+    target a specific batch instead of all-or-none. Live jobs always poll the
+    union of every batch; the trading dashboard never sees this."""
+    return response.json({
+        "batches": [
+            {"name": name, "tokens": toks, "count": len(toks)}
+            for name, toks in config.INGEST_TOKEN_BATCHES
+        ],
+    })
+
+
 @app.get("/gaps/calendar")
 async def get_gaps_calendar(request):
     """Per-event coverage calendar — powers the FillBoard UI.

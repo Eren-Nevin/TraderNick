@@ -10,6 +10,7 @@
   // window. (On the per-provider page Binance has 5 forms, each
   // independently kickable; sharing the date pickers would leak state.)
 
+  import { onMount } from 'svelte';
   import { BACKFILL_FORMS, type BackfillFormSpec } from '$lib/admin/backfill_forms';
 
   type Props = {
@@ -18,6 +19,37 @@
     onSubmitted?: () => void;
   };
   let { form, onSubmitted }: Props = $props();
+
+  // Ingestion token batches, fetched once for any form that has a
+  // 'token-batches' field. Selecting batches → expanded to their union of
+  // tokens (sent as the `tokens` arg). Batches are an ingestion concept;
+  // source of truth is the ingestion config, surfaced via this endpoint.
+  type TokenBatch = { name: string; tokens: string[]; count: number };
+  let batches = $state<TokenBatch[]>([]);
+  function batchTokens(name: string): string[] {
+    return batches.find((b) => b.name === name)?.tokens ?? [];
+  }
+
+  onMount(async () => {
+    if (!form.fields.some((f) => f.kind === 'token-batches')) return;
+    try {
+      const res = await fetch('/api/admin/config/token_batches');
+      if (res.ok) {
+        batches = ((await res.json()).batches ?? []) as TokenBatch[];
+        // Seed any token-batches field that hasn't been touched yet → all batches.
+        for (const field of form.fields) {
+          if (field.kind === 'token-batches') {
+            const cur = fieldValues[field.name] as string[] | undefined;
+            if (!cur || cur.length === 0) {
+              fieldValues = { ...fieldValues, [field.name]: batches.map((b) => b.name) };
+            }
+          }
+        }
+      }
+    } catch {
+      /* leave batches empty; the field shows a loading/error hint */
+    }
+  });
 
   // Default `since` = yesterday 00:00:00 UTC, rendered in local time for the
   // datetime-local input. new Date(fSince).toISOString() round-trips back to
@@ -44,7 +76,11 @@
   function seedDefaults() {
     const next: Record<string, string[] | string> = {};
     for (const field of form.fields) {
-      if (field.defaultSelected && field.defaultSelected.length > 0) {
+      if (field.kind === 'token-batches') {
+        // Default = every batch selected (mirrors live = all batches). If
+        // batches haven't loaded yet, onMount fills this in once they do.
+        next[field.name] = batches.map((b) => b.name);
+      } else if (field.defaultSelected && field.defaultSelected.length > 0) {
         next[field.name] = [...field.defaultSelected];
       }
     }
@@ -91,6 +127,13 @@
         const arr = s.split(',').map((t) => t.trim()).filter((t) => t.length > 0);
         if (field.required && arr.length === 0) throw new Error(`${field.label} is required`);
         if (arr.length > 0) body[field.name] = arr;
+      } else if (field.kind === 'token-batches') {
+        // Expand the selected batch names to their union of tokens and send
+        // as `tokens` (the backend stays token-based). Empty → omit, so the
+        // backend falls back to the full live roster.
+        const names = (v as string[] | undefined) ?? [];
+        const toks = [...new Set(names.flatMap((n) => batchTokens(n)))];
+        if (toks.length > 0) body['tokens'] = toks;
       }
     }
     return body;
@@ -194,6 +237,25 @@
                 {/each}
               </div>
             {/each}
+          </div>
+        {:else if field.kind === 'token-batches'}
+          <div class="flex flex-wrap gap-1.5">
+            {#each batches as b (b.name)}
+              <button
+                type="button"
+                class="text-xs px-2 py-0.5 rounded border"
+                class:border-blue-500={isSelected(field.name, b.name)}
+                class:bg-blue-950={isSelected(field.name, b.name)}
+                class:text-blue-200={isSelected(field.name, b.name)}
+                class:border-zinc-700={!isSelected(field.name, b.name)}
+                class:text-zinc-400={!isSelected(field.name, b.name)}
+                onclick={() => toggleMulti(field.name, b.name)}
+                title={b.tokens.join(', ')}
+              >{b.name} ({b.count})</button>
+            {/each}
+            {#if batches.length === 0}
+              <span class="text-xs text-zinc-600">loading batches…</span>
+            {/if}
           </div>
         {:else if field.kind === 'tokens-csv' || field.kind === 'pools-csv'}
           <input

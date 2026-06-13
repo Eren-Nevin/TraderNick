@@ -11,13 +11,53 @@ CLICKHOUSE_USER = os.environ.get("CLICKHOUSE_USER", "tradernick")
 CLICKHOUSE_PASSWORD = os.environ.get("CLICKHOUSE_PASSWORD", "tradernick")
 CLICKHOUSE_DB = os.environ.get("CLICKHOUSE_DB", "tradernick")
 
-INGEST_TOKENS = [t.strip() for t in os.environ.get(
+def _parse_token_csv(raw: str) -> list[str]:
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+# ── Token batches ─────────────────────────────────────────────────────────
+# Tokens are ingested in *batches*. Batch 1 is the original INGEST_TOKENS
+# roster; further batches are supplied via INGEST_TOKENS_BATCH_2,
+# INGEST_TOKENS_BATCH_3, … (scanned in order until the first missing var).
+#
+# Batches exist ONLY so backfill jobs can target a subset (so adding new
+# tokens doesn't force a full-history re-backfill of everything). The live
+# streams and gap detection always poll the FLAT UNION of every batch
+# (`INGEST_TOKENS`, below) — i.e. live always covers all batches. The
+# trading dashboard is unaware of batches; it's purely an ingestion concern.
+# Adding a later batch is a pure env change — no code edit needed.
+_INGEST_BATCH_1 = _parse_token_csv(os.environ.get(
     "INGEST_TOKENS",
     "BTC,ETH,SOL,ARB,"
     "LTC,TRX,AAVE,AERO,CAKE,COW,ENA,ETHFI,FET,FIL,HYPE,"
     "MORPHO,PENDLE,RENDER,SUSHI,UNI,WLD,VIRTUAL,PAXG,ZEC,"
     "TON,NEAR,DOGE,TAO"
-).split(",") if t.strip()]
+))
+
+INGEST_TOKEN_BATCHES: list[tuple[str, list[str]]] = []
+if _INGEST_BATCH_1:
+    INGEST_TOKEN_BATCHES.append(("Batch 1", _INGEST_BATCH_1))
+_batch_n = 2
+while True:
+    _raw = os.environ.get(f"INGEST_TOKENS_BATCH_{_batch_n}")
+    if _raw is None:
+        break
+    _toks = _parse_token_csv(_raw)
+    if _toks:
+        INGEST_TOKEN_BATCHES.append((f"Batch {_batch_n}", _toks))
+    _batch_n += 1
+
+# Flat, de-duplicated union across all batches (first occurrence wins, order
+# preserved). Drop-in replacement for the old flat list — every existing
+# consumer (live streams, gap detection, backfill default roster) keeps
+# working and automatically covers every batch.
+INGEST_TOKENS: list[str] = []
+_seen_tokens: set[str] = set()
+for _bname, _btoks in INGEST_TOKEN_BATCHES:
+    for _bt in _btoks:
+        if _bt not in _seen_tokens:
+            _seen_tokens.add(_bt)
+            INGEST_TOKENS.append(_bt)
 
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "change_me")
