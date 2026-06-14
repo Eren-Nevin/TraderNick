@@ -695,6 +695,129 @@ async def wallet_pnl(request):
     })
 
 
+# ── Live positions from the official Hyperliquid clearinghouse ───────
+# Ground-truth check: our hl_position_history is sourced from DeFiStream and
+# is, by design, snapshotted on a grid (and only for the INGEST_TOKENS roster)
+# — so it lags and can be incomplete. The official HL `clearinghouseState`
+# returns a wallet's *current, complete* perp book straight from the exchange.
+# This endpoint is a thin pass-through normalizer; we don't store anything.
+# It lets us diff "what we have" vs "what HL says right now" later.
+
+_HL_INFO_URL = "https://api.hyperliquid.xyz/info"
+_HL_INFO_TIMEOUT_S = 15.0
+
+
+def _f(v) -> float:
+    """HL returns every number as a JSON string ('0.5', '-123.4'). Coerce
+    to float, tolerating None / '' / malformed → 0.0."""
+    try:
+        return float(v)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+@bp.get("/hyperliquid/live_positions")
+@throttled("heavy")
+async def live_positions(request):
+    """Fetch a wallet's CURRENT perp positions from the official Hyperliquid
+    API (clearinghouseState) and normalize them to our (token, side) shape.
+
+    This is the authoritative live book — complete (all tokens, not just our
+    ingest roster) and real-time — for comparing against our stored
+    hl_position_history snapshots, which are grid-sampled and roster-scoped
+    and therefore stale/partial by construction.
+
+    Query params:
+      wallet — required, the address (0x…).
+
+    Returns:
+      {
+        wallet, time (ms epoch from HL), fetched_at (our ISO),
+        margin_summary: { account_value, total_ntl_pos, total_raw_usd,
+                          total_margin_used },
+        withdrawable,
+        positions: [ {
+          token, side ('long'|'short'),
+          amount,            // |szi|, position size in coins
+          szi,               // signed size (+long / -short)
+          size,              // |positionValue|, USD notional
+          entry_px, mark_implied_px, liquidation_px,
+          unrealized_pnl, return_on_equity, margin_used, max_leverage,
+          leverage_type, leverage_value,
+          cum_funding_all_time, cum_funding_since_open, cum_funding_since_change
+        }, … ]   // sorted by descending USD notional
+      }
+
+    The position shape intentionally overlaps our stored columns
+    (token/side/amount/size/unrealized_pnl) so a downstream diff is a plain
+    per-(token,side) join.
+    """
+    wallet = request.args.get("wallet")
+    if not wallet:
+        return response.json({"error": "missing wallet"}, status=400)
+    wallet = wallet.lower()
+
+    import aiohttp
+    payload = {"type": "clearinghouseState", "user": wallet}
+    try:
+        timeout = aiohttp.ClientTimeout(total=_HL_INFO_TIMEOUT_S)
+        async with aiohttp.ClientSession(timeout=timeout) as session:
+            async with session.post(_HL_INFO_URL, json=payload) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    return response.json(
+                        {"error": f"hyperliquid api returned {resp.status}",
+                         "detail": text[:500]},
+                        status=502)
+                data = await resp.json()
+    except aiohttp.ClientError as e:
+        return response.json({"error": f"hyperliquid api request failed: {e}"}, status=502)
+    except Exception as e:  # JSON decode / timeout
+        return response.json({"error": f"hyperliquid api error: {e}"}, status=502)
+
+    ms = data.get("marginSummary") or {}
+    positions = []
+    for ap in (data.get("assetPositions") or []):
+        p = ap.get("position") or {}
+        szi = _f(p.get("szi"))
+        if szi == 0.0:
+            continue  # flat — HL shouldn't emit these, but guard anyway
+        lev = p.get("leverage") or {}
+        positions.append({
+            "token": p.get("coin"),
+            "side": "long" if szi > 0 else "short",
+            "amount": abs(szi),
+            "szi": szi,
+            "size": abs(_f(p.get("positionValue"))),
+            "entry_px": _f(p.get("entryPx")),
+            "liquidation_px": _f(p.get("liquidationPx")),
+            "unrealized_pnl": _f(p.get("unrealizedPnl")),
+            "return_on_equity": _f(p.get("returnOnEquity")),
+            "margin_used": _f(p.get("marginUsed")),
+            "max_leverage": p.get("maxLeverage"),
+            "leverage_type": lev.get("type"),
+            "leverage_value": lev.get("value"),
+            "cum_funding_all_time": _f((p.get("cumFunding") or {}).get("allTime")),
+            "cum_funding_since_open": _f((p.get("cumFunding") or {}).get("sinceOpen")),
+            "cum_funding_since_change": _f((p.get("cumFunding") or {}).get("sinceChange")),
+        })
+    positions.sort(key=lambda x: x["size"], reverse=True)
+
+    return response.json({
+        "wallet": wallet,
+        "time": data.get("time"),
+        "fetched_at": datetime.now(timezone.utc).replace(microsecond=0).isoformat(),
+        "margin_summary": {
+            "account_value": _f(ms.get("accountValue")),
+            "total_ntl_pos": _f(ms.get("totalNtlPos")),
+            "total_raw_usd": _f(ms.get("totalRawUsd")),
+            "total_margin_used": _f(ms.get("totalMarginUsed")),
+        },
+        "withdrawable": _f(data.get("withdrawable")),
+        "positions": positions,
+    })
+
+
 # ── SmartSelector presets ────────────────────────────────────────────
 # Persistence layer for "criteria groups" — a saved SmartSelectorState
 # (lookback / top_n / scope / sort_by / criteria[…]) under a name. Lets
