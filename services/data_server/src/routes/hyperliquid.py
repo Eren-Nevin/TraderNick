@@ -75,6 +75,16 @@ async def aggregate(request):
     event = request.args.get("event")
     if event not in _EVENT_TABLES:
         return response.json({"error": f"event must be one of {list(_EVENT_KEYS)}"}, status=400)
+    # trade_history is now DAILY + ABSOLUTE (cumulative-from-inception)
+    # snapshots — the generic sum()-per-bucket path would sum cumulative
+    # curves and is meaningless. Use the purpose-built endpoints instead, which
+    # apply snapshot-diff: /hyperliquid/wallet_pnl (per-wallet realized curve)
+    # or /hyperliquid/wallets/leaderboard (window totals).
+    if event == "trade_history":
+        return response.json(
+            {"error": "trade_history is daily/absolute now; use "
+                      "/hyperliquid/wallet_pnl or /hyperliquid/wallets/leaderboard"},
+            status=400)
     table, amount_expr, value_expr, wallet_col, agg_func, extra_where = _EVENT_TABLES[event]
 
     token = request.args.get("token")            # optional; if absent, sums across tokens
@@ -301,28 +311,70 @@ async def leaderboard(request):
 
     since_dt = _parse_iso(since); until_dt = _parse_iso(until)
     params: dict = {"since": since_dt, "until": until_dt, "limit": limit}
-    where = ["time >= {since:DateTime}", "time <  {until:DateTime}"]
+    th_tok = ""
     if token:
-        where.append("token = {token:String}")
+        th_tok = "AND token = {token:String}"
         params["token"] = token
-    where_sql = " AND ".join(where)
-
+    # trade_history is now DAILY + ABSOLUTE (cumulative from inception), so a
+    # window value can't be summed — it's snapshot(until_day) − snapshot(since)
+    # per (wallet, token), summed across tokens. A current-day tail from
+    # hl_fills (realized PnL + fees in the in-progress day) keeps the headline
+    # PnL columns live to `until`. volume / buy / sell / trade_count are
+    # reported at the last daily snapshot (≤24h stale on those secondary
+    # columns — sub-day volume reconstruction is out of scope for v1).
     sql = f"""
+        WITH
+        win AS (
+            SELECT wallet,
+                sum(e_np - s_np) AS net_pnl,
+                sum(e_p  - s_p)  AS pnl,
+                sum(e_f  - s_f)  AS fees,
+                sum(e_v  - s_v)  AS volume,
+                sum(e_bv - s_bv) AS buy_volume,
+                sum(e_sv - s_sv) AS sell_volume,
+                sum(e_tc - s_tc) AS trade_count
+            FROM (
+                SELECT wallet, token,
+                    argMaxIf(net_pnl, time, time <= toStartOfDay({{until:DateTime}})) AS e_np,
+                    argMaxIf(net_pnl, time, time <= {{since:DateTime}})               AS s_np,
+                    argMaxIf(pnl, time, time <= toStartOfDay({{until:DateTime}}))      AS e_p,
+                    argMaxIf(pnl, time, time <= {{since:DateTime}})                    AS s_p,
+                    argMaxIf(fees, time, time <= toStartOfDay({{until:DateTime}}))     AS e_f,
+                    argMaxIf(fees, time, time <= {{since:DateTime}})                   AS s_f,
+                    argMaxIf(volume, time, time <= toStartOfDay({{until:DateTime}}))   AS e_v,
+                    argMaxIf(volume, time, time <= {{since:DateTime}})                 AS s_v,
+                    argMaxIf(buy_volume, time, time <= toStartOfDay({{until:DateTime}})) AS e_bv,
+                    argMaxIf(buy_volume, time, time <= {{since:DateTime}})             AS s_bv,
+                    argMaxIf(sell_volume, time, time <= toStartOfDay({{until:DateTime}})) AS e_sv,
+                    argMaxIf(sell_volume, time, time <= {{since:DateTime}})            AS s_sv,
+                    argMaxIf(trade_count, time, time <= toStartOfDay({{until:DateTime}})) AS e_tc,
+                    argMaxIf(trade_count, time, time <= {{since:DateTime}})            AS s_tc
+                FROM tradernick.hl_trade_history FINAL
+                WHERE time <= {{until:DateTime}} {th_tok}
+                GROUP BY wallet, token
+            )
+            GROUP BY wallet
+        ),
+        tail AS (
+            SELECT wallet, sum(closed_pnl) AS t_pnl, sum(fee) AS t_fee
+            FROM tradernick.hl_fills FINAL
+            WHERE time > toStartOfDay({{until:DateTime}}) AND time <= {{until:DateTime}} {th_tok}
+            GROUP BY wallet
+        )
         SELECT
-            wallet,
-            sum(net_pnl)  AS net_pnl,
-            sum(pnl)      AS pnl,
-            sum(fees)     AS fees,
-            sum(volume)   AS volume,
-            sum(buy_volume) AS buy_volume,
-            sum(sell_volume) AS sell_volume,
-            sum(trade_count) AS trade_count,
+            w.wallet AS wallet,
+            w.net_pnl + coalesce(t.t_pnl, 0) - coalesce(t.t_fee, 0) AS net_pnl,
+            w.pnl + coalesce(t.t_pnl, 0) AS pnl,
+            w.fees + coalesce(t.t_fee, 0) AS fees,
+            w.volume AS volume,
+            w.buy_volume AS buy_volume,
+            w.sell_volume AS sell_volume,
+            w.trade_count AS trade_count,
             -- Surface wallet labels (Array(String)) for the badge on the
             -- table chart; empty array for unlabelled wallets.
-            dictGet('tradernick.wallet_labels', 'categories', lower(wallet)) AS categories
-        FROM tradernick.hl_trade_history FINAL
-        WHERE {where_sql}
-        GROUP BY wallet
+            dictGet('tradernick.wallet_labels', 'categories', lower(w.wallet)) AS categories
+        FROM win w
+        LEFT JOIN tail t ON t.wallet = w.wallet
         ORDER BY {order_by} DESC
         LIMIT {{limit:UInt32}}
     """
@@ -601,13 +653,37 @@ async def wallet_pnl(request):
             FROM numbers(0, dateDiff('day', toDate({since:DateTime}), toDate({until:DateTime})) + 1)
         ),
         realized AS (
-            SELECT toDate(time) AS day,
-                   sum(net_pnl) AS realized
-            FROM tradernick.hl_trade_history FINAL
+            -- trade_history is DAILY + ABSOLUTE (cumulative from inception).
+            -- Per-day realized flow = snapshot[d] − snapshot[d-1], summed
+            -- across tokens. Fetch one day before `since` so the first in-range
+            -- day has a prior snapshot to diff against. The Python cumsum of
+            -- these deltas rebuilds the realized-since-window-start curve.
+            SELECT day,
+                   cum - lagInFrame(cum, 1, 0)
+                         OVER (ORDER BY day ASC
+                               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS realized
+            FROM (
+                SELECT d AS day, sum(cum_np) AS cum
+                FROM (
+                    SELECT toDate(time) AS d, token, argMax(net_pnl, time) AS cum_np
+                    FROM tradernick.hl_trade_history FINAL
+                    WHERE wallet = {wallet:String}
+                      AND time >= {since:DateTime} - INTERVAL 1 DAY
+                      AND time <  {until:DateTime} + INTERVAL 1 DAY
+                    GROUP BY d, token
+                )
+                GROUP BY d
+            )
+        ),
+        realized_tail AS (
+            -- In-progress day: add realized PnL (closed_pnl − fee) from
+            -- hl_fills since the last daily snapshot so "today so far" is live.
+            SELECT toDate({until:DateTime}) AS day,
+                   sum(closed_pnl) - sum(fee) AS tail
+            FROM tradernick.hl_fills FINAL
             WHERE wallet = {wallet:String}
-              AND time >= {since:DateTime}
-              AND time <  {until:DateTime} + INTERVAL 1 DAY
-            GROUP BY day
+              AND time > toStartOfDay({until:DateTime})
+              AND time <= {until:DateTime}
         ),
         unreal AS (
             SELECT day, sum(eod) AS unrealized
@@ -622,11 +698,12 @@ async def wallet_pnl(request):
             GROUP BY day
         )
         SELECT d.day AS day,
-               coalesce(r.realized, 0)   AS realized,
+               coalesce(r.realized, 0) + coalesce(rt.tail, 0) AS realized,
                coalesce(u.unrealized, 0) AS unrealized
         FROM days d
-        LEFT JOIN realized r ON r.day = d.day
-        LEFT JOIN unreal   u ON u.day = d.day
+        LEFT JOIN realized r       ON r.day  = d.day
+        LEFT JOIN unreal   u       ON u.day  = d.day
+        LEFT JOIN realized_tail rt ON rt.day = d.day
         ORDER BY d.day
     """
     params = {"wallet": wallet, "since": since_dt, "until": until_dt}
@@ -1160,14 +1237,39 @@ _VAULT_PERF_CTE = """
     GROUP BY wallet
   ),
   vault_realized AS (
-    SELECT wallet AS vault,
-      sum(net_pnl)     AS realized_pnl,
-      sum(volume)      AS trade_volume,
-      sum(trade_count) AS trade_count_total
-    FROM tradernick.hl_trade_history FINAL
-    WHERE time >= {since:DateTime}
-      AND time <  {until:DateTime}
-    GROUP BY wallet
+    -- trade_history is DAILY + ABSOLUTE: realized_pnl over the window =
+    -- snapshot(until_day) − snapshot(since) per (wallet, token), summed across
+    -- tokens, + a current-day realized/fees tail from hl_fills. trade_volume /
+    -- trade_count are at the last daily snapshot (≤24h stale on those).
+    SELECT v.vault AS vault,
+      v.realized_pnl + coalesce(tl.t_pnl, 0) - coalesce(tl.t_fee, 0) AS realized_pnl,
+      v.trade_volume      AS trade_volume,
+      v.trade_count_total AS trade_count_total
+    FROM (
+      SELECT wallet AS vault,
+        sum(e_np - s_np) AS realized_pnl,
+        sum(e_v  - s_v)  AS trade_volume,
+        sum(e_tc - s_tc) AS trade_count_total
+      FROM (
+        SELECT wallet, token,
+          argMaxIf(net_pnl, time, time <= toStartOfDay({until:DateTime})) AS e_np,
+          argMaxIf(net_pnl, time, time <= {since:DateTime})               AS s_np,
+          argMaxIf(volume, time, time <= toStartOfDay({until:DateTime}))   AS e_v,
+          argMaxIf(volume, time, time <= {since:DateTime})                 AS s_v,
+          argMaxIf(trade_count, time, time <= toStartOfDay({until:DateTime})) AS e_tc,
+          argMaxIf(trade_count, time, time <= {since:DateTime})            AS s_tc
+        FROM tradernick.hl_trade_history FINAL
+        WHERE time <= {until:DateTime}
+        GROUP BY wallet, token
+      )
+      GROUP BY wallet
+    ) v
+    LEFT JOIN (
+      SELECT wallet, sum(closed_pnl) AS t_pnl, sum(fee) AS t_fee
+      FROM tradernick.hl_fills FINAL
+      WHERE time > toStartOfDay({until:DateTime}) AND time <= {until:DateTime}
+      GROUP BY wallet
+    ) tl ON tl.wallet = v.vault
   )
 """
 

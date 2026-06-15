@@ -112,6 +112,9 @@ GAP_SPECS: dict[str, list[GapTableSpec]] = {
         GapTableSpec("tradernick.hl_trades",        mode=GapMode.EVENT_DRIVEN, threshold_ratio=0.2),
         GapTableSpec("tradernick.hl_fills",         mode=GapMode.EVENT_DRIVEN, threshold_ratio=0.2),
         GapTableSpec("tradernick.hl_position_history", mode=GapMode.EVENT_DRIVEN, threshold_ratio=0.2),
+        # trade_history is daily snapshots now; this sweep is day-granular
+        # (median DAILY row count over a trailing window), so it adapts to the
+        # new cadence automatically — no per-hour assumption to fix here.
         GapTableSpec("tradernick.hl_trade_history", mode=GapMode.EVENT_DRIVEN, threshold_ratio=0.2),
         # hl_transfers + hl_vaults are very low cadence; skip from gap detection.
     ],
@@ -574,7 +577,14 @@ CALENDAR_EVENTS.update({
     "hyperliquid.trades":           _event_driven("hyperliquid.trades", "hyperliquid", "HL Trades",             "tradernick.hl_trades",             min_per_hour=10_000),
     "hyperliquid.fills":            _event_driven("hyperliquid.fills", "hyperliquid", "HL Fills",              "tradernick.hl_fills",              min_per_hour=10_000),
     "hyperliquid.position_history": _event_driven("hyperliquid.position_history", "hyperliquid", "HL Position History", "tradernick.hl_position_history", min_per_hour=10_000),
-    "hyperliquid.trade_history":    _event_driven("hyperliquid.trade_history", "hyperliquid", "HL Trade History", "tradernick.hl_trade_history",     min_per_hour=1_000),
+    # trade_history is now a DAILY snapshot feed (one timestamp/day, at 00:00),
+    # so the FillBoard expects rows only on hour 0 — a flat hourly EVENT_DRIVEN
+    # baseline would paint 23/24 hours red every day. Model it as a bursty
+    # regular feed concentrated on hour 0 (expected_per_day scales by the
+    # day's token universe; actual daily wallet-rows vastly exceed it, so only a
+    # genuine missing-snapshot day flags). The sweep GapTableSpec is already
+    # day-granular and needs no change.
+    "hyperliquid.trade_history":    _reg_cadence("hyperliquid.trade_history", "hyperliquid", "HL Trade History", "tradernick.hl_trade_history", expected_per_day=1, hours_of_emit=(0,), threshold_ratio=0.5),
     "hyperliquid.transfers":        _event_driven("hyperliquid.transfers", "hyperliquid", "HL Transfers",       "tradernick.hl_transfers",          min_per_hour=1),
     "hyperliquid.vaults":           _event_driven("hyperliquid.vaults", "hyperliquid", "HL Vaults",            "tradernick.hl_vaults",             min_per_hour=1),
 })

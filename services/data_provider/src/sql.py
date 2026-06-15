@@ -799,7 +799,15 @@ def hl_trade_history(since: str, until: str, *,
                      wallets: list[str] | None = None,
                      limit: int | None = None) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(us,UTC), wallet, token, pnl, fees, net_pnl,
-    volume, buy_volume, sell_volume, trade_count(Int64))."""
+    volume, buy_volume, sell_volume, trade_count(Int64)).
+
+    NOTE (2026-06 semantics change): rows are now DAILY snapshots whose metric
+    columns are ABSOLUTE — cumulative from the wallet's inception, not per-bucket
+    deltas. To get a window's realized value, diff two snapshots
+    (snapshot(until) − snapshot(since)); for sub-day precision add the
+    hl_fills / hl_funding tail since the last daily snapshot. This is a raw
+    passthrough (no aggregation), so it faithfully returns those absolute daily
+    rows — downstream Horatio consumers must apply the diff themselves."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
         'time >= toDateTime64({since:String}, 3)',

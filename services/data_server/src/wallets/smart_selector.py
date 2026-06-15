@@ -632,41 +632,75 @@ class SmartSelector:
         # ── trade_history ───────────────────────────────────────────
         if combos_for[SRC_TRADE_HISTORY]:
             th_max = src_max_lb(SRC_TRADE_HISTORY)
-            daily_proj = proj_pair(
-                "sum(net_pnl)",
-                "sumIf(net_pnl, token = {sel_token:String})",
-                SRC_TRADE_HISTORY, "daily_pnl_g", "daily_pnl_t")
-            daily_proj += ",\n                   " + proj_pair(
-                "sum(volume)",
-                "sumIf(volume, token = {sel_token:String})",
-                SRC_TRADE_HISTORY, "daily_vol_g", "daily_vol_t")
-            daily_proj += ",\n                   " + proj_pair(
-                "sum(trade_count)",
-                "sumIf(trade_count, token = {sel_token:String})",
-                SRC_TRADE_HISTORY, "daily_trades_g", "daily_trades_t")
+            # trade_history snapshots are now DAILY + ABSOLUTE (cumulative from
+            # the wallet's inception), so they can't be summed. We convert them
+            # to per-day deltas here, in three nested layers, and keep the
+            # downstream `trailing`/Sharpe sum() logic unchanged (summing daily
+            # deltas telescopes to the correct endpoint difference
+            # cum[d] − cum[d−L−1]):
+            #   layer 1  cumulative per (wallet, token, day) = argMax by time
+            #   layer 2  cumulative per (wallet, day, scope)  = sum / sumIf token
+            #   layer 3  daily delta = cum[d] − cum[d−1] via lagInFrame
+            # FINAL collapses RMT dupes before argMax (defensive; daily freq
+            # means ~1 row/day anyway). The fetch reaches th_max+1 days back so
+            # the earliest in-window day (target.d − th_max) has a prior
+            # snapshot to diff against; that pre-roll day's own delta is outside
+            # every trailing window and never contributes.
+            cum_proj = proj_pair(
+                "sum(cum_net_pnl)",
+                "sumIf(cum_net_pnl, token = {sel_token:String})",
+                SRC_TRADE_HISTORY, "cum_pnl_g", "cum_pnl_t")
+            cum_proj += ",\n                       " + proj_pair(
+                "sum(cum_volume)",
+                "sumIf(cum_volume, token = {sel_token:String})",
+                SRC_TRADE_HISTORY, "cum_vol_g", "cum_vol_t")
+            cum_proj += ",\n                       " + proj_pair(
+                "sum(cum_trades)",
+                "sumIf(cum_trades, token = {sel_token:String})",
+                SRC_TRADE_HISTORY, "cum_trades_g", "cum_trades_t")
+
+            def _delta_pair(g_src: str, t_src: str, g_alias: str, t_alias: str) -> str:
+                parts: list[str] = []
+                if "global" in scopes_for[SRC_TRADE_HISTORY]:
+                    parts.append(f"{g_src} - lagInFrame({g_src}, 1, 0) OVER w AS {g_alias}")
+                if "token" in scopes_for[SRC_TRADE_HISTORY]:
+                    parts.append(f"{t_src} - lagInFrame({t_src}, 1, 0) OVER w AS {t_alias}")
+                return ",\n                   ".join(parts)
+            delta_proj = _delta_pair("cum_pnl_g", "cum_pnl_t", "daily_pnl_g", "daily_pnl_t")
+            delta_proj += ",\n                   " + _delta_pair(
+                "cum_vol_g", "cum_vol_t", "daily_vol_g", "daily_vol_t")
+            delta_proj += ",\n                   " + _delta_pair(
+                "cum_trades_g", "cum_trades_t", "daily_trades_g", "daily_trades_t")
+
             # Token prefilter when no global-scope metric needs the source —
-            # drops every non-chart-token row before the GROUP BY and the
+            # drops every non-chart-token row before the GROUP BYs and the
             # downstream trailing CROSS JOIN (the leaderboard's hot path).
-            # Same trick the oi/vol/funding sources already use.
             th_token_filter = ""
             if "global" not in scopes_for[SRC_TRADE_HISTORY] and "token" in scopes_for[SRC_TRADE_HISTORY]:
-                th_token_filter = "              AND token = {sel_token:String}\n"
+                th_token_filter = "                      AND token = {sel_token:String}\n"
             ctes.append(
                 "daily_per_wallet AS (\n"
-                "            SELECT toDate(time) AS d, wallet,\n"
-                "                   " + daily_proj + "\n"
-                # FINAL: hl_trade_history is a ReplacingMergeTree. Without it,
-                # re-backfilled duplicate (wallet, token, time) rows are summed
-                # by sum(net_pnl)/sum(volume)/sum(trade_count) below, inflating
-                # every wallet's ranking metrics and corrupting the top-N
-                # selection. (argMax-based snapshot reads elsewhere are dedup-
-                # safe; sum() is not.)
-                "            FROM tradernick.hl_trade_history FINAL\n"
-                "            WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max) + " DAY\n"
-                "              AND time <  {sel_until:DateTime}\n"
+                "            SELECT d, wallet,\n"
+                "                   " + delta_proj + "\n"
+                "            FROM (\n"
+                "                SELECT d, wallet,\n"
+                "                       " + cum_proj + "\n"
+                "                FROM (\n"
+                "                    SELECT toDate(time) AS d, wallet, token,\n"
+                "                           argMax(net_pnl, time)     AS cum_net_pnl,\n"
+                "                           argMax(volume, time)      AS cum_volume,\n"
+                "                           argMax(trade_count, time) AS cum_trades\n"
+                "                    FROM tradernick.hl_trade_history FINAL\n"
+                "                    WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max + 1) + " DAY\n"
+                "                      AND time <  {sel_until:DateTime}\n"
                 + th_token_filter +
-                f"              {HIP3_EXCLUDE}\n"
-                "            GROUP BY d, wallet\n"
+                f"                      {HIP3_EXCLUDE}\n"
+                "                    GROUP BY d, wallet, token\n"
+                "                )\n"
+                "                GROUP BY d, wallet\n"
+                "            )\n"
+                "            WINDOW w AS (PARTITION BY wallet ORDER BY d ASC\n"
+                "                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)\n"
                 "        )"
             )
 

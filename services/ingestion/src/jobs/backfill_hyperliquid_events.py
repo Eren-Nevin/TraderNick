@@ -57,7 +57,11 @@ _CHUNK_HOURS = {
     # are not a chunk-size issue — they're a live-overlap contention
     # issue handled by `_LIVE_OVERLAP_BUFFER` below.
     "position_history": 2,
-    "trade_history":    6,
+    # trade_history is now DAILY absolute snapshots (window deprecated). 28-day
+    # chunks pulled ~46M rows each (every wallet that ever traded a token gets a
+    # daily row) and took ~9.5 min/request — too slow. 7-day chunks keep each
+    # request bounded (still well under DeFiStream's 31-day/request cap).
+    "trade_history":    24 * 7,
     "transfers":        6,
     "funding":          6,
     "vaults":           6,
@@ -159,7 +163,9 @@ async def _fetch_chunk(ds, *, event, tokens, since, until):
                 # Mirrors the live group: 15m grid + $100 min position size.
                 b = b.window("15m").min_size(100)
             elif event == "trade_history":
-                b = b.window("1h")
+                # `window` deprecated — DeFiStream returns one DAILY absolute
+                # (cumulative-from-inception) snapshot per wallet/token.
+                pass
             df = await b.as_df("polars")
             if df.is_empty(): return 0
             rows = transform(df)

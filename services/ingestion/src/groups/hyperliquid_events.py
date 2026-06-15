@@ -55,7 +55,11 @@ _CADENCE: dict[str, tuple[int, int]] = {
     "trades":           (900,   6),
     "fills":            (900,   6),
     "position_history": (900,   1),
-    "trade_history":    (900,  24),
+    # trade_history moved to a DAILY tick (2026-06): DeFiStream deprecated the
+    # `window` arg and now emits one absolute (cumulative-from-inception)
+    # snapshot per day. Polling more often is pointless — the value only
+    # advances daily — so tick=24h with a 7-day gap-fill chunk.
+    "trade_history":    (86400, 168),
     "transfers":        (900,  24),
     "funding":          (1800, 24),
     "vaults":           (1800, 24),
@@ -74,6 +78,8 @@ _OVERLAP_MINUTES = {
     60:    3,
     900:   45,    # 3× the new 15m cadence — same shape as the old 300→15
     1800:  1440,
+    86400: 2880,  # daily tick (trade_history) re-fetches the last 2 days so a
+                  # missed daily snapshot (or upstream revision) self-heals.
 }
 
 
@@ -108,9 +114,10 @@ async def _fetch_and_insert(ds, *, event, tokens, since, until) -> int:
                 # tracking.
                 b = b.window("15m").min_size(100)
             elif event == "trade_history":
-                # Explicit 1h bucket — matches the canonical leaderboard
-                # cadence and keeps gap detection at hour granularity.
-                b = b.window("1h")
+                # `window` is deprecated for trade_history — DeFiStream now
+                # returns one DAILY absolute (cumulative-from-inception)
+                # snapshot per wallet/token. No window call.
+                pass
             df = await b.as_df("polars")
             if df.is_empty():
                 return 0
