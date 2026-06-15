@@ -156,8 +156,8 @@ async def _fetch_chunk(ds, *, event, tokens, since, until):
             if event == "ohlcv":
                 b = b.window("1m")
             elif event == "position_history":
-                # Mirrors the live group: 15m grid + $1000 min position size.
-                b = b.window("15m").min_size(1000)
+                # Mirrors the live group: 15m grid + $100 min position size.
+                b = b.window("15m").min_size(100)
             elif event == "trade_history":
                 b = b.window("1h")
             df = await b.as_df("polars")

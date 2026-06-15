@@ -31,6 +31,7 @@ Cadence rationale (per the approved plan):
 """
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -47,6 +48,24 @@ class MaterializerSpec:
     recent_cadence_s: int                    # cadence for the recent tier
     sweep_window_days: int                   # how far back the sweep tier covers
     sweep_cadence_s: int                     # cadence for the sweep tier
+
+    def __post_init__(self) -> None:
+        # Hard guarantee: every materializer reads its source WITH FINAL so the
+        # rebuild collapses ReplacingMergeTree duplicates before aggregating.
+        # This is what makes recalc idempotent under backfill replays — the
+        # source can carry un-merged duplicate rows at rebuild time (e.g. right
+        # after a non-forced backfill re-inserts overlapping rows). Validated
+        # at construction, so it holds for EVERY recalc path: build_partition()
+        # executes spec.rebuild_sql verbatim and is the single chokepoint shared
+        # by the auto-fired downstream rebuild, a manual backfill_data_processor,
+        # and the live sweep. A new/edited spec that drops FINAL fails loudly at
+        # import instead of silently over-counting at runtime.
+        if not re.search(rf"\bFROM\s+{re.escape(self.source_table)}\s+FINAL\b",
+                         self.rebuild_sql, re.IGNORECASE):
+            raise ValueError(
+                f"MaterializerSpec {self.name!r}: rebuild_sql must read its "
+                f"source {self.source_table!r} with FINAL (recalc relies on "
+                f"FINAL to dedup the RMT source before aggregating)")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

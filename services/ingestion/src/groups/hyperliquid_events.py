@@ -103,10 +103,10 @@ async def _fetch_and_insert(ds, *, event, tokens, since, until) -> int:
                 b = b.window("1m")
             elif event == "position_history":
                 # 15m snapshot grid (was 5m) — 3× fewer rows per token-day at
-                # the cost of coarser carry-forward granularity. min_size=1000
+                # the cost of coarser carry-forward granularity. min_size=100
                 # drops dust positions, focusing the table on wallets worth
                 # tracking.
-                b = b.window("15m").min_size(1000)
+                b = b.window("15m").min_size(100)
             elif event == "trade_history":
                 # Explicit 1h bucket — matches the canonical leaderboard
                 # cadence and keeps gap detection at hour granularity.
