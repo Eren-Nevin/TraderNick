@@ -52,6 +52,36 @@ async def delete_transfers_range(*, where_extra: str, since: datetime, until: da
     await ch.command(sql)
 
 
+async def force_purge_tokens(*, table: str, tokens: list[str], since: datetime,
+                             until: datetime, time_col: str = "time") -> str:
+    """Token-scoped force purge of a [since, until) window on a token-keyed table.
+
+    Deletes ONLY the given tokens' rows in the window — there is no path
+    here that issues a bare time-only DELETE. This is the guard against the
+    2026-06-13 incident where a Batch-2 force backfill purged Batch-1 rows
+    because the DELETE was window-only (see the matching, already-fixed
+    block in jobs/backfill_hyperliquid_events.py). Every backfill that
+    honours `force` routes through here so the blast radius can never exceed
+    the tokens being backfilled.
+
+    `table` (a `db.name` pair) and `time_col` are validated as identifiers;
+    each token is `safe_ident()`-validated and single-quoted. Returns the
+    WHERE clause used (for logging). When `tokens` is empty this is a no-op
+    that returns "" — it refuses to purge rather than purging everything.
+    """
+    if not tokens:
+        return ""
+    safe_ident(time_col)
+    for part in table.split("."):
+        safe_ident(part)
+    tok_in = ",".join("'" + safe_ident(t) + "'" for t in tokens)
+    where = (f"{time_col} >= '{sql_dt(since)}' AND {time_col} < '{sql_dt(until)}' "
+             f"AND token IN ({tok_in})")
+    ch = await async_client()
+    await ch.command(f"ALTER TABLE {table} DELETE WHERE {where}")
+    return where
+
+
 async def async_client():
     global _async_client_obj
     if _async_client_obj is None:

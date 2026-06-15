@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 from defistream import AsyncDeFiStream
 
 import config
-from clickhouse import OHLCV_COLUMNS, async_client, ohlcv_df_to_rows
+from clickhouse import OHLCV_COLUMNS, async_client, force_purge_tokens, ohlcv_df_to_rows
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [backfill] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
@@ -135,6 +135,14 @@ async def main(job_id: str):
         progress=(done / total) if total else 1.0, started_at=started_at,
     )
     log.info("job %s starting: tokens=%d chunks=%d resumed_at=%d", job_id, len(tokens), total, done)
+
+    # Token-scoped force purge — only on a fresh run (done==0), never on
+    # resume. Deletes just this job's tokens in the window so a one-batch
+    # forced backfill can't wipe another batch's rows.
+    if args.get("force") and done == 0:
+        where = await force_purge_tokens(
+            table="tradernick.binance_ohlcv_1m", tokens=tokens, since=since, until=until)
+        log.info("job %s force purge: tradernick.binance_ohlcv_1m WHERE %s", job_id, where)
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
 
