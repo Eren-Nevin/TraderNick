@@ -123,11 +123,18 @@ CREATE TABLE IF NOT EXISTS tradernick.ingestion_jobs
     started_at   DateTime           CODEC(DoubleDelta, ZSTD(3)),
     finished_at  Nullable(DateTime) CODEC(DoubleDelta, ZSTD(3)),
     error        Nullable(String)   CODEC(ZSTD(3)),
-    updated_at   DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+    -- ms precision (DateTime64(3)) is REQUIRED: this is the ReplacingMergeTree
+    -- version column. With second-precision DateTime, a job's final per-chunk
+    -- `running` write and its terminal `completed` write land in the same
+    -- second → identical version → on merge RMT keeps an arbitrary tied row
+    -- (observed: a completed job stuck showing `running` forever). ms keeps the
+    -- terminal write strictly newer so it always wins. TTL wraps updated_at in
+    -- toDateTime() because TTL expressions require DateTime/Date, not DateTime64.
+    updated_at   DateTime64(3)      DEFAULT now64(3) CODEC(DoubleDelta, ZSTD(3))
 )
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (job_id)
-TTL updated_at + INTERVAL 270 DAY;
+TTL toDateTime(updated_at) + INTERVAL 270 DAY;
 
 -- ---------------------------------------------------------------------------
 -- Per-stream live ingestion tracking.

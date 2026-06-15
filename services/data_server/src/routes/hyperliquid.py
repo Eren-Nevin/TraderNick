@@ -676,14 +676,17 @@ async def wallet_pnl(request):
             )
         ),
         realized_tail AS (
-            -- In-progress day: add realized PnL (closed_pnl − fee) from
-            -- hl_fills since the last daily snapshot so "today so far" is live.
-            SELECT toDate({until:DateTime}) AS day,
+            -- In-progress day reconstructed to NOW: realized so far today =
+            -- closed_pnl − fee from hl_fills since today's 00:00 trade_history
+            -- snapshot. Anchored to now() (not the `until` arg) so the latest
+            -- point is exact-to-the-minute even if a caller passes a date-only
+            -- `until`; only contributes when today falls inside [since, until].
+            SELECT toDate(now()) AS day,
                    sum(closed_pnl) - sum(fee) AS tail
             FROM tradernick.hl_fills FINAL
             WHERE wallet = {wallet:String}
-              AND time > toStartOfDay({until:DateTime})
-              AND time <= {until:DateTime}
+              AND time > toStartOfDay(now())
+              AND time <= now()
         ),
         unreal AS (
             SELECT day, sum(eod) AS unrealized
