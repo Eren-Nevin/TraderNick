@@ -307,7 +307,7 @@
                     <!-- Signed notional of the chart-token position at the
                          filter day (+green long / −red short / gray N/A). -->
                     <span
-                      class="font-mono tabular-nums text-[11px] mr-2 {posClass(w)}"
+                      class="font-mono tabular-nums text-[13px] font-medium mr-2 {posClass(w)}"
                       title={posTitle(w)}
                     >{posText(w)}</span>
                     <!-- Anchor so middle-click + Ctrl-click open the
