@@ -314,19 +314,13 @@ async def leaderboard(request):
 
     since_dt = _parse_iso(since); until_dt = _parse_iso(until)
     params: dict = {"since": since_dt, "until": until_dt, "limit": limit}
-    th_tok = ""
     if token:
-        th_tok = "AND token = {token:String}"
+        # ── TOKEN-scoped: snapshot-diff per (wallet, token) straight from the
+        # source (the token-leading projection prunes to one token's rows). The
+        # token-less rollup can't serve a single token.
         params["token"] = token
-    # trade_history is now DAILY + ABSOLUTE (cumulative from inception), so a
-    # window value can't be summed — it's snapshot(until_day) − snapshot(since)
-    # per (wallet, token), summed across tokens. A current-day tail from
-    # hl_fills (realized PnL + fees in the in-progress day) keeps the headline
-    # PnL columns live to `until`. volume / buy / sell / trade_count are
-    # reported at the last daily snapshot (≤24h stale on those secondary
-    # columns — sub-day volume reconstruction is out of scope for v1).
-    sql = f"""
-        WITH
+        th_tok = "AND token = {token:String}"
+        win_cte = f"""
         win AS (
             SELECT wallet,
                 sum(e_np - s_np) AS net_pnl,
@@ -357,11 +351,56 @@ async def leaderboard(request):
                 GROUP BY wallet, token
             )
             GROUP BY wallet
+        )"""
+        tail_tok = th_tok
+    else:
+        # ── GLOBAL (all tokens): read the pre-aggregated per-(day,wallet)
+        # rollup (hl_trade_history_wallet_daily, token dimension summed away,
+        # HIP3 excluded). Window value = snapshot(until_day) − snapshot(since_day)
+        # via two single-partition reads at the latest day ≤ each bound (dense-
+        # to-now snapshots mean that one day carries every ever-traded wallet).
+        # Far cheaper than the all-token per-(wallet,token) argMaxIf scan.
+        win_cte = """
+        ta_e AS (
+            SELECT wallet,
+                sumMerge(net_pnl_state)     AS net_pnl, sumMerge(pnl_state)  AS pnl,
+                sumMerge(fees_state)        AS fees,    sumMerge(volume_state) AS volume,
+                sumMerge(buy_volume_state)  AS buy_volume, sumMerge(sell_volume_state) AS sell_volume,
+                sumMerge(trade_count_state) AS trade_count
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE day = (SELECT max(day) FROM tradernick.hl_trade_history_wallet_daily WHERE day <= toDate({until:DateTime}))
+            GROUP BY wallet
         ),
+        ta_s AS (
+            SELECT wallet,
+                sumMerge(net_pnl_state)     AS net_pnl, sumMerge(pnl_state)  AS pnl,
+                sumMerge(fees_state)        AS fees,    sumMerge(volume_state) AS volume,
+                sumMerge(buy_volume_state)  AS buy_volume, sumMerge(sell_volume_state) AS sell_volume,
+                sumMerge(trade_count_state) AS trade_count
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE day = (SELECT max(day) FROM tradernick.hl_trade_history_wallet_daily WHERE day <= toDate({since:DateTime}))
+            GROUP BY wallet
+        ),
+        win AS (
+            SELECT e.wallet AS wallet,
+                e.net_pnl     - coalesce(s.net_pnl, 0)     AS net_pnl,
+                e.pnl         - coalesce(s.pnl, 0)         AS pnl,
+                e.fees        - coalesce(s.fees, 0)        AS fees,
+                e.volume      - coalesce(s.volume, 0)      AS volume,
+                e.buy_volume  - coalesce(s.buy_volume, 0)  AS buy_volume,
+                e.sell_volume - coalesce(s.sell_volume, 0) AS sell_volume,
+                e.trade_count - coalesce(s.trade_count, 0) AS trade_count
+            FROM ta_e e LEFT JOIN ta_s s ON s.wallet = e.wallet
+        )"""
+        # Current-day tail HIP3-excluded to match the rollup's HIP3 exclusion.
+        tail_tok = "AND position(token, ':') = 0"
+    sql = f"""
+        WITH
+        {win_cte},
         tail AS (
             SELECT wallet, sum(closed_pnl) AS t_pnl, sum(fee) AS t_fee
             FROM tradernick.hl_fills FINAL
-            WHERE time > toStartOfDay({{until:DateTime}}) AND time <= {{until:DateTime}} {th_tok}
+            WHERE time > toStartOfDay({{until:DateTime}}) AND time <= {{until:DateTime}} {tail_tok}
             GROUP BY wallet
         )
         SELECT
@@ -733,30 +772,7 @@ async def wallet_pnl(request):
             SELECT toDate({since:DateTime}) + number AS day
             FROM numbers(0, dateDiff('day', toDate({since:DateTime}), toDate({until:DateTime})) + 1)
         ),
-        realized AS (
-            -- trade_history is DAILY + ABSOLUTE (cumulative from inception).
-            -- Per-day realized flow = snapshot[d] − snapshot[d-1], summed
-            -- across tokens. Fetch one day before `since` so the first in-range
-            -- day has a prior snapshot to diff against. The Python cumsum of
-            -- these deltas rebuilds the realized-since-window-start curve.
-            SELECT day,
-                   cum - lagInFrame(cum, 1, 0)
-                         OVER (ORDER BY day ASC
-                               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS realized
-            FROM (
-                SELECT d AS day, sum(cum_np) AS cum
-                FROM (
-                    SELECT toDate(time) AS d, token, argMax(net_pnl, time) AS cum_np
-                    FROM tradernick.hl_trade_history FINAL
-                    WHERE wallet = {wallet:String}
-                      AND time >= {since:DateTime} - INTERVAL 1 DAY
-                      AND time <  {until:DateTime} + INTERVAL 1 DAY
-                      @@TOK@@
-                    GROUP BY d, token
-                )
-                GROUP BY d
-            )
-        ),
+        @@REALIZED@@,
         realized_tail AS (
             -- In-progress day reconstructed to NOW: realized so far today =
             -- closed_pnl − fee from hl_fills since today's 00:00 trade_history
@@ -793,8 +809,49 @@ async def wallet_pnl(request):
         LEFT JOIN realized_tail rt ON rt.day = d.day
         ORDER BY d.day
     """
-    # Splice the token filter into the three sources (or strip the sentinel for
-    # the global curve). The `{token:String}` placeholder is bound below.
+    # realized daily-flow CTE: GLOBAL reads the pre-aggregated per-(day,wallet)
+    # rollup (token dimension summed away, HIP3 excluded) — the per-day delta is
+    # snapshot[d] − snapshot[d-1] of the across-tokens cumulative. TOKEN scope
+    # keeps the source (the rollup has no token column). Both fetch one day
+    # before `since` so the first in-range day has a prior snapshot to diff.
+    if token:
+        realized_cte = """realized AS (
+            SELECT day,
+                   cum - lagInFrame(cum, 1, 0)
+                         OVER (ORDER BY day ASC
+                               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS realized
+            FROM (
+                SELECT d AS day, sum(cum_np) AS cum
+                FROM (
+                    SELECT toDate(time) AS d, token, argMax(net_pnl, time) AS cum_np
+                    FROM tradernick.hl_trade_history FINAL
+                    WHERE wallet = {wallet:String}
+                      AND time >= {since:DateTime} - INTERVAL 1 DAY
+                      AND time <  {until:DateTime} + INTERVAL 1 DAY
+                      AND token = {token:String}
+                    GROUP BY d, token
+                )
+                GROUP BY d
+            )
+        )"""
+    else:
+        realized_cte = """realized AS (
+            SELECT day,
+                   cum - lagInFrame(cum, 1, 0)
+                         OVER (ORDER BY day ASC
+                               ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) AS realized
+            FROM (
+                SELECT day, sumMerge(net_pnl_state) AS cum
+                FROM tradernick.hl_trade_history_wallet_daily
+                WHERE wallet = {wallet:String}
+                  AND day >= toDate({since:DateTime}) - 1
+                  AND day <  toDate({until:DateTime}) + 1
+                GROUP BY day
+            )
+        )"""
+    sql = sql.replace("@@REALIZED@@", realized_cte)
+    # Splice the token filter into the remaining sources (fills tail + eod
+    # unrealized), or strip the sentinel for the global curve.
     sql = sql.replace("@@TOK@@", "AND token = {token:String}" if token else "")
     params = {"wallet": wallet, "since": since_dt, "until": until_dt}
     if token:
@@ -1377,37 +1434,41 @@ _VAULT_PERF_CTE = """
     GROUP BY wallet
   ),
   vault_realized AS (
-    -- trade_history is DAILY + ABSOLUTE: realized_pnl over the window =
-    -- snapshot(until_day) − snapshot(since) per (wallet, token), summed across
-    -- tokens, + a current-day realized/fees tail from hl_fills. trade_volume /
-    -- trade_count are at the last daily snapshot (≤24h stale on those).
+    -- GLOBAL realized_pnl over the window = snapshot(until_day) − snapshot(since)
+    -- summed across all tokens, read from the pre-aggregated per-(day,wallet)
+    -- rollup (hl_trade_history_wallet_daily, HIP3 excluded) via two single-
+    -- partition reads at the latest day ≤ each bound (dense-to-now snapshots),
+    -- + a current-day realized/fees tail from hl_fills (HIP3-excluded to match).
+    -- trade_volume / trade_count are at the last daily snapshot (≤24h stale).
     SELECT v.vault AS vault,
       v.realized_pnl + coalesce(tl.t_pnl, 0) - coalesce(tl.t_fee, 0) AS realized_pnl,
       v.trade_volume      AS trade_volume,
       v.trade_count_total AS trade_count_total
     FROM (
-      SELECT wallet AS vault,
-        sum(e_np - s_np) AS realized_pnl,
-        sum(e_v  - s_v)  AS trade_volume,
-        sum(e_tc - s_tc) AS trade_count_total
+      SELECT e.wallet AS vault,
+        e.net_pnl     - coalesce(s.net_pnl, 0)     AS realized_pnl,
+        e.volume      - coalesce(s.volume, 0)      AS trade_volume,
+        e.trade_count - coalesce(s.trade_count, 0) AS trade_count_total
       FROM (
-        SELECT wallet, token,
-          argMaxIf(net_pnl, time, time <= toStartOfDay({until:DateTime})) AS e_np,
-          argMaxIf(net_pnl, time, time <= {since:DateTime})               AS s_np,
-          argMaxIf(volume, time, time <= toStartOfDay({until:DateTime}))   AS e_v,
-          argMaxIf(volume, time, time <= {since:DateTime})                 AS s_v,
-          argMaxIf(trade_count, time, time <= toStartOfDay({until:DateTime})) AS e_tc,
-          argMaxIf(trade_count, time, time <= {since:DateTime})            AS s_tc
-        FROM tradernick.hl_trade_history FINAL
-        WHERE time <= {until:DateTime}
-        GROUP BY wallet, token
-      )
-      GROUP BY wallet
+        SELECT wallet, sumMerge(net_pnl_state) AS net_pnl,
+               sumMerge(volume_state) AS volume, sumMerge(trade_count_state) AS trade_count
+        FROM tradernick.hl_trade_history_wallet_daily
+        WHERE day = (SELECT max(day) FROM tradernick.hl_trade_history_wallet_daily WHERE day <= toDate({until:DateTime}))
+        GROUP BY wallet
+      ) e
+      LEFT JOIN (
+        SELECT wallet, sumMerge(net_pnl_state) AS net_pnl,
+               sumMerge(volume_state) AS volume, sumMerge(trade_count_state) AS trade_count
+        FROM tradernick.hl_trade_history_wallet_daily
+        WHERE day = (SELECT max(day) FROM tradernick.hl_trade_history_wallet_daily WHERE day <= toDate({since:DateTime}))
+        GROUP BY wallet
+      ) s ON s.wallet = e.wallet
     ) v
     LEFT JOIN (
       SELECT wallet, sum(closed_pnl) AS t_pnl, sum(fee) AS t_fee
       FROM tradernick.hl_fills FINAL
       WHERE time > toStartOfDay({until:DateTime}) AND time <= {until:DateTime}
+        AND position(token, ':') = 0
       GROUP BY wallet
     ) tl ON tl.wallet = v.vault
   )

@@ -2228,36 +2228,47 @@ ORDER BY (day, wallet)
 TTL day + INTERVAL 271 DAY;
 
 -- ───────────────────────────────────────────────────────────────────
--- Per-(day, wallet) GLOBAL OI capital base — token dimension COLLAPSED.
+-- Per-(day, wallet) GLOBAL OI rollup — token dimension COLLAPSED.
 --
--- The Sharpe metrics divide each day's PnL by that day's average total OI
--- ($) — the capital deployed. In global scope that average was computed by
--- scanning hl_position_history_1h across ALL tokens per hourly bucket (the
--- real reason global Sharpe timed out; the PnL numerator is cheap by
--- comparison). This table pre-aggregates the denominator to one row per
--- (day, wallet):
---   oi_usd_state   = Σ over (bucket, token, side) of that bucket's wallet
---                    OI in USD  (sumMerge → numerator of the daily average)
---   n_buckets_state = uniqExact(bucket)  (distinct hourly buckets the wallet
---                    held a non-HIP3 position that day → denominator)
--- so day_avg_oi = sumMerge(oi_usd_state) / uniqExactMerge(n_buckets_state).
--- (uniqExact over a multi-day window telescopes to the per-day bucket-count
--- sum since bucket timestamps never repeat across days.)
+-- A full materialization of what the smart_selector `oi_per_day` CTE computes
+-- for GLOBAL scope, so global OI metrics (avg_total/long/short OI in $/token,
+-- avg_roe_pct, avg_position_count, last_total_oi_$/token, last_position_count)
+-- AND the Sharpe denominator no longer scan hl_position_history_1h across ALL
+-- tokens per hourly bucket per query (the reason global OI/Sharpe was slow).
 --
--- HIP3 perps excluded at build via the -IfState combinators (the rebuild
--- body must stay a single flat GROUP BY so the data_processor's WHERE
--- splice works — see registry.py). Global Sharpe only; token Sharpe keeps
--- using the cheap token-prefiltered oi_per_day path.
+-- Built two-level (per-bucket sums → per-day aggregates) so the per-bucket
+-- RoE ratio and position count are exact; one row per (day, wallet):
+--   s_*            = Σ over the day's hourly buckets of that bucket's wallet
+--                    OI ($/token, total/long/short), RoE, position count
+--   n_buckets      = distinct hourly buckets the wallet held a non-HIP3 pos
+--   last_*         = value at the day's latest non-HIP3 bucket (argMax by bucket)
+--   last_bucket    = that latest bucket (the trailing argMaxIf ordering key)
+-- so e.g. avg_total_oi_usd over a window = Σ s_total_oi_usd / Σ n_buckets, and
+-- day_avg_oi (Sharpe denom) = s_total_oi_usd / n_buckets per day.
+--
+-- HIP3 perps excluded via the -If predicate (`position(token,':')=0`) at the
+-- per-bucket level, NOT a WHERE — the rebuild body must stay a single flat
+-- top-level GROUP BY so the data_processor WHERE-splice lands correctly (see
+-- registry.py). Read each state with its matching -Merge (sum→sumMerge,
+-- uniqExactIf→uniqExactIfMerge, argMaxIf→argMaxIfMerge, maxIf→maxIfMerge).
 CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_oi_wallet_daily
 (
-    day             Date    CODEC(DoubleDelta, ZSTD(3)),
-    wallet          String  CODEC(ZSTD(3)),
-    -- -IfState states (HIP3 excluded via the predicate, no WHERE — keeps the
-    -- rebuild body a single flat GROUP BY so the data_processor WHERE-splice
-    -- works). Read with sumIfMerge / uniqExactIfMerge.
-    oi_usd_state    AggregateFunction(sumIf, Float64, UInt8),
+    day                     Date    CODEC(DoubleDelta, ZSTD(3)),
+    wallet                  String  CODEC(ZSTD(3)),
+    s_total_oi_token_state  AggregateFunction(sum, Float64),
+    s_long_oi_token_state   AggregateFunction(sum, Float64),
+    s_short_oi_token_state  AggregateFunction(sum, Float64),
+    s_total_oi_usd_state    AggregateFunction(sum, Float64),
+    s_long_oi_usd_state     AggregateFunction(sum, Float64),
+    s_short_oi_usd_state    AggregateFunction(sum, Float64),
+    s_roe_state             AggregateFunction(sum, Float64),
+    s_n_positions_state     AggregateFunction(sum, UInt64),
     -- bucket is DateTime (hl_position_history_1h.bucket = toStartOfHour)
-    n_buckets_state AggregateFunction(uniqExactIf, DateTime, UInt8)
+    n_buckets_state         AggregateFunction(uniqExactIf, DateTime, UInt8),
+    last_total_oi_usd_state   AggregateFunction(argMaxIf, Float64, DateTime, UInt8),
+    last_total_oi_token_state AggregateFunction(argMaxIf, Float64, DateTime, UInt8),
+    last_n_positions_state    AggregateFunction(argMaxIf, UInt64,  DateTime, UInt8),
+    last_bucket_state         AggregateFunction(maxIf, DateTime, UInt8)
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY day
 ORDER BY (day, wallet)

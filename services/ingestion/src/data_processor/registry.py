@@ -228,28 +228,62 @@ GROUP BY day, wallet
 """
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Per-(day, wallet) GLOBAL OI capital base for the Sharpe denominator — token
-# dimension summed away. Sourced from the hl_position_history_1h rollup (reuses
-# its hourly bucketing, exactly like the live oi_per_day path) so global Sharpe
-# no longer scans all-token hourly OI per query. day_avg_oi reconstructs as
-# sumIfMerge(oi_usd_state) / uniqExactIfMerge(n_buckets_state).
+# Per-(day, wallet) GLOBAL OI rollup — full materialization of smart_selector's
+# `oi_per_day` for global scope (token dimension summed away). Powers the global
+# OI metrics (avg_total/long/short OI $/token, avg_roe_pct, avg_position_count,
+# last_*) AND the Sharpe denominator, so neither scans all-token hourly OI per
+# query. Sourced from hl_position_history_1h (reuses its hourly bucketing).
 #
-# Body MUST stay a single flat top-level GROUP BY so build_partition's WHERE-
-# splice lands correctly: the inner subquery merges the AMT states per
-# (bucket, token, side, wallet) WITHOUT a WHERE; the spliced `WHERE bucket >= …`
-# is pushed down into that scan by the optimizer (verified: one day ≈ 2.7M rows,
-# not a full-table scan). HIP3 is excluded via the -IfState predicate rather
-# than a WHERE — a WHERE in the inner query would be miscaptured by the splice.
+# THREE levels: innermost argMaxMerges the AMT states per (bucket,token,side,
+# wallet); the MIDDLE collapses to per-(bucket,wallet) sums with HIP3 excluded
+# via the -If predicate (`position(token,':')=0` carried as `isreal`); the OUTER
+# rolls buckets up to per-(day,wallet) — sumState for the windowable sums, the
+# per-bucket RoE ratio summed exactly, argMaxIf/maxIf for the latest-bucket
+# values. Read each with its matching -Merge.
+#
+# Body MUST stay a single flat top-level GROUP BY (no WHERE anywhere) so
+# build_partition's WHERE-splice lands before `GROUP BY day, wallet`; `bucket`
+# is exposed by the subqueries and the spliced `WHERE bucket >= …` pushes down
+# into the innermost scan (verified bounded, not a full-table scan). A WHERE in
+# any subquery would be miscaptured by the splice — HIP3 is done via -If instead.
 _HL_POSITION_HISTORY_OI_WALLET_DAILY_SELECT = """
 SELECT
     toDate(bucket) AS day,
     wallet,
-    sumIfState(sz, position(token, ':') = 0)           AS oi_usd_state,
-    uniqExactIfState(bucket, position(token, ':') = 0) AS n_buckets_state
+    sumState(b_total_oi_token) AS s_total_oi_token_state,
+    sumState(b_long_oi_token)  AS s_long_oi_token_state,
+    sumState(b_short_oi_token) AS s_short_oi_token_state,
+    sumState(b_total_oi_usd)   AS s_total_oi_usd_state,
+    sumState(b_long_oi_usd)    AS s_long_oi_usd_state,
+    sumState(b_short_oi_usd)   AS s_short_oi_usd_state,
+    sumState(if(b_total_oi_usd > 0, b_unreal / b_total_oi_usd, 0)) AS s_roe_state,
+    sumState(b_n_positions)    AS s_n_positions_state,
+    uniqExactIfState(bucket, b_nonhip3 > 0)              AS n_buckets_state,
+    argMaxIfState(b_total_oi_usd,   bucket, b_nonhip3 > 0) AS last_total_oi_usd_state,
+    argMaxIfState(b_total_oi_token, bucket, b_nonhip3 > 0) AS last_total_oi_token_state,
+    argMaxIfState(b_n_positions,    bucket, b_nonhip3 > 0) AS last_n_positions_state,
+    maxIfState(bucket, b_nonhip3 > 0)                    AS last_bucket_state
 FROM (
-    SELECT bucket, token, side, wallet, argMaxMerge(size_state) AS sz
-    FROM tradernick.hl_position_history_1h FINAL
-    GROUP BY bucket, token, side, wallet
+    SELECT bucket, wallet,
+        sumIf(amt, isreal)                      AS b_total_oi_token,
+        sumIf(amt, isreal AND side = 'long')    AS b_long_oi_token,
+        sumIf(amt, isreal AND side = 'short')   AS b_short_oi_token,
+        sumIf(sz,  isreal)                      AS b_total_oi_usd,
+        sumIf(sz,  isreal AND side = 'long')    AS b_long_oi_usd,
+        sumIf(sz,  isreal AND side = 'short')   AS b_short_oi_usd,
+        sumIf(pnl, isreal)                      AS b_unreal,
+        uniqExactIf(token, amt > 0 AND isreal)  AS b_n_positions,
+        countIf(isreal)                         AS b_nonhip3
+    FROM (
+        SELECT bucket, token, side, wallet,
+            argMaxMerge(amount_state) AS amt,
+            argMaxMerge(size_state)   AS sz,
+            argMaxMerge(pnl_state)    AS pnl,
+            position(token, ':') = 0  AS isreal
+        FROM tradernick.hl_position_history_1h FINAL
+        GROUP BY bucket, token, side, wallet
+    )
+    GROUP BY bucket, wallet
 )
 GROUP BY day, wallet
 """

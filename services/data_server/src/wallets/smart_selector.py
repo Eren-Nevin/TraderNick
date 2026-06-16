@@ -1184,23 +1184,57 @@ class SmartSelector:
         # ── avg OI over hourly snapshots ────────────────────────────
         if combos_for[SRC_OI]:
             oi_max = src_max_lb(SRC_OI)
-            # Inner: argMaxMerge the hourly snapshot per (bucket, token,
-            # side, wallet). Middle: collapse to per-(bucket, wallet)
-            # totals + sided sums; emit per-scope projections of both
-            # amount (tokens) and size (USD). Outer (oi_trailing):
-            # average those per-bucket wallet OIs across all hourly
-            # buckets in the trailing lookback window.
-            # Prefilter on token when only token-scope metrics are
-            # referenced — hl_position_history_1h's ORDER BY starts with
-            # `token`, so filtering on it lets CH skip all other tokens'
-            # parts entirely. Without this, a 7-day NEAR-scoped query
-            # reads ~50M rows × 30 tokens; with it, ~1-12M rows × 1
-            # token. The global path can't prefilter (it needs all
-            # tokens summed), so it pays the larger read.
-            oi_inner_token_filter = ""
-            if "global" not in scopes_for[SRC_OI] and "token" in scopes_for[SRC_OI]:
+            OI_AVG_COLS = ["total_oi_token", "long_oi_token", "short_oi_token",
+                           "total_oi_usd", "long_oi_usd", "short_oi_usd"]
+            # GLOBAL OI with NO token-scope OI (mirrors th_global_only): read the
+            # pre-aggregated per-(day,wallet) GLOBAL OI rollup
+            # (hl_position_history_oi_wallet_daily) directly. It already holds
+            # exactly what the source build emits for global scope, so oi_trailing
+            # below is unchanged and the all-token oi_snapshots/oi_per_bucket scan
+            # is skipped. ("global" is in scopes_for[SRC_OI] only when a global OI
+            # METRIC needs it — global-OI-only-for-Sharpe was discarded earlier
+            # and uses oi_cap_daily instead.) Mixed global+token keeps the source
+            # build (rare).
+            oi_metric_rollup = ("global" in scopes_for[SRC_OI]
+                                and "token" not in scopes_for[SRC_OI])
+            if oi_metric_rollup:
+                oi_b_merges = ",\n                   ".join(
+                    f"sumMerge(s_{c}_state) AS s_{c}_g" for c in OI_AVG_COLS)
+                ctes.append(
+                    "oi_per_day AS (\n"
+                    "            SELECT day AS d, wallet,\n"
+                    "                   " + oi_b_merges + ",\n"
+                    "                   sumMerge(s_roe_state)             AS s_roe_g,\n"
+                    "                   sumMerge(s_n_positions_state)     AS s_n_positions_g,\n"
+                    "                   uniqExactIfMerge(n_buckets_state) AS n_buckets,\n"
+                    "                   argMaxIfMerge(last_total_oi_usd_state)   AS last_total_oi_usd_g,\n"
+                    "                   argMaxIfMerge(last_total_oi_token_state) AS last_total_oi_token_g,\n"
+                    "                   argMaxIfMerge(last_n_positions_state)    AS last_n_positions_g,\n"
+                    "                   maxIfMerge(last_bucket_state)     AS last_bucket\n"
+                    "            FROM tradernick.hl_position_history_oi_wallet_daily\n"
+                    "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(oi_max) + " DAY\n"
+                    "              AND day <  toDate({sel_until:DateTime})\n"
+                    "            GROUP BY day, wallet\n"
+                    "        )"
+                )
+            else:
+              # Inner: argMaxMerge the hourly snapshot per (bucket, token,
+              # side, wallet). Middle: collapse to per-(bucket, wallet)
+              # totals + sided sums; emit per-scope projections of both
+              # amount (tokens) and size (USD). Outer (oi_trailing):
+              # average those per-bucket wallet OIs across all hourly
+              # buckets in the trailing lookback window.
+              # Prefilter on token when only token-scope metrics are
+              # referenced — hl_position_history_1h's ORDER BY starts with
+              # `token`, so filtering on it lets CH skip all other tokens'
+              # parts entirely. Without this, a 7-day NEAR-scoped query
+              # reads ~50M rows × 30 tokens; with it, ~1-12M rows × 1
+              # token. The global path can't prefilter (it needs all
+              # tokens summed), so it pays the larger read.
+              oi_inner_token_filter = ""
+              if "global" not in scopes_for[SRC_OI] and "token" in scopes_for[SRC_OI]:
                 oi_inner_token_filter = "              AND token = {sel_token:String}\n"
-            ctes.append(
+              ctes.append(
                 "oi_snapshots AS (\n"
                 "            SELECT bucket, token, side, wallet,\n"
                 "                   argMaxMerge(amount_state) AS amt,\n"
@@ -1213,71 +1247,69 @@ class SmartSelector:
                 f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY bucket, token, side, wallet\n"
                 "        )"
-            )
-            # Per-bucket per-wallet sums. Six numeric columns per scope:
-            # total/long/short × tokens/USD. Token filter only applies on
-            # _t projections via sumIf.
-            oi_bucket_parts: list[str] = []
-            def _pp(g_expr, t_expr, g_alias, t_alias):
+              )
+              # Per-bucket per-wallet sums. Six numeric columns per scope:
+              # total/long/short × tokens/USD. Token filter only applies on
+              # _t projections via sumIf.
+              oi_bucket_parts: list[str] = []
+              def _pp(g_expr, t_expr, g_alias, t_alias):
                 return proj_pair(g_expr, t_expr, SRC_OI, g_alias, t_alias)
-            oi_bucket_parts.append(_pp(
+              oi_bucket_parts.append(_pp(
                 "sum(amt)",
                 "sumIf(amt, token = {sel_token:String})",
                 "total_oi_token_g", "total_oi_token_t"))
-            oi_bucket_parts.append(_pp(
+              oi_bucket_parts.append(_pp(
                 "sumIf(amt, side='long')",
                 "sumIf(amt, side='long' AND token = {sel_token:String})",
                 "long_oi_token_g", "long_oi_token_t"))
-            oi_bucket_parts.append(_pp(
+              oi_bucket_parts.append(_pp(
                 "sumIf(amt, side='short')",
                 "sumIf(amt, side='short' AND token = {sel_token:String})",
                 "short_oi_token_g", "short_oi_token_t"))
-            oi_bucket_parts.append(_pp(
+              oi_bucket_parts.append(_pp(
                 "sum(sz)",
                 "sumIf(sz, token = {sel_token:String})",
                 "total_oi_usd_g", "total_oi_usd_t"))
-            oi_bucket_parts.append(_pp(
+              oi_bucket_parts.append(_pp(
                 "sumIf(sz, side='long')",
                 "sumIf(sz, side='long' AND token = {sel_token:String})",
                 "long_oi_usd_g", "long_oi_usd_t"))
-            oi_bucket_parts.append(_pp(
+              oi_bucket_parts.append(_pp(
                 "sumIf(sz, side='short')",
                 "sumIf(sz, side='short' AND token = {sel_token:String})",
                 "short_oi_usd_g", "short_oi_usd_t"))
-            # Wallet-total unrealized PnL at this bucket (USD). Paired
-            # with total_oi_usd in the trailing CTE to compute per-bucket
-            # RoE, which is then averaged over the lookback.
-            oi_bucket_parts.append(_pp(
+              # Wallet-total unrealized PnL at this bucket (USD). Paired
+              # with total_oi_usd in the trailing CTE to compute per-bucket
+              # RoE, which is then averaged over the lookback.
+              oi_bucket_parts.append(_pp(
                 "sum(pnl)",
                 "sumIf(pnl, token = {sel_token:String})",
                 "unrealized_pnl_usd_g", "unrealized_pnl_usd_t"))
-            # Number of distinct open positions (coins held) at this bucket —
-            # uniqExact over tokens with a non-zero snapshot. Averaged over the
-            # lookback in oi_trailing → avg_position_count. amt is unsigned
-            # (side carries direction), so amt > 0 = an open position.
-            oi_bucket_parts.append(_pp(
+              # Number of distinct open positions (coins held) at this bucket —
+              # uniqExact over tokens with a non-zero snapshot. Averaged over the
+              # lookback in oi_trailing → avg_position_count. amt is unsigned
+              # (side carries direction), so amt > 0 = an open position.
+              oi_bucket_parts.append(_pp(
                 "uniqExactIf(token, amt > 0)",
                 "uniqExactIf(token, amt > 0 AND token = {sel_token:String})",
                 "n_positions_g", "n_positions_t"))
-            oi_bucket_parts = [p for p in oi_bucket_parts if p]
-            ctes.append(
+              oi_bucket_parts = [p for p in oi_bucket_parts if p]
+              ctes.append(
                 "oi_per_bucket AS (\n"
                 "            SELECT bucket, wallet,\n"
                 "                   " + ",\n                   ".join(oi_bucket_parts) + "\n"
                 "            FROM oi_snapshots\n"
                 "            GROUP BY bucket, wallet\n"
                 "        )"
-            )
-            # Roll the hourly buckets up to one row per (day, wallet) FIRST —
-            # the per-day sums + bucket count are sufficient to reconstruct the
-            # exact trailing average (avg over buckets = Σ bucket values / Σ
-            # bucket count). This shrinks the trailing CROSS JOIN input ~24× vs
-            # joining target_days against hourly buckets directly.
-            oi_letters = sorted({s for (s, _) in combos_for[SRC_OI]})
-            oi_day_parts: list[str] = []
-            OI_AVG_COLS = ["total_oi_token", "long_oi_token", "short_oi_token",
-                           "total_oi_usd", "long_oi_usd", "short_oi_usd"]
-            for s in oi_letters:
+              )
+              # Roll the hourly buckets up to one row per (day, wallet) FIRST —
+              # the per-day sums + bucket count are sufficient to reconstruct the
+              # exact trailing average (avg over buckets = Σ bucket values / Σ
+              # bucket count). This shrinks the trailing CROSS JOIN input ~24× vs
+              # joining target_days against hourly buckets directly.
+              oi_letters = sorted({s for (s, _) in combos_for[SRC_OI]})
+              oi_day_parts: list[str] = []
+              for s in oi_letters:
                 for col_name in OI_AVG_COLS:
                     oi_day_parts.append(f"sum({col_name}_{s}) AS s_{col_name}_{s}")
                 oi_day_parts.append(
@@ -1294,7 +1326,7 @@ class SmartSelector:
                     f"argMax(total_oi_token_{s}, bucket) AS last_total_oi_token_{s}")
                 oi_day_parts.append(
                     f"argMax(n_positions_{s}, bucket) AS last_n_positions_{s}")
-            ctes.append(
+              ctes.append(
                 "oi_per_day AS (\n"
                 "            SELECT toDate(bucket) AS d, wallet,\n"
                 "                   " + ",\n                   ".join(oi_day_parts) + ",\n"
@@ -1303,7 +1335,7 @@ class SmartSelector:
                 "            FROM oi_per_bucket\n"
                 "            GROUP BY d, wallet\n"
                 "        )"
-            )
+              )
             # Trailing: avg per-bucket wallet OI over the lookback ending at
             # target.d (exclusive), per (scope, lookback) combo. avg over the
             # window = Σ(per-day bucket sums) / Σ(per-day bucket counts).
@@ -1420,7 +1452,7 @@ class SmartSelector:
                 ctes.append(
                     "oi_cap_daily AS (\n"
                     "            SELECT day AS d, wallet,\n"
-                    "                   sumIfMerge(oi_usd_state)\n"
+                    "                   sumMerge(s_total_oi_usd_state)\n"
                     "                     / nullIf(uniqExactIfMerge(n_buckets_state), 0) AS day_avg_oi_g\n"
                     "            FROM tradernick.hl_position_history_oi_wallet_daily\n"
                     "            WHERE day >= toDate({sel_since:DateTime}) - " + str(sharpe_max) + "\n"
