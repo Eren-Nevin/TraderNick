@@ -331,7 +331,14 @@
         />
         <select
           value={c.metric}
-          onchange={(e) => setCriterion(i, { metric: (e.target as HTMLSelectElement).value as SmartMetricKey })}
+          onchange={(e) => {
+            const metric = (e.target as HTMLSelectElement).value as SmartMetricKey;
+            // Token-only metrics (Sharpe) can't be global — snap scope to token
+            // as the metric changes so the locked dropdown stays consistent.
+            const patch: Partial<SmartCriterionState> = { metric };
+            if (metricDef(metric)?.tokenOnly) patch.scope = 'token';
+            setCriterion(i, patch);
+          }}
           class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 w-44"
         >
           {#each METRIC_CATALOGUE as m (m.key)}
@@ -354,15 +361,28 @@
           onchange={(e) => setCriterion(i, { max: numOrUndef((e.target as HTMLInputElement).value) })}
           class="w-24 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 text-right"
         />
-        <select
-          value={c.scope ?? value.scope}
-          onchange={(e) => setCriterion(i, { scope: (e.target as HTMLSelectElement).value as 'global' | 'token' })}
-          class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 ml-1"
-          title="Compute this metric across all HL tokens (global) or filtered to this chart's token only"
-        >
-          <option value="global">Global</option>
-          <option value="token">{tokenLabel ? `Token (${tokenLabel})` : 'Token'}</option>
-        </select>
+        {#if metricDef(c.metric)?.tokenOnly}
+          <!-- Sharpe is token-only for now (global path times out); lock the
+               scope picker to Token. -->
+          <select
+            value="token"
+            disabled
+            class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 ml-1 opacity-60 cursor-not-allowed"
+            title="Sharpe runs in token scope only for now — global is temporarily disabled (it times out on wide windows)."
+          >
+            <option value="token">{tokenLabel ? `Token (${tokenLabel})` : 'Token'}</option>
+          </select>
+        {:else}
+          <select
+            value={c.scope ?? value.scope}
+            onchange={(e) => setCriterion(i, { scope: (e.target as HTMLSelectElement).value as 'global' | 'token' })}
+            class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 ml-1"
+            title="Compute this metric across all HL tokens (global) or filtered to this chart's token only"
+          >
+            <option value="global">Global</option>
+            <option value="token">{tokenLabel ? `Token (${tokenLabel})` : 'Token'}</option>
+          </select>
+        {/if}
         <input
           type="number" min="1" max="180" step="1"
           value={c.lookback ?? ''}

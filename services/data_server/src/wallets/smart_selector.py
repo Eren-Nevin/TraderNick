@@ -135,6 +135,14 @@ def _sharpe_expr(kind: str) -> str:
 _SHARPE_REALIZED = _sharpe_expr("realized")
 _SHARPE_TOTAL = _sharpe_expr("total")
 
+# Metrics locked to TOKEN scope (global disabled for now). The global-scope
+# daily-return pipeline scans hl_position_history_1h across ALL tokens over the
+# lookback and runs an extra returns CROSS JOIN on top of the OI one, which
+# times out for wide windows (e.g. 60d). Until that path is optimized we coerce
+# these criteria — and the sort metric — to token scope. See _sort_scope /
+# _from_obj where this is enforced.
+_TOKEN_ONLY_METRICS = frozenset({"sharpe", "sharpe_realized"})
+
 
 # Columns available in `combined` after source CTEs are materialised. Suffix
 # `_g` = wallet's aggregate across all HL tokens; `_t` = aggregate filtered
@@ -474,6 +482,10 @@ class SmartSelector:
             cscope = c.get("scope")
             if cscope is not None and cscope not in ("global", "token"):
                 raise ValueError(f"selector.criteria[{i}].scope must be 'global', 'token', or null")
+            # Sharpe metrics are token-only for now — coerce any global/inherit
+            # to token so a stale or hand-crafted global Sharpe can't time out.
+            if metric in _TOKEN_ONLY_METRICS:
+                cscope = "token"
             clookback = c.get("lookback")
             if clookback is not None and (not isinstance(clookback, int) or not (1 <= clookback <= 180)):
                 raise ValueError(f"selector.criteria[{i}].lookback must be int in [1, 180] or null")
@@ -573,6 +585,10 @@ class SmartSelector:
         criterion in the list, that criterion's effective scope wins.
         Otherwise the overall scope is the fallback — keeps orphaned
         sort metrics from breaking when they're not in the criteria UI."""
+        # Token-only metrics (Sharpe) ignore the node scope entirely — they
+        # always rank in token scope even when sort_by isn't a listed criterion.
+        if self.sort_by in _TOKEN_ONLY_METRICS:
+            return "token"
         for c in self.criteria:
             if c.metric == self.sort_by:
                 return self._effective_scope(c.scope)
@@ -750,37 +766,36 @@ class SmartSelector:
             th_max = src_max_lb(SRC_TRADE_HISTORY)
             # trade_history snapshots are now DAILY + ABSOLUTE (cumulative from
             # the wallet's inception), so they can't be summed. We convert them
-            # to per-day deltas here, in three nested layers, and keep the
-            # downstream `trailing`/Sharpe sum() logic unchanged (summing daily
-            # deltas telescopes to the correct endpoint difference
-            # cum[d] − cum[d−L−1]):
-            #   layer 1  cumulative per (wallet, token, day) = argMax by
-            #            (time, ingested_at) — see the dedup note below
-            #   layer 2  cumulative per (wallet, day, scope)  = sum / sumIf token
-            #   layer 3  daily delta = cum[d] − cum[d−1] via lagInFrame
-            # NO FINAL: hl_trade_history is a ReplacingMergeTree(ingested_at),
-            # but `argMax(metric, (time, ingested_at))` picks the exact same
-            # winning row FINAL would (latest snapshot of the day; among
-            # same-timestamp dupes the latest-ingested = the RMT winner), so the
-            # result is byte-identical to FINAL (verified). Dropping FINAL lets
-            # the optimizer use the `(token, time, wallet)` projection so a
-            # token-scoped scan prunes to that token's rows (~10×) instead of
-            # FINAL-merging the whole window. The fetch reaches th_max+1 days
-            # back so the earliest in-window day (target.d − th_max) has a prior
-            # snapshot to diff against; that pre-roll day's own delta is outside
-            # every trailing window and never contributes.
-            cum_proj = proj_pair(
-                "sum(cum_net_pnl)",
-                "sumIf(cum_net_pnl, token = {sel_token:String})",
-                SRC_TRADE_HISTORY, "cum_pnl_g", "cum_pnl_t")
-            cum_proj += ",\n                       " + proj_pair(
-                "sum(cum_volume)",
-                "sumIf(cum_volume, token = {sel_token:String})",
-                SRC_TRADE_HISTORY, "cum_vol_g", "cum_vol_t")
-            cum_proj += ",\n                       " + proj_pair(
-                "sum(cum_trades)",
-                "sumIf(cum_trades, token = {sel_token:String})",
-                SRC_TRADE_HISTORY, "cum_trades_g", "cum_trades_t")
+            # to per-day deltas: a per-(wallet, day, scope) cumulative, then the
+            # daily delta cum[d] − cum[d−1] via lagInFrame. Summing those deltas
+            # downstream (trailing / Sharpe) telescopes to the correct endpoint
+            # difference cum[d] − cum[d−L−1], so the sum() logic is unchanged.
+            # The fetch reaches th_max+1 days back so the earliest in-window day
+            # (target.d − th_max) has a prior snapshot to diff against; that
+            # pre-roll day's own delta is outside every trailing window and never
+            # contributes.
+            #
+            # The per-(d,wallet) cumulative is built two different ways by scope,
+            # because the dedup strategy that's cheap for one is catastrophic for
+            # the other:
+            #
+            #   TOKEN-only: prefilter to the chart token, dedup the RMT with
+            #   `argMax(metric, (time, ingested_at))` per (d, wallet, token), then
+            #   sum. NO FINAL — argMax picks the byte-identical winning row FINAL
+            #   would, and dropping FINAL lets the optimizer keep the
+            #   `(token, time, wallet)` projection so the scan prunes to one
+            #   token's rows (~10×). Cardinality is tiny (one token's wallets).
+            #
+            #   GLOBAL (or mixed): no token prefilter is possible, so that
+            #   per-(d,wallet,token) argMax explodes to ≈all wallets × all tokens
+            #   × every day (~200M groups → >100 GiB, OOMs the AggregatingTransform).
+            #   The data is exactly one snapshot per (wallet, token, day)
+            #   (verified across the window), so FINAL dedups the RMT and we sum
+            #   the per-token snapshots straight into per-(d,wallet) cumulatives
+            #   in a SINGLE GROUP BY (~45M groups / 75d, ~12 GiB, ~7s). FINAL
+            #   streams; there's no projection prune to lose here since global
+            #   reads every token regardless.
+            is_global_th = "global" in scopes_for[SRC_TRADE_HISTORY]
 
             def _delta_pair(g_src: str, t_src: str, g_alias: str, t_alias: str) -> str:
                 parts: list[str] = []
@@ -795,32 +810,66 @@ class SmartSelector:
             delta_proj += ",\n                   " + _delta_pair(
                 "cum_trades_g", "cum_trades_t", "daily_trades_g", "daily_trades_t")
 
-            # Token prefilter when no global-scope metric needs the source —
-            # drops every non-chart-token row before the GROUP BYs and the
-            # downstream trailing CROSS JOIN (the leaderboard's hot path).
-            th_token_filter = ""
-            if "global" not in scopes_for[SRC_TRADE_HISTORY] and "token" in scopes_for[SRC_TRADE_HISTORY]:
-                th_token_filter = "                      AND token = {sel_token:String}\n"
+            th_window = (
+                "                WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max + 1) + " DAY\n"
+                "                  AND time <  {sel_until:DateTime}\n")
+            if is_global_th:
+                # FINAL-dedup + sum token snapshots into per-(d,wallet) cumulatives.
+                cum_direct = proj_pair(
+                    "sum(net_pnl)",
+                    "sumIf(net_pnl, token = {sel_token:String})",
+                    SRC_TRADE_HISTORY, "cum_pnl_g", "cum_pnl_t")
+                cum_direct += ",\n                       " + proj_pair(
+                    "sum(volume)",
+                    "sumIf(volume, token = {sel_token:String})",
+                    SRC_TRADE_HISTORY, "cum_vol_g", "cum_vol_t")
+                cum_direct += ",\n                       " + proj_pair(
+                    "sum(trade_count)",
+                    "sumIf(trade_count, token = {sel_token:String})",
+                    SRC_TRADE_HISTORY, "cum_trades_g", "cum_trades_t")
+                cum_subquery = (
+                    "                SELECT toDate(time) AS d, wallet,\n"
+                    "                       " + cum_direct + "\n"
+                    "                FROM tradernick.hl_trade_history FINAL\n"
+                    + th_window +
+                    f"                  {HIP3_EXCLUDE}\n"
+                    "                GROUP BY d, wallet")
+            else:
+                # Token-prefiltered argMax dedup (keeps the projection prune).
+                cum_proj = proj_pair(
+                    "sum(cum_net_pnl)",
+                    "sumIf(cum_net_pnl, token = {sel_token:String})",
+                    SRC_TRADE_HISTORY, "cum_pnl_g", "cum_pnl_t")
+                cum_proj += ",\n                       " + proj_pair(
+                    "sum(cum_volume)",
+                    "sumIf(cum_volume, token = {sel_token:String})",
+                    SRC_TRADE_HISTORY, "cum_vol_g", "cum_vol_t")
+                cum_proj += ",\n                       " + proj_pair(
+                    "sum(cum_trades)",
+                    "sumIf(cum_trades, token = {sel_token:String})",
+                    SRC_TRADE_HISTORY, "cum_trades_g", "cum_trades_t")
+                cum_subquery = (
+                    "                SELECT d, wallet,\n"
+                    "                       " + cum_proj + "\n"
+                    "                FROM (\n"
+                    "                    SELECT toDate(time) AS d, wallet, token,\n"
+                    "                           argMax(net_pnl, (time, ingested_at))     AS cum_net_pnl,\n"
+                    "                           argMax(volume, (time, ingested_at))      AS cum_volume,\n"
+                    "                           argMax(trade_count, (time, ingested_at)) AS cum_trades\n"
+                    "                    FROM tradernick.hl_trade_history\n"
+                    "                    WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max + 1) + " DAY\n"
+                    "                      AND time <  {sel_until:DateTime}\n"
+                    "                      AND token = {sel_token:String}\n"
+                    f"                      {HIP3_EXCLUDE}\n"
+                    "                    GROUP BY d, wallet, token\n"
+                    "                )\n"
+                    "                GROUP BY d, wallet")
             ctes.append(
                 "daily_per_wallet AS (\n"
                 "            SELECT d, wallet,\n"
                 "                   " + delta_proj + "\n"
                 "            FROM (\n"
-                "                SELECT d, wallet,\n"
-                "                       " + cum_proj + "\n"
-                "                FROM (\n"
-                "                    SELECT toDate(time) AS d, wallet, token,\n"
-                "                           argMax(net_pnl, (time, ingested_at))     AS cum_net_pnl,\n"
-                "                           argMax(volume, (time, ingested_at))      AS cum_volume,\n"
-                "                           argMax(trade_count, (time, ingested_at)) AS cum_trades\n"
-                "                    FROM tradernick.hl_trade_history\n"
-                "                    WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max + 1) + " DAY\n"
-                "                      AND time <  {sel_until:DateTime}\n"
-                + th_token_filter +
-                f"                      {HIP3_EXCLUDE}\n"
-                "                    GROUP BY d, wallet, token\n"
-                "                )\n"
-                "                GROUP BY d, wallet\n"
+                + cum_subquery + "\n"
                 "            )\n"
                 "            WINDOW w AS (PARTITION BY wallet ORDER BY d ASC\n"
                 "                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)\n"
@@ -839,6 +888,24 @@ class SmartSelector:
                     f"sumIf(src.daily_vol_{s}, {w}) AS vol_{s}_l{L}",
                     f"sumIf(src.daily_trades_{s}, {w}) AS trade_count_{s}_l{L}",
                 ]
+            # Prune dormant wallet-days from the CROSS JOIN input. Daily absolute
+            # snapshots are DENSE — once a wallet has ever traded, it carries a
+            # row for EVERY day (incl. fully inactive ones), so the global
+            # daily_per_wallet is ~all wallets × every day (~10M rows / 15d). A
+            # dormant day has all-zero deltas and adds 0 to every trailing sum, so
+            # dropping it from the join is exact for these sum-based metrics while
+            # collapsing the (target_days × dense-wallet-days) cross product back
+            # to the sparse active set — that product, GROUP BY'd per (day,
+            # wallet), is what OOM'd the AggregatingTransform (~110 GiB) in global
+            # scope. Funding-only days survive (their PnL delta is non-zero).
+            # Sharpe is unaffected: returns_per_wallet_day reads the DENSE
+            # daily_per_wallet directly (a held-but-flat day is a real 0% return),
+            # not this CTE.
+            th_active_cols: list[str] = []
+            for s in sorted(self._suffix(sc) for sc in scopes_for[SRC_TRADE_HISTORY]):
+                th_active_cols += [
+                    f"src.daily_pnl_{s}", f"src.daily_vol_{s}", f"src.daily_trades_{s}"]
+            th_active_pred = " OR ".join(f"{c} != 0" for c in th_active_cols)
             ctes.append(
                 "trailing AS (\n"
                 "            SELECT target.d AS day, src.wallet AS wallet,\n"
@@ -847,6 +914,7 @@ class SmartSelector:
                 "            CROSS JOIN daily_per_wallet src\n"
                 "            WHERE src.d >= target.d - " + str(th_max) + "\n"
                 "              AND src.d <  target.d\n"
+                "              AND (" + th_active_pred + ")\n"
                 "            GROUP BY target.d, src.wallet\n"
                 "        )"
             )
