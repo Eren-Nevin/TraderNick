@@ -874,28 +874,50 @@ class SmartSelector:
                     "                  AND day <  toDate({sel_until:DateTime})\n"
                     "                GROUP BY day, wallet")
             elif is_global_th:
-                # Mixed global+token: FINAL-dedup + sum token snapshots into
-                # per-(d,wallet) cumulatives (token-less rollup can't serve the
-                # _t projection, so this node pays the source scan).
-                cum_direct = proj_pair(
-                    "sum(net_pnl)",
-                    "sumIf(net_pnl, token = {sel_token:String})",
-                    SRC_TRADE_HISTORY, "cum_pnl_g", "cum_pnl_t")
-                cum_direct += ",\n                       " + proj_pair(
-                    "sum(volume)",
-                    "sumIf(volume, token = {sel_token:String})",
-                    SRC_TRADE_HISTORY, "cum_vol_g", "cum_vol_t")
-                cum_direct += ",\n                       " + proj_pair(
-                    "sum(trade_count)",
-                    "sumIf(trade_count, token = {sel_token:String})",
-                    SRC_TRADE_HISTORY, "cum_trades_g", "cum_trades_t")
+                # Mixed global+token in one node: take the GLOBAL cumulative from
+                # the rollup (Table A, dense per-(day,wallet), already summed over
+                # tokens) and the TOKEN cumulative from the source (token-
+                # prefiltered argMax — keeps the projection prune to one token's
+                # rows). LEFT JOIN on (d, wallet) so every wallet (the global
+                # ranking universe) is present with token cols coalescing to 0
+                # where it never traded the chart token. This avoids the all-token
+                # `hl_trade_history FINAL` scan the old mixed path did (which read
+                # every token's rows just to sum the global cumulative).
                 cum_subquery = (
-                    "                SELECT toDate(time) AS d, wallet,\n"
-                    "                       " + cum_direct + "\n"
-                    "                FROM tradernick.hl_trade_history FINAL\n"
-                    + th_window +
-                    f"                  {HIP3_EXCLUDE}\n"
-                    "                GROUP BY d, wallet")
+                    "                SELECT g.d AS d, g.wallet AS wallet,\n"
+                    "                       g.cum_pnl_g, g.cum_vol_g, g.cum_trades_g,\n"
+                    "                       coalesce(t.cum_pnl_t, 0)    AS cum_pnl_t,\n"
+                    "                       coalesce(t.cum_vol_t, 0)    AS cum_vol_t,\n"
+                    "                       coalesce(t.cum_trades_t, 0) AS cum_trades_t\n"
+                    "                FROM (\n"
+                    "                    SELECT day AS d, wallet,\n"
+                    "                           sumMerge(net_pnl_state)     AS cum_pnl_g,\n"
+                    "                           sumMerge(volume_state)      AS cum_vol_g,\n"
+                    "                           sumMerge(trade_count_state) AS cum_trades_g\n"
+                    "                    FROM tradernick.hl_trade_history_wallet_daily\n"
+                    "                    WHERE day >= toDate({sel_since:DateTime}) - " + str(th_max + 1) + "\n"
+                    "                      AND day <  toDate({sel_until:DateTime})\n"
+                    "                    GROUP BY day, wallet\n"
+                    "                ) g\n"
+                    "                LEFT JOIN (\n"
+                    "                    SELECT d, wallet,\n"
+                    "                           sumIf(cum_net_pnl, token = {sel_token:String}) AS cum_pnl_t,\n"
+                    "                           sumIf(cum_volume, token = {sel_token:String})   AS cum_vol_t,\n"
+                    "                           sumIf(cum_trades, token = {sel_token:String})   AS cum_trades_t\n"
+                    "                    FROM (\n"
+                    "                        SELECT toDate(time) AS d, wallet, token,\n"
+                    "                               argMax(net_pnl, (time, ingested_at))     AS cum_net_pnl,\n"
+                    "                               argMax(volume, (time, ingested_at))      AS cum_volume,\n"
+                    "                               argMax(trade_count, (time, ingested_at)) AS cum_trades\n"
+                    "                        FROM tradernick.hl_trade_history\n"
+                    "                        WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max + 1) + " DAY\n"
+                    "                          AND time <  {sel_until:DateTime}\n"
+                    "                          AND token = {sel_token:String}\n"
+                    f"                          {HIP3_EXCLUDE}\n"
+                    "                        GROUP BY d, wallet, token\n"
+                    "                    )\n"
+                    "                    GROUP BY d, wallet\n"
+                    "                ) t ON t.d = g.d AND t.wallet = g.wallet")
             else:
                 # Token-prefiltered argMax dedup (keeps the projection prune).
                 cum_proj = proj_pair(
