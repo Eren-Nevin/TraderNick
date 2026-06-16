@@ -2981,6 +2981,10 @@
           const arr = data as LongShortRow[];
           const countMA = maArray(arr.map((d) => d.top_trader_count_ratio), ma.length, ma.type);
           const volMA = maArray(arr.map((d) => d.top_trader_vol_ratio), ma.length, ma.type);
+          const avgVolMA = maArray(
+            arr.map((d) => (d.top_trader_count_ratio ? d.top_trader_vol_ratio / d.top_trader_count_ratio : 0)),
+            ma.length, ma.type
+          );
           out.push({
             key: `cum_top_ct_${idx}`,
             label: `Top count ${tag}`,
@@ -2994,6 +2998,13 @@
             color,
             dash: SUB_DASH[1],
             compute: (_d: LongShortRow, i: number) => volMA[i]
+          });
+          out.push({
+            key: `cum_top_avg_vol_${idx}`,
+            label: `Top avg vol ${tag}`,
+            color,
+            dash: SUB_DASH[2] ?? SUB_DASH[1],
+            compute: (_d: LongShortRow, i: number) => avgVolMA[i]
           });
           break;
         }

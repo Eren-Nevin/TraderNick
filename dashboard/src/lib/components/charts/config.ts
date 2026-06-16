@@ -228,6 +228,16 @@ export const TOP_TRADERS_LINES = [
     label: 'Top traders (vol)',
     color: '#06b6d4',
     compute: (d: LongShortRow) => d.top_trader_vol_ratio
+  },
+  {
+    // Volume-per-trader L/S ratio: the vol L/S ratio divided by the count L/S
+    // ratio = (avg vol per long trader) / (avg vol per short trader). Reads
+    // > 1 when longs trade bigger on average than shorts, < 1 when smaller.
+    key: 'top_avg_vol',
+    label: 'Top traders (avg vol)',
+    color: '#a855f7',
+    compute: (d: LongShortRow) =>
+      d.top_trader_count_ratio ? d.top_trader_vol_ratio / d.top_trader_count_ratio : 0
   }
 ];
 
