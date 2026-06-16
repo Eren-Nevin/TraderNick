@@ -4140,6 +4140,10 @@
   let walletsDialogError = $state<string | null>(null);
   let walletsDialogList = $state<string[]>([]);
   let walletsDialogDay = $state('');
+  // As-of-day selector metrics: the values that admitted each wallet on the
+  // clicked day (e.g. Sharpe annualized), shown in the dialog's stats area.
+  let walletsDialogAsOf = $state<Array<{ key: string; label: string; scope: string; lookback: number }>>([]);
+  let walletsDialogMetrics = $state<Record<string, Record<string, number | null>>>({});
   let walletsFetchCtl: AbortController | null = null;
 
   async function openSmartWalletsDialog(timeSec: number) {
@@ -4149,6 +4153,8 @@
     const dayIso = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
     walletsDialogDay = dayIso;
     walletsDialogList = [];
+    walletsDialogAsOf = [];
+    walletsDialogMetrics = {};
     walletsDialogError = null;
     walletsDialogLoading = true;
     walletsDialogOpen = true;
@@ -4168,6 +4174,8 @@
       if (!res.ok) throw new Error(`smart_wallets ${res.status}`);
       const body = await res.json();
       walletsDialogList = (body.wallets ?? []) as string[];
+      walletsDialogAsOf = (body.as_of_metrics ?? []) as Array<{ key: string; label: string; scope: string; lookback: number }>;
+      walletsDialogMetrics = (body.wallet_metrics ?? {}) as Record<string, Record<string, number | null>>;
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') {
         walletsDialogError = e instanceof Error ? e.message : String(e);
@@ -6724,6 +6732,8 @@
 <SmartWalletsDialog
   open={walletsDialogOpen}
   wallets={walletsDialogList}
+  asOfMetrics={walletsDialogAsOf}
+  walletMetrics={walletsDialogMetrics}
   loading={walletsDialogLoading}
   error={walletsDialogError}
   day={walletsDialogDay}

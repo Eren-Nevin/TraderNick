@@ -23,6 +23,7 @@ export type SmartMetricKey =
   | 'long_pnl'
   | 'short_pnl'
   | 'sharpe'
+  | 'sharpe_annualized'
   | 'avg_total_oi_token'
   | 'avg_long_oi_token'
   | 'avg_short_oi_token'
@@ -31,6 +32,9 @@ export type SmartMetricKey =
   | 'avg_short_oi_usd'
   | 'avg_roe_pct'
   | 'avg_position_count'
+  | 'last_total_oi_usd'
+  | 'last_total_oi_token'
+  | 'last_position_count'
   | 'non_funding_pnl'
   | 'funding_pnl_share'
   | 'long_volume_usd'
@@ -84,12 +88,16 @@ export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
   { key: 'avg_short_oi_token',      label: 'Avg Short OI (token)',      kind: 'token' },
   { key: 'avg_roe_pct',             label: 'Avg RoE (%)',               kind: 'pct' },
   { key: 'avg_position_count',      label: 'Avg Position Count',        kind: 'count', defaultScope: 'global' },
+  { key: 'last_total_oi_usd',       label: 'Latest Total OI ($)',       kind: 'usd' },
+  { key: 'last_total_oi_token',     label: 'Latest Total OI (token)',   kind: 'token' },
+  { key: 'last_position_count',     label: 'Latest Position Count',     kind: 'count', defaultScope: 'global' },
   { key: 'non_funding_pnl',         label: 'Non-Funding PnL ($)',       kind: 'usd' },
   { key: 'funding_pnl_share',       label: 'Funding PnL Share',         kind: 'pct' },
   { key: 'trade_count',             label: 'Trade count',               kind: 'count' },
   { key: 'long_pnl',                label: 'Long PnL ($)',              kind: 'usd' },
   { key: 'short_pnl',               label: 'Short PnL ($)',             kind: 'usd' },
-  { key: 'sharpe',                  label: 'Sharpe ratio',              kind: 'ratio' },
+  { key: 'sharpe',                  label: 'Sharpe (daily)',            kind: 'ratio' },
+  { key: 'sharpe_annualized',       label: 'Sharpe (annualized)',       kind: 'ratio' },
 ];
 
 export function metricDef(key: string): SmartMetricDef | undefined {

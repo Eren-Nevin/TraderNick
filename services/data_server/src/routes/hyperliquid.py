@@ -11,6 +11,7 @@ already-pre-aggregated trader performance from hl_trade_history for the
 table-chart kind on the dashboard.
 """
 from __future__ import annotations
+import logging
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -21,6 +22,8 @@ from routes.ohlcv import INTERVAL_SECONDS
 from throttle import throttled
 from wallets.smart_selector import SmartSelector
 from wallets import cache as wallets_cache
+
+log = logging.getLogger(__name__)
 
 bp = Blueprint("hyperliquid")
 
@@ -580,10 +583,36 @@ async def smart_wallets(request):
     ch = await client()
     rows = await ch.query(sql, parameters=params)
     wallets = [r[0] for r in rows.result_rows]
+
+    # Per-wallet "as of <day>" metric values: the exact figures the SELECTOR
+    # computed at the admission day (Sharpe annualized, etc.) — what the dialog
+    # shows instead of a current-time recomputation. Only the ROOT node's own
+    # criteria/sort metrics (a pure-composite root has none). Best-effort: a
+    # failure here just omits the as-of stats, the wallet list still returns.
+    as_of_metrics: list = []
+    wallet_metrics: dict = {}
+    mq = selector.build_root_metrics_query(since_dt, until_dt)
+    if mq is not None and wallets:
+        msql, mparams, meta = mq
+        mparams = {**mparams, "m_day": day_dt.date(), "m_wallets": wallets}
+        try:
+            mrows = await ch.query(msql, parameters=mparams)
+            as_of_metrics = meta
+            for r in mrows.result_rows:
+                w = r[0]
+                wallet_metrics[w] = {
+                    meta[i]["key"]: (float(r[i + 1]) if r[i + 1] is not None else None)
+                    for i in range(len(meta))
+                }
+        except Exception as exc:  # noqa: BLE001
+            log.warning("smart_wallets as-of metrics failed: %s", exc)
+
     return response.json({
         "day": day_dt.date().isoformat(),
         "selector": selector.summary(),
         "wallets": wallets,
+        "as_of_metrics": as_of_metrics,
+        "wallet_metrics": wallet_metrics,
     })
 
 

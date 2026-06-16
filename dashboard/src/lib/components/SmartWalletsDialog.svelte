@@ -18,11 +18,20 @@
   import WalletPnlChart from '$lib/components/WalletPnlChart.svelte';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import { fmtUsdTooltip, fmtAmountTooltip } from '$lib/components/charts/config';
+  import { metricDef } from '$lib/components/charts/smartSelector';
+
+  /** One selector metric surfaced "as of" the clicked day. */
+  type AsOfMetric = { key: string; label: string; scope: string; lookback: number };
 
   type Props = {
     open: boolean;
     /** Loaded list of wallet addresses (may be empty during fetch). */
     wallets: string[];
+    /** Selector metrics (sort + criteria) shown as-of the clicked day, in
+     *  rank/sort order. Empty for a pure-composite filter (no own criteria). */
+    asOfMetrics?: AsOfMetric[];
+    /** address → { metricKey → value } as the selector computed it on `day`. */
+    walletMetrics?: Record<string, Record<string, number | null>>;
     /** Loading state — true while the smart_wallets fetch is in flight. */
     loading?: boolean;
     /** Error message if the fetch failed. */
@@ -38,12 +47,25 @@
   let {
     open,
     wallets,
+    asOfMetrics = [],
+    walletMetrics = {},
     loading = false,
     error: errMsg = null,
     day = '',
     token = '',
     onClose
   }: Props = $props();
+
+  // Format an as-of metric value by its catalogue kind. The value is exactly
+  // what the selector computed at the admission day (no unit re-scaling).
+  function fmtMetric(key: string, v: number | null | undefined): string {
+    if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+    const kind = metricDef(key)?.kind;
+    if (kind === 'usd') return fmtUsdTooltip(v);
+    if (kind === 'token') return fmtAmountTooltip(v);
+    // ratio / count / pct → plain number; ratios & counts read best at 2dp.
+    return Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(2);
+  }
 
   let toast = $state<{ text: string; at: number } | null>(null);
   let toastTimer: ReturnType<typeof setTimeout> | null = null;
@@ -263,6 +285,27 @@
                 {#if expanded === w}
                   <tr class="border-b border-zinc-800 bg-zinc-900/40">
                     <td colspan="4" class="px-4 py-3">
+                      {#if asOfMetrics.length > 0 && walletMetrics[w]}
+                        <!-- The metric values the SELECTOR computed at the
+                             clicked day — i.e. what admitted this wallet to the
+                             filtered set (not a current-time recomputation). -->
+                        <div class="mb-3">
+                          <div class="text-[10px] uppercase tracking-wide text-zinc-500 mb-1.5">
+                            As of {day} · filter values
+                          </div>
+                          <div class="grid grid-cols-3 gap-2 text-[11px]">
+                            {#each asOfMetrics as m (m.key)}
+                              <div class="rounded bg-zinc-900/70 px-2 py-1.5">
+                                <div class="text-zinc-500 text-[10px] uppercase tracking-wide truncate" title={m.label}>
+                                  {m.label}
+                                </div>
+                                <div class="text-zinc-200 tabular-nums">{fmtMetric(m.key, walletMetrics[w]?.[m.key])}</div>
+                                <div class="text-zinc-600 text-[9px]">{m.scope === 'token' ? token || 'token' : 'global'} · {m.lookback}d</div>
+                              </div>
+                            {/each}
+                          </div>
+                        </div>
+                      {/if}
                       {#if pnlLoading}
                         <div class="py-6 text-center text-zinc-400 text-xs">Loading PnL…</div>
                       {:else if pnlError}
@@ -306,7 +349,9 @@
                         {:else}
                           <WalletPnlChart data={chartData} height={200} {cutoff} label={pnlMode === 'total' ? 'Total' : 'Realized'} />
                         {/if}
-                        {#if pnlStats}
+                        {#if pnlStats && asOfMetrics.length === 0}
+                          <!-- Fallback (pure-composite filter has no own
+                               metrics to surface): current-time PnL stats. -->
                           <div class="grid grid-cols-4 gap-2 mt-3 text-[11px]">
                             <div class="rounded bg-zinc-900/70 px-2 py-1.5">
                               <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Realized</div>

@@ -54,6 +54,7 @@ _SUFFIXABLE_NAMES = sorted([
     "funding_per_wallet_day", "funding_trailing",
     "vol_per_wallet_day", "vol_trailing",
     "oi_snapshots", "oi_per_bucket", "oi_per_day", "oi_trailing",
+    "returns_per_wallet_day", "returns_trailing",
     "combined", "ranked", "own_wallets",
     "sel_since", "sel_until", "sel_top_n",
 ], key=len, reverse=True)
@@ -107,6 +108,24 @@ class MetricDef:
     label: str
     requires: frozenset[str]
     column_sql: str
+
+
+# Return-Sharpe expressions. A textbook return-Sharpe: mean / population-stddev
+# of DAILY RETURNS over the lookback, where return[d] = that day's realized PnL
+# divided by the day's average total OI in USD (return on capital deployed).
+# We carry per-(scope,lookback) running sums from the returns_trailing CTE —
+# ret_sum = Σreturn, ret_sumsq = Σreturn², ret_cnt = #invested days — so mean =
+# ret_sum/ret_cnt and population variance = ret_sumsq/ret_cnt − mean² (no array
+# needed). Require ≥2 days and var>0, else 0 (guards constant / single-day
+# series from ±inf). The annualized variant scales the daily ratio by √365
+# (HL perps trade 24/7). `{s}` expands to e.g. `g_l7` so the columns land on the
+# lookback-tagged `combined` projections (ret_sum_g_l7, …).
+_RET_MEAN = "(ret_sum_{s} / ret_cnt_{s})"
+_RET_VAR = "(ret_sumsq_{s} / ret_cnt_{s} - pow(ret_sum_{s} / ret_cnt_{s}, 2))"
+_SHARPE_DAILY = ("if(ret_cnt_{s} > 1 AND " + _RET_VAR + " > 0, "
+                 + _RET_MEAN + " / sqrt(" + _RET_VAR + "), 0)")
+_SHARPE_ANN = ("if(ret_cnt_{s} > 1 AND " + _RET_VAR + " > 0, "
+               + "(" + _RET_MEAN + " / sqrt(" + _RET_VAR + ")) * sqrt(365), 0)")
 
 
 # Columns available in `combined` after source CTEs are materialised. Suffix
@@ -166,17 +185,20 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         frozenset({SRC_SIDED}),
         "short_pnl_{s}",
     ),
-    # Sharpe: mean / stddevPop of daily PnL over the trailing window. The
-    # arrayReduce variant lets us compute it from a groupArray captured in
-    # the trailing CTE — no extra hl_trade_history scan. stddev=0 → 0 to
-    # keep single-day / constant-PnL wallets from being ranked ±inf.
+    # Return-Sharpe (daily): mean / population-stddev of daily RETURNS over the
+    # lookback, where return[d] = daily realized PnL / that day's avg total OI
+    # ($). Needs both trade_history (PnL) and OI (capital base); the returns
+    # CTEs join them per (day, wallet). See _SHARPE_DAILY above.
     "sharpe": MetricDef(
-        "sharpe", "Sharpe ratio",
-        frozenset({SRC_TRADE_HISTORY}),
-        ("if(arrayReduce('stddevPop', daily_pnls_{s}) > 0,"
-         " arrayReduce('avg', daily_pnls_{s})"
-         " / arrayReduce('stddevPop', daily_pnls_{s}),"
-         " 0)"),
+        "sharpe", "Sharpe (daily)",
+        frozenset({SRC_TRADE_HISTORY, SRC_OI}),
+        _SHARPE_DAILY,
+    ),
+    # Annualized return-Sharpe: the daily ratio × √365 (HL perps trade 24/7).
+    "sharpe_annualized": MetricDef(
+        "sharpe_annualized", "Sharpe (annualized)",
+        frozenset({SRC_TRADE_HISTORY, SRC_OI}),
+        _SHARPE_ANN,
     ),
     # ── Average OI over the lookback (token + USD) ───────────────────
     # Source columns (per-scope) emitted by the SRC_OI trailing CTE:
@@ -226,6 +248,27 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
     "avg_position_count": MetricDef(
         "avg_position_count", "Avg Position Count",
         frozenset({SRC_OI}), "avg_n_positions_{s}",
+    ),
+    # ── Latest-snapshot (point-in-time) variants of the OI/position
+    # metrics. Instead of averaging every hourly bucket in the lookback,
+    # these read the wallet's MOST RECENT snapshot within the window
+    # (argMax by bucket). Use them to filter on where a wallet *currently*
+    # sits (e.g. total OI $ right now) rather than its typical level over
+    # the period. The lookback still bounds recency: a wallet with no
+    # snapshot in the window resolves to 0. Source columns emitted by the
+    # oi_trailing CTE: last_total_oi_usd_{s} / last_total_oi_token_{s} /
+    # last_n_positions_{s}.
+    "last_total_oi_usd": MetricDef(
+        "last_total_oi_usd", "Latest Total OI ($)",
+        frozenset({SRC_OI}), "last_total_oi_usd_{s}",
+    ),
+    "last_total_oi_token": MetricDef(
+        "last_total_oi_token", "Latest Total OI (token)",
+        frozenset({SRC_OI}), "last_total_oi_token_{s}",
+    ),
+    "last_position_count": MetricDef(
+        "last_position_count", "Latest Position Count",
+        frozenset({SRC_OI}), "last_n_positions_{s}",
     ),
     # ── Sided + taker volume (token + USD) ───────────────────────────
     # Source columns emitted by the SRC_VOL trailing CTE:
@@ -537,6 +580,24 @@ class SmartSelector:
                 needs.add((src, eff, lb))
         return needs
 
+    # Metrics whose value is a return-Sharpe built from the daily-return series
+    # (returns_trailing). Both share the same per-(scope,lookback) running sums.
+    _SHARPE_METRICS = frozenset({"sharpe", "sharpe_annualized"})
+
+    def _sharpe_combos(self) -> set[tuple[str, int]]:
+        """(scope-letter, lookback) combos where a Sharpe metric is referenced
+        (sort or an active criterion). Drives emission of the returns CTEs +
+        the per-combo running-sum columns the Sharpe expressions read."""
+        out: set[tuple[str, int]] = set()
+        if self.sort_by in self._SHARPE_METRICS:
+            out.add((self._suffix(self._sort_scope()), self._sort_lookback()))
+        for c in self.criteria:
+            if c.disabled or c.metric not in self._SHARPE_METRICS:
+                continue
+            out.add((self._suffix(self._effective_scope(c.scope)),
+                     self._effective_lookback(c.lookback)))
+        return out
+
     @staticmethod
     def _suffix(scope: str) -> str:
         return "g" if scope == "global" else "t"
@@ -724,8 +785,9 @@ class SmartSelector:
             )
 
             # trailing — one windowed aggregate per (scope, lookback) combo,
-            # gated by sumIf/groupArrayIf so a single CROSS JOIN over the max
-            # window serves every lookback. daily_pnls_* feeds Sharpe.
+            # gated by sumIf so a single CROSS JOIN over the max window serves
+            # every lookback. (Sharpe's daily-return series is built separately
+            # in returns_trailing, since it needs the OI capital base too.)
             trailing_parts: list[str] = []
             for (s, L) in sorted(combos_for[SRC_TRADE_HISTORY]):
                 w = f"src.d >= target.d - {L}"
@@ -733,7 +795,6 @@ class SmartSelector:
                     f"sumIf(src.daily_pnl_{s}, {w}) AS realized_pnl_{s}_l{L}",
                     f"sumIf(src.daily_vol_{s}, {w}) AS vol_{s}_l{L}",
                     f"sumIf(src.daily_trades_{s}, {w}) AS trade_count_{s}_l{L}",
-                    f"groupArrayIf(src.daily_pnl_{s}, {w}) AS daily_pnls_{s}_l{L}",
                 ]
             ctes.append(
                 "trailing AS (\n"
@@ -1050,11 +1111,22 @@ class SmartSelector:
                     f"sum(if(total_oi_usd_{s} > 0, "
                     f"unrealized_pnl_usd_{s} / total_oi_usd_{s}, 0)) AS s_roe_{s}")
                 oi_day_parts.append(f"sum(n_positions_{s}) AS s_n_positions_{s}")
+                # Latest-snapshot variants: the value at this day's most
+                # recent bucket (argMax by bucket). last_bucket below pairs
+                # with these so the trailing CTE can pick the single most
+                # recent day's value across the window.
+                oi_day_parts.append(
+                    f"argMax(total_oi_usd_{s}, bucket) AS last_total_oi_usd_{s}")
+                oi_day_parts.append(
+                    f"argMax(total_oi_token_{s}, bucket) AS last_total_oi_token_{s}")
+                oi_day_parts.append(
+                    f"argMax(n_positions_{s}, bucket) AS last_n_positions_{s}")
             ctes.append(
                 "oi_per_day AS (\n"
                 "            SELECT toDate(bucket) AS d, wallet,\n"
                 "                   " + ",\n                   ".join(oi_day_parts) + ",\n"
-                "                   count() AS n_buckets\n"
+                "                   count() AS n_buckets,\n"
+                "                   max(bucket) AS last_bucket\n"
                 "            FROM oi_per_bucket\n"
                 "            GROUP BY d, wallet\n"
                 "        )"
@@ -1077,6 +1149,18 @@ class SmartSelector:
                 oi_trail_parts.append(
                     f"if({denom} > 0, sumIf(src.s_n_positions_{s}, {w}) / {denom}, 0) "
                     f"AS avg_n_positions_{s}_l{L}")
+                # Latest-snapshot: value at the window's most recent bucket —
+                # argMaxIf over per-day last-bucket values, ordered by the
+                # day's last_bucket. Wallet absent from the window → 0.
+                oi_trail_parts.append(
+                    f"argMaxIf(src.last_total_oi_usd_{s}, src.last_bucket, {w}) "
+                    f"AS last_total_oi_usd_{s}_l{L}")
+                oi_trail_parts.append(
+                    f"argMaxIf(src.last_total_oi_token_{s}, src.last_bucket, {w}) "
+                    f"AS last_total_oi_token_{s}_l{L}")
+                oi_trail_parts.append(
+                    f"argMaxIf(src.last_n_positions_{s}, src.last_bucket, {w}) "
+                    f"AS last_n_positions_{s}_l{L}")
             ctes.append(
                 "oi_trailing AS (\n"
                 "            SELECT target.d AS day, src.wallet AS wallet,\n"
@@ -1084,6 +1168,59 @@ class SmartSelector:
                 "            FROM target_days target\n"
                 "            CROSS JOIN oi_per_day src\n"
                 "            WHERE src.d >= target.d - " + str(oi_max) + "\n"
+                "              AND src.d <  target.d\n"
+                "            GROUP BY target.d, src.wallet\n"
+                "        )"
+            )
+
+        # ── returns (daily-return series for the Sharpe metrics) ────
+        # return[d] = daily realized PnL (trade_history) / that day's avg total
+        # OI in $ (position_history). Joins the per-day PnL deltas with the
+        # per-day avg OI, INNER so only days the wallet actually held capital
+        # (OI>0) count. returns_trailing then keeps per-(scope,lookback) running
+        # sums (Σreturn, Σreturn², #days) so the Sharpe expressions can compute
+        # mean / population-stddev without materialising an array.
+        sharpe_combos = self._sharpe_combos()
+        if sharpe_combos:
+            sharpe_max = max((L for (_, L) in sharpe_combos), default=1)
+            sharpe_scopes = sorted({s for (s, _) in sharpe_combos})
+            avg_oi_parts = [
+                f"if(n_buckets > 0, s_total_oi_usd_{s} / n_buckets, 0) AS day_avg_oi_{s}"
+                for s in sharpe_scopes
+            ]
+            ret_day_parts = [
+                f"if(oi.day_avg_oi_{s} > 0, th.daily_pnl_{s} / oi.day_avg_oi_{s}, 0) "
+                f"AS daily_return_{s}"
+                for s in sharpe_scopes
+            ]
+            ctes.append(
+                "returns_per_wallet_day AS (\n"
+                "            SELECT th.d AS d, th.wallet AS wallet,\n"
+                "                   " + ",\n                   ".join(ret_day_parts) + "\n"
+                "            FROM daily_per_wallet th\n"
+                "            INNER JOIN (\n"
+                "                SELECT d, wallet,\n"
+                "                       " + ",\n                       ".join(avg_oi_parts) + "\n"
+                "                FROM oi_per_day\n"
+                "            ) oi ON oi.d = th.d AND oi.wallet = th.wallet\n"
+                "        )"
+            )
+            ret_trail_parts: list[str] = []
+            for (s, L) in sorted(sharpe_combos):
+                w = f"src.d >= target.d - {L}"
+                ret_trail_parts += [
+                    f"sumIf(src.daily_return_{s}, {w}) AS ret_sum_{s}_l{L}",
+                    f"sumIf(src.daily_return_{s} * src.daily_return_{s}, {w}) "
+                    f"AS ret_sumsq_{s}_l{L}",
+                    f"countIf({w}) AS ret_cnt_{s}_l{L}",
+                ]
+            ctes.append(
+                "returns_trailing AS (\n"
+                "            SELECT target.d AS day, src.wallet AS wallet,\n"
+                "                   " + ",\n                   ".join(ret_trail_parts) + "\n"
+                "            FROM target_days target\n"
+                "            CROSS JOIN returns_per_wallet_day src\n"
+                "            WHERE src.d >= target.d - " + str(sharpe_max) + "\n"
                 "              AND src.d <  target.d\n"
                 "            GROUP BY target.d, src.wallet\n"
                 "        )"
@@ -1101,7 +1238,7 @@ class SmartSelector:
         # (src, alias, cte_name, base_cols, windowed?)
         src_info = [
             (SRC_TRADE_HISTORY, "r", "trailing",
-             ["realized_pnl", "vol", "trade_count", "daily_pnls"], True),
+             ["realized_pnl", "vol", "trade_count"], True),
             (SRC_EOD, "u", "unrealized_eod", ["unrealized_pnl"], False),
             (SRC_SIDED, "s", "sided_pnl", ["long_pnl", "short_pnl"], True),
             (SRC_VOL, "v", "vol_trailing", VOL_COLS, True),
@@ -1109,7 +1246,8 @@ class SmartSelector:
             (SRC_OI, "o", "oi_trailing",
              ["avg_total_oi_token", "avg_long_oi_token", "avg_short_oi_token",
               "avg_total_oi_usd", "avg_long_oi_usd", "avg_short_oi_usd",
-              "avg_roe_pct", "avg_n_positions"], True),
+              "avg_roe_pct", "avg_n_positions",
+              "last_total_oi_usd", "last_total_oi_token", "last_n_positions"], True),
         ]
         spine = next(si for si in src_info if combos_for[si[0]])
         spine_alias = spine[1]
@@ -1128,13 +1266,26 @@ class SmartSelector:
                 for base in bases:
                     srccol = f"{alias}.{base}_{s}" + (f"_l{L}" if windowed else "")
                     tgt = f"{base}_{s}_l{L}"
-                    # daily_pnls is an Array (Sharpe input) and only exists when
-                    # trade_history is present — which makes it the spine — so
-                    # it's never coalesced. Numeric non-spine columns coalesce.
-                    if is_spine or base == "daily_pnls":
+                    # Spine columns are never null; non-spine LEFT-JOIN columns
+                    # coalesce to 0 for wallets the joined source lacks.
+                    if is_spine:
                         combined_cols.append(f"{srccol} AS {tgt}")
                     else:
                         combined_cols.append(f"coalesce({srccol}, 0) AS {tgt}")
+
+        # Sharpe's daily-return running sums live in returns_trailing, which is
+        # not a `src_info` source (it joins two sources). LEFT JOIN it on
+        # (day, wallet) and coalesce — wallets with no invested days → 0 sums,
+        # which the Sharpe expression's `ret_cnt > 1` guard maps to 0.
+        if sharpe_combos:
+            combined_from += (
+                f"\n            LEFT JOIN returns_trailing rs "
+                f"ON rs.day = {spine_alias}.day "
+                f"AND rs.wallet = {spine_alias}.wallet")
+            for (s, L) in sorted(sharpe_combos):
+                for base in ("ret_sum", "ret_sumsq", "ret_cnt"):
+                    combined_cols.append(
+                        f"coalesce(rs.{base}_{s}_l{L}, 0) AS {base}_{s}_l{L}")
 
         ctes.append(
             "combined AS (\n"
@@ -1169,10 +1320,18 @@ class SmartSelector:
             f"        )"
         )
         ctes.append(
+            # groupArray over a rank-ordered subquery so the wallet array comes
+            # out best→worst by the sort metric (the dialog renders it in order;
+            # the selection is a top-N, so it must be ranked). arrayIntersect in
+            # composite nodes preserves the first operand's order, so a composite
+            # filter stays ranked by its first node too.
             "own_wallets AS (\n"
             "            SELECT day, groupArray(wallet) AS wallets\n"
-            "            FROM ranked\n"
-            "            WHERE rk <= {sel_top_n:UInt32}\n"
+            "            FROM (\n"
+            "                SELECT day, wallet FROM ranked\n"
+            "                WHERE rk <= {sel_top_n:UInt32}\n"
+            "                ORDER BY day, rk\n"
+            "            )\n"
             "            GROUP BY day\n"
             "        )"
         )
@@ -1280,6 +1439,63 @@ class SmartSelector:
             )
         cte_sql = "WITH\n        " + ",\n        ".join(blocks.values())
         return cte_sql, final_name, params
+
+    def root_metrics(self) -> list[tuple[str, str, int]]:
+        """(metric_key, effective_scope, effective_lookback) for the ROOT node's
+        sort metric + active criteria, deduped, sort metric first. Empty when the
+        root is a pure-composite (no own criteria) — nothing of its own to show."""
+        if not self.criteria:
+            return []
+        items = [(self.sort_by, self._sort_scope(), self._sort_lookback())]
+        for c in self.criteria:
+            if c.disabled:
+                continue
+            items.append((c.metric, self._effective_scope(c.scope),
+                          self._effective_lookback(c.lookback)))
+        out: list[tuple[str, str, int]] = []
+        seen: set[str] = set()
+        for (k, sc, lb) in items:
+            if k in seen:
+                continue
+            seen.add(k)
+            out.append((k, sc, lb))
+        return out
+
+    def build_root_metrics_query(
+        self, since_dt: datetime, until_dt: datetime,
+    ) -> tuple[str, dict[str, Any], list[dict[str, Any]]] | None:
+        """Build a query yielding, per wallet, the ROOT node's metric values as
+        the selector computes them (sort + active criteria) — i.e. the exact
+        values that admitted a wallet at a given day. Returns (sql, params,
+        meta): the SQL has `{m_day:Date}` + `{m_wallets:Array(String)}`
+        placeholders the caller binds, and selects `wallet` plus `m0, m1, …`
+        (one per entry in `meta`, in order). Returns None for a pure-composite
+        root (no own criteria).
+
+        Runs the root's OWN (unsuffixed) CTE chain standalone — it only reads
+        from `combined`; the ranked/own_wallets CTEs are present but unreferenced
+        (ClickHouse skips evaluating them). The caller restricts to the final
+        wallet set via `m_wallets`, so values line up with the actual (possibly
+        composite) selection even though we only compute the root's metrics."""
+        metrics = self.root_metrics()
+        if not metrics:
+            return None
+        own_ctes, params = self._build_node_ctes(since_dt, until_dt)
+        cols = ", ".join(
+            f"({self._metric_expr(k, sc, lb)}) AS m{i}"
+            for i, (k, sc, lb) in enumerate(metrics)
+        )
+        sql = (
+            "WITH\n        " + ",\n        ".join(own_ctes) + "\n"
+            f"        SELECT wallet, {cols}\n"
+            "        FROM combined\n"
+            "        WHERE day = {m_day:Date} AND wallet IN {m_wallets:Array(String)}"
+        )
+        meta = [
+            {"key": k, "label": METRIC_REGISTRY[k].label, "scope": sc, "lookback": lb}
+            for (k, sc, lb) in metrics
+        ]
+        return sql, params, meta
 
     def summary(self) -> dict[str, Any]:
         out: dict[str, Any] = {
