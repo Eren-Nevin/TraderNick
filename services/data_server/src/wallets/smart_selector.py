@@ -695,12 +695,25 @@ class SmartSelector:
     # ── CTE emission ────────────────────────────────────────────────────
 
     def _build_node_ctes(
-        self, since_dt: datetime, until_dt: datetime
+        self, since_dt: datetime, until_dt: datetime,
+        restrict_wallets: str | None = None,
     ) -> tuple[list[str], dict[str, Any]]:
         """Emit this node's OWN ranking CTE chain (unsuffixed). Returns
         (ctes, params); the final CTE is `own_wallets(day, wallets[])`. The
         driver `build_cte` suffixes names/params per node and composes the
-        intersection with child refs. Only called when the node has criteria."""
+        intersection with child refs. Only called when the node has criteria.
+
+        `restrict_wallets`, when given, is the name of an `Array(String)` query
+        param; every leaf source read gets `AND wallet IN {<name>:Array(String)}`
+        so the whole chain computes over just that wallet set. Per-wallet metric
+        values are independent (ranking aside), so this is exact — it's how
+        build_root_metrics_query computes as-of values for the dialog's ~20-50
+        already-resolved wallets without scanning the global universe. Left None
+        on the ranking path (every wallet must be considered)."""
+        # `AND wallet IN {…}` fragment spliced into each leaf read's WHERE when
+        # restricting to a known wallet set (else empty → no-op for ranking).
+        wf = (f"              AND wallet IN {{{restrict_wallets}:Array(String)}}\n"
+              if restrict_wallets else "")
         needs = self._needs()
         # Per-source: the union of scopes referenced (drives the scope-only
         # daily CTEs via proj_pair) and the set of (scope-letter, lookback)
@@ -872,6 +885,7 @@ class SmartSelector:
                     "                FROM tradernick.hl_trade_history_wallet_daily\n"
                     "                WHERE day >= toDate({sel_since:DateTime}) - " + str(th_max + 1) + "\n"
                     "                  AND day <  toDate({sel_until:DateTime})\n"
+                    + wf +
                     "                GROUP BY day, wallet")
             elif is_global_th:
                 # Mixed global+token in one node: take the GLOBAL cumulative from
@@ -897,6 +911,7 @@ class SmartSelector:
                     "                    FROM tradernick.hl_trade_history_wallet_daily\n"
                     "                    WHERE day >= toDate({sel_since:DateTime}) - " + str(th_max + 1) + "\n"
                     "                      AND day <  toDate({sel_until:DateTime})\n"
+                    + wf +
                     "                    GROUP BY day, wallet\n"
                     "                ) g\n"
                     "                LEFT JOIN (\n"
@@ -913,6 +928,7 @@ class SmartSelector:
                     "                        WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max + 1) + " DAY\n"
                     "                          AND time <  {sel_until:DateTime}\n"
                     "                          AND token = {sel_token:String}\n"
+                    + wf +
                     f"                          {HIP3_EXCLUDE}\n"
                     "                        GROUP BY d, wallet, token\n"
                     "                    )\n"
@@ -944,6 +960,7 @@ class SmartSelector:
                     "                    WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max + 1) + " DAY\n"
                     "                      AND time <  {sel_until:DateTime}\n"
                     "                      AND token = {sel_token:String}\n"
+                    + wf +
                     f"                      {HIP3_EXCLUDE}\n"
                     "                    GROUP BY d, wallet, token\n"
                     "                )\n"
@@ -1047,6 +1064,7 @@ class SmartSelector:
                 "                FROM tradernick.hl_position_history_eod_wallet\n"
                 "                WHERE day >= toDate({sel_since:DateTime}) - INTERVAL 1 DAY\n"
                 "                  AND day <  toDate({sel_until:DateTime})\n"
+                + wf +
                 f"                  {HIP3_EXCLUDE}\n"
                 "                GROUP BY snap_day, wallet, token, side\n"
                 "            )\n"
@@ -1073,7 +1091,7 @@ class SmartSelector:
                 "            FROM tradernick.hl_fills_pnl_daily\n"
                 "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(sided_max) + " DAY\n"
                 "              AND day <  toDate({sel_until:DateTime})\n"
-                + sided_token_filter +
+                + sided_token_filter + wf +
                 f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY day, wallet, side\n"
                 "        )"
@@ -1122,6 +1140,7 @@ class SmartSelector:
                 "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(fund_max) + " DAY\n"
                 "              AND day <  toDate({sel_until:DateTime})\n"
                 f"{fund_inner_token_filter}"
+                + wf +
                 f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY day, wallet\n"
                 "        )"
@@ -1204,6 +1223,7 @@ class SmartSelector:
                 "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(vol_max) + " DAY\n"
                 "              AND day <  toDate({sel_until:DateTime})\n"
                 f"{vol_inner_token_filter}"
+                + wf +
                 f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY day, wallet\n"
                 "        )"
@@ -1260,6 +1280,7 @@ class SmartSelector:
                     "            FROM tradernick.hl_position_history_oi_wallet_daily\n"
                     "            WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(oi_max) + " DAY\n"
                     "              AND day <  toDate({sel_until:DateTime})\n"
+                    + wf +
                     "            GROUP BY day, wallet\n"
                     "        )"
                 )
@@ -1290,6 +1311,7 @@ class SmartSelector:
                 "            WHERE bucket >= {sel_since:DateTime} - INTERVAL " + str(oi_max) + " DAY\n"
                 "              AND bucket <  {sel_until:DateTime}\n"
                 f"{oi_inner_token_filter}"
+                + wf +
                 f"              {HIP3_EXCLUDE}\n"
                 "            GROUP BY bucket, token, side, wallet\n"
                 "        )"
@@ -1476,7 +1498,7 @@ class SmartSelector:
                     "                    FROM tradernick.hl_position_history_eod_wallet\n"
                     "                    WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(sharpe_max + 2) + " DAY\n"
                     "                      AND day <  toDate({sel_until:DateTime})\n"
-                    + ("        " + eod_tok_filter if eod_tok_filter else "") +
+                    + ("        " + eod_tok_filter if eod_tok_filter else "") + wf +
                     f"                      {HIP3_EXCLUDE}\n"
                     "                    GROUP BY day, wallet, token, side\n"
                     "                )\n"
@@ -1503,6 +1525,7 @@ class SmartSelector:
                     "            FROM tradernick.hl_position_history_oi_wallet_daily\n"
                     "            WHERE day >= toDate({sel_since:DateTime}) - " + str(sharpe_max) + "\n"
                     "              AND day <  toDate({sel_until:DateTime})\n"
+                    + wf +
                     "            GROUP BY day, wallet\n"
                     "        )"
                 )
@@ -1874,11 +1897,18 @@ class SmartSelector:
         from `combined`; the ranked/own_wallets CTEs are present but unreferenced
         (ClickHouse skips evaluating them). The caller restricts to the final
         wallet set via `m_wallets`, so values line up with the actual (possibly
-        composite) selection even though we only compute the root's metrics."""
+        composite) selection even though we only compute the root's metrics.
+
+        The whole CTE chain is restricted to `m_wallets` at the leaf reads
+        (restrict_wallets), not just at the final `combined` filter — otherwise
+        the windowed trailing/returns CTEs would compute over the entire wallet
+        universe for the lookback and only ~20-50 rows would survive (the dialog
+        was ~40s). Per-wallet metric values are independent, so this is exact."""
         metrics = self.root_metrics()
         if not metrics:
             return None
-        own_ctes, params = self._build_node_ctes(since_dt, until_dt)
+        own_ctes, params = self._build_node_ctes(
+            since_dt, until_dt, restrict_wallets="m_wallets")
         cols = ", ".join(
             f"({self._metric_expr(k, sc, lb, nd)}) AS m{i}"
             for i, (k, sc, lb, nd) in enumerate(metrics)
