@@ -865,6 +865,53 @@ async def wallet_pnl(request):
     })
 
 
+@bp.get("/hyperliquid/token_close")
+@throttled("light")
+async def token_close(request):
+    """Daily close price for a token — overlays on the Smart Wallets dialog's
+    mini-PnL chart. Returns one point per day (last 1-minute close of the day).
+
+    Query params:
+      token — required (e.g. AAVE).
+      since — ISO date (inclusive). Defaults to until − 180 days.
+      until — ISO date (inclusive). Defaults to today (UTC).
+    """
+    token = request.args.get("token")
+    if not token:
+        return response.json({"error": "missing token"}, status=400)
+    until_arg = request.args.get("until")
+    since_arg = request.args.get("since")
+    try:
+        until_dt = (datetime.fromisoformat(until_arg).replace(tzinfo=None)
+                    if until_arg else datetime.utcnow())
+        since_dt = (datetime.fromisoformat(since_arg).replace(tzinfo=None)
+                    if since_arg else until_dt - timedelta(days=180))
+    except ValueError:
+        return response.json({"error": "invalid since/until; expected YYYY-MM-DD"}, status=400)
+    if since_dt > until_dt:
+        return response.json({"error": "since must be <= until"}, status=400)
+
+    sql = """
+        SELECT toDate(time) AS d, argMax(close, time) AS close
+        FROM tradernick.hl_ohlcv_1m
+        WHERE token = {token:String}
+          AND time >= {since:DateTime}
+          AND time <  {until:DateTime} + INTERVAL 1 DAY
+        GROUP BY d
+        ORDER BY d
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters={
+        "token": token, "since": since_dt, "until": until_dt})
+    series = [
+        {"time": int(datetime(r[0].year, r[0].month, r[0].day,
+                              tzinfo=timezone.utc).timestamp()),
+         "close": float(r[1])}
+        for r in rows.result_rows
+    ]
+    return response.json({"token": token, "series": series})
+
+
 # ── Live positions from the official Hyperliquid clearinghouse ───────
 # Ground-truth check: our hl_position_history is sourced from DeFiStream and
 # is, by design, snapshotted on a grid (and only for the INGEST_TOKENS roster)

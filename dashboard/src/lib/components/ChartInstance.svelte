@@ -3703,10 +3703,10 @@
     }
     // Smart-money OI: optional "wallets passing filter" line on the
     // secondary (right-side) axis — the count of wallets in the (combined)
-    // set each day. Short-dashed amber so it reads as supplementary context.
+    // set each day. Short-dashed blue so it reads as supplementary context.
     if (instance.kind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)) {
       base.push({
-        key: 'wallet_count', label: 'Wallets', color: '#fbbf24',
+        key: 'wallet_count', label: 'Wallets', color: '#3b82f6',
         axis: 'secondary',
         dash: '3,3',
         compute: (d: Record<string, number>) => d.wallet_count ?? 0,

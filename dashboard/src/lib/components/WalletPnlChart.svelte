@@ -29,9 +29,12 @@
     // different colour marking the start of a metric's lookback window
     // (e.g. the Sharpe lookback) relative to `cutoff`. null → no line.
     lookbackStart = null as number | null,
+    // Optional close-price overlay (token), drawn as a blue line on a separate
+    // left price scale. Empty → not shown. Must be timeframe-aligned with `data`.
+    closeData = [] as Point[],
     // Tooltip label for the plotted value (e.g. "Realized", "Total").
     label = 'PnL'
-  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; label?: string } = $props();
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string } = $props();
 
   // Cutoff = amber (filter/as-of day); lookback start = thinner sky-blue.
   function buildRefs() {
@@ -44,6 +47,7 @@
   let container = $state<HTMLDivElement | null>(null);
   let chart: IChartApi | null = null;
   let series: ISeriesApi<'Baseline'> | null = null;
+  let closeSeries: ISeriesApi<'Line'> | null = null;
   let vref: VRefLinesPrimitive | null = null;
   let ro: ResizeObserver | null = null;
 
@@ -81,6 +85,18 @@
       title: ''
     });
 
+    // Close-price overlay: a blue line on its own LEFT price scale (price units
+    // differ from PnL $). Data pushed by the effect below; hidden when empty.
+    closeSeries = chart.addLineSeries({
+      color: '#3b82f6',
+      lineWidth: 2,
+      priceScaleId: 'left',
+      priceLineVisible: false,
+      lastValueVisible: false,
+      crosshairMarkerVisible: false
+    });
+    chart.priceScale('left').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 }, visible: false });
+
     // Dashed vertical markers: amber cutoff ("as-of" day) + optional
     // thinner sky-blue lookback-start line.
     vref = new VRefLinesPrimitive(buildRefs(), '#fbbf24');
@@ -103,6 +119,7 @@
       chart?.remove();
       chart = null;
       series = null;
+      closeSeries = null;
       vref = null;
     };
   });
@@ -111,6 +128,17 @@
   $effect(() => {
     void cutoff; void lookbackStart;
     vref?.setRefs(buildRefs(), '#fbbf24');
+  });
+
+  // Close-price overlay: push data + show/hide the left axis with it.
+  $effect(() => {
+    if (!chart || !closeSeries) return;
+    closeSeries.setData(
+      closeData
+        .filter((d) => Number.isFinite(d.value))
+        .map((d) => ({ time: d.time as UTCTimestamp, value: d.value }))
+    );
+    chart.priceScale('left').applyOptions({ visible: closeData.length > 0 });
   });
 
   // Re-theme on theme toggle.
