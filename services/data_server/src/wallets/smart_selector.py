@@ -53,7 +53,7 @@ _SUFFIXABLE_NAMES = sorted([
     "unrealized_eod", "sided_pnl_daily", "sided_pnl",
     "funding_per_wallet_day", "funding_trailing",
     "vol_per_wallet_day", "vol_trailing",
-    "oi_snapshots", "oi_per_bucket", "oi_per_day", "oi_trailing",
+    "oi_snapshots", "oi_per_bucket", "oi_per_day", "oi_trailing", "oi_cap_daily",
     "returns_per_wallet_day", "returns_trailing",
     "combined", "ranked", "own_wallets",
     "sel_since", "sel_until", "sel_top_n",
@@ -135,13 +135,15 @@ def _sharpe_expr(kind: str) -> str:
 _SHARPE_REALIZED = _sharpe_expr("realized")
 _SHARPE_TOTAL = _sharpe_expr("total")
 
-# Metrics locked to TOKEN scope (global disabled for now). The global-scope
-# daily-return pipeline scans hl_position_history_1h across ALL tokens over the
-# lookback and runs an extra returns CROSS JOIN on top of the OI one, which
-# times out for wide windows (e.g. 60d). Until that path is optimized we coerce
-# these criteria — and the sort metric — to token scope. See _sort_scope /
-# _from_obj where this is enforced.
-_TOKEN_ONLY_METRICS = frozenset({"sharpe", "sharpe_realized"})
+# Metrics locked to TOKEN scope. EMPTY now: global Sharpe used to be disabled
+# here because its daily-return pipeline scanned hl_position_history_1h across
+# ALL tokens per query (60d timed out). Global Sharpe now reads the pre-
+# aggregated per-(day, wallet) OI capital base (hl_position_history_oi_wallet_
+# daily) for its denominator and the trade_history wallet-daily rollup for its
+# numerator, so the all-token scan is gone and global is allowed again. The
+# mechanism is kept (coercion sites + _sort_scope below honour it) in case a
+# future metric needs locking, but no metric is currently token-only.
+_TOKEN_ONLY_METRICS: frozenset[str] = frozenset()
 
 
 # Columns available in `combined` after source CTEs are materialised. Suffix
@@ -653,6 +655,27 @@ class SmartSelector:
                      self._effective_lookback(c.lookback)))
         return out
 
+    def _oi_global_nonsharpe(self) -> bool:
+        """True when a NON-Sharpe metric needs global-scope OI. That's the only
+        thing that justifies building the expensive all-token oi_per_bucket /
+        oi_per_day GLOBAL projections — Sharpe's global capital base comes from
+        the cheap hl_position_history_oi_wallet_daily rollup instead. When this
+        is False and only Sharpe wants global OI, the global OI build is skipped
+        entirely (see _build_node_ctes)."""
+        def wants(metric: str, scope: str) -> bool:
+            if metric in self._SHARPE_KIND:
+                return False
+            return (SRC_OI in METRIC_REGISTRY[metric].requires
+                    and self._suffix(scope) == "g")
+        if wants(self.sort_by, self._sort_scope()):
+            return True
+        for c in self.criteria:
+            if c.disabled:
+                continue
+            if wants(c.metric, self._effective_scope(c.scope)):
+                return True
+        return False
+
     @staticmethod
     def _suffix(scope: str) -> str:
         return "g" if scope == "global" else "t"
@@ -699,6 +722,20 @@ class SmartSelector:
             raise ValueError(
                 "selector references no sources — at least one metric "
                 "(criterion or sort) must be defined")
+
+        # Sharpe's GLOBAL capital base now comes from the cheap
+        # hl_position_history_oi_wallet_daily rollup (oi_cap_daily CTE below),
+        # not the all-token oi_per_bucket scan. So when global OI is referenced
+        # ONLY by Sharpe (no global OI metric like avg_total_oi_usd), drop the
+        # global OI scope/combo here — the expensive global oi_per_bucket build
+        # is skipped and the SRC_OI block emits only what real OI metrics need
+        # (token scope, if any). Token-scope Sharpe keeps using oi_per_day.
+        sharpe_combos_early = self._sharpe_combos()
+        sharpe_global = any(s == "g" for (_, s, _) in sharpe_combos_early)
+        if sharpe_global and not self._oi_global_nonsharpe():
+            scopes_for[SRC_OI].discard("global")
+            combos_for[SRC_OI] = {(s, lb) for (s, lb) in combos_for[SRC_OI]
+                                  if s != "g"}
 
         def src_max_lb(src: str) -> int:
             return max((lb for (_, lb) in combos_for[src]), default=1)
@@ -796,6 +833,15 @@ class SmartSelector:
             #   streams; there's no projection prune to lose here since global
             #   reads every token regardless.
             is_global_th = "global" in scopes_for[SRC_TRADE_HISTORY]
+            # Pure-global (no token TH metric in this node) → read the
+            # hl_trade_history_wallet_daily rollup, which already summed the
+            # token dimension away (HIP3 excluded at build) into one row per
+            # (day, wallet). This skips the 251M-row source FINAL scan + per-
+            # query token collapse that made global ranking slow/OOM. Mixed
+            # global+token in one node can't be served by the token-less rollup,
+            # so it falls back to the source FINAL scan below (correct, just
+            # unaccelerated — a rare combination).
+            th_global_only = is_global_th and "token" not in scopes_for[SRC_TRADE_HISTORY]
 
             def _delta_pair(g_src: str, t_src: str, g_alias: str, t_alias: str) -> str:
                 parts: list[str] = []
@@ -813,8 +859,24 @@ class SmartSelector:
             th_window = (
                 "                WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max + 1) + " DAY\n"
                 "                  AND time <  {sel_until:DateTime}\n")
-            if is_global_th:
-                # FINAL-dedup + sum token snapshots into per-(d,wallet) cumulatives.
+            if th_global_only:
+                # Pre-aggregated rollup: one row per (day, wallet), token
+                # dimension already summed (HIP3 excluded at build). sumMerge
+                # collapses the AggregatingMergeTree parts to the per-(d,wallet)
+                # cumulative; the lagInFrame delta below is unchanged.
+                cum_subquery = (
+                    "                SELECT day AS d, wallet,\n"
+                    "                       sumMerge(net_pnl_state)     AS cum_pnl_g,\n"
+                    "                       sumMerge(volume_state)      AS cum_vol_g,\n"
+                    "                       sumMerge(trade_count_state) AS cum_trades_g\n"
+                    "                FROM tradernick.hl_trade_history_wallet_daily\n"
+                    "                WHERE day >= toDate({sel_since:DateTime}) - " + str(th_max + 1) + "\n"
+                    "                  AND day <  toDate({sel_until:DateTime})\n"
+                    "                GROUP BY day, wallet")
+            elif is_global_th:
+                # Mixed global+token: FINAL-dedup + sum token snapshots into
+                # per-(d,wallet) cumulatives (token-less rollup can't serve the
+                # _t projection, so this node pays the source scan).
                 cum_direct = proj_pair(
                     "sum(net_pnl)",
                     "sumIf(net_pnl, token = {sel_token:String})",
@@ -1347,10 +1409,25 @@ class SmartSelector:
                     "        )"
                 )
 
-            avg_oi_parts = [
-                f"if(n_buckets > 0, s_total_oi_usd_{s} / n_buckets, 0) AS day_avg_oi_{s}"
-                for s in sharpe_scopes
-            ]
+            # OI capital base (the Sharpe denominator), sourced per scope from
+            # the cheapest place:
+            #   token  → oi_per_day (token-prefiltered, already built)
+            #   global → oi_cap_daily (the per-(day,wallet) OI rollup, Table B),
+            #            so global Sharpe never triggers the all-token
+            #            oi_per_bucket scan. day_avg_oi reconstructs from the
+            #            -IfState states; nullIf guards a no-bucket day.
+            if "g" in sharpe_scopes:
+                ctes.append(
+                    "oi_cap_daily AS (\n"
+                    "            SELECT day AS d, wallet,\n"
+                    "                   sumIfMerge(oi_usd_state)\n"
+                    "                     / nullIf(uniqExactIfMerge(n_buckets_state), 0) AS day_avg_oi_g\n"
+                    "            FROM tradernick.hl_position_history_oi_wallet_daily\n"
+                    "            WHERE day >= toDate({sel_since:DateTime}) - " + str(sharpe_max) + "\n"
+                    "              AND day <  toDate({sel_until:DateTime})\n"
+                    "            GROUP BY day, wallet\n"
+                    "        )"
+                )
             ret_day_parts: list[str] = []
             for (k, s) in kind_scopes:
                 if k == "realized":
@@ -1360,6 +1437,27 @@ class SmartSelector:
                 ret_day_parts.append(
                     f"if(oi.day_avg_oi_{s} > 0, {pnl} / oi.day_avg_oi_{s}, 0) "
                     f"AS daily_return_{k}_{s}")
+            # Combined capital source carrying day_avg_oi_{s} for every Sharpe
+            # scope. One source per scope; if both are referenced, FULL JOIN on
+            # (d, wallet) so a day with capital in either scope survives (the
+            # absent scope's avg is NULL → its return guards to 0).
+            cap_parts: list[str] = []
+            if "t" in sharpe_scopes:
+                cap_parts.append(
+                    "SELECT d, wallet, if(n_buckets > 0, s_total_oi_usd_t / n_buckets, 0) "
+                    "AS day_avg_oi_t FROM oi_per_day")
+            if "g" in sharpe_scopes:
+                cap_parts.append("SELECT d, wallet, day_avg_oi_g FROM oi_cap_daily")
+            if len(cap_parts) == 1:
+                oi_source = "                " + cap_parts[0]
+            else:
+                oi_source = (
+                    "                SELECT coalesce(a.d, b.d) AS d,\n"
+                    "                       coalesce(a.wallet, b.wallet) AS wallet,\n"
+                    "                       a.day_avg_oi_t, b.day_avg_oi_g\n"
+                    "                FROM (" + cap_parts[0] + ") a\n"
+                    "                FULL OUTER JOIN (" + cap_parts[1] + ") b\n"
+                    "                  ON a.d = b.d AND a.wallet = b.wallet")
             eod_joins = ""
             if total_scopes:
                 eod_joins = (
@@ -1371,9 +1469,7 @@ class SmartSelector:
                 "                   " + ",\n                   ".join(ret_day_parts) + "\n"
                 "            FROM daily_per_wallet th\n"
                 "            INNER JOIN (\n"
-                "                SELECT d, wallet,\n"
-                "                       " + ",\n                       ".join(avg_oi_parts) + "\n"
-                "                FROM oi_per_day\n"
+                + oi_source + "\n"
                 "            ) oi ON oi.d = th.d AND oi.wallet = th.wallet"
                 + eod_joins + "\n"
                 "        )"

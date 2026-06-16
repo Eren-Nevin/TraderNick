@@ -199,6 +199,61 @@ FROM tradernick.hl_funding FINAL
 GROUP BY day, wallet, token
 """
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-(day, wallet) trade_history rollup — the token dimension summed away so
+# global-scope smart_selector ranking reads one ~50× smaller row per wallet/day
+# instead of scanning the 251M-row source FINAL and collapsing ~51 tokens on
+# every cold query. Values are daily ABSOLUTE (cumulative-from-inception)
+# snapshots; one row per (wallet, token, day) (verified), so summing over FINAL
+# is exact. HIP3 builder perps (token contains ':') are excluded here to match
+# the live global query's `position(token, ':') = 0` filter — the table has no
+# token column, so it can't be filtered at read time. trade_count widened to
+# UInt64 before summing. sumState (not raw) keeps the per-partition rebuild
+# idempotent under backfill replays.
+_HL_TRADE_HISTORY_WALLET_DAILY_SELECT = """
+SELECT
+    toDate(time) AS day,
+    wallet,
+    sumState(pnl)                   AS pnl_state,
+    sumState(fees)                  AS fees_state,
+    sumState(net_pnl)               AS net_pnl_state,
+    sumState(funding)               AS funding_state,
+    sumState(volume)                AS volume_state,
+    sumState(buy_volume)            AS buy_volume_state,
+    sumState(sell_volume)           AS sell_volume_state,
+    sumState(toUInt64(trade_count)) AS trade_count_state
+FROM tradernick.hl_trade_history FINAL
+WHERE position(token, ':') = 0
+GROUP BY day, wallet
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Per-(day, wallet) GLOBAL OI capital base for the Sharpe denominator — token
+# dimension summed away. Sourced from the hl_position_history_1h rollup (reuses
+# its hourly bucketing, exactly like the live oi_per_day path) so global Sharpe
+# no longer scans all-token hourly OI per query. day_avg_oi reconstructs as
+# sumIfMerge(oi_usd_state) / uniqExactIfMerge(n_buckets_state).
+#
+# Body MUST stay a single flat top-level GROUP BY so build_partition's WHERE-
+# splice lands correctly: the inner subquery merges the AMT states per
+# (bucket, token, side, wallet) WITHOUT a WHERE; the spliced `WHERE bucket >= …`
+# is pushed down into that scan by the optimizer (verified: one day ≈ 2.7M rows,
+# not a full-table scan). HIP3 is excluded via the -IfState predicate rather
+# than a WHERE — a WHERE in the inner query would be miscaptured by the splice.
+_HL_POSITION_HISTORY_OI_WALLET_DAILY_SELECT = """
+SELECT
+    toDate(bucket) AS day,
+    wallet,
+    sumIfState(sz, position(token, ':') = 0)           AS oi_usd_state,
+    uniqExactIfState(bucket, position(token, ':') = 0) AS n_buckets_state
+FROM (
+    SELECT bucket, token, side, wallet, argMaxMerge(size_state) AS sz
+    FROM tradernick.hl_position_history_1h FINAL
+    GROUP BY bucket, token, side, wallet
+)
+GROUP BY day, wallet
+"""
+
 
 REGISTRY: list[MaterializerSpec] = [
     MaterializerSpec(
@@ -279,6 +334,34 @@ REGISTRY: list[MaterializerSpec] = [
         target_table="tradernick.hl_funding_daily",
         source_time_col="time",
         rebuild_sql=_HL_FUNDING_DAILY_SELECT,
+        partition_grain="day",
+        recent_partitions=3,
+        recent_cadence_s=15 * 60,
+        sweep_window_days=30,
+        sweep_cadence_s=6 * 60 * 60,
+    ),
+    # Global smart_selector accelerators (sum metrics + Sharpe). Maintained by
+    # the SAME data_processor worker/jobs as the rollups above — no new worker.
+    MaterializerSpec(
+        name="hl_trade_history_wallet_daily",
+        source_table="tradernick.hl_trade_history",
+        target_table="tradernick.hl_trade_history_wallet_daily",
+        source_time_col="time",
+        rebuild_sql=_HL_TRADE_HISTORY_WALLET_DAILY_SELECT,
+        partition_grain="day",
+        recent_partitions=3,
+        recent_cadence_s=15 * 60,
+        sweep_window_days=30,
+        sweep_cadence_s=6 * 60 * 60,
+    ),
+    # Sourced from the hl_position_history_1h rollup (above) — must rebuild
+    # after it, hence ordered last here and last in the downstream list.
+    MaterializerSpec(
+        name="hl_position_history_oi_wallet_daily",
+        source_table="tradernick.hl_position_history_1h",
+        target_table="tradernick.hl_position_history_oi_wallet_daily",
+        source_time_col="bucket",
+        rebuild_sql=_HL_POSITION_HISTORY_OI_WALLET_DAILY_SELECT,
         partition_grain="day",
         recent_partitions=3,
         recent_cadence_s=15 * 60,

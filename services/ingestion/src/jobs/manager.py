@@ -111,6 +111,11 @@ _BACKFILL_DOWNSTREAMS: dict[str, list[str]] = {
         "hl_fills_pnl_daily",
         "hl_fills_vol_daily",
         "hl_funding_daily",
+        # Global smart_selector accelerators. trade_history rollup sums the
+        # token dimension away; the OI rollup sources hl_position_history_1h
+        # (listed above) so it rebuilds AFTER it — keep it last.
+        "hl_trade_history_wallet_daily",
+        "hl_position_history_oi_wallet_daily",
     ],
 }
 

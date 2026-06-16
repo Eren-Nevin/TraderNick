@@ -2186,6 +2186,83 @@ PARTITION BY day
 ORDER BY (day, wallet, token)
 TTL day + INTERVAL 271 DAY;
 
+-- ───────────────────────────────────────────────────────────────────
+-- Per-(day, wallet) trade_history rollup — token dimension COLLAPSED.
+--
+-- hl_trade_history carries one daily ABSOLUTE (cumulative-from-inception)
+-- snapshot per (wallet, token, day). Global-scope smart_selector ranking
+-- needs the wallet's cumulative across ALL tokens per day, which used to
+-- mean scanning the 251M-row source WITH FINAL and summing the ~51-token
+-- dimension on every cold query (the global-OOM / 60-120s path). This
+-- table pre-sums the tokens away: one row per (day, wallet) holding the
+-- cumulative as of end-of-day, ~50× smaller. The smart_selector global
+-- path reads it directly (sumMerge → per-day cumulative → lagInFrame
+-- daily delta), unchanged downstream.
+--
+-- sumState (not the raw value) so the data_processor's per-partition
+-- rebuild FROM FINAL + REPLACE PARTITION is idempotent under backfill
+-- replays — a push MV would compound RMT re-ingestion (the documented
+-- reason the fills rollups dropped their MVs). HIP3 builder perps
+-- (token LIKE '%:%') are EXCLUDED at build time to match the live global
+-- query's `position(token, ':') = 0` filter — the table has no token
+-- column, so the exclusion can't be applied at read time. trade_count is
+-- widened to UInt64 before summing to avoid overflow across many days.
+CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history_wallet_daily
+(
+    day               Date    CODEC(DoubleDelta, ZSTD(3)),
+    wallet            String  CODEC(ZSTD(3)),
+    pnl_state         AggregateFunction(sum, Float64),
+    fees_state        AggregateFunction(sum, Float64),
+    net_pnl_state     AggregateFunction(sum, Float64),
+    funding_state     AggregateFunction(sum, Float64),
+    volume_state      AggregateFunction(sum, Float64),
+    buy_volume_state  AggregateFunction(sum, Float64),
+    sell_volume_state AggregateFunction(sum, Float64),
+    trade_count_state AggregateFunction(sum, UInt64)
+) ENGINE = AggregatingMergeTree()
+-- Daily partitions for atomic data_processor REPLACE PARTITION, same as
+-- the other HL daily rollups. Maintained by the SAME data_processor
+-- worker (registry.py spec) — no dedicated MV/worker.
+PARTITION BY day
+ORDER BY (day, wallet)
+TTL day + INTERVAL 271 DAY;
+
+-- ───────────────────────────────────────────────────────────────────
+-- Per-(day, wallet) GLOBAL OI capital base — token dimension COLLAPSED.
+--
+-- The Sharpe metrics divide each day's PnL by that day's average total OI
+-- ($) — the capital deployed. In global scope that average was computed by
+-- scanning hl_position_history_1h across ALL tokens per hourly bucket (the
+-- real reason global Sharpe timed out; the PnL numerator is cheap by
+-- comparison). This table pre-aggregates the denominator to one row per
+-- (day, wallet):
+--   oi_usd_state   = Σ over (bucket, token, side) of that bucket's wallet
+--                    OI in USD  (sumMerge → numerator of the daily average)
+--   n_buckets_state = uniqExact(bucket)  (distinct hourly buckets the wallet
+--                    held a non-HIP3 position that day → denominator)
+-- so day_avg_oi = sumMerge(oi_usd_state) / uniqExactMerge(n_buckets_state).
+-- (uniqExact over a multi-day window telescopes to the per-day bucket-count
+-- sum since bucket timestamps never repeat across days.)
+--
+-- HIP3 perps excluded at build via the -IfState combinators (the rebuild
+-- body must stay a single flat GROUP BY so the data_processor's WHERE
+-- splice works — see registry.py). Global Sharpe only; token Sharpe keeps
+-- using the cheap token-prefiltered oi_per_day path.
+CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_oi_wallet_daily
+(
+    day             Date    CODEC(DoubleDelta, ZSTD(3)),
+    wallet          String  CODEC(ZSTD(3)),
+    -- -IfState states (HIP3 excluded via the predicate, no WHERE — keeps the
+    -- rebuild body a single flat GROUP BY so the data_processor WHERE-splice
+    -- works). Read with sumIfMerge / uniqExactIfMerge.
+    oi_usd_state    AggregateFunction(sumIf, Float64, UInt8),
+    -- bucket is DateTime (hl_position_history_1h.bucket = toStartOfHour)
+    n_buckets_state AggregateFunction(uniqExactIf, DateTime, UInt8)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY day
+ORDER BY (day, wallet)
+TTL day + INTERVAL 271 DAY;
+
 -- Pre-aggregated per-(wallet, token, bucket) trader performance. The right
 -- table for leaderboard queries — small + already summed. net_pnl = pnl - fees.
 CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history

@@ -64,11 +64,11 @@ export interface SmartMetricDef {
   /** Whether the criterion UI exposes a "min days" input for this metric — the
    *  small-sample guard, only meaningful for the daily-return Sharpe metrics. */
   usesMinDays?: boolean;
-  /** Locked to token scope (global disabled for now). The global-scope Sharpe
-   *  pipeline scans OI across all tokens over the lookback and times out; until
-   *  it's optimized the scope picker only offers Token for these metrics, and
-   *  sanitize coerces any persisted global scope to token. Backend enforces the
-   *  same (smart_selector.py _TOKEN_ONLY_METRICS). */
+  /** Locked to token scope: the scope picker only offers Token, and sanitize
+   *  coerces any persisted global scope to token (backend mirrors this via
+   *  smart_selector.py _TOKEN_ONLY_METRICS). No metric currently sets this —
+   *  global Sharpe was un-locked once it moved to the pre-aggregated
+   *  per-(day,wallet) rollups. Kept for future metrics that need locking. */
   tokenOnly?: boolean;
 }
 
@@ -105,8 +105,8 @@ export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
   { key: 'trade_count',             label: 'Trade count',               kind: 'count' },
   { key: 'long_pnl',                label: 'Long PnL ($)',              kind: 'usd' },
   { key: 'short_pnl',               label: 'Short PnL ($)',             kind: 'usd' },
-  { key: 'sharpe',                  label: 'Sharpe (total)',            kind: 'ratio', usesMinDays: true, tokenOnly: true, defaultScope: 'token' },
-  { key: 'sharpe_realized',         label: 'Sharpe (realized)',         kind: 'ratio', usesMinDays: true, tokenOnly: true, defaultScope: 'token' },
+  { key: 'sharpe',                  label: 'Sharpe (total)',            kind: 'ratio', usesMinDays: true, defaultScope: 'token' },
+  { key: 'sharpe_realized',         label: 'Sharpe (realized)',         kind: 'ratio', usesMinDays: true, defaultScope: 'token' },
 ];
 
 export function metricDef(key: string): SmartMetricDef | undefined {
