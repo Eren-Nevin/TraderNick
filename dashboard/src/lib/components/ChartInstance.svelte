@@ -552,7 +552,14 @@
   // prepend never shifts the chart; backend caches make the re-pans cheap.
   // The oldest reachable day is the kind's normal full-window floor, captured
   // per-load in `dynFloor` (so per-interval caps like 1m→30d still hold).
-  const DYN_CHUNK_DAYS = 60;
+  // hl_smart_oi uses a SMALLER initial/backfill chunk: a global-Sharpe selector
+  // cold-fills its per-day leaderboard over the whole chunk in one request, and
+  // 60 days can take ~90-100s — close to the 120s browser fetch cap. 30 days
+  // halves the cold-fill cost (~45-55s) for guaranteed headroom; older windows
+  // backfill on pan (each its own request, on a separate slot), and the
+  // smart_wallets_cache makes re-pans cheap. The cheaper kinds (HL OI, exchange
+  // flow) keep 60.
+  const DYN_CHUNK_DAYS = instance.kind === 'hl_smart_oi' ? 30 : 60;
   // Start backfilling once the view's left edge comes within this many days of
   // the loaded floor, so data is already there by the time the user reaches it.
   const DYN_PREFETCH_DAYS = 12;
