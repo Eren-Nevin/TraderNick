@@ -960,46 +960,70 @@ class SmartSelector:
                 "        )"
             )
 
-            # trailing — one windowed aggregate per (scope, lookback) combo,
-            # gated by sumIf so a single CROSS JOIN over the max window serves
-            # every lookback. (Sharpe's daily-return series is built separately
-            # in returns_trailing, since it needs the OI capital base too.)
+            # trailing — windowed sum per (scope, lookback) combo, via a sliding
+            # RANGE WINDOW over the DENSE daily_per_wallet (one row per wallet per
+            # day) rather than a target_days × daily_per_wallet CROSS JOIN. The
+            # old CROSS JOIN re-scanned the trailing window for every target day
+            # (O(target_days × window)) — on the global wallet universe that was
+            # ~50s on its own (it was the second-biggest cost after the Sharpe
+            # CROSS JOIN). The window pass is O(N).
+            #
+            # `RANGE BETWEEN L PRECEDING AND 1 PRECEDING` over day = the window
+            # d' ∈ [d−L, d−1], identical to the old `src.d >= target.d − L AND
+            # src.d < target.d`. Dense series → the window is evaluated at every
+            # target day directly (no probe rows needed, unlike returns_trailing).
+            # The dormant-day prune becomes a windowed active-day count over the
+            # widest window: a (day, wallet) survives iff it had ≥1 non-zero daily
+            # delta in [d−th_max, d−1] — byte-identical to the old per-row
+            # active_pred + GROUP BY. Sharpe is unaffected (returns_per_wallet_day
+            # reads daily_per_wallet directly).
+            th_delta_cols: list[str] = []
+            for s in sorted(self._suffix(sc) for sc in scopes_for[SRC_TRADE_HISTORY]):
+                th_delta_cols += [f"daily_pnl_{s}", f"daily_vol_{s}", f"daily_trades_{s}"]
+            th_active_expr = "(" + " OR ".join(f"{c} != 0" for c in th_delta_cols) + ")"
             trailing_parts: list[str] = []
             for (s, L) in sorted(combos_for[SRC_TRADE_HISTORY]):
-                w = f"src.d >= target.d - {L}"
                 trailing_parts += [
-                    f"sumIf(src.daily_pnl_{s}, {w}) AS realized_pnl_{s}_l{L}",
-                    f"sumIf(src.daily_vol_{s}, {w}) AS vol_{s}_l{L}",
-                    f"sumIf(src.daily_trades_{s}, {w}) AS trade_count_{s}_l{L}",
+                    f"sumIf(daily_pnl_{s}, is_real = 1) OVER w_l{L} AS realized_pnl_{s}_l{L}",
+                    f"sumIf(daily_vol_{s}, is_real = 1) OVER w_l{L} AS vol_{s}_l{L}",
+                    f"sumIf(daily_trades_{s}, is_real = 1) OVER w_l{L} AS trade_count_{s}_l{L}",
                 ]
-            # Prune dormant wallet-days from the CROSS JOIN input. Daily absolute
-            # snapshots are DENSE — once a wallet has ever traded, it carries a
-            # row for EVERY day (incl. fully inactive ones), so the global
-            # daily_per_wallet is ~all wallets × every day (~10M rows / 15d). A
-            # dormant day has all-zero deltas and adds 0 to every trailing sum, so
-            # dropping it from the join is exact for these sum-based metrics while
-            # collapsing the (target_days × dense-wallet-days) cross product back
-            # to the sparse active set — that product, GROUP BY'd per (day,
-            # wallet), is what OOM'd the AggregatingTransform (~110 GiB) in global
-            # scope. Funding-only days survive (their PnL delta is non-zero).
-            # Sharpe is unaffected: returns_per_wallet_day reads the DENSE
-            # daily_per_wallet directly (a held-but-flat day is a real 0% return),
-            # not this CTE.
-            th_active_cols: list[str] = []
-            for s in sorted(self._suffix(sc) for sc in scopes_for[SRC_TRADE_HISTORY]):
-                th_active_cols += [
-                    f"src.daily_pnl_{s}", f"src.daily_vol_{s}", f"src.daily_trades_{s}"]
-            th_active_pred = " OR ".join(f"{c} != 0" for c in th_active_cols)
+            th_ls = sorted({L for (_, L) in combos_for[SRC_TRADE_HISTORY]})
+            th_windows = ",\n                       ".join(
+                f"w_l{L} AS (PARTITION BY wallet ORDER BY d ASC "
+                f"RANGE BETWEEN {L} PRECEDING AND 1 PRECEDING)"
+                for L in th_ls)
+            th_out = ",\n                   ".join(
+                f"realized_pnl_{s}_l{L}, vol_{s}_l{L}, trade_count_{s}_l{L}"
+                for (s, L) in sorted(combos_for[SRC_TRADE_HISTORY]))
+            # daily_per_wallet is DENSE (one row per wallet per day), so the
+            # sliding RANGE window is evaluated at every target day directly —
+            # EXCEPT the top boundary `until` (upper bound is `day < until`). One
+            # probe row for that single missing day (is_real=0, zero deltas);
+            # adding probes for ALL target days was the bottleneck. `…If(is_real
+            # = 1)` excludes the probe's zeros. The active-day count over the
+            # widest window restores the old CROSS JOIN's "≥1 active day in
+            # window" sparsity exactly.
             ctes.append(
                 "trailing AS (\n"
-                "            SELECT target.d AS day, src.wallet AS wallet,\n"
-                "                   " + ",\n                   ".join(trailing_parts) + "\n"
-                "            FROM target_days target\n"
-                "            CROSS JOIN daily_per_wallet src\n"
-                "            WHERE src.d >= target.d - " + str(th_max) + "\n"
-                "              AND src.d <  target.d\n"
-                "              AND (" + th_active_pred + ")\n"
-                "            GROUP BY target.d, src.wallet\n"
+                "            SELECT d AS day, wallet,\n"
+                "                   " + th_out + "\n"
+                "            FROM (\n"
+                "                SELECT d, wallet,\n"
+                "                       " + ",\n                       ".join(trailing_parts) + ",\n"
+                "                       countIf(" + th_active_expr + " AND is_real = 1) OVER w_l" + str(th_max) + " AS th_active_cnt\n"
+                "                FROM (\n"
+                "                    SELECT d, wallet, " + ", ".join(th_delta_cols) + ", 1 AS is_real\n"
+                "                    FROM daily_per_wallet\n"
+                "                    UNION ALL\n"
+                "                    SELECT toDate({sel_until:DateTime}) AS d, w.wallet AS wallet, "
+                + ", ".join(f"0 AS {c}" for c in th_delta_cols) + ", 0 AS is_real\n"
+                "                    FROM (SELECT DISTINCT wallet FROM daily_per_wallet) w\n"
+                "                )\n"
+                "                WINDOW " + th_windows + "\n"
+                "            )\n"
+                "            WHERE d IN (SELECT d FROM target_days)\n"
+                "              AND th_active_cnt > 0\n"
                 "        )"
             )
 
@@ -1539,24 +1563,59 @@ class SmartSelector:
                 + eod_joins + "\n"
                 "        )"
             )
-            ret_trail_parts: list[str] = []
+            # Trailing Σr / Σr² / #days per (kind, scope, lookback), via a
+            # sliding RANGE WINDOW instead of a target_days × per-wallet-day
+            # CROSS JOIN. The CROSS JOIN re-scanned the window for every target
+            # day (O(target_days × window)) and was the dominant cost of global
+            # Sharpe (~50s alone over the dense wallet universe); the window pass
+            # is O(N) (~100× faster, measured).
+            #
+            # The returns series is SPARSE (rows only on days the wallet held
+            # capital), and the window must be evaluated at EVERY target day —
+            # so we UNION target-day "probe" rows (is_real=0, zero returns) into
+            # each wallet's partition. At a probe row for day d the frame
+            # `RANGE BETWEEN L PRECEDING AND 1 PRECEDING` covers d' ∈ [d−L, d−1]
+            # and `…If(is_real = 1)` sums only the real rows there — byte-
+            # identical to the old `sumIf(r, src.d >= target.d − L AND src.d <
+            # target.d)`. Keeping only the probe rows yields exactly one row per
+            # (target_day, wallet), matching the CROSS JOIN's spine.
+            ret_cols = sorted({(k, s) for (k, s, _) in sharpe_combos})
+            ret_value_cols = [f"daily_return_{k}_{s}" for (k, s) in ret_cols]
+            ret_ls = sorted({L for (_, _, L) in sharpe_combos})
+            ret_agg_parts: list[str] = []
             for (k, s, L) in sorted(sharpe_combos):
-                w = f"src.d >= target.d - {L}"
-                r = f"src.daily_return_{k}_{s}"
-                ret_trail_parts += [
-                    f"sumIf({r}, {w}) AS ret_sum_{k}_{s}_l{L}",
-                    f"sumIf({r} * {r}, {w}) AS ret_sumsq_{k}_{s}_l{L}",
-                    f"countIf({w}) AS ret_cnt_{k}_{s}_l{L}",
+                r = f"daily_return_{k}_{s}"
+                ret_agg_parts += [
+                    f"sumIf({r}, is_real = 1) OVER w_l{L} AS ret_sum_{k}_{s}_l{L}",
+                    f"sumIf({r} * {r}, is_real = 1) OVER w_l{L} AS ret_sumsq_{k}_{s}_l{L}",
+                    f"countIf(is_real = 1) OVER w_l{L} AS ret_cnt_{k}_{s}_l{L}",
                 ]
+            ret_out_cols = ",\n                   ".join(
+                f"ret_sum_{k}_{s}_l{L}, ret_sumsq_{k}_{s}_l{L}, ret_cnt_{k}_{s}_l{L}"
+                for (k, s, L) in sorted(sharpe_combos))
+            ret_windows = ",\n                       ".join(
+                f"w_l{L} AS (PARTITION BY wallet ORDER BY d ASC "
+                f"RANGE BETWEEN {L} PRECEDING AND 1 PRECEDING)"
+                for L in ret_ls)
             ctes.append(
                 "returns_trailing AS (\n"
-                "            SELECT target.d AS day, src.wallet AS wallet,\n"
-                "                   " + ",\n                   ".join(ret_trail_parts) + "\n"
-                "            FROM target_days target\n"
-                "            CROSS JOIN returns_per_wallet_day src\n"
-                "            WHERE src.d >= target.d - " + str(sharpe_max) + "\n"
-                "              AND src.d <  target.d\n"
-                "            GROUP BY target.d, src.wallet\n"
+                "            SELECT d AS day, wallet,\n"
+                "                   " + ret_out_cols + "\n"
+                "            FROM (\n"
+                "                SELECT d, wallet, is_real,\n"
+                "                       " + ",\n                       ".join(ret_agg_parts) + "\n"
+                "                FROM (\n"
+                "                    SELECT d, wallet, " + ", ".join(ret_value_cols) + ", 1 AS is_real\n"
+                "                    FROM returns_per_wallet_day\n"
+                "                    UNION ALL\n"
+                "                    SELECT target.d AS d, w.wallet AS wallet, "
+                + ", ".join(f"0 AS {c}" for c in ret_value_cols) + ", 0 AS is_real\n"
+                "                    FROM target_days target\n"
+                "                    CROSS JOIN (SELECT DISTINCT wallet FROM returns_per_wallet_day) w\n"
+                "                )\n"
+                "                WINDOW " + ret_windows + "\n"
+                "            )\n"
+                "            WHERE is_real = 0\n"
                 "        )"
             )
 
