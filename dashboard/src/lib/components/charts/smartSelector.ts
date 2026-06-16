@@ -61,6 +61,9 @@ export interface SmartMetricDef {
    *  omit this and fall back to 'token'; metrics that are only meaningful
    *  across all tokens (e.g. avg_position_count = basket size) set 'global'. */
   defaultScope?: 'global' | 'token';
+  /** Whether the criterion UI exposes a "min days" input for this metric — the
+   *  small-sample guard, only meaningful for the daily-return Sharpe metrics. */
+  usesMinDays?: boolean;
 }
 
 export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
@@ -96,8 +99,8 @@ export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
   { key: 'trade_count',             label: 'Trade count',               kind: 'count' },
   { key: 'long_pnl',                label: 'Long PnL ($)',              kind: 'usd' },
   { key: 'short_pnl',               label: 'Short PnL ($)',             kind: 'usd' },
-  { key: 'sharpe',                  label: 'Sharpe (daily)',            kind: 'ratio' },
-  { key: 'sharpe_annualized',       label: 'Sharpe (annualized)',       kind: 'ratio' },
+  { key: 'sharpe',                  label: 'Sharpe (daily)',            kind: 'ratio', usesMinDays: true },
+  { key: 'sharpe_annualized',       label: 'Sharpe (annualized)',       kind: 'ratio', usesMinDays: true },
 ];
 
 export function metricDef(key: string): SmartMetricDef | undefined {
@@ -121,6 +124,10 @@ export interface SmartCriterionState {
    *  overall lookback. Lets each metric use its own window, e.g.
    *  "volume ≥ 100K / 10d AND realized PnL ≥ 10K / 3d". */
   lookback?: number;
+  /** Minimum invested-days threshold — only meaningful for the Sharpe metrics
+   *  (a small-sample guard; below it the metric is 0). Unset → 2 (no extra
+   *  filtering). Configurable per criterion, like `lookback`. */
+  min_days?: number;
   /** Soft-disable: criterion stays in the UI list but its min/max bounds
    *  are skipped server-side. Lets the user A/B configurations without
    *  losing the saved values. Default false (criterion is active). */
@@ -177,6 +184,9 @@ export function sanitizeSmartSelectorState(raw: unknown): SmartSelectorState {
       if (typeof cc.lookback === 'number' && cc.lookback >= 1 && cc.lookback <= 180) {
         item.lookback = Math.round(cc.lookback);
       }
+      if (typeof cc.min_days === 'number' && cc.min_days >= 2 && cc.min_days <= 180) {
+        item.min_days = Math.round(cc.min_days);
+      }
       if (cc.disabled === true) item.disabled = true;
       out.criteria.push(item);
     }
@@ -198,6 +208,7 @@ export function smartSelectorCacheKey(s: SmartSelectorState): string {
       max: c.max ?? null,
       scope: c.scope ?? null,
       lookback: c.lookback ?? null,
+      min_days: c.min_days ?? null,
       disabled: c.disabled ?? false
     })),
   };

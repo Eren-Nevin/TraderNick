@@ -120,11 +120,17 @@ class MetricDef:
 # series from ±inf). The annualized variant scales the daily ratio by √365
 # (HL perps trade 24/7). `{s}` expands to e.g. `g_l7` so the columns land on the
 # lookback-tagged `combined` projections (ret_sum_g_l7, …).
+# `{nd}` is the per-criterion minimum invested-days threshold (a small-sample
+# guard against the Sharpe blowing up when a wallet has only a couple of
+# near-identical daily returns → ~0 stddev). It expands to a literal int via
+# _metric_expr; below the threshold the Sharpe is 0. Default is 2 (the math
+# minimum — stddev needs ≥2 points), so existing filters are unchanged; the
+# user raises it (e.g. 20) to require a real track record.
 _RET_MEAN = "(ret_sum_{s} / ret_cnt_{s})"
 _RET_VAR = "(ret_sumsq_{s} / ret_cnt_{s} - pow(ret_sum_{s} / ret_cnt_{s}, 2))"
-_SHARPE_DAILY = ("if(ret_cnt_{s} > 1 AND " + _RET_VAR + " > 0, "
+_SHARPE_DAILY = ("if(ret_cnt_{s} >= {nd} AND " + _RET_VAR + " > 0, "
                  + _RET_MEAN + " / sqrt(" + _RET_VAR + "), 0)")
-_SHARPE_ANN = ("if(ret_cnt_{s} > 1 AND " + _RET_VAR + " > 0, "
+_SHARPE_ANN = ("if(ret_cnt_{s} >= {nd} AND " + _RET_VAR + " > 0, "
                + "(" + _RET_MEAN + " / sqrt(" + _RET_VAR + ")) * sqrt(365), 0)")
 
 
@@ -357,6 +363,10 @@ class SmartCriterion:
     # AND realized PnL ≥ 10K over 3d". The trailing CTEs compute every
     # referenced lookback in one pass via conditional aggregation.
     lookback: int | None = None
+    # Minimum invested-days threshold — only meaningful for the Sharpe metrics
+    # (a small-sample guard; below it the Sharpe is 0). None → default 2 (no
+    # extra filtering). Configurable per criterion alongside `lookback`.
+    min_days: int | None = None
     # Soft-disable: the criterion stays in the list but its min/max bounds
     # don't filter and its source CTE isn't materialised (unless something
     # else references it). Lets the user A/B different criteria without
@@ -458,6 +468,9 @@ class SmartSelector:
             clookback = c.get("lookback")
             if clookback is not None and (not isinstance(clookback, int) or not (1 <= clookback <= 180)):
                 raise ValueError(f"selector.criteria[{i}].lookback must be int in [1, 180] or null")
+            cmin_days = c.get("min_days")
+            if cmin_days is not None and (not isinstance(cmin_days, int) or not (2 <= cmin_days <= 180)):
+                raise ValueError(f"selector.criteria[{i}].min_days must be int in [2, 180] or null")
             cdisabled = c.get("disabled", False)
             if not isinstance(cdisabled, bool):
                 raise ValueError(f"selector.criteria[{i}].disabled must be a boolean")
@@ -467,6 +480,7 @@ class SmartSelector:
                 max=float(cmax) if cmax is not None else None,
                 scope=cscope,
                 lookback=clookback,
+                min_days=cmin_days,
                 disabled=cdisabled,
             ))
 
@@ -494,7 +508,8 @@ class SmartSelector:
             "sort_by": self.sort_by,
             "criteria": [
                 {"metric": c.metric, "min": c.min, "max": c.max,
-                 "scope": c.scope, "lookback": c.lookback, "disabled": c.disabled}
+                 "scope": c.scope, "lookback": c.lookback,
+                 "min_days": c.min_days, "disabled": c.disabled}
                 for c in self.criteria
             ],
         }
@@ -562,6 +577,20 @@ class SmartSelector:
                 return self._effective_lookback(c.lookback)
         return self.lookback_days
 
+    @staticmethod
+    def _effective_min_days(criterion_min_days: int | None) -> int:
+        """Min invested-days threshold for a criterion — its own value, else 2
+        (the math minimum, i.e. the prior no-guard behaviour)."""
+        return max(int(criterion_min_days), 2) if criterion_min_days else 2
+
+    def _sort_min_days(self) -> int:
+        """min_days for the sort metric — the matching criterion's value if the
+        sort metric is itself a criterion, else the default (2)."""
+        for c in self.criteria:
+            if c.metric == self.sort_by:
+                return self._effective_min_days(c.min_days)
+        return 2
+
     def _needs(self) -> set[tuple[str, str, int]]:
         """Set of (source, scope, lookback) every active metric references.
         Disabled criteria don't pull their source in (the ranked CTE skips
@@ -603,12 +632,16 @@ class SmartSelector:
         return "g" if scope == "global" else "t"
 
     @classmethod
-    def _metric_expr(cls, metric_key: str, scope: str, lookback: int) -> str:
+    def _metric_expr(cls, metric_key: str, scope: str, lookback: int,
+                     min_days: int = 2) -> str:
         """Concrete column expression for a metric at a (scope, lookback).
         `{s}` in the registry template expands to e.g. `g_l3` so it lands on
-        the lookback-tagged `combined` columns (`realized_pnl_g_l3`, …)."""
-        return METRIC_REGISTRY[metric_key].column_sql.replace(
-            "{s}", f"{cls._suffix(scope)}_l{lookback}")
+        the lookback-tagged `combined` columns (`realized_pnl_g_l3`, …). `{nd}`
+        (Sharpe templates only) expands to the min invested-days threshold; it
+        is a no-op for metrics whose template doesn't reference it."""
+        return (METRIC_REGISTRY[metric_key].column_sql
+                .replace("{s}", f"{cls._suffix(scope)}_l{lookback}")
+                .replace("{nd}", str(max(int(min_days), 2))))
 
     # ── CTE emission ────────────────────────────────────────────────────
 
@@ -1302,14 +1335,17 @@ class SmartSelector:
             if c.min is None and c.max is None:
                 continue
             expr = self._metric_expr(
-                c.metric, self._effective_scope(c.scope), self._effective_lookback(c.lookback))
+                c.metric, self._effective_scope(c.scope),
+                self._effective_lookback(c.lookback),
+                self._effective_min_days(c.min_days))
             if c.min is not None:
                 where_clauses.append(f"({expr}) >= {{sel_crit_min_{i}:Float64}}")
             if c.max is not None:
                 where_clauses.append(f"({expr}) <= {{sel_crit_max_{i}:Float64}}")
         where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
         sort_expr = self._metric_expr(
-            self.sort_by, self._sort_scope(), self._sort_lookback())
+            self.sort_by, self._sort_scope(), self._sort_lookback(),
+            self._sort_min_days())
 
         ctes.append(
             f"ranked AS (\n"
@@ -1440,25 +1476,27 @@ class SmartSelector:
         cte_sql = "WITH\n        " + ",\n        ".join(blocks.values())
         return cte_sql, final_name, params
 
-    def root_metrics(self) -> list[tuple[str, str, int]]:
-        """(metric_key, effective_scope, effective_lookback) for the ROOT node's
-        sort metric + active criteria, deduped, sort metric first. Empty when the
-        root is a pure-composite (no own criteria) — nothing of its own to show."""
+    def root_metrics(self) -> list[tuple[str, str, int, int]]:
+        """(metric_key, effective_scope, effective_lookback, min_days) for the
+        ROOT node's sort metric + active criteria, deduped, sort metric first.
+        Empty when the root is a pure-composite (no own criteria)."""
         if not self.criteria:
             return []
-        items = [(self.sort_by, self._sort_scope(), self._sort_lookback())]
+        items = [(self.sort_by, self._sort_scope(), self._sort_lookback(),
+                  self._sort_min_days())]
         for c in self.criteria:
             if c.disabled:
                 continue
             items.append((c.metric, self._effective_scope(c.scope),
-                          self._effective_lookback(c.lookback)))
-        out: list[tuple[str, str, int]] = []
+                          self._effective_lookback(c.lookback),
+                          self._effective_min_days(c.min_days)))
+        out: list[tuple[str, str, int, int]] = []
         seen: set[str] = set()
-        for (k, sc, lb) in items:
+        for (k, sc, lb, nd) in items:
             if k in seen:
                 continue
             seen.add(k)
-            out.append((k, sc, lb))
+            out.append((k, sc, lb, nd))
         return out
 
     def build_root_metrics_query(
@@ -1482,8 +1520,8 @@ class SmartSelector:
             return None
         own_ctes, params = self._build_node_ctes(since_dt, until_dt)
         cols = ", ".join(
-            f"({self._metric_expr(k, sc, lb)}) AS m{i}"
-            for i, (k, sc, lb) in enumerate(metrics)
+            f"({self._metric_expr(k, sc, lb, nd)}) AS m{i}"
+            for i, (k, sc, lb, nd) in enumerate(metrics)
         )
         sql = (
             "WITH\n        " + ",\n        ".join(own_ctes) + "\n"
@@ -1493,7 +1531,7 @@ class SmartSelector:
         )
         meta = [
             {"key": k, "label": METRIC_REGISTRY[k].label, "scope": sc, "lookback": lb}
-            for (k, sc, lb) in metrics
+            for (k, sc, lb, nd) in metrics
         ]
         return sql, params, meta
 
@@ -1509,6 +1547,8 @@ class SmartSelector:
                     "min": c.min,
                     "max": c.max,
                     "scope": c.scope,
+                    "lookback": c.lookback,
+                    "min_days": c.min_days,
                     "disabled": c.disabled,
                 }
                 for c in self.criteria

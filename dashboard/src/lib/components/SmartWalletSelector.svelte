@@ -375,6 +375,21 @@
           title={`Lookback (days) for this criterion. Blank = inherit the selector's ${value.lookback}d.`}
         />
         <span class="text-zinc-500 text-[11px]">d</span>
+        {#if metricDef(c.metric)?.usesMinDays}
+          <span class="text-zinc-500 text-[11px] ml-1.5">min</span>
+          <input
+            type="number" min="2" max="180" step="1"
+            value={c.min_days ?? ''}
+            placeholder="2"
+            onchange={(e) => {
+              const n = numOrUndef((e.target as HTMLInputElement).value);
+              setCriterion(i, { min_days: n === undefined ? undefined : Math.max(2, Math.round(n)) });
+            }}
+            class="w-12 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-zinc-100 text-right ml-1"
+            title="Minimum invested (in-position) days required in the lookback before this Sharpe is scored — guards against tiny-sample blow-ups (a couple of near-identical daily returns → ~0 volatility → huge Sharpe). Below the threshold the metric is 0. Blank = 2 (no guard)."
+          />
+          <span class="text-zinc-500 text-[11px]">d invested</span>
+        {/if}
         <label class="flex items-center gap-1 cursor-pointer ml-1">
           <input
             type="radio"
