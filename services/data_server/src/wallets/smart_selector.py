@@ -638,12 +638,19 @@ class SmartSelector:
             # downstream `trailing`/Sharpe sum() logic unchanged (summing daily
             # deltas telescopes to the correct endpoint difference
             # cum[d] − cum[d−L−1]):
-            #   layer 1  cumulative per (wallet, token, day) = argMax by time
+            #   layer 1  cumulative per (wallet, token, day) = argMax by
+            #            (time, ingested_at) — see the dedup note below
             #   layer 2  cumulative per (wallet, day, scope)  = sum / sumIf token
             #   layer 3  daily delta = cum[d] − cum[d−1] via lagInFrame
-            # FINAL collapses RMT dupes before argMax (defensive; daily freq
-            # means ~1 row/day anyway). The fetch reaches th_max+1 days back so
-            # the earliest in-window day (target.d − th_max) has a prior
+            # NO FINAL: hl_trade_history is a ReplacingMergeTree(ingested_at),
+            # but `argMax(metric, (time, ingested_at))` picks the exact same
+            # winning row FINAL would (latest snapshot of the day; among
+            # same-timestamp dupes the latest-ingested = the RMT winner), so the
+            # result is byte-identical to FINAL (verified). Dropping FINAL lets
+            # the optimizer use the `(token, time, wallet)` projection so a
+            # token-scoped scan prunes to that token's rows (~10×) instead of
+            # FINAL-merging the whole window. The fetch reaches th_max+1 days
+            # back so the earliest in-window day (target.d − th_max) has a prior
             # snapshot to diff against; that pre-roll day's own delta is outside
             # every trailing window and never contributes.
             cum_proj = proj_pair(
@@ -687,10 +694,10 @@ class SmartSelector:
                 "                       " + cum_proj + "\n"
                 "                FROM (\n"
                 "                    SELECT toDate(time) AS d, wallet, token,\n"
-                "                           argMax(net_pnl, time)     AS cum_net_pnl,\n"
-                "                           argMax(volume, time)      AS cum_volume,\n"
-                "                           argMax(trade_count, time) AS cum_trades\n"
-                "                    FROM tradernick.hl_trade_history FINAL\n"
+                "                           argMax(net_pnl, (time, ingested_at))     AS cum_net_pnl,\n"
+                "                           argMax(volume, (time, ingested_at))      AS cum_volume,\n"
+                "                           argMax(trade_count, (time, ingested_at)) AS cum_trades\n"
+                "                    FROM tradernick.hl_trade_history\n"
                 "                    WHERE time >= {sel_since:DateTime} - INTERVAL " + str(th_max + 1) + " DAY\n"
                 "                      AND time <  {sel_until:DateTime}\n"
                 + th_token_filter +

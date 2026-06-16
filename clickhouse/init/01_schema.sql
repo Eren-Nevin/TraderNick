@@ -2201,11 +2201,22 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_trade_history
     buy_volume    Float64        CODEC(Gorilla, ZSTD(3)),
     sell_volume   Float64        CODEC(Gorilla, ZSTD(3)),
     trade_count   UInt32         CODEC(T64, ZSTD(3)),
-    ingested_at   DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+    ingested_at   DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3)),
+    -- Token-leading projection: the base ORDER BY leads with `wallet` (fast for
+    -- wallet_pnl), so a token-scoped scan (smart_selector ranking) can't prune
+    -- by token and would read the whole time-window. This projection re-sorts
+    -- by (token, time, wallet) so token='X' prunes to that token's rows (~10×).
+    -- Consumers must read it WITHOUT FINAL to use it (CH won't use projections
+    -- under FINAL); dedup in-query via argMax(metric, (time, ingested_at)),
+    -- which is byte-identical to FINAL for daily snapshots.
+    PROJECTION p_token_time (SELECT * ORDER BY (token, time, wallet))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
 ORDER BY (wallet, token, time)
-TTL toDateTime(time) + INTERVAL 270 DAY;
+TTL toDateTime(time) + INTERVAL 270 DAY
+-- 'rebuild' keeps the projection consistent after RMT dedup merges (required:
+-- CH refuses projections on RMT otherwise).
+SETTINGS deduplicate_merge_projection_mode = 'rebuild';
 
 -- Bridge in/out (USDC on Arbitrum ↔ HL). No TTL — historical capital
 -- migration is a useful reference. direction = 'deposit' (Arb→HL) or
