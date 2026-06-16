@@ -69,10 +69,11 @@ async def live_loop(ds, calls, sem, stream_name: str | None = None):
         await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
 
 
-async def sweep_loop(ds, calls, sem, sweep_cadence: float, stream_name: str | None = None):
-    jitter = sweep.sweep_jitter_s(sweep_cadence)
-    log.info("sweep_loop: waiting %.0fs before first fire (cadence=%ss)", jitter, sweep_cadence)
-    await asyncio.sleep(jitter)
+async def sweep_loop(ds, calls, sem, sweep_cadence: float, stream_name: str | None = None, once: bool = False):
+    if not once:
+        jitter = sweep.sweep_jitter_s(sweep_cadence)
+        log.info("sweep_loop: waiting %.0fs before first fire (cadence=%ss)", jitter, sweep_cadence)
+        await asyncio.sleep(jitter)
     ch = await async_client()
     while True:
         next_fire = time.monotonic() + sweep_cadence
@@ -110,6 +111,8 @@ async def sweep_loop(ds, calls, sem, sweep_cadence: float, stream_name: str | No
         await asyncio.gather(*(_one(*c) for c in calls), return_exceptions=True)
         if stream_name:
             await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, error=_sweep_err)
+        if once:
+            return
         await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
 
@@ -131,6 +134,12 @@ async def _run(events_filter: list[str] | None = None, stream_name: str | None =
     sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS)
     log.info("polling spark chains=%s -> %d calls/tick; live=%ss sweep=%ss",
              chains, len(calls), POLL_INTERVAL_SECONDS, sweep_cadence)
+    # Boot-sweep — run one sweep iteration to completion BEFORE the live
+    # loop starts, so a restart after a long stop recovers the full
+    # [last_seen, now] gap instead of live_loop advancing the watermark
+    # past it (mirrors streams/_hl_common.py).
+    log.info("boot-sweep: recovering pre-restart gap before live loop starts")
+    await sweep_loop(ds, calls, sem, sweep_cadence, stream_name=stream_name, once=True)
     await asyncio.gather(
         live_loop(ds, calls, sem, stream_name=stream_name),
         sweep_loop(ds, calls, sem, sweep_cadence, stream_name=stream_name),

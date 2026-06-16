@@ -90,11 +90,20 @@ class Supervisor:
                      "(provider=%s)", role, provider)
             return
 
-        try:
-            persisted = await ch_status.read_all_state()
-        except Exception as exc:  # noqa: BLE001
-            log.exception("read_all_state failed (treating all as enabled): %s", exc)
-            persisted = {}
+        # Wait for ClickHouse to be reachable before reading the persisted
+        # enabled-state. On a HOST reboot the daemon brings `restart:
+        # unless-stopped` containers back WITHOUT honoring `depends_on:
+        # condition: service_healthy` (that's only enforced by an explicit
+        # `docker compose up`), so this live worker can start several minutes
+        # before ClickHouse finishes recovering. A FAILED read here must NOT
+        # be treated as "no persisted rows": for per-provider `live` services
+        # `force_idle` would then default EVERY stream to OFF and the
+        # supervisor would spawn nothing until the operator re-enables each one
+        # by hand. So retry until the read SUCCEEDS — an empty dict from a
+        # reachable CH is a legitimate fresh-install state and ends the loop.
+        # (Mirrors _resume_inflight_with_retry in app.py, which already guards
+        # the same reboot race for in-flight jobs.)
+        persisted = await self._read_state_with_retry()
 
         # Provider filter: only streams whose group maps to our provider.
         # In `monolith` mode (default for the unmodified env) provider is
@@ -131,6 +140,43 @@ class Supervisor:
                 self.workers[spec.name] = WorkerStatus(spec.name, spec.module, "stream")
                 continue
             self._spawn(spec.name, spec.module, "stream")
+
+    async def _read_state_with_retry(self) -> dict:
+        """Read the persisted enabled-state, retrying while ClickHouse is
+        unreachable (the host-reboot race — see start_from_registry). Returns
+        the {name: enabled} map on the first SUCCESSFUL read; an empty map from
+        a reachable CH (fresh install) is a success and returns immediately.
+        Only an EXCEPTION (CH not ready) is retried. Gives up after a long
+        budget so a truly-dead CH can't wedge startup forever — at which point
+        we fall back to empty state and log loudly."""
+        import ch_status
+
+        delay = 2.0
+        elapsed = 0.0
+        deadline = 60 * 15  # seconds of total retry budget
+        attempt = 0
+        while True:
+            attempt += 1
+            try:
+                state = await ch_status.read_all_state()
+                if attempt > 1:
+                    log.info("read_all_state succeeded on attempt %d (%d entries)",
+                             attempt, len(state))
+                return state
+            except Exception as exc:  # noqa: BLE001
+                if elapsed >= deadline:
+                    log.exception(
+                        "read_all_state failed after %d attempts (%.0fs); "
+                        "proceeding with EMPTY state — per-provider streams may "
+                        "default OFF until re-enabled via the admin UI",
+                        attempt, elapsed)
+                    return {}
+                log.warning("read_all_state attempt %d failed (%s) — ClickHouse "
+                            "not ready? retrying in %.1fs",
+                            attempt, exc.__class__.__name__, delay)
+                await asyncio.sleep(delay)
+                elapsed += delay
+                delay = min(delay * 1.6, 30.0)
 
     def _spawn(self, name: str, module: str, kind: str) -> None:
         """Internal: register a worker + kick off its supervise loop."""

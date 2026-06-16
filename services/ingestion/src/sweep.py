@@ -43,18 +43,38 @@ SWEEP_SAFETY_OVERLAP = timedelta(minutes=5)
 LIVE_OVERLAP = timedelta(minutes=5)
 
 
+# Cap (seconds) on a loop's FIRST-fire startup delay. Historically the first
+# fire used Uniform(0, cadence) so the fleet's steady-state phase stayed
+# uniformly spread forever (each worker keeps firing at first_fire + k*cadence,
+# so a full-width first offset == a full-width permanent phase). The problem:
+# applying the FULL cadence to the *first* fire means a freshly (re)started
+# worker ingests nothing — and shows "Starting" in the admin UI — for up to a
+# whole cadence. That's up to 15m for the 15m HL streams, 30m for
+# funding/vaults, and up to 24h for the daily trade_history stream — which is
+# exactly the "all live jobs stuck at Starting after a restart" symptom.
+#
+# Since the per-provider split each container runs only a handful of streams,
+# the full-cadence spread is no longer needed to stay under DeFiStream's
+# per-key rate limit. So cap the FIRST fire: every worker now ticks (and runs
+# its gap-recovery sweep) within FIRST_FIRE_CAP_S of boot, flipping the UI to
+# RUNNING and landing the freshest slot promptly. Sub-cap-cadence
+# (high-frequency) streams are untouched — min() is a no-op for them, so they
+# keep their full phase spread.
+FIRST_FIRE_CAP_S = 90.0
+
+
 def live_jitter_s(cadence_s: float) -> float:
-    """Uniform(0, cadence_s) — full-width random phase. Spreads N concurrent
-    workers uniformly across their cadence window forever, not just on the
-    first fire. (If jitter < cadence, the cluster stays cluster-shaped after
-    the first fire because all subsequent ticks happen at first_fire + k*cadence.)"""
-    return random.uniform(0.0, cadence_s)
+    """Startup delay before the live loop's FIRST fire: Uniform(0, min(cadence, cap)).
+    Capped (see FIRST_FIRE_CAP_S) so a (re)started worker doesn't sit idle and
+    show "Starting" for up to a full cadence."""
+    return random.uniform(0.0, min(cadence_s, FIRST_FIRE_CAP_S))
 
 
 def sweep_jitter_s(sweep_cadence_s: float) -> float:
-    """Uniform(0, sweep_cadence_s) — same full-width principle as live jitter,
-    just on the sweep timeline."""
-    return random.uniform(0.0, sweep_cadence_s)
+    """Startup delay before the sweep loop's FIRST fire: Uniform(0, min(sweep_cadence, cap)).
+    Capped (same rationale as live_jitter_s) so the gap-recovery sweep runs
+    promptly after a restart instead of up to one sweep cadence later."""
+    return random.uniform(0.0, min(sweep_cadence_s, FIRST_FIRE_CAP_S))
 
 
 def sweep_cadence_s(live_cadence_s: float) -> float:

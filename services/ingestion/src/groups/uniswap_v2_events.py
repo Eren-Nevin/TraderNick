@@ -137,10 +137,11 @@ async def _run(events_filter: list[str] | None = None, stream_name: str | None =
                 await ch_status.write_tick(stream_name, total_rows, error=err, duration_s=time.monotonic()-_live_t0)
             await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
 
-    async def sweep_loop():
-        jitter = sweep.sweep_jitter_s(sweep_cadence)
-        log.info("sweep_loop: waiting %.0fs before first fire (cadence=%ss)", jitter, sweep_cadence)
-        await asyncio.sleep(jitter)
+    async def sweep_loop(once: bool = False):
+        if not once:
+            jitter = sweep.sweep_jitter_s(sweep_cadence)
+            log.info("sweep_loop: waiting %.0fs before first fire (cadence=%ss)", jitter, sweep_cadence)
+            await asyncio.sleep(jitter)
         ch = await async_client()
         while True:
             next_fire = time.monotonic() + sweep_cadence
@@ -176,8 +177,16 @@ async def _run(events_filter: list[str] | None = None, stream_name: str | None =
                 log.info("%s sweep done rows=%d", label, total)
             await asyncio.gather(*(_one(*c) for c in calls), return_exceptions=True)
             await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, rows=_sweep_rows, error=_sweep_err) if stream_name else None
+            if once:
+                return
             await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
+    # Boot-sweep — run one sweep iteration to completion BEFORE the live
+    # loop starts, so a restart after a long stop recovers the full
+    # [last_seen, now] gap instead of live_loop advancing the watermark
+    # past it (mirrors streams/_hl_common.py).
+    log.info("boot-sweep: recovering pre-restart gap before live loop starts")
+    await sweep_loop(once=True)
     await asyncio.gather(live_loop(), sweep_loop())
 
 
