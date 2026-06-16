@@ -647,6 +647,8 @@ async def wallet_pnl(request):
 
     Query params:
       wallet — required, the address (lowercased to match the tables).
+      token  — optional. When set, the curve + stats cover ONLY this token
+               (matches a token-scoped criterion); omitted → global/all tokens.
       since  — ISO date (inclusive). Defaults to until − 180 days.
       until  — ISO date (inclusive). Defaults to today (UTC).
     """
@@ -654,6 +656,12 @@ async def wallet_pnl(request):
     if not wallet:
         return response.json({"error": "missing wallet"}, status=400)
     wallet = wallet.lower()
+
+    # Optional token scope: when set, the curve + stats cover only this token
+    # (matches a token-scoped Sharpe/OI criterion). Omitted → GLOBAL (all
+    # tokens), the original behaviour. Token symbols are stored as-is
+    # (uppercase), so do NOT lowercase like the wallet.
+    token = request.args.get("token") or None
 
     until_arg = request.args.get("until")
     since_arg = request.args.get("since")
@@ -699,6 +707,7 @@ async def wallet_pnl(request):
                     WHERE wallet = {wallet:String}
                       AND time >= {since:DateTime} - INTERVAL 1 DAY
                       AND time <  {until:DateTime} + INTERVAL 1 DAY
+                      @@TOK@@
                     GROUP BY d, token
                 )
                 GROUP BY d
@@ -716,6 +725,7 @@ async def wallet_pnl(request):
             WHERE wallet = {wallet:String}
               AND time > toStartOfDay(now())
               AND time <= now()
+              @@TOK@@
         ),
         unreal AS (
             SELECT day, sum(eod) AS unrealized
@@ -725,6 +735,7 @@ async def wallet_pnl(request):
                 WHERE wallet = {wallet:String}
                   AND day >= toDate({since:DateTime})
                   AND day <= toDate({until:DateTime})
+                  @@TOK@@
                 GROUP BY day, token, side
             )
             GROUP BY day
@@ -738,7 +749,12 @@ async def wallet_pnl(request):
         LEFT JOIN realized_tail rt ON rt.day = d.day
         ORDER BY d.day
     """
+    # Splice the token filter into the three sources (or strip the sentinel for
+    # the global curve). The `{token:String}` placeholder is bound below.
+    sql = sql.replace("@@TOK@@", "AND token = {token:String}" if token else "")
     params = {"wallet": wallet, "since": since_dt, "until": until_dt}
+    if token:
+        params["token"] = token
     ch = await client()
     rows = await ch.query(sql, parameters=params)
 
@@ -797,6 +813,7 @@ async def wallet_pnl(request):
     }
     return response.json({
         "wallet": wallet,
+        "token": token,            # null = global (all tokens)
         "since": since_dt.date().isoformat(),
         "until": until_dt.date().isoformat(),
         "series": series,

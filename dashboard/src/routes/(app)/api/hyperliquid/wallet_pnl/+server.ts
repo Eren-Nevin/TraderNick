@@ -4,7 +4,7 @@ import type { RequestHandler } from './$types';
 
 // Proxy for /hyperliquid/wallet_pnl — per-wallet daily PnL series + stats,
 // powering the collapsible PnL view in the Smart Wallets dialog.
-const PASSTHROUGH = ['wallet', 'since', 'until'];
+const PASSTHROUGH = ['wallet', 'token', 'since', 'until'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

@@ -128,10 +128,9 @@ class MetricDef:
 # user raises it (e.g. 20) to require a real track record.
 _RET_MEAN = "(ret_sum_{s} / ret_cnt_{s})"
 _RET_VAR = "(ret_sumsq_{s} / ret_cnt_{s} - pow(ret_sum_{s} / ret_cnt_{s}, 2))"
-_SHARPE_DAILY = ("if(ret_cnt_{s} >= {nd} AND " + _RET_VAR + " > 0, "
-                 + _RET_MEAN + " / sqrt(" + _RET_VAR + "), 0)")
-_SHARPE_ANN = ("if(ret_cnt_{s} >= {nd} AND " + _RET_VAR + " > 0, "
-               + "(" + _RET_MEAN + " / sqrt(" + _RET_VAR + ")) * sqrt(365), 0)")
+# Single Sharpe = the annualized daily return-Sharpe (× √365).
+_SHARPE_EXPR = ("if(ret_cnt_{s} >= {nd} AND " + _RET_VAR + " > 0, "
+                + "(" + _RET_MEAN + " / sqrt(" + _RET_VAR + ")) * sqrt(365), 0)")
 
 
 # Columns available in `combined` after source CTEs are materialised. Suffix
@@ -191,20 +190,14 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         frozenset({SRC_SIDED}),
         "short_pnl_{s}",
     ),
-    # Return-Sharpe (daily): mean / population-stddev of daily RETURNS over the
-    # lookback, where return[d] = daily realized PnL / that day's avg total OI
-    # ($). Needs both trade_history (PnL) and OI (capital base); the returns
-    # CTEs join them per (day, wallet). See _SHARPE_DAILY above.
+    # Return-Sharpe (annualized): mean / population-stddev of daily RETURNS over
+    # the lookback × √365, where return[d] = daily realized PnL / that day's avg
+    # total OI ($). Needs both trade_history (PnL) and OI (capital base); the
+    # returns CTEs join them per (day, wallet). See _SHARPE_EXPR above.
     "sharpe": MetricDef(
-        "sharpe", "Sharpe (daily)",
+        "sharpe", "Sharpe ratio",
         frozenset({SRC_TRADE_HISTORY, SRC_OI}),
-        _SHARPE_DAILY,
-    ),
-    # Annualized return-Sharpe: the daily ratio × √365 (HL perps trade 24/7).
-    "sharpe_annualized": MetricDef(
-        "sharpe_annualized", "Sharpe (annualized)",
-        frozenset({SRC_TRADE_HISTORY, SRC_OI}),
-        _SHARPE_ANN,
+        _SHARPE_EXPR,
     ),
     # ── Average OI over the lookback (token + USD) ───────────────────
     # Source columns (per-scope) emitted by the SRC_OI trailing CTE:
@@ -442,7 +435,12 @@ class SmartSelector:
         scope = obj.get("scope", "global")
         if scope not in ("global", "token"):
             raise ValueError("selector.scope must be 'global' or 'token'")
+        # Legacy alias: the separate daily/annualized Sharpe metrics were
+        # collapsed into a single annualized `sharpe`. Migrate old persisted
+        # wires so they don't fail validation.
         sort_by = obj.get("sort_by")
+        if sort_by == "sharpe_annualized":
+            sort_by = "sharpe"
         if has_criteria:
             if not isinstance(sort_by, str) or sort_by not in METRIC_REGISTRY:
                 raise ValueError(f"selector.sort_by must be one of: {list(METRIC_REGISTRY)}")
@@ -454,6 +452,8 @@ class SmartSelector:
             if not isinstance(c, dict):
                 raise ValueError(f"selector.criteria[{i}] must be an object")
             metric = c.get("metric")
+            if metric == "sharpe_annualized":  # legacy alias → unified `sharpe`
+                metric = "sharpe"
             if metric not in METRIC_REGISTRY:
                 raise ValueError(f"selector.criteria[{i}].metric unknown: {metric}")
             cmin = c.get("min")
@@ -611,7 +611,7 @@ class SmartSelector:
 
     # Metrics whose value is a return-Sharpe built from the daily-return series
     # (returns_trailing). Both share the same per-(scope,lookback) running sums.
-    _SHARPE_METRICS = frozenset({"sharpe", "sharpe_annualized"})
+    _SHARPE_METRICS = frozenset({"sharpe"})
 
     def _sharpe_combos(self) -> set[tuple[str, int]]:
         """(scope-letter, lookback) combos where a Sharpe metric is referenced

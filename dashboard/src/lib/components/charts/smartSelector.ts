@@ -23,7 +23,6 @@ export type SmartMetricKey =
   | 'long_pnl'
   | 'short_pnl'
   | 'sharpe'
-  | 'sharpe_annualized'
   | 'avg_total_oi_token'
   | 'avg_long_oi_token'
   | 'avg_short_oi_token'
@@ -99,8 +98,7 @@ export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
   { key: 'trade_count',             label: 'Trade count',               kind: 'count' },
   { key: 'long_pnl',                label: 'Long PnL ($)',              kind: 'usd' },
   { key: 'short_pnl',               label: 'Short PnL ($)',             kind: 'usd' },
-  { key: 'sharpe',                  label: 'Sharpe (daily)',            kind: 'ratio', usesMinDays: true },
-  { key: 'sharpe_annualized',       label: 'Sharpe (annualized)',       kind: 'ratio', usesMinDays: true },
+  { key: 'sharpe',                  label: 'Sharpe ratio',              kind: 'ratio', usesMinDays: true },
 ];
 
 export function metricDef(key: string): SmartMetricDef | undefined {
@@ -161,6 +159,9 @@ export function sanitizeSmartSelectorState(raw: unknown): SmartSelectorState {
   const d = defaultSmartSelectorState();
   if (!raw || typeof raw !== 'object') return d;
   const r = raw as Record<string, unknown>;
+  // Legacy alias: the daily/annualized Sharpe pair was collapsed into a single
+  // (annualized) `sharpe`. Migrate persisted state so old filters still load.
+  const migrateMetric = (m: unknown) => (m === 'sharpe_annualized' ? 'sharpe' : m);
   const out: SmartSelectorState = { ...d };
   if (typeof r.lookback === 'number' && r.lookback >= 1 && r.lookback <= 180) {
     out.lookback = Math.round(r.lookback);
@@ -169,14 +170,16 @@ export function sanitizeSmartSelectorState(raw: unknown): SmartSelectorState {
     out.top_n = Math.round(r.top_n);
   }
   if (r.scope === 'global' || r.scope === 'token') out.scope = r.scope;
-  if (isMetricKey(r.sort_by)) out.sort_by = r.sort_by;
+  const sortBy = migrateMetric(r.sort_by);
+  if (isMetricKey(sortBy)) out.sort_by = sortBy;
   if (Array.isArray(r.criteria)) {
     out.criteria = [];
     for (const c of r.criteria) {
       if (!c || typeof c !== 'object') continue;
       const cc = c as Record<string, unknown>;
-      if (!isMetricKey(cc.metric)) continue;
-      const item: SmartCriterionState = { metric: cc.metric };
+      const mk = migrateMetric(cc.metric);
+      if (!isMetricKey(mk)) continue;
+      const item: SmartCriterionState = { metric: mk };
       if (typeof cc.min === 'number' && isFinite(cc.min)) item.min = cc.min;
       if (typeof cc.max === 'number' && isFinite(cc.max)) item.max = cc.max;
       if (cc.scope === 'global' || cc.scope === 'token') item.scope = cc.scope;

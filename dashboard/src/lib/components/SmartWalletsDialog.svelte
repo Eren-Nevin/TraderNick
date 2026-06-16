@@ -101,7 +101,7 @@
   // window (cutoff − lookback days) so the chart shows exactly the span the
   // (annualized) Sharpe was computed over, relative to the filter day.
   let sharpeLookback = $derived(
-    asOfMetrics.find((m) => m.key === 'sharpe' || m.key === 'sharpe_annualized')?.lookback ?? null
+    asOfMetrics.find((m) => m.key === 'sharpe')?.lookback ?? null
   );
   let lookbackStart = $derived(
     cutoff != null && sharpeLookback != null ? cutoff - sharpeLookback * 86_400 : null
@@ -122,6 +122,14 @@
   // Which cumulative curve to plot: realized only, or realized + EOD
   // unrealized snapshot ("total").
   let pnlMode = $state<'realized' | 'total'>('realized');
+  // Curve scope: global (all tokens) or this chart's token. Only offered when
+  // there's a token; defaults to the criterion's scope so a token-scoped
+  // Sharpe filter opens on the matching token curve.
+  let pnlScope = $state<'global' | 'token'>('global');
+  // The filter's criteria are token-scoped (so default the curve to token).
+  let criterionIsTokenScoped = $derived(
+    !!token && asOfMetrics.some((m) => m.scope === 'token')
+  );
   let pnlLoading = $state(false);
   let pnlError = $state<string | null>(null);
   let pnlSeries = $state<RawPoint[]>([]);          // full daily series
@@ -146,8 +154,17 @@
     // Opening a (different) wallet collapses any other and drops its data.
     expanded = w;
     tf = 'daily';
+    // Default the curve scope to match the filter's criterion scope.
+    pnlScope = criterionIsTokenScoped ? 'token' : 'global';
     clearPnl();
     void loadPnl(w);
+  }
+
+  // User flips the Global/Token toggle while a row is open → re-fetch.
+  function setPnlScope(s: 'global' | 'token') {
+    if (pnlScope === s) return;
+    pnlScope = s;
+    if (expanded) { clearPnl(); void loadPnl(expanded); }
   }
 
   async function loadPnl(w: string) {
@@ -156,6 +173,8 @@
     pnlCtl = new AbortController();
     try {
       const qs = new URLSearchParams({ wallet: w });
+      // Token-scope the curve to match a token-scoped criterion; else global.
+      if (pnlScope === 'token' && token) qs.set('token', token);
       // Intentionally NOT pinned to the clicked day — the PnL view shows the
       // wallet's full recent history (server defaults to a 180-day window
       // ending today), not just up to the bucket that opened the dialog.
@@ -336,8 +355,23 @@
                                 >{m}</button>
                               {/each}
                             </div>
+                            {#if token}
+                              <div class="flex gap-1" title="Scope the PnL curve: all the wallet's tokens, or just this chart's token">
+                                {#each [['global', 'Global'], ['token', token]] as const as [s, lbl]}
+                                  <button
+                                    type="button"
+                                    class="px-2 py-0.5 rounded text-[10px] border cursor-pointer"
+                                    class:border-sky-600={pnlScope === s}
+                                    class:text-sky-300={pnlScope === s}
+                                    class:border-zinc-700={pnlScope !== s}
+                                    class:text-zinc-400={pnlScope !== s}
+                                    onclick={() => setPnlScope(s)}
+                                  >{lbl}</button>
+                                {/each}
+                              </div>
+                            {/if}
                             <span class="text-[10px] text-zinc-500">
-                              cumulative, all tokens{pnlMode === 'total' ? ' · + EOD unrealized' : ''}
+                              cumulative, {pnlScope === 'token' && token ? token : 'all tokens'}{pnlMode === 'total' ? ' · + EOD unrealized' : ''}
                             </span>
                           </div>
                           <div class="flex gap-1">
