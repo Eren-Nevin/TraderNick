@@ -3725,13 +3725,25 @@
     }
     return base;
   });
+  // ls / tt series selector: 'all' (or unset) shows every series; a specific
+  // series key narrows to that one line. The MA overlays (keyed
+  // `cum_<seriesKey>_<idx>`) are filtered to match so picking one series hides
+  // the others' moving averages too.
+  function pickSeries<T extends { key: string }>(lines: T[], sel: string | undefined): T[] {
+    return !sel || sel === 'all' ? lines : lines.filter((l) => l.key === sel);
+  }
+  function pickMA(maLines: unknown[], sel: string | undefined): unknown[] {
+    if (!sel || sel === 'all') return maLines;
+    const re = new RegExp(`^cum_${sel}_\\d+$`);
+    return maLines.filter((l) => re.test((l as { key: string }).key));
+  }
   let ttLinesD = $derived([
-    ...(instance.showPoint ? TOP_TRADERS_LINES : []),
-    ...cumulativeLines
+    ...(instance.showPoint ? pickSeries(TOP_TRADERS_LINES, instance.seriesFilter) : []),
+    ...pickMA(cumulativeLines, instance.seriesFilter)
   ]);
   let lsLinesD = $derived([
-    ...(instance.showPoint ? LS_LINES : []),
-    ...cumulativeLines
+    ...(instance.showPoint ? pickSeries(LS_LINES, instance.seriesFilter) : []),
+    ...pickMA(cumulativeLines, instance.seriesFilter)
   ]);
   // Rebase an array of {close} (Candle-shaped) rows so the first non-null
   // close is 0%, every subsequent value is `(close - base) / base * 100`.
@@ -5528,6 +5540,22 @@
           >
             <option value="binance">Binance</option>
             <option value="hl">Hyperliquid</option>
+          </select>
+        {/if}
+        {#if instance.kind === 'ls' || instance.kind === 'tt'}
+          <!-- Series selector for the L/S ratio charts. 'All' shows every line
+               (current behaviour); picking a single series isolates it. Options
+               come straight from the line catalogue so they stay in sync. -->
+          <select
+            value={instance.seriesFilter ?? 'all'}
+            onchange={(e) => (instance.seriesFilter = e.currentTarget.value)}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Which ratio series to display"
+          >
+            <option value="all">All</option>
+            {#each (instance.kind === 'tt' ? TOP_TRADERS_LINES : LS_LINES) as s (s.key)}
+              <option value={s.key}>{s.label}</option>
+            {/each}
           </select>
         {/if}
         {#if (instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl') || instance.kind === 'hl_smart_oi'}

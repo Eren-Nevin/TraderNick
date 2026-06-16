@@ -1564,6 +1564,11 @@ export type ChartInstance = {
    *  user spot over-filtering (counts hitting 0 or hovering far below
    *  the top_n cap) without leaving the chart. */
   smartShowWalletCount?: boolean;
+  /** ls / tt charts only: which ratio series to display. 'all' (or unset) =
+   *  every series (the default); otherwise the single series key to show
+   *  (LS: 'all_ct' | 'taker_vol'; TT: 'top_ct' | 'top_vol' | 'top_avg_vol').
+   *  Moving-average overlays are filtered to match the selected series. */
+  seriesFilter?: string;
   /** Optional wallet-category filter applied to the transfer chart's main
    *  series. When set, the chart replaces its unfiltered sum with the filtered
    *  one (MAs computed from the filtered values too). */
