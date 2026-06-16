@@ -97,6 +97,16 @@
     return Number.isFinite(t) ? Math.floor(t / 1000) : null;
   });
 
+  // When a Sharpe metric is in the filter, mark the start of its lookback
+  // window (cutoff − lookback days) so the chart shows exactly the span the
+  // (annualized) Sharpe was computed over, relative to the filter day.
+  let sharpeLookback = $derived(
+    asOfMetrics.find((m) => m.key === 'sharpe' || m.key === 'sharpe_annualized')?.lookback ?? null
+  );
+  let lookbackStart = $derived(
+    cutoff != null && sharpeLookback != null ? cutoff - sharpeLookback * 86_400 : null
+  );
+
   // ── Expandable per-wallet PnL view (accordion, lazy, drop-on-collapse) ──
   type Point = { time: number; value: number };
   type PnlStats = {
@@ -347,7 +357,13 @@
                         {#if chartData.length === 0}
                           <div class="py-6 text-center text-zinc-500 text-xs">No PnL history in range.</div>
                         {:else}
-                          <WalletPnlChart data={chartData} height={200} {cutoff} label={pnlMode === 'total' ? 'Total' : 'Realized'} />
+                          <WalletPnlChart data={chartData} height={200} {cutoff} {lookbackStart} label={pnlMode === 'total' ? 'Total' : 'Realized'} />
+                          <div class="flex items-center gap-3 mt-1 text-[10px] text-zinc-500">
+                            <span class="flex items-center gap-1"><span class="inline-block w-3 border-t border-dashed" style="border-color:#fbbf24"></span>filter day{day ? ` (${day})` : ''}</span>
+                            {#if lookbackStart != null}
+                              <span class="flex items-center gap-1"><span class="inline-block w-3 border-t border-dashed" style="border-color:#38bdf8"></span>Sharpe lookback start (−{sharpeLookback}d)</span>
+                            {/if}
+                          </div>
                         {/if}
                         {#if pnlStats && asOfMetrics.length === 0}
                           <!-- Fallback (pure-composite filter has no own

@@ -25,9 +25,21 @@
     // Unix seconds at UTC midnight; draws a dashed vertical "cutoff" line
     // (the day the smart-wallets dialog was opened for). null → no line.
     cutoff = null as number | null,
+    // Unix seconds; when set, draws a second, thinner dashed line in a
+    // different colour marking the start of a metric's lookback window
+    // (e.g. the Sharpe lookback) relative to `cutoff`. null → no line.
+    lookbackStart = null as number | null,
     // Tooltip label for the plotted value (e.g. "Realized", "Total").
     label = 'PnL'
-  }: { data?: Point[]; height?: number; cutoff?: number | null; label?: string } = $props();
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; label?: string } = $props();
+
+  // Cutoff = amber (filter/as-of day); lookback start = thinner sky-blue.
+  function buildRefs() {
+    const refs: { time: number; color?: string; dash?: string; width?: number }[] = [];
+    if (lookbackStart != null) refs.push({ time: lookbackStart, color: '#38bdf8', dash: '2,3', width: 0.6 });
+    if (cutoff != null) refs.push({ time: cutoff, color: '#fbbf24', dash: '4,3' });
+    return refs;
+  }
 
   let container = $state<HTMLDivElement | null>(null);
   let chart: IChartApi | null = null;
@@ -69,11 +81,9 @@
       title: ''
     });
 
-    // Dashed vertical cutoff line (amber) — the dialog's "as-of" day.
-    vref = new VRefLinesPrimitive(
-      cutoff != null ? [{ time: cutoff, color: '#fbbf24', dash: '4,3' }] : [],
-      '#fbbf24'
-    );
+    // Dashed vertical markers: amber cutoff ("as-of" day) + optional
+    // thinner sky-blue lookback-start line.
+    vref = new VRefLinesPrimitive(buildRefs(), '#fbbf24');
     series.attachPrimitive(vref);
 
     chart.subscribeCrosshairMove((p) => {
@@ -97,9 +107,10 @@
     };
   });
 
-  // Keep the cutoff line in sync if the prop changes.
+  // Keep the marker lines in sync if either prop changes.
   $effect(() => {
-    vref?.setRefs(cutoff != null ? [{ time: cutoff, color: '#fbbf24', dash: '4,3' }] : [], '#fbbf24');
+    void cutoff; void lookbackStart;
+    vref?.setRefs(buildRefs(), '#fbbf24');
   });
 
   // Re-theme on theme toggle.

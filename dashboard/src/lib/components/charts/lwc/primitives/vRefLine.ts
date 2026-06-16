@@ -8,7 +8,7 @@ import type {
   Time
 } from 'lightweight-charts';
 
-export type VRef = { time: number; color?: string; dash?: string };
+export type VRef = { time: number; color?: string; dash?: string; width?: number };
 
 type BitmapScope = {
   readonly context: CanvasRenderingContext2D;
@@ -91,7 +91,9 @@ class VRefLinesRenderer implements ISeriesPrimitivePaneRenderer {
         const px = Math.round(x * ratio) + 0.5;
         ctx.save();
         ctx.beginPath();
-        ctx.lineWidth = Math.max(1, ratio);
+        // `width` is a multiplier on the base device-pixel width (default 1);
+        // a thinner secondary line (e.g. 0.6) stays visible via the 0.75 floor.
+        ctx.lineWidth = Math.max(0.75, Math.max(1, ratio) * (r.width ?? 1));
         ctx.strokeStyle = r.color ?? defaultColor;
         const dash = parseDash(r.dash, ratio);
         if (dash.length) ctx.setLineDash(dash);
