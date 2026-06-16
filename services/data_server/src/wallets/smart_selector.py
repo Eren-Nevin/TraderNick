@@ -1482,36 +1482,49 @@ class SmartSelector:
                     "            GROUP BY day, wallet\n"
                     "        )"
                 )
+            # OI capital base join, one source per Sharpe scope:
+            #   token  → oi_per_day (token-prefiltered)
+            #   global → oi_cap_daily (Table B rollup)
+            # Global OI ⊇ token OI (a non-HIP3 chart-token position implies
+            # non-HIP3 OI), so when BOTH scopes are referenced the GLOBAL source
+            # is the capital gate (INNER JOIN — "days the wallet held capital")
+            # and the TOKEN source is an optional LEFT JOIN. That's identical to
+            # a FULL OUTER of the two per-(day,wallet) sets (token ⊆ global, so
+            # their union is just the global set) but avoids materializing a
+            # hash join over the large global set — the old FULL OUTER was the
+            # main reason a token-sort + global-Sharpe-criterion node ran ~2×
+            # slower than a pure-global one. Single scope → that scope is the
+            # INNER gate.
+            oi_subq = {
+                "t": "SELECT d, wallet, if(n_buckets > 0, s_total_oi_usd_t / n_buckets, 0) "
+                     "AS day_avg_oi_t FROM oi_per_day",
+                "g": "SELECT d, wallet, day_avg_oi_g FROM oi_cap_daily",
+            }
+            oi_alias = {"t": "ot", "g": "og"}
+            gate = "g" if "g" in sharpe_scopes else "t"
             ret_day_parts: list[str] = []
             for (k, s) in kind_scopes:
                 if k == "realized":
                     pnl = f"th.daily_pnl_{s}"
                 else:  # total: realized delta + mark-to-market unrealized delta
                     pnl = f"(th.daily_pnl_{s} + coalesce(u.unreal_delta_{s}, 0))"
+                a = oi_alias[s]
                 ret_day_parts.append(
-                    f"if(oi.day_avg_oi_{s} > 0, {pnl} / oi.day_avg_oi_{s}, 0) "
+                    f"if({a}.day_avg_oi_{s} > 0, {pnl} / {a}.day_avg_oi_{s}, 0) "
                     f"AS daily_return_{k}_{s}")
-            # Combined capital source carrying day_avg_oi_{s} for every Sharpe
-            # scope. One source per scope; if both are referenced, FULL JOIN on
-            # (d, wallet) so a day with capital in either scope survives (the
-            # absent scope's avg is NULL → its return guards to 0).
-            cap_parts: list[str] = []
-            if "t" in sharpe_scopes:
-                cap_parts.append(
-                    "SELECT d, wallet, if(n_buckets > 0, s_total_oi_usd_t / n_buckets, 0) "
-                    "AS day_avg_oi_t FROM oi_per_day")
-            if "g" in sharpe_scopes:
-                cap_parts.append("SELECT d, wallet, day_avg_oi_g FROM oi_cap_daily")
-            if len(cap_parts) == 1:
-                oi_source = "                " + cap_parts[0]
-            else:
-                oi_source = (
-                    "                SELECT coalesce(a.d, b.d) AS d,\n"
-                    "                       coalesce(a.wallet, b.wallet) AS wallet,\n"
-                    "                       a.day_avg_oi_t, b.day_avg_oi_g\n"
-                    "                FROM (" + cap_parts[0] + ") a\n"
-                    "                FULL OUTER JOIN (" + cap_parts[1] + ") b\n"
-                    "                  ON a.d = b.d AND a.wallet = b.wallet")
+            oi_join_sql = (
+                "            INNER JOIN (\n"
+                "                " + oi_subq[gate] + "\n"
+                "            ) " + oi_alias[gate] + " ON "
+                + oi_alias[gate] + ".d = th.d AND " + oi_alias[gate] + ".wallet = th.wallet")
+            for s in sorted(sharpe_scopes):
+                if s == gate:
+                    continue
+                oi_join_sql += (
+                    "\n            LEFT JOIN (\n"
+                    "                " + oi_subq[s] + "\n"
+                    "            ) " + oi_alias[s] + " ON "
+                    + oi_alias[s] + ".d = th.d AND " + oi_alias[s] + ".wallet = th.wallet")
             eod_joins = ""
             if total_scopes:
                 eod_joins = (
@@ -1522,9 +1535,7 @@ class SmartSelector:
                 "            SELECT th.d AS d, th.wallet AS wallet,\n"
                 "                   " + ",\n                   ".join(ret_day_parts) + "\n"
                 "            FROM daily_per_wallet th\n"
-                "            INNER JOIN (\n"
-                + oi_source + "\n"
-                "            ) oi ON oi.d = th.d AND oi.wallet = th.wallet"
+                + oi_join_sql
                 + eod_joins + "\n"
                 "        )"
             )
