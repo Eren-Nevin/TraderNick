@@ -215,6 +215,18 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         "avg_roe_pct", "Avg RoE (%)",
         frozenset({SRC_OI}), "avg_roe_pct_{s}",
     ),
+    # Average number of distinct open positions (coins held) per hourly
+    # snapshot, averaged over the lookback — a basket-size / concentration
+    # measure. Directional wallets hold few coins (low count); basket
+    # buyers/sellers hold many. Set `max` to filter out basket traders and
+    # focus on directed users; `min` to require a minimum breadth. Global
+    # scope counts coins across all HL tokens; token scope degenerates to
+    # "fraction of buckets holding the chart token" (0/1 averaged). Source
+    # column emitted by the oi_trailing CTE: avg_n_positions_{s}.
+    "avg_position_count": MetricDef(
+        "avg_position_count", "Avg Position Count",
+        frozenset({SRC_OI}), "avg_n_positions_{s}",
+    ),
     # ── Sided + taker volume (token + USD) ───────────────────────────
     # Source columns emitted by the SRC_VOL trailing CTE:
     #   vol_token_{s}, vol_usd_{s} (totals — vol_usd matches the legacy
@@ -1005,6 +1017,14 @@ class SmartSelector:
                 "sum(pnl)",
                 "sumIf(pnl, token = {sel_token:String})",
                 "unrealized_pnl_usd_g", "unrealized_pnl_usd_t"))
+            # Number of distinct open positions (coins held) at this bucket —
+            # uniqExact over tokens with a non-zero snapshot. Averaged over the
+            # lookback in oi_trailing → avg_position_count. amt is unsigned
+            # (side carries direction), so amt > 0 = an open position.
+            oi_bucket_parts.append(_pp(
+                "uniqExactIf(token, amt > 0)",
+                "uniqExactIf(token, amt > 0 AND token = {sel_token:String})",
+                "n_positions_g", "n_positions_t"))
             oi_bucket_parts = [p for p in oi_bucket_parts if p]
             ctes.append(
                 "oi_per_bucket AS (\n"
@@ -1029,6 +1049,7 @@ class SmartSelector:
                 oi_day_parts.append(
                     f"sum(if(total_oi_usd_{s} > 0, "
                     f"unrealized_pnl_usd_{s} / total_oi_usd_{s}, 0)) AS s_roe_{s}")
+                oi_day_parts.append(f"sum(n_positions_{s}) AS s_n_positions_{s}")
             ctes.append(
                 "oi_per_day AS (\n"
                 "            SELECT toDate(bucket) AS d, wallet,\n"
@@ -1053,6 +1074,9 @@ class SmartSelector:
                 oi_trail_parts.append(
                     f"if({denom} > 0, sumIf(src.s_roe_{s}, {w}) / {denom}, 0) "
                     f"AS avg_roe_pct_{s}_l{L}")
+                oi_trail_parts.append(
+                    f"if({denom} > 0, sumIf(src.s_n_positions_{s}, {w}) / {denom}, 0) "
+                    f"AS avg_n_positions_{s}_l{L}")
             ctes.append(
                 "oi_trailing AS (\n"
                 "            SELECT target.d AS day, src.wallet AS wallet,\n"
@@ -1085,7 +1109,7 @@ class SmartSelector:
             (SRC_OI, "o", "oi_trailing",
              ["avg_total_oi_token", "avg_long_oi_token", "avg_short_oi_token",
               "avg_total_oi_usd", "avg_long_oi_usd", "avg_short_oi_usd",
-              "avg_roe_pct"], True),
+              "avg_roe_pct", "avg_n_positions"], True),
         ]
         spine = next(si for si in src_info if combos_for[si[0]])
         spine_alias = spine[1]

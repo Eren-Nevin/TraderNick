@@ -30,6 +30,7 @@ export type SmartMetricKey =
   | 'avg_long_oi_usd'
   | 'avg_short_oi_usd'
   | 'avg_roe_pct'
+  | 'avg_position_count'
   | 'non_funding_pnl'
   | 'funding_pnl_share'
   | 'long_volume_usd'
@@ -52,6 +53,10 @@ export interface SmartMetricDef {
   /** Sensible default `min` for the picker when the user first adds this
    *  metric as a criterion. `undefined` means "no default — leave blank". */
   defaultMin?: number;
+  /** Scope a newly-added criterion of this metric defaults to. Most metrics
+   *  omit this and fall back to 'token'; metrics that are only meaningful
+   *  across all tokens (e.g. avg_position_count = basket size) set 'global'. */
+  defaultScope?: 'global' | 'token';
 }
 
 export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
@@ -78,6 +83,7 @@ export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
   { key: 'avg_long_oi_token',       label: 'Avg Long OI (token)',       kind: 'token' },
   { key: 'avg_short_oi_token',      label: 'Avg Short OI (token)',      kind: 'token' },
   { key: 'avg_roe_pct',             label: 'Avg RoE (%)',               kind: 'pct' },
+  { key: 'avg_position_count',      label: 'Avg Position Count',        kind: 'count', defaultScope: 'global' },
   { key: 'non_funding_pnl',         label: 'Non-Funding PnL ($)',       kind: 'usd' },
   { key: 'funding_pnl_share',       label: 'Funding PnL Share',         kind: 'pct' },
   { key: 'trade_count',             label: 'Trade count',               kind: 'count' },

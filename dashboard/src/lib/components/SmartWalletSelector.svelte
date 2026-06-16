@@ -58,7 +58,10 @@
     // the source CTEs can be prefiltered on token. Users still flip a
     // criterion to global on the per-row dropdown when they want a
     // cross-token aggregate.
-    const fresh: SmartCriterionState = { metric: next.key as SmartMetricKey, scope: 'token' };
+    const fresh: SmartCriterionState = {
+      metric: next.key as SmartMetricKey,
+      scope: next.defaultScope ?? 'token',
+    };
     if (next.defaultMin !== undefined) fresh.min = next.defaultMin;
     onChange(autoSort({ ...value, criteria: [...value.criteria, fresh] }));
   }
@@ -70,7 +73,7 @@
     // token scope to match the addCriterion path.
     let criteria = value.criteria;
     if (!criteria.some((c) => c.metric === metric)) {
-      criteria = [...criteria, { metric, scope: 'token' }];
+      criteria = [...criteria, { metric, scope: metricDef(metric)?.defaultScope ?? 'token' }];
     }
     onChange({ ...value, sort_by: metric, criteria });
   }
