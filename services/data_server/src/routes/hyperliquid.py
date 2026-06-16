@@ -607,12 +607,56 @@ async def smart_wallets(request):
         except Exception as exc:  # noqa: BLE001
             log.warning("smart_wallets as-of metrics failed: %s", exc)
 
+    # Per-wallet position in the chart token AS OF the filter day (latest hourly
+    # snapshot that day): drives the long/short/none dot in the list + the
+    # position panel in the expanded view. Only wallets actually holding the
+    # token that day appear; the rest render gray (no position). Best-effort.
+    wallet_positions: dict = {}
+    if token and wallets:
+        pos_sql = """
+            SELECT wallet, side, amount, size_usd, unrealized
+            FROM (
+                SELECT wallet,
+                       argMax(side, bucket)  AS side,
+                       argMax(amt, bucket)   AS amount,
+                       argMax(sz, bucket)    AS size_usd,
+                       argMax(pnl, bucket)   AS unrealized
+                FROM (
+                    SELECT wallet, bucket, side,
+                           argMaxMerge(amount_state) AS amt,
+                           argMaxMerge(size_state)   AS sz,
+                           argMaxMerge(pnl_state)    AS pnl
+                    FROM tradernick.hl_position_history_1h
+                    WHERE token = {p_token:String}
+                      AND toDate(bucket) = {p_day:Date}
+                      AND wallet IN {p_wallets:Array(String)}
+                    GROUP BY wallet, bucket, side
+                )
+                GROUP BY wallet
+            )
+            WHERE amount > 0
+        """
+        try:
+            prows = await ch.query(pos_sql, parameters={
+                "p_token": token, "p_day": day_dt.date(), "p_wallets": wallets})
+            for r in prows.result_rows:
+                wallet_positions[r[0]] = {
+                    "side": r[1],
+                    "amount": float(r[2]),
+                    "size_usd": float(r[3]),
+                    "unrealized": float(r[4]),
+                }
+        except Exception as exc:  # noqa: BLE001
+            log.warning("smart_wallets positions failed: %s", exc)
+
     return response.json({
         "day": day_dt.date().isoformat(),
         "selector": selector.summary(),
+        "token": token,
         "wallets": wallets,
         "as_of_metrics": as_of_metrics,
         "wallet_metrics": wallet_metrics,
+        "wallet_positions": wallet_positions,
     })
 
 

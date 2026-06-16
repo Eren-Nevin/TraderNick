@@ -122,11 +122,24 @@
   // Push data + fit.
   $effect(() => {
     if (!series || !chart) return;
-    series.setData(
-      data
-        .filter((d) => Number.isFinite(d.value))
-        .map((d) => ({ time: d.time as UTCTimestamp, value: d.value }))
-    );
+    const pts: Array<{ time: UTCTimestamp; value?: number }> = data
+      .filter((d) => Number.isFinite(d.value))
+      .map((d) => ({ time: d.time as UTCTimestamp, value: d.value }));
+    // Anchor any marker time (cutoff / lookback start) that falls OUTSIDE the
+    // data's range with a whitespace point (time only, no value). Without it,
+    // timeToCoordinate() returns null for a time not on the scale and the
+    // vertical reference line silently doesn't render — which is why the
+    // lookback line is missing for wallets whose history starts after the
+    // lookback window began.
+    if (pts.length) {
+      const minT = pts[0].time as number;
+      const maxT = pts[pts.length - 1].time as number;
+      for (const t of [cutoff, lookbackStart]) {
+        if (t != null && (t < minT || t > maxT)) pts.push({ time: t as UTCTimestamp });
+      }
+      pts.sort((a, b) => (a.time as number) - (b.time as number));
+    }
+    series.setData(pts as { time: UTCTimestamp; value: number }[]);
     chart.timeScale().fitContent();
   });
 </script>

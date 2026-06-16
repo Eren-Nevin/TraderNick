@@ -32,6 +32,9 @@
     asOfMetrics?: AsOfMetric[];
     /** address → { metricKey → value } as the selector computed it on `day`. */
     walletMetrics?: Record<string, Record<string, number | null>>;
+    /** address → the wallet's chart-token position at `day` (long/short side,
+     *  token amount, USD notional, unrealized PnL). Absent = no position. */
+    walletPositions?: Record<string, { side: string; amount: number; size_usd: number; unrealized: number }>;
     /** Loading state — true while the smart_wallets fetch is in flight. */
     loading?: boolean;
     /** Error message if the fetch failed. */
@@ -49,6 +52,7 @@
     wallets,
     asOfMetrics = [],
     walletMetrics = {},
+    walletPositions = {},
     loading = false,
     error: errMsg = null,
     day = '',
@@ -87,6 +91,27 @@
 
   function coinglassUrl(w: string): string {
     return `https://www.coinglass.com/hyperliquid/${w}`;
+  }
+
+  // Collapsed-view position label before each address: the signed notional of
+  // the wallet's chart-token position at the filter day — +<notional> green for
+  // long, −<notional> red for short, gray "N/A" when there's no position.
+  function posText(w: string): string {
+    const p = walletPositions[w];
+    if (!p) return 'N/A';
+    return (p.side === 'long' ? '+' : '-') + fmtUsdTooltip(p.size_usd);
+  }
+  function posClass(w: string): string {
+    const side = walletPositions[w]?.side;
+    if (side === 'long') return 'text-emerald-400';
+    if (side === 'short') return 'text-red-400';
+    return 'text-zinc-600';
+  }
+  function posTitle(w: string): string {
+    const p = walletPositions[w];
+    const tk = token || 'token';
+    if (!p) return `No ${tk} position on ${day}`;
+    return `${p.side === 'long' ? 'Long' : 'Short'} ${tk} · ${fmtUsdTooltip(p.size_usd)} notional · ${fmtUsdTooltip(p.unrealized)} unrealized (as of ${day})`;
   }
 
   // The "as-of" cutoff day (header day) as Unix seconds at UTC midnight —
@@ -279,6 +304,12 @@
                 <tr class="border-b border-zinc-800 hover:bg-zinc-900/60">
                   <td class="px-4 py-1.5 text-zinc-500 tabular-nums w-12">{i + 1}</td>
                   <td class="px-4 py-1.5">
+                    <!-- Signed notional of the chart-token position at the
+                         filter day (+green long / −red short / gray N/A). -->
+                    <span
+                      class="font-mono tabular-nums text-[11px] mr-2 {posClass(w)}"
+                      title={posTitle(w)}
+                    >{posText(w)}</span>
                     <!-- Anchor so middle-click + Ctrl-click open the
                          Coinglass URL via the browser's default new-tab
                          behaviour. Left-click is intercepted and copies. -->
@@ -333,6 +364,42 @@
                               </div>
                             {/each}
                           </div>
+                        </div>
+                      {/if}
+                      {#if token}
+                        <!-- The wallet's position in the chart token AS OF the
+                             filter day (the current position at filter time). -->
+                        <div class="mb-3">
+                          <div class="text-[10px] uppercase tracking-wide text-zinc-500 mb-1.5">
+                            Position at {day} · {token}
+                          </div>
+                          {#if walletPositions[w]}
+                            {@const p = walletPositions[w]}
+                            <div class="grid grid-cols-4 gap-2 text-[11px]">
+                              <div class="rounded bg-zinc-900/70 px-2 py-1.5">
+                                <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Side</div>
+                                <div class={p.side === 'long' ? 'text-emerald-300' : 'text-red-300'}>
+                                  {p.side === 'long' ? 'Long' : 'Short'}
+                                </div>
+                              </div>
+                              <div class="rounded bg-zinc-900/70 px-2 py-1.5">
+                                <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Notional</div>
+                                <div class="text-zinc-200">{fmtUsdTooltip(p.size_usd)}</div>
+                              </div>
+                              <div class="rounded bg-zinc-900/70 px-2 py-1.5">
+                                <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Size</div>
+                                <div class="text-zinc-200">{fmtAmountTooltip(p.amount)} {token}</div>
+                              </div>
+                              <div class="rounded bg-zinc-900/70 px-2 py-1.5">
+                                <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Unrealized</div>
+                                <div class={p.unrealized >= 0 ? 'text-emerald-300' : 'text-red-300'}>
+                                  {fmtUsdTooltip(p.unrealized)}
+                                </div>
+                              </div>
+                            </div>
+                          {:else}
+                            <div class="text-zinc-500 text-[11px]">No open {token} position on {day}.</div>
+                          {/if}
                         </div>
                       {/if}
                       {#if pnlLoading}

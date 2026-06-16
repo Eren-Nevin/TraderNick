@@ -4144,6 +4144,8 @@
   // clicked day (e.g. Sharpe annualized), shown in the dialog's stats area.
   let walletsDialogAsOf = $state<Array<{ key: string; label: string; scope: string; lookback: number }>>([]);
   let walletsDialogMetrics = $state<Record<string, Record<string, number | null>>>({});
+  // Per-wallet position in the chart token at the filter day (long/short/none).
+  let walletsDialogPositions = $state<Record<string, { side: string; amount: number; size_usd: number; unrealized: number }>>({});
   let walletsFetchCtl: AbortController | null = null;
 
   async function openSmartWalletsDialog(timeSec: number) {
@@ -4155,6 +4157,7 @@
     walletsDialogList = [];
     walletsDialogAsOf = [];
     walletsDialogMetrics = {};
+    walletsDialogPositions = {};
     walletsDialogError = null;
     walletsDialogLoading = true;
     walletsDialogOpen = true;
@@ -4176,6 +4179,7 @@
       walletsDialogList = (body.wallets ?? []) as string[];
       walletsDialogAsOf = (body.as_of_metrics ?? []) as Array<{ key: string; label: string; scope: string; lookback: number }>;
       walletsDialogMetrics = (body.wallet_metrics ?? {}) as Record<string, Record<string, number | null>>;
+      walletsDialogPositions = (body.wallet_positions ?? {}) as Record<string, { side: string; amount: number; size_usd: number; unrealized: number }>;
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') {
         walletsDialogError = e instanceof Error ? e.message : String(e);
@@ -6734,6 +6738,7 @@
   wallets={walletsDialogList}
   asOfMetrics={walletsDialogAsOf}
   walletMetrics={walletsDialogMetrics}
+  walletPositions={walletsDialogPositions}
   loading={walletsDialogLoading}
   error={walletsDialogError}
   day={walletsDialogDay}

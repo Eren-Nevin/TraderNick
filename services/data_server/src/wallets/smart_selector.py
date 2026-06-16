@@ -1234,32 +1234,48 @@ class SmartSelector:
             kind_scopes = sorted({(k, s) for (k, s, _) in sharpe_combos})
             total_scopes = sorted({s for (k, s, _) in sharpe_combos if k == "total"})
 
-            # EOD unrealized level per (wallet, day) for the `total` kind. Reach
-            # back sharpe_max+2 days so the earliest in-window day has a prior
-            # day to diff against. Token-prefiltered when only token scope.
+            # Per-(wallet, day) EOD unrealized DELTA for the `total` kind. The
+            # delta diffs against the previous PRESENT snapshot (lagInFrame over
+            # the wallet's EOD days), NOT the fixed calendar d−1: the EOD series
+            # has gaps (missing snapshot days), and diffing against a 0-filled
+            # d−1 would mis-attribute the whole accumulated unrealized level as a
+            # single-day move. Reach back sharpe_max+2 days so the earliest
+            # in-window day has a prior snapshot. Token-prefiltered when only
+            # token scope. (Closing a position books its PnL as realized, so the
+            # realized delta + this unrealized delta sum to the true equity move.)
             if total_scopes:
-                eod_parts: list[str] = []
+                lvl_parts: list[str] = []
                 if "g" in total_scopes:
-                    eod_parts.append("sum(eod) AS unreal_g")
+                    lvl_parts.append("sum(eod) AS unreal_g")
                 if "t" in total_scopes:
-                    eod_parts.append("sumIf(eod, token = {sel_token:String}) AS unreal_t")
+                    lvl_parts.append("sumIf(eod, token = {sel_token:String}) AS unreal_t")
+                delta_parts = [
+                    f"unreal_{s} - lagInFrame(unreal_{s}, 1, 0) OVER w AS unreal_delta_{s}"
+                    for s in total_scopes
+                ]
                 eod_tok_filter = ("              AND token = {sel_token:String}\n"
                                   if total_scopes == ["t"] else "")
                 ctes.append(
                     "eod_unreal_per_day AS (\n"
-                    "            SELECT day AS d, wallet,\n"
-                    "                   " + ",\n                   ".join(eod_parts) + "\n"
+                    "            SELECT d, wallet,\n"
+                    "                   " + ",\n                   ".join(delta_parts) + "\n"
                     "            FROM (\n"
-                    "                SELECT day, wallet, token, side,\n"
-                    "                       argMaxMerge(pnl_state) AS eod\n"
-                    "                FROM tradernick.hl_position_history_eod_wallet\n"
-                    "                WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(sharpe_max + 2) + " DAY\n"
-                    "                  AND day <  toDate({sel_until:DateTime})\n"
-                    + eod_tok_filter +
-                    f"                  {HIP3_EXCLUDE}\n"
-                    "                GROUP BY day, wallet, token, side\n"
+                    "                SELECT day AS d, wallet,\n"
+                    "                       " + ",\n                       ".join(lvl_parts) + "\n"
+                    "                FROM (\n"
+                    "                    SELECT day, wallet, token, side,\n"
+                    "                           argMaxMerge(pnl_state) AS eod\n"
+                    "                    FROM tradernick.hl_position_history_eod_wallet\n"
+                    "                    WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(sharpe_max + 2) + " DAY\n"
+                    "                      AND day <  toDate({sel_until:DateTime})\n"
+                    + ("        " + eod_tok_filter if eod_tok_filter else "") +
+                    f"                      {HIP3_EXCLUDE}\n"
+                    "                    GROUP BY day, wallet, token, side\n"
+                    "                )\n"
+                    "                GROUP BY day, wallet\n"
                     "            )\n"
-                    "            GROUP BY day, wallet\n"
+                    "            WINDOW w AS (PARTITION BY wallet ORDER BY d ASC\n"
+                    "                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)\n"
                     "        )"
                 )
 
@@ -1271,9 +1287,8 @@ class SmartSelector:
             for (k, s) in kind_scopes:
                 if k == "realized":
                     pnl = f"th.daily_pnl_{s}"
-                else:  # total: realized delta + (unreal[d] − unreal[d−1])
-                    pnl = (f"(th.daily_pnl_{s} + (coalesce(u.unreal_{s}, 0) "
-                           f"- coalesce(up.unreal_{s}, 0)))")
+                else:  # total: realized delta + mark-to-market unrealized delta
+                    pnl = f"(th.daily_pnl_{s} + coalesce(u.unreal_delta_{s}, 0))"
                 ret_day_parts.append(
                     f"if(oi.day_avg_oi_{s} > 0, {pnl} / oi.day_avg_oi_{s}, 0) "
                     f"AS daily_return_{k}_{s}")
@@ -1281,9 +1296,7 @@ class SmartSelector:
             if total_scopes:
                 eod_joins = (
                     "\n            LEFT JOIN eod_unreal_per_day u "
-                    "ON u.d = th.d AND u.wallet = th.wallet"
-                    "\n            LEFT JOIN eod_unreal_per_day up "
-                    "ON up.d = th.d - 1 AND up.wallet = th.wallet")
+                    "ON u.d = th.d AND u.wallet = th.wallet")
             ctes.append(
                 "returns_per_wallet_day AS (\n"
                 "            SELECT th.d AS d, th.wallet AS wallet,\n"
