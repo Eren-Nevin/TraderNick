@@ -101,7 +101,7 @@
   // window (cutoff − lookback days) so the chart shows exactly the span the
   // (annualized) Sharpe was computed over, relative to the filter day.
   let sharpeLookback = $derived(
-    asOfMetrics.find((m) => m.key === 'sharpe')?.lookback ?? null
+    asOfMetrics.find((m) => m.key === 'sharpe' || m.key === 'sharpe_realized')?.lookback ?? null
   );
   let lookbackStart = $derived(
     cutoff != null && sharpeLookback != null ? cutoff - sharpeLookback * 86_400 : null

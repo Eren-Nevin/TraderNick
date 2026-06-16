@@ -110,27 +110,30 @@ class MetricDef:
     column_sql: str
 
 
-# Return-Sharpe expressions. A textbook return-Sharpe: mean / population-stddev
-# of DAILY RETURNS over the lookback, where return[d] = that day's realized PnL
-# divided by the day's average total OI in USD (return on capital deployed).
-# We carry per-(scope,lookback) running sums from the returns_trailing CTE —
-# ret_sum = Σreturn, ret_sumsq = Σreturn², ret_cnt = #invested days — so mean =
-# ret_sum/ret_cnt and population variance = ret_sumsq/ret_cnt − mean² (no array
-# needed). Require ≥2 days and var>0, else 0 (guards constant / single-day
-# series from ±inf). The annualized variant scales the daily ratio by √365
-# (HL perps trade 24/7). `{s}` expands to e.g. `g_l7` so the columns land on the
-# lookback-tagged `combined` projections (ret_sum_g_l7, …).
-# `{nd}` is the per-criterion minimum invested-days threshold (a small-sample
-# guard against the Sharpe blowing up when a wallet has only a couple of
-# near-identical daily returns → ~0 stddev). It expands to a literal int via
-# _metric_expr; below the threshold the Sharpe is 0. Default is 2 (the math
-# minimum — stddev needs ≥2 points), so existing filters are unchanged; the
-# user raises it (e.g. 20) to require a real track record.
-_RET_MEAN = "(ret_sum_{s} / ret_cnt_{s})"
-_RET_VAR = "(ret_sumsq_{s} / ret_cnt_{s} - pow(ret_sum_{s} / ret_cnt_{s}, 2))"
-# Single Sharpe = the annualized daily return-Sharpe (× √365).
-_SHARPE_EXPR = ("if(ret_cnt_{s} >= {nd} AND " + _RET_VAR + " > 0, "
-                + "(" + _RET_MEAN + " / sqrt(" + _RET_VAR + ")) * sqrt(365), 0)")
+# Return-Sharpe expressions. An annualized return-Sharpe: mean / population-
+# stddev of DAILY RETURNS over the lookback × √365, where return[d] = that day's
+# PnL / the day's average total OI in USD (return on capital deployed). Two PnL
+# "kinds":
+#   realized — daily realized-PnL delta only.
+#   total    — realized delta + mark-to-market unrealized delta (the day-over-
+#              day change in open-position PnL), i.e. the true equity return.
+# Per (kind, scope, lookback) the returns_trailing CTE carries running sums —
+# ret_sum_{kind} = Σreturn, ret_sumsq_{kind} = Σreturn², ret_cnt_{kind} = #days —
+# so mean = ret_sum/ret_cnt and population variance = ret_sumsq/ret_cnt − mean²
+# (no array needed). `{s}` expands to e.g. `g_l7` so the columns land on the
+# lookback-tagged `combined` projections (ret_sum_total_g_l7, …). `{nd}` is the
+# per-criterion minimum invested-days threshold (small-sample guard): below it
+# the Sharpe is 0. Default 2 (the math minimum — stddev needs ≥2 points).
+def _sharpe_expr(kind: str) -> str:
+    mean = f"(ret_sum_{kind}_{{s}} / ret_cnt_{kind}_{{s}})"
+    var = (f"(ret_sumsq_{kind}_{{s}} / ret_cnt_{kind}_{{s}} "
+           f"- pow(ret_sum_{kind}_{{s}} / ret_cnt_{kind}_{{s}}, 2))")
+    return (f"if(ret_cnt_{kind}_{{s}} >= {{nd}} AND {var} > 0, "
+            f"({mean} / sqrt({var})) * sqrt(365), 0)")
+
+
+_SHARPE_REALIZED = _sharpe_expr("realized")
+_SHARPE_TOTAL = _sharpe_expr("total")
 
 
 # Columns available in `combined` after source CTEs are materialised. Suffix
@@ -190,14 +193,19 @@ METRIC_REGISTRY: dict[str, MetricDef] = {
         frozenset({SRC_SIDED}),
         "short_pnl_{s}",
     ),
-    # Return-Sharpe (annualized): mean / population-stddev of daily RETURNS over
-    # the lookback × √365, where return[d] = daily realized PnL / that day's avg
-    # total OI ($). Needs both trade_history (PnL) and OI (capital base); the
-    # returns CTEs join them per (day, wallet). See _SHARPE_EXPR above.
+    # Return-Sharpe (annualized). `sharpe` uses TOTAL PnL (realized + mark-to-
+    # market unrealized delta); `sharpe_realized` uses realized PnL only. Both
+    # divide daily PnL by that day's avg total OI ($) and need trade_history +
+    # OI; the `total` kind additionally reads EOD unrealized. See _sharpe_expr.
     "sharpe": MetricDef(
-        "sharpe", "Sharpe ratio",
+        "sharpe", "Sharpe (total)",
         frozenset({SRC_TRADE_HISTORY, SRC_OI}),
-        _SHARPE_EXPR,
+        _SHARPE_TOTAL,
+    ),
+    "sharpe_realized": MetricDef(
+        "sharpe_realized", "Sharpe (realized)",
+        frozenset({SRC_TRADE_HISTORY, SRC_OI}),
+        _SHARPE_REALIZED,
     ),
     # ── Average OI over the lookback (token + USD) ───────────────────
     # Source columns (per-scope) emitted by the SRC_OI trailing CTE:
@@ -435,12 +443,13 @@ class SmartSelector:
         scope = obj.get("scope", "global")
         if scope not in ("global", "token"):
             raise ValueError("selector.scope must be 'global' or 'token'")
-        # Legacy alias: the separate daily/annualized Sharpe metrics were
-        # collapsed into a single annualized `sharpe`. Migrate old persisted
-        # wires so they don't fail validation.
+        # Legacy alias: `sharpe_annualized` was the annualized realized Sharpe,
+        # now named `sharpe_realized`. Migrate old persisted wires so they keep
+        # their (realized) meaning and don't fail validation. (`sharpe` now
+        # means the TOTAL-PnL Sharpe — not migrated.)
         sort_by = obj.get("sort_by")
         if sort_by == "sharpe_annualized":
-            sort_by = "sharpe"
+            sort_by = "sharpe_realized"
         if has_criteria:
             if not isinstance(sort_by, str) or sort_by not in METRIC_REGISTRY:
                 raise ValueError(f"selector.sort_by must be one of: {list(METRIC_REGISTRY)}")
@@ -452,8 +461,8 @@ class SmartSelector:
             if not isinstance(c, dict):
                 raise ValueError(f"selector.criteria[{i}] must be an object")
             metric = c.get("metric")
-            if metric == "sharpe_annualized":  # legacy alias → unified `sharpe`
-                metric = "sharpe"
+            if metric == "sharpe_annualized":  # legacy alias → realized Sharpe
+                metric = "sharpe_realized"
             if metric not in METRIC_REGISTRY:
                 raise ValueError(f"selector.criteria[{i}].metric unknown: {metric}")
             cmin = c.get("min")
@@ -609,21 +618,22 @@ class SmartSelector:
                 needs.add((src, eff, lb))
         return needs
 
-    # Metrics whose value is a return-Sharpe built from the daily-return series
-    # (returns_trailing). Both share the same per-(scope,lookback) running sums.
-    _SHARPE_METRICS = frozenset({"sharpe"})
+    # Sharpe metrics → the daily-return kind their running sums use.
+    _SHARPE_KIND = {"sharpe": "total", "sharpe_realized": "realized"}
 
-    def _sharpe_combos(self) -> set[tuple[str, int]]:
-        """(scope-letter, lookback) combos where a Sharpe metric is referenced
-        (sort or an active criterion). Drives emission of the returns CTEs +
-        the per-combo running-sum columns the Sharpe expressions read."""
-        out: set[tuple[str, int]] = set()
-        if self.sort_by in self._SHARPE_METRICS:
-            out.add((self._suffix(self._sort_scope()), self._sort_lookback()))
+    def _sharpe_combos(self) -> set[tuple[str, str, int]]:
+        """(kind, scope-letter, lookback) combos where a Sharpe metric is
+        referenced (sort or an active criterion). Drives emission of the returns
+        CTEs + the per-combo running-sum columns the Sharpe expressions read."""
+        out: set[tuple[str, str, int]] = set()
+        if self.sort_by in self._SHARPE_KIND:
+            out.add((self._SHARPE_KIND[self.sort_by],
+                     self._suffix(self._sort_scope()), self._sort_lookback()))
         for c in self.criteria:
-            if c.disabled or c.metric not in self._SHARPE_METRICS:
+            if c.disabled or c.metric not in self._SHARPE_KIND:
                 continue
-            out.add((self._suffix(self._effective_scope(c.scope)),
+            out.add((self._SHARPE_KIND[c.metric],
+                     self._suffix(self._effective_scope(c.scope)),
                      self._effective_lookback(c.lookback)))
         return out
 
@@ -1207,25 +1217,73 @@ class SmartSelector:
             )
 
         # ── returns (daily-return series for the Sharpe metrics) ────
-        # return[d] = daily realized PnL (trade_history) / that day's avg total
-        # OI in $ (position_history). Joins the per-day PnL deltas with the
-        # per-day avg OI, INNER so only days the wallet actually held capital
-        # (OI>0) count. returns_trailing then keeps per-(scope,lookback) running
-        # sums (Σreturn, Σreturn², #days) so the Sharpe expressions can compute
-        # mean / population-stddev without materialising an array.
+        # return[d] = daily PnL / that day's avg total OI ($). Two PnL kinds:
+        #   realized — daily realized-PnL delta (daily_per_wallet) only.
+        #   total    — realized delta + mark-to-market unrealized delta
+        #              (EOD unrealized[d] − unrealized[d−1], from
+        #              hl_position_history_eod_wallet). When a position closes,
+        #              its unrealized converts to realized, so the two deltas sum
+        #              to the true day-over-day equity change with no double
+        #              count. INNER joined to OI so only days the wallet held
+        #              capital (OI>0) count; returns_trailing keeps per-(kind,
+        #              scope,lookback) running sums (Σr, Σr², #days).
         sharpe_combos = self._sharpe_combos()
         if sharpe_combos:
-            sharpe_max = max((L for (_, L) in sharpe_combos), default=1)
-            sharpe_scopes = sorted({s for (s, _) in sharpe_combos})
+            sharpe_max = max((L for (_, _, L) in sharpe_combos), default=1)
+            sharpe_scopes = sorted({s for (_, s, _) in sharpe_combos})
+            kind_scopes = sorted({(k, s) for (k, s, _) in sharpe_combos})
+            total_scopes = sorted({s for (k, s, _) in sharpe_combos if k == "total"})
+
+            # EOD unrealized level per (wallet, day) for the `total` kind. Reach
+            # back sharpe_max+2 days so the earliest in-window day has a prior
+            # day to diff against. Token-prefiltered when only token scope.
+            if total_scopes:
+                eod_parts: list[str] = []
+                if "g" in total_scopes:
+                    eod_parts.append("sum(eod) AS unreal_g")
+                if "t" in total_scopes:
+                    eod_parts.append("sumIf(eod, token = {sel_token:String}) AS unreal_t")
+                eod_tok_filter = ("              AND token = {sel_token:String}\n"
+                                  if total_scopes == ["t"] else "")
+                ctes.append(
+                    "eod_unreal_per_day AS (\n"
+                    "            SELECT day AS d, wallet,\n"
+                    "                   " + ",\n                   ".join(eod_parts) + "\n"
+                    "            FROM (\n"
+                    "                SELECT day, wallet, token, side,\n"
+                    "                       argMaxMerge(pnl_state) AS eod\n"
+                    "                FROM tradernick.hl_position_history_eod_wallet\n"
+                    "                WHERE day >= toDate({sel_since:DateTime}) - INTERVAL " + str(sharpe_max + 2) + " DAY\n"
+                    "                  AND day <  toDate({sel_until:DateTime})\n"
+                    + eod_tok_filter +
+                    f"                  {HIP3_EXCLUDE}\n"
+                    "                GROUP BY day, wallet, token, side\n"
+                    "            )\n"
+                    "            GROUP BY day, wallet\n"
+                    "        )"
+                )
+
             avg_oi_parts = [
                 f"if(n_buckets > 0, s_total_oi_usd_{s} / n_buckets, 0) AS day_avg_oi_{s}"
                 for s in sharpe_scopes
             ]
-            ret_day_parts = [
-                f"if(oi.day_avg_oi_{s} > 0, th.daily_pnl_{s} / oi.day_avg_oi_{s}, 0) "
-                f"AS daily_return_{s}"
-                for s in sharpe_scopes
-            ]
+            ret_day_parts: list[str] = []
+            for (k, s) in kind_scopes:
+                if k == "realized":
+                    pnl = f"th.daily_pnl_{s}"
+                else:  # total: realized delta + (unreal[d] − unreal[d−1])
+                    pnl = (f"(th.daily_pnl_{s} + (coalesce(u.unreal_{s}, 0) "
+                           f"- coalesce(up.unreal_{s}, 0)))")
+                ret_day_parts.append(
+                    f"if(oi.day_avg_oi_{s} > 0, {pnl} / oi.day_avg_oi_{s}, 0) "
+                    f"AS daily_return_{k}_{s}")
+            eod_joins = ""
+            if total_scopes:
+                eod_joins = (
+                    "\n            LEFT JOIN eod_unreal_per_day u "
+                    "ON u.d = th.d AND u.wallet = th.wallet"
+                    "\n            LEFT JOIN eod_unreal_per_day up "
+                    "ON up.d = th.d - 1 AND up.wallet = th.wallet")
             ctes.append(
                 "returns_per_wallet_day AS (\n"
                 "            SELECT th.d AS d, th.wallet AS wallet,\n"
@@ -1235,17 +1293,18 @@ class SmartSelector:
                 "                SELECT d, wallet,\n"
                 "                       " + ",\n                       ".join(avg_oi_parts) + "\n"
                 "                FROM oi_per_day\n"
-                "            ) oi ON oi.d = th.d AND oi.wallet = th.wallet\n"
+                "            ) oi ON oi.d = th.d AND oi.wallet = th.wallet"
+                + eod_joins + "\n"
                 "        )"
             )
             ret_trail_parts: list[str] = []
-            for (s, L) in sorted(sharpe_combos):
+            for (k, s, L) in sorted(sharpe_combos):
                 w = f"src.d >= target.d - {L}"
+                r = f"src.daily_return_{k}_{s}"
                 ret_trail_parts += [
-                    f"sumIf(src.daily_return_{s}, {w}) AS ret_sum_{s}_l{L}",
-                    f"sumIf(src.daily_return_{s} * src.daily_return_{s}, {w}) "
-                    f"AS ret_sumsq_{s}_l{L}",
-                    f"countIf({w}) AS ret_cnt_{s}_l{L}",
+                    f"sumIf({r}, {w}) AS ret_sum_{k}_{s}_l{L}",
+                    f"sumIf({r} * {r}, {w}) AS ret_sumsq_{k}_{s}_l{L}",
+                    f"countIf({w}) AS ret_cnt_{k}_{s}_l{L}",
                 ]
             ctes.append(
                 "returns_trailing AS (\n"
@@ -1315,10 +1374,10 @@ class SmartSelector:
                 f"\n            LEFT JOIN returns_trailing rs "
                 f"ON rs.day = {spine_alias}.day "
                 f"AND rs.wallet = {spine_alias}.wallet")
-            for (s, L) in sorted(sharpe_combos):
+            for (k, s, L) in sorted(sharpe_combos):
                 for base in ("ret_sum", "ret_sumsq", "ret_cnt"):
                     combined_cols.append(
-                        f"coalesce(rs.{base}_{s}_l{L}, 0) AS {base}_{s}_l{L}")
+                        f"coalesce(rs.{base}_{k}_{s}_l{L}, 0) AS {base}_{k}_{s}_l{L}")
 
         ctes.append(
             "combined AS (\n"

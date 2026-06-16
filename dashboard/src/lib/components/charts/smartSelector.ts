@@ -23,6 +23,7 @@ export type SmartMetricKey =
   | 'long_pnl'
   | 'short_pnl'
   | 'sharpe'
+  | 'sharpe_realized'
   | 'avg_total_oi_token'
   | 'avg_long_oi_token'
   | 'avg_short_oi_token'
@@ -98,7 +99,8 @@ export const METRIC_CATALOGUE: ReadonlyArray<SmartMetricDef> = [
   { key: 'trade_count',             label: 'Trade count',               kind: 'count' },
   { key: 'long_pnl',                label: 'Long PnL ($)',              kind: 'usd' },
   { key: 'short_pnl',               label: 'Short PnL ($)',             kind: 'usd' },
-  { key: 'sharpe',                  label: 'Sharpe ratio',              kind: 'ratio', usesMinDays: true },
+  { key: 'sharpe',                  label: 'Sharpe (total)',            kind: 'ratio', usesMinDays: true },
+  { key: 'sharpe_realized',         label: 'Sharpe (realized)',         kind: 'ratio', usesMinDays: true },
 ];
 
 export function metricDef(key: string): SmartMetricDef | undefined {
@@ -161,7 +163,8 @@ export function sanitizeSmartSelectorState(raw: unknown): SmartSelectorState {
   const r = raw as Record<string, unknown>;
   // Legacy alias: the daily/annualized Sharpe pair was collapsed into a single
   // (annualized) `sharpe`. Migrate persisted state so old filters still load.
-  const migrateMetric = (m: unknown) => (m === 'sharpe_annualized' ? 'sharpe' : m);
+  // `sharpe_annualized` was the annualized realized Sharpe → now `sharpe_realized`.
+  const migrateMetric = (m: unknown) => (m === 'sharpe_annualized' ? 'sharpe_realized' : m);
   const out: SmartSelectorState = { ...d };
   if (typeof r.lookback === 'number' && r.lookback >= 1 && r.lookback <= 180) {
     out.lookback = Math.round(r.lookback);
