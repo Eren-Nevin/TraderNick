@@ -4434,6 +4434,10 @@
       // 1 decimal is enough; the underlying ratio is noisy.
       return (v: number) => `${(v * 100).toFixed(1)}%`;
     }
+    if (o.kind === 'volume') {
+      // 'volume_usd' = dollar notional; 'volume' = token amount (coin count).
+      return o.seriesKey === 'volume' ? fmtAmountTooltip : fmtUsdTooltip;
+    }
     if (o.kind === 'ohlcv' || o.kind === 'price') {
       // Volume is USD when the host renders it that way; close/open/high/low
       // are price (USD for fiat-quoted markets). Both formatters round to
