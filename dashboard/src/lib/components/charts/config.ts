@@ -298,6 +298,7 @@ export type ChartKind =
   | 'price_ratio'
   | 'oi'
   | 'vol_oi'
+  | 'volume'
   | 'fr'
   | 'book_depth'
   | 'bs'
@@ -425,6 +426,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   price_ratio: 'Price Ratio',
   oi: 'Open Interest',
   vol_oi: 'Vol / OI',
+  volume: 'Volume',
   fr: 'Funding Rate',
   book_depth: 'Book Depth',
   bs: 'Taker Buyer vs Seller',
@@ -1177,7 +1179,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Exchange — Binance OHLCV + derivatives. The chart's in-built exchange
   // selector lets the user flip these to Hyperliquid in place, so we list
   // them once under Exchange rather than duplicating under Perp.
-  if (kind === 'ohlcv' || kind === 'price' || kind === 'price_ratio' || kind === 'pc' || kind === 'oi' || kind === 'vol_oi' || kind === 'fr'
+  if (kind === 'ohlcv' || kind === 'price' || kind === 'price_ratio' || kind === 'pc' || kind === 'oi' || kind === 'vol_oi' || kind === 'volume' || kind === 'fr'
       || kind === 'book_depth'
       || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls') {
     return 'Exchange';
@@ -2213,6 +2215,12 @@ export function newChartInstance(
     base.exchange = 'binance';
     base.oiHlDisplay = 'total';
     base.oiUnit = 'usd';
+  }
+  if (kind === 'volume') {
+    // Traded volume per bucket from {exchange}_ohlcv_1m (volume + volume_usd).
+    // USD notional by default; the toolbar flips to token amount via volumeUnit.
+    base.exchange = 'binance';
+    base.volumeUnit = 'usd';
   }
   if (kind === 'hl_smart_oi') {
     base.exchange = 'hl';

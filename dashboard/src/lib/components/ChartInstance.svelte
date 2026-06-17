@@ -786,8 +786,10 @@
         : (instance.chain ?? '');
       return `${effectiveKind}|${cPart}|${instance.interval}`;
     }
-    if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'ls' || instance.kind === 'book_depth') {
+    if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'volume' || instance.kind === 'ls' || instance.kind === 'book_depth') {
       // Exchange selector busts the cache so flipping Binance ↔ HL re-fetches.
+      // volumeUnit (usd/token) is display-only — both come in the /ohlcv
+      // response — so it's intentionally NOT in the key.
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
     }
@@ -2332,10 +2334,13 @@
         return;
       }
       switch (instance.kind) {
-        case 'ohlcv': {
-          // OHLCV chart routes its read to whichever exchange the
-          // instance is pinned to. Default 'binance' for back-compat;
-          // 'hl' reads from tradernick.hl_ohlcv_1m server-side.
+        case 'ohlcv':
+        case 'volume': {
+          // OHLCV + Volume charts both read the per-bucket candle series
+          // (which carries volume + volume_usd) from whichever exchange the
+          // instance is pinned to. Default 'binance' for back-compat; 'hl'
+          // reads from tradernick.hl_ohlcv_1m server-side. The volume chart
+          // just plots the volume / volume_usd field per the unit toggle.
           const ohlcvQs = new URLSearchParams(baseQS);
           ohlcvQs.set('exchange', instance.exchange ?? 'binance');
           url = `/api/ohlcv?${ohlcvQs}`;
@@ -4675,6 +4680,21 @@
   let lsLinesM           = $derived(overlayLinesD.length === 0 ? lsLinesD : [...lsLinesD, ...overlayLinesD]);
   let transferLinesM     = $derived(overlayLinesD.length === 0 ? transferLinesD : [...transferLinesD, ...overlayLinesD]);
   let exchangeFlowLinesM = $derived(overlayLinesD.length === 0 ? exchangeFlowLinesD : [...exchangeFlowLinesD, ...overlayLinesD]);
+  // Volume chart: a single line off the /ohlcv candle series — volume_usd
+  // (dollar notional) or volume (token amount) per the unit toggle.
+  let volumeLinesD = $derived([
+    {
+      key: 'volume',
+      label: (instance.volumeUnit ?? 'usd') === 'token'
+        ? `Volume (${instance.token})` : 'Volume ($)',
+      color: '#06b6d4',
+      // Param typed as a Datum-compatible shape (extra fields optional) so the
+      // array satisfies LineChart's Line[] — a bare `Candle` has required
+      // OHLC fields and isn't a supertype of Datum.
+      compute: (d: { time: number; volume?: number; volume_usd?: number }) =>
+        (instance.volumeUnit ?? 'usd') === 'token' ? (d.volume ?? 0) : (d.volume_usd ?? 0)
+    }
+  ]);
   let hlUnrealizedLinesM = $derived(overlayLinesD.length === 0 ? hlUnrealizedLinesD : [...hlUnrealizedLinesD, ...overlayLinesD]);
   let hlPnlSplitLinesM   = $derived(overlayLinesD.length === 0 ? hlPnlSplitLinesD : [...hlPnlSplitLinesD, ...overlayLinesD]);
   let hlVaultFlowLinesM  = $derived(overlayLinesD.length === 0 ? hlVaultFlowLinesD : [...hlVaultFlowLinesD, ...overlayLinesD]);
@@ -5534,7 +5554,7 @@
           {/if}
         </select>
       {:else}
-        {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'pc' || instance.kind === 'ls'}
+        {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'volume' || instance.kind === 'pc' || instance.kind === 'ls'}
           <!-- Exchange selector picks the data source. ohlcv → *_ohlcv_1m,
                fr → binance_funding_rate / hl_funding, bs/sz → *_raw_trades /
                hl_trades, pc → *_ohlcv_1m close, ls → binance_long_short_ratios /
@@ -5613,6 +5633,19 @@
             onchange={(e) => (instance.oiUnit = e.currentTarget.value as 'usd' | 'token')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="Display OI as dollar notional or token amount"
+          >
+            <option value="usd">USD</option>
+            <option value="token">{instance.token ?? 'Token'}</option>
+          </select>
+        {/if}
+        {#if instance.kind === 'volume'}
+          <!-- Volume unit: dollar notional (sum of per-1m volume×close) vs
+               token amount. Reuses the shared volumeUnit field. -->
+          <select
+            value={instance.volumeUnit ?? 'usd'}
+            onchange={(e) => (instance.volumeUnit = e.currentTarget.value as 'usd' | 'token')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Display volume as dollar notional or token amount"
           >
             <option value="usd">USD</option>
             <option value="token">{instance.token ?? 'Token'}</option>
@@ -6394,6 +6427,23 @@
         formatY2={showWalletCount ? ((v: number) => Math.round(v).toString()) : undefined}
         formatTooltip2={showWalletCount ? ((v: number) => `${Math.round(v)} wallets`) : undefined}
         onClick={showWalletCount ? ((t: number) => openSmartWalletsDialog(t)) : undefined}
+      />
+    {:else if instance.kind === 'volume'}
+      <!-- Traded volume per bucket. USD notional or token amount per the
+           volumeUnit toggle, on the same line-chart path as OI. -->
+      {@const volUseToken = (instance.volumeUnit ?? 'usd') === 'token'}
+      <LineChart
+        data={data as Candle[]}
+        lines={volumeLinesD}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={volUseToken ? fmtAmountAxis : fmtUsdAxis}
+        formatTooltip={volUseToken ? fmtAmountTooltip : fmtUsdTooltip}
       />
     {:else if instance.kind === 'fr'}
       <SignedBarChart
