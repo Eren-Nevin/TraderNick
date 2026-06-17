@@ -42,8 +42,7 @@
     fmtRatio,
     lookbackWindow,
     maArray,
-    sizeLines,
-    sizeSeries,
+    sizeLineSeries,
     unixSec,
     weekBoundariesSec,
     AAVE_V3_CHART_KINDS,
@@ -3591,18 +3590,17 @@
     ...cumulativeLines
   ]);
 
-  // bs / sz: bar series (Point toggle controls visibility)
+  // bs: stacked bar series (Point toggle controls visibility).
   let bsBars = $derived(instance.showPoint ? BUYER_SELLER_SERIES : []);
-  let szBars = $derived(
-    instance.showPoint ? sizeSeries(instance.under ?? 10000, instance.over ?? 100000) : []
-  );
-
   let bsLines = $derived(anyMaEnabled ? [...BUYER_SELLER_LINES, ...cumulativeLines] : []);
-  let szLinesD = $derived(
-    anyMaEnabled
-      ? [...sizeLines(instance.under ?? 10000, instance.over ?? 100000), ...cumulativeLines]
-      : []
-  );
+
+  // sz (Volume by Size) renders as LINES — three absolute-USD bucket lines
+  // (small / mid / large), not a stack. showPoint toggles the bucket lines;
+  // MA overlays (absolute small/large/total from cumulativeLines) ride along.
+  let szLinesD = $derived([
+    ...(instance.showPoint ? sizeLineSeries(instance.under ?? 10000, instance.over ?? 100000) : []),
+    ...cumulativeLines
+  ]);
   // OI lines: Binance is always the single total line. HL switches by
   // the oiHlDisplay selector — 'total' matches Binance shape exactly,
   // 'long'/'short' shows just that side, 'long_short' shows two, and
@@ -6552,9 +6550,10 @@
         vRefLines={weekVRefLines}
       />
     {:else if instance.kind === 'sz'}
-      <StackedBarChart
+      <!-- Volume by Size as independent lines (small / mid / large $), not a
+           stack — so each bucket's absolute USD reads directly off its own line. -->
+      <LineChart
         data={data as VolumeBucket[]}
-        series={szBars}
         lines={szLinesM}
         height={chartCanvasHeight}
         {xExtent}
@@ -6563,6 +6562,8 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
+        formatY={fmtUsdAxis}
+        formatTooltip={fmtUsdTooltip}
       />
     {:else if instance.kind === 'tt'}
       <LineChart
