@@ -2960,31 +2960,36 @@
           break;
         }
         case 'sz': {
+          // sz now renders absolute-USD bucket LINES, so its MAs are the
+          // absolute small/mid/large $ MAs (not share-%), keyed cum_<bucket>_<idx>
+          // and colour-matched to their bucket so the series selector's MA filter
+          // (pickMA `^cum_<key>_\d+$`) lines up.
           const arr = data as VolumeBucket[];
           const u = instance.under ?? 10000;
           const o = instance.over ?? 100000;
           const smallMA = maArray(arr.map((b) => b.small_usd), ma.length, ma.type);
+          const midMA   = maArray(arr.map((b) => b.mid_usd),   ma.length, ma.type);
           const largeMA = maArray(arr.map((b) => b.large_usd), ma.length, ma.type);
-          const totalMA = maArray(
-            arr.map((b) => b.small_usd + b.mid_usd + b.large_usd),
-            ma.length,
-            ma.type
-          );
           out.push({
-            key: `cum_small_${idx}`,
-            label: `% < $${u} ${tag}`,
-            color,
+            key: `cum_small_usd_${idx}`,
+            label: `< $${u} ${tag}`,
+            color: '#3f3f46',
             dash: SUB_DASH[0],
-            compute: (_d: VolumeBucket, i: number) =>
-              totalMA[i] > 0 ? (smallMA[i] / totalMA[i]) * 100 : 0
+            compute: (_d: VolumeBucket, i: number) => smallMA[i]
           });
           out.push({
-            key: `cum_large_${idx}`,
-            label: `% > $${o} ${tag}`,
-            color,
+            key: `cum_mid_usd_${idx}`,
+            label: `$${u}–$${o} ${tag}`,
+            color: '#3b82f6',
             dash: SUB_DASH[1],
-            compute: (_d: VolumeBucket, i: number) =>
-              totalMA[i] > 0 ? (largeMA[i] / totalMA[i]) * 100 : 0
+            compute: (_d: VolumeBucket, i: number) => midMA[i]
+          });
+          out.push({
+            key: `cum_large_usd_${idx}`,
+            label: `> $${o} ${tag}`,
+            color: '#a855f7',
+            dash: SUB_DASH[2] ?? SUB_DASH[0],
+            compute: (_d: VolumeBucket, i: number) => largeMA[i]
           });
           break;
         }
@@ -3598,8 +3603,10 @@
   // (small / mid / large), not a stack. showPoint toggles the bucket lines;
   // MA overlays (absolute small/large/total from cumulativeLines) ride along.
   let szLinesD = $derived([
-    ...(instance.showPoint ? sizeLineSeries(instance.under ?? 10000, instance.over ?? 100000) : []),
-    ...cumulativeLines
+    ...(instance.showPoint
+      ? pickSeries(sizeLineSeries(instance.under ?? 10000, instance.over ?? 100000), instance.seriesFilter)
+      : []),
+    ...pickMA(cumulativeLines, instance.seriesFilter)
   ]);
   // OI lines: Binance is always the single total line. HL switches by
   // the oiHlDisplay selector — 'total' matches Binance shape exactly,
@@ -5587,6 +5594,22 @@
             {/each}
           </select>
         {/if}
+        {#if instance.kind === 'sz'}
+          <!-- Volume-by-Size series selector: 'All' shows every bucket line;
+               picking one isolates that bucket (and its MA). Options come from
+               the same bucket catalogue so labels track the $ thresholds. -->
+          <select
+            value={instance.seriesFilter ?? 'all'}
+            onchange={(e) => (instance.seriesFilter = e.currentTarget.value)}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Which size bucket to display"
+          >
+            <option value="all">All</option>
+            {#each sizeLineSeries(instance.under ?? 10000, instance.over ?? 100000) as s (s.key)}
+              <option value={s.key}>{s.label}</option>
+            {/each}
+          </select>
+        {/if}
         {#if (instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl') || instance.kind === 'hl_smart_oi'}
           <!-- HL-only display selector. position_history carries per-wallet
                sides so we can split OI into long/short or show all three on
@@ -6541,6 +6564,7 @@
         data={data as VolumeBucket[]}
         series={bsBars}
         lines={bsLinesM}
+        bars
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}

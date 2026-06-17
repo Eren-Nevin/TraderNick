@@ -44,7 +44,8 @@
     hoverTime = null,
     onHover,
     valueFormat = 'usd' as 'usd' | 'pct',
-    pctMax = 100
+    pctMax = 100,
+    bars = false
   }: {
     data: Datum[];
     series: Series[];
@@ -56,6 +57,11 @@
     onView?: (v: View) => void;
     hoverTime?: number | null;
     onHover?: (t: number | null) => void;
+    /** Render each stacked layer as an opaque histogram bar instead of a
+     *  filled area. Areas overdraw with a gradient fill that reads as
+     *  semi-transparent when layers overlap ("one behind the other"); opaque
+     *  bars give a clean, unambiguous stack. Used by the bs chart. */
+    bars?: boolean;
     /** How the stacked series values are denominated. 'usd' (default) formats
      *  the axis/tooltip as dollars and shows a separate %-of-total column.
      *  'pct' means the values ARE percentages (e.g. a 100%-stack), so the axis
@@ -71,7 +77,7 @@
   let chart: IChartApi | null = null;
   // Stack layers, keyed by series.key. Each layer's value is the cumulative
   // top up to (and including) that series.
-  const areaSeries = new Map<string, ISeriesApi<'Area'>>();
+  const areaSeries = new Map<string, ISeriesApi<'Area'> | ISeriesApi<'Histogram'>>();
   const lineSeries = new Map<string, ISeriesApi<'Line'>>();
   let suppressViewEmit = false;
   let lastEmittedFrom: number | null = null;
@@ -193,14 +199,10 @@
     // Add layers in REVERSE so the top-most cumulative paints first.
     for (let k = n - 1; k >= 0; k--) {
       const ser = series[k];
-      const a = chart.addAreaSeries({
-        topColor: ser.color,
-        bottomColor: ser.color,
-        lineColor: ser.color,
-        lineWidth: 1,
+      const common = {
         priceScaleId: 'right',
         priceFormat: {
-          type: 'custom',
+          type: 'custom' as const,
           formatter: valueFormat === 'pct' ? fmtPct : fmtUsd,
           minMove: 0.01
         },
@@ -226,14 +228,26 @@
                 };
               },
         priceLineVisible: false,
-        lastValueVisible: false,
-        crosshairMarkerVisible: false
-      });
-      const points: AreaData[] = data.map((d, i) => ({
+        lastValueVisible: false
+      };
+      // Opaque histogram bars (bs) vs gradient-filled area (book_depth). The
+      // cumulative overdraw is identical either way; histograms just paint a
+      // solid bar so overlapping layers read as a clean stack.
+      const a = bars
+        ? chart.addHistogramSeries({ ...common, color: ser.color })
+        : chart.addAreaSeries({
+            ...common,
+            topColor: ser.color,
+            bottomColor: ser.color,
+            lineColor: ser.color,
+            lineWidth: 1,
+            crosshairMarkerVisible: false
+          });
+      const points = data.map((d, i) => ({
         time: d.time as UTCTimestamp,
         value: tops[k][i]
       }));
-      a.setData(points);
+      a.setData(points as AreaData[]);
       areaSeries.set(ser.key, a);
     }
   });
