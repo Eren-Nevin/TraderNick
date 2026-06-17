@@ -59,6 +59,46 @@ export const pagesStore = {
     return page;
   },
 
+  /** Duplicate a page — its name and ALL of its charts — and insert the copy
+   *  right after the source. Each chart gets a fresh id so the two pages don't
+   *  share per-instance state (the load cache is keyed by chart id). Returns
+   *  the new Page, or null if the source doesn't exist. */
+  duplicate(id: string, name?: string): Page | null {
+    const src = _pages.find((p) => p.id === id);
+    if (!src) return null;
+    const trimmed = (name ?? '').trim();
+    const page: Page = { id: newId(), name: trimmed || `${src.name} (copy)` };
+    if (typeof localStorage !== 'undefined') {
+      try {
+        const raw = localStorage.getItem(pageLayoutKey(id));
+        if (raw != null) {
+          let out = raw;
+          try {
+            const parsed = JSON.parse(raw);
+            if (parsed && Array.isArray(parsed.charts)) {
+              parsed.charts = parsed.charts.map((c: Record<string, unknown>) => ({
+                ...c,
+                id:
+                  typeof crypto !== 'undefined' && crypto.randomUUID
+                    ? crypto.randomUUID()
+                    : `c-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}`
+              }));
+              out = JSON.stringify(parsed);
+            }
+          } catch { /* not parseable — copy verbatim */ }
+          localStorage.setItem(pageLayoutKey(page.id), out);
+        }
+      } catch { /* ignore */ }
+    }
+    const idx = _pages.findIndex((p) => p.id === id);
+    _pages =
+      idx >= 0
+        ? [..._pages.slice(0, idx + 1), page, ..._pages.slice(idx + 1)]
+        : [..._pages, page];
+    persist();
+    return page;
+  },
+
   rename(id: string, name: string) {
     const trimmed = name.trim();
     if (!trimmed) return;

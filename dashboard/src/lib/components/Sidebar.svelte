@@ -48,6 +48,20 @@
     goto(`/dashboard/${p.id}`);
   }
 
+  function duplicatePage(id: string, ev: Event) {
+    ev.preventDefault();
+    ev.stopPropagation();
+    const p = pagesStore.duplicate(id);
+    if (!p) return;
+    // Open the copy's name for editing, then navigate to it. editingIsNew=false
+    // so cancelling keeps the duplicated page (with its "… (copy)" name) instead
+    // of discarding it.
+    editingId = p.id;
+    editingName = p.name;
+    editingIsNew = false;
+    goto(`/dashboard/${p.id}`);
+  }
+
   function commitEdit() {
     if (!editingId) return;
     const name = editingName.trim();
@@ -181,7 +195,7 @@
             title={p.name}
             class="flex items-center justify-between gap-1 rounded text-sm transition-colors {isActive
               ? 'bg-zinc-800 text-zinc-50'
-              : 'text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100'} px-3 py-2 pr-12"
+              : 'text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100'} px-3 py-2 pr-[4.5rem]"
           >
             <span class="truncate">{p.name}</span>
           </a>
@@ -193,6 +207,13 @@
               class="w-5 h-5 flex items-center justify-center rounded text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
               aria-label="Rename page"
             >✎</button>
+            <button
+              type="button"
+              title="Duplicate page (with all its charts)"
+              onclick={(e) => duplicatePage(p.id, e)}
+              class="w-5 h-5 flex items-center justify-center rounded text-xs text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+              aria-label="Duplicate page"
+            >⧉</button>
             {#if pagesStore.pages.length > 1}
               <button
                 type="button"
