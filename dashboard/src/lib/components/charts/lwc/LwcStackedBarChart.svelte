@@ -23,9 +23,11 @@
     color: string;
     compute: (d: Datum, i: number, data: Datum[]) => number;
     dash?: string;
-    /** Percent lines (scale: 'pct') go on the left axis (0..100). Value
-     *  lines (scale: 'value' or omitted) stack onto the right USD axis. */
-    scale?: 'pct' | 'value';
+    /** Percent lines (scale: 'pct') and ratio lines (scale: 'ratio') go on the
+     *  left (secondary) axis — pct formatted 0..100%, ratio as a plain number
+     *  (autoscaled). Value lines (scale: 'value' or omitted) use the right USD
+     *  axis. */
+    scale?: 'pct' | 'value' | 'ratio';
     rawValue?: (d: Datum, i: number, data: Datum[]) => number;
     rawFormat?: (v: number) => string;
     /** Unused by StackedBarChart — kept for shared Line type parity. */
@@ -118,6 +120,9 @@
 
   function fmtPct(v: number): string {
     return `${v.toFixed(0)}%`;
+  }
+  function fmtRatio(v: number): string {
+    return v.toFixed(2);
   }
 
   onMount(() => {
@@ -263,12 +268,14 @@
       }
     }
 
-    let hasPct = false;
+    let hasLeft = false;
 
     for (const ln of lines) {
-      const onPct = ln.scale === 'pct';
-      if (onPct) hasPct = true;
-      const scaleId = onPct ? 'left' : 'right';
+      // pct + ratio share the left (secondary) axis; pct formats as %, ratio
+      // as a plain number, everything else is right-axis USD.
+      const onLeft = ln.scale === 'pct' || ln.scale === 'ratio';
+      if (onLeft) hasLeft = true;
+      const scaleId = onLeft ? 'left' : 'right';
       let s = lineSeries.get(ln.key);
       if (!s) {
         s = chart.addLineSeries({
@@ -276,9 +283,12 @@
           lineWidth: 1,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
           priceScaleId: scaleId,
-          priceFormat: onPct
-            ? { type: 'custom', formatter: fmtPct, minMove: 0.01 }
-            : { type: 'custom', formatter: fmtUsd, minMove: 0.01 },
+          priceFormat:
+            ln.scale === 'pct'
+              ? { type: 'custom', formatter: fmtPct, minMove: 0.01 }
+              : ln.scale === 'ratio'
+                ? { type: 'custom', formatter: fmtRatio, minMove: 0.01 }
+                : { type: 'custom', formatter: fmtUsd, minMove: 0.01 },
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false
@@ -298,12 +308,8 @@
       s.setData(points);
     }
 
-    // Pin the pct scale to 0..100 when at least one pct line is present.
-    if (hasPct) {
-      chart.priceScale('left').applyOptions({ visible: true });
-    } else {
-      chart.priceScale('left').applyOptions({ visible: false });
-    }
+    // Show the left (secondary) axis when any pct/ratio line is present.
+    chart.priceScale('left').applyOptions({ visible: hasLeft });
   });
 
   // View sync with echo-skip — same pattern as the other Lwc charts.

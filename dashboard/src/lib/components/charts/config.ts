@@ -207,6 +207,25 @@ export const BUYER_SELLER_LINES = [
   }
 ];
 
+// Taker buyer/seller RATIO line. >1 = more taker buying, <1 = more selling,
+// 1 = balanced. scale:'ratio' puts it on the secondary (left) axis when shown
+// alongside the stacked $ bars ('both' mode); on its own it's a plain line.
+export const BUYER_SELLER_RATIO_LINES = [
+  {
+    key: 'bs_ratio',
+    label: 'Buyer / Seller',
+    color: '#fbbf24',
+    scale: 'ratio' as const,
+    // Param typed as a Datum-compatible shape (fields optional) so the line
+    // satisfies both LineChart's and StackedBarChart's Line[] — a bare
+    // VolumeBucket has required fields and isn't a supertype of Datum.
+    compute: (d: { time: number; buyer_taker_usd?: number; seller_taker_usd?: number }) => {
+      const s = d.seller_taker_usd ?? 0;
+      return s > 0 ? (d.buyer_taker_usd ?? 0) / s : 0;
+    }
+  }
+];
+
 export const OI_LINES = [
   {
     key: 'oi_usd',
@@ -1563,6 +1582,10 @@ export type ChartInstance = {
    *  The Long/Short ratio mode ignores this — it's mathematically the same
    *  in either unit, since longs and shorts mark at the same price. */
   oiUnit?: 'usd' | 'token';
+  /** bs (Taker Buyer vs Seller) only: what to render — 'stacked' (default, the
+   *  buyer+seller $ stacked bars), 'ratio' (a single Buyer/Seller line, ~1 =
+   *  balanced), or 'both' (bars + the ratio line on a secondary axis). */
+  bsDisplay?: 'stacked' | 'ratio' | 'both';
   /** hl_smart_oi only: ids of the saved wallet filters this chart draws —
    *  one OI series group per filter. Filters live in the filters store
    *  (localStorage) and are inline-expanded into the `filter=` param at
@@ -2228,6 +2251,7 @@ export function newChartInstance(
   }
   if (kind === 'bs') {
     base.exchange = 'binance';
+    base.bsDisplay = 'stacked';
   }
   if (kind === 'oi') {
     base.exchange = 'binance';
