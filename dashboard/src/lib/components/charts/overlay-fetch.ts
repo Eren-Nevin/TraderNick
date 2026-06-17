@@ -82,9 +82,11 @@ async function fetchRawSeries(
   const kind = o.kind;
 
   // ── Exchange / derivatives ──────────────────────────────────────────
-  if (kind === 'ohlcv' || kind === 'price') {
+  if (kind === 'ohlcv' || kind === 'price' || kind === 'volume') {
     // `price` is the simplified "just the close line" overlay — it reuses
     // the OHLCV endpoint and ignores any series key other than close.
+    // `volume` reads the candle's volume_usd / volume field directly off the
+    // same endpoint, so it shares this branch.
     const qs = new URLSearchParams({
       token: o.token ?? 'BTC',
       interval,
@@ -98,7 +100,8 @@ async function fetchRawSeries(
     const body = await res.json();
     const candles = (body.candles ?? []) as Array<Record<string, number>>;
     const key = kind === 'price' ? 'close' : o.seriesKey;
-    return candles.map((c) => ({ time: c.time, value: numAt(c, key, 'close') }));
+    const fallback = kind === 'volume' ? 'volume_usd' : 'close';
+    return candles.map((c) => ({ time: c.time, value: numAt(c, key, fallback) }));
   }
 
   if (kind === 'price_ratio') {

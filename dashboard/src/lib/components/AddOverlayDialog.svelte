@@ -384,7 +384,7 @@
     const inherit = primaryToken || 'BTC';
     if (k.startsWith('hl_')) { formToken = inherit; formChain = 'HL'; }
     else if (k === 'transfer' || k === 'exchange_flow') { formToken = 'USDC'; formChain = 'ETH'; }
-    else if (k === 'ohlcv' || k === 'price' || k === 'oi' || k === 'vol_oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'tt' || k === 'ls') {
+    else if (k === 'ohlcv' || k === 'volume' || k === 'price' || k === 'oi' || k === 'vol_oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'tt' || k === 'ls') {
       formToken = inherit;
     } else if (k === 'price_ratio') {
       // Numerator defaults like the Price overlay (host's token). The
@@ -529,7 +529,7 @@
   // isn't pinned. Pinned fields render as a small read-only chip instead
   // (see the template below).
   function tokenFieldKindUsesIt(k: ChartKind): boolean {
-    return k === 'ohlcv' || k === 'price' || k === 'price_ratio' || k === 'oi' || k === 'vol_oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'tt' || k === 'ls'
+    return k === 'ohlcv' || k === 'volume' || k === 'price' || k === 'price_ratio' || k === 'oi' || k === 'vol_oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'tt' || k === 'ls'
         || k === 'transfer' || k === 'exchange_flow'
         || k.startsWith('aave_') || k.startsWith('morpho_') || k.startsWith('spark_')
         || k === 'hl_pnl' || k === 'hl_unrealized_pnl';
@@ -543,7 +543,7 @@
         || k.startsWith('uniswap_');
   }
   function exchangeFieldKindUsesIt(k: ChartKind): boolean {
-    return k === 'ohlcv' || k === 'price' || k === 'price_ratio' || k === 'oi' || k === 'vol_oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'ls' || k === 'tt';
+    return k === 'ohlcv' || k === 'volume' || k === 'price' || k === 'price_ratio' || k === 'oi' || k === 'vol_oi' || k === 'fr' || k === 'bs' || k === 'sz' || k === 'ls' || k === 'tt';
   }
   // Show the interactive widget only when (used AND not locked).
   function showsTokenField(k: ChartKind): boolean {

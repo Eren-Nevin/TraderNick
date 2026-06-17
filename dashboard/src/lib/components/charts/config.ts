@@ -1801,6 +1801,13 @@ export const OVERLAY_KIND_SERIES: Partial<Record<ChartKind, OverlaySeriesDef[]>>
     { key: 'net_oi_pct',       label: 'Smart Net OI %' },
     { key: 'long_to_short_oi', label: 'Smart Long / Short OI' }
   ],
+  // Traded volume per bucket from {exchange}_ohlcv_1m, projected straight off
+  // the candle's volume_usd / volume fields (same /api/ohlcv overlay path as
+  // ohlcv/price). Exchange + token pickers come from the dialog like OHLCV.
+  volume: [
+    { key: 'volume_usd', label: 'Volume ($)' },
+    { key: 'volume',     label: 'Volume (token)' }
+  ],
   fr: [ { key: 'rate_bps', label: 'Funding Rate' } ],
   bs: [
     { key: 'buyer_taker_usd',  label: 'Buyer Taker $' },
