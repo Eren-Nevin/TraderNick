@@ -204,13 +204,27 @@
           formatter: valueFormat === 'pct' ? fmtPct : fmtUsd,
           minMove: 0.01
         },
-        // Pin the 100%-stack axis to a fixed 0..100 so band thicknesses are
-        // honest proportions and the base is always 0% (otherwise autoscale
-        // floats the floor up to the smallest band, compressing the stack).
+        // Pin the axis FLOOR to 0 so band thicknesses are honest proportions.
+        // An area series fills from its line down to the price scale's visible
+        // minimum, not to zero — so without this, autoscale floats the floor up
+        // to the smallest stacked value and the bottom band gets its base
+        // chopped off (a true 50/50 buyer/seller split rendered as ~95/05).
+        // pct mode additionally pins the top to pctMax (100% / 200%); USD mode
+        // keeps the autoscaled top but forces the bottom to 0.
         autoscaleInfoProvider:
           valueFormat === 'pct'
             ? () => ({ priceRange: { minValue: 0, maxValue: pctMax } })
-            : undefined,
+            : (base: () => { priceRange: { minValue: number; maxValue: number } | null } | null) => {
+                const r = base();
+                if (!r || !r.priceRange) return r;
+                return {
+                  ...r,
+                  priceRange: {
+                    minValue: Math.min(0, r.priceRange.minValue),
+                    maxValue: r.priceRange.maxValue
+                  }
+                };
+              },
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false
