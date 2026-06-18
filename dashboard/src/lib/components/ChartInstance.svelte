@@ -2944,21 +2944,49 @@
           break;
         }
         case 'bs': {
+          // MA tracks whatever the current display mode plots, so it lands on
+          // the right axis: absolute buyer/seller $ in stacked/both, the two
+          // %-shares in pct mode, the buyer/seller ratio in ratio mode. (The
+          // old version always emitted a share-% MA, which was invisible on the
+          // USD axis of the stacked chart.) `_d` is unused — values come from
+          // the precomputed arrays — so the param is typed Datum-loose to suit
+          // both the LineChart and StackedBarChart line slots.
           const arr = data as VolumeBucket[];
-          const buyerMA = maArray(arr.map((b) => b.buyer_taker_usd), ma.length, ma.type);
-          const totalMA = maArray(
-            arr.map((b) => b.buyer_taker_usd + b.seller_taker_usd),
-            ma.length,
-            ma.type
-          );
-          out.push({
-            key: `cum_buyer_${idx}`,
-            label: `% Buyer ${tag}`,
-            color,
-            dash: SUB_DASH[0],
-            compute: (_d: VolumeBucket, i: number) =>
-              totalMA[i] > 0 ? (buyerMA[i] / totalMA[i]) * 100 : 0
-          });
+          const mode = instance.bsDisplay ?? 'stacked';
+          const tot = arr.map((b) => b.buyer_taker_usd + b.seller_taker_usd);
+          if (mode === 'ratio') {
+            const ratioMA = maArray(
+              arr.map((b) => (b.seller_taker_usd > 0 ? b.buyer_taker_usd / b.seller_taker_usd : 0)),
+              ma.length, ma.type);
+            out.push({
+              key: `cum_bs_ratio_${idx}`, label: `Buyer/Seller ${tag}`, color,
+              dash: SUB_DASH[0], compute: (_d: { time: number }, i: number) => ratioMA[i]
+            });
+          } else if (mode === 'pct') {
+            const buyerPctMA = maArray(
+              arr.map((b, i) => (tot[i] > 0 ? (b.buyer_taker_usd / tot[i]) * 100 : 0)), ma.length, ma.type);
+            const sellerPctMA = maArray(
+              arr.map((b, i) => (tot[i] > 0 ? (b.seller_taker_usd / tot[i]) * 100 : 0)), ma.length, ma.type);
+            out.push({
+              key: `cum_bs_buyer_pct_${idx}`, label: `% Buyer ${tag}`, color: '#22c55e',
+              dash: SUB_DASH[0], compute: (_d: { time: number }, i: number) => buyerPctMA[i]
+            });
+            out.push({
+              key: `cum_bs_seller_pct_${idx}`, label: `% Seller ${tag}`, color: '#ef4444',
+              dash: SUB_DASH[1], compute: (_d: { time: number }, i: number) => sellerPctMA[i]
+            });
+          } else {
+            const buyerMA = maArray(arr.map((b) => b.buyer_taker_usd), ma.length, ma.type);
+            const sellerMA = maArray(arr.map((b) => b.seller_taker_usd), ma.length, ma.type);
+            out.push({
+              key: `cum_bs_buyer_${idx}`, label: `Buyer ${tag}`, color: '#22c55e',
+              dash: SUB_DASH[0], compute: (_d: { time: number }, i: number) => buyerMA[i]
+            });
+            out.push({
+              key: `cum_bs_seller_${idx}`, label: `Seller ${tag}`, color: '#ef4444',
+              dash: SUB_DASH[1], compute: (_d: { time: number }, i: number) => sellerMA[i]
+            });
+          }
           break;
         }
         case 'sz': {
@@ -3611,10 +3639,18 @@
     ...(bsMode === 'both' ? BUYER_SELLER_RATIO_LINES : []),
     ...(anyMaEnabled ? [...BUYER_SELLER_LINES, ...cumulativeLines] : [])
   ]);
-  // Pure ratio-mode line set (LineChart): the Buyer/Seller line.
-  let bsRatioLinesD = $derived(BUYER_SELLER_RATIO_LINES);
-  // Pure pct-mode line set (LineChart): % Buyer + % Seller of total taker vol.
-  let bsPctLinesD = $derived(BUYER_SELLER_PCT_LINES);
+  // Ratio-mode line set (LineChart): the Buyer/Seller line + its MA (cumulative
+  // lines are mode-aware, so they MA the ratio here). cumulativeLines is the
+  // shared unknown[] MA bag — cast to the line shape so the merge stays typed.
+  let bsRatioLinesD = $derived([
+    ...BUYER_SELLER_RATIO_LINES,
+    ...(cumulativeLines as typeof BUYER_SELLER_RATIO_LINES)
+  ]);
+  // Pct-mode line set (LineChart): % Buyer + % Seller + their MAs.
+  let bsPctLinesD = $derived([
+    ...BUYER_SELLER_PCT_LINES,
+    ...(cumulativeLines as typeof BUYER_SELLER_PCT_LINES)
+  ]);
 
   // sz (Volume by Size) renders as LINES — three absolute-USD bucket lines
   // (small / mid / large), not a stack. showPoint toggles the bucket lines;
