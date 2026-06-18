@@ -454,6 +454,8 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ohlcv: 'OHLCV',
   price: 'Price',
   price_ratio: 'Price Ratio',
+  // pc: chart token shown relative to one or more base tokens (a price-ratio
+  // line per base). Labelled below at the `pc:` key.
   oi: 'Open Interest',
   vol_oi: 'Vol / OI',
   volume: 'Volume',
@@ -465,7 +467,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ls: 'Long/Short',
   transfer: 'Token Flow',
   exchange_flow: 'Exchange Flow',
-  pc: 'Price Comparison',
+  pc: 'Relative Price',
   aave_v3: 'AAVE V3',
   aave_v2: 'AAVE V2',
   aave_v4: 'AAVE V4',
@@ -2287,7 +2289,10 @@ export function newChartInstance(
     base.bookDepthMode = 'totals';
   }
   if (kind === 'pc') {
-    base.overlayTokens = [];
+    // Relative-price chart: the chart token is shown relative to each base
+    // token (one price-ratio series per base). overlayTokens holds the base
+    // tokens; default a single BTC base.
+    base.overlayTokens = ['BTC'];
     base.exchange = 'binance';
   }
   if (isLeaderboardKind(kind)) {

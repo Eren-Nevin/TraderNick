@@ -3776,58 +3776,43 @@
   ]);
   // Rebase an array of {close} (Candle-shaped) rows so the first non-null
   // close is 0%, every subsequent value is `(close - base) / base * 100`.
-  // Used by the pc (Price Comparison) chart kind.
-  function rebasedCloses(rows: { close?: number }[] | undefined | null): number[] {
-    if (!rows || rows.length === 0) return [];
-    let base = 0;
-    for (const r of rows) {
-      if (r && typeof r.close === 'number' && r.close !== 0) { base = r.close; break; }
-    }
-    if (!base) return rows.map(() => 0);
-    return rows.map((r) => {
-      const c = r && typeof r.close === 'number' ? r.close : base;
-      return ((c - base) / base) * 100;
-    });
-  }
-  let mainRebased = $derived(
+  // ── Relative Price (pc) ──────────────────────────────────────────────
+  // The chart token's price expressed RELATIVE to each base token: one line
+  // per base, value = close(chart token) / close(base token) per bucket. Base
+  // tokens live in instance.overlayTokens (default ['BTC']). Candle grids are
+  // assumed index-aligned across tokens (same interval/window), matching the
+  // multi-token fetch above.
+  let pcMainCloses = $derived(
     instance.kind === 'pc'
-      ? rebasedCloses(data as unknown as { close?: number }[])
+      ? (data as unknown as { close?: number }[]).map((r) =>
+          r && typeof r.close === 'number' ? r.close : NaN)
       : []
   );
-  // Each overlay's rebased array indexed by *main's* time bucket position.
-  // We assume Binance OHLCV at the same interval/window aligns 1-to-1 across
-  // tokens; if an overlay is missing a bucket, the per-index lookup returns
-  // undefined and the line just gaps.
-  let overlayRebasedByToken = $derived.by<Record<string, number[]>>(() => {
+  let pcRatioByToken = $derived.by<Record<string, number[]>>(() => {
     const out: Record<string, number[]> = {};
     if (instance.kind !== 'pc') return out;
     for (const tok of instance.overlayTokens ?? []) {
       const rows = overlayData[tok];
-      out[tok] = rebasedCloses(rows);
+      out[tok] = pcMainCloses.map((mc, i) => {
+        const b = rows?.[i]?.close;
+        return typeof b === 'number' && b !== 0 && Number.isFinite(mc) ? mc / b : NaN;
+      });
     }
     return out;
   });
-  // Distinct palette for the pc chart's lines — main is cyan, the rest pick
-  // from this palette in order.
-  const OVERLAY_COLORS = ['#fbbf24', '#a855f7', '#22c55e', '#ef4444', '#ec4899'] as const;
+  // Distinct palette for the pc chart's ratio lines.
+  const OVERLAY_COLORS = ['#06b6d4', '#fbbf24', '#a855f7', '#22c55e', '#ef4444', '#ec4899'] as const;
   // OHLCV chart is back to its original behaviour: candles + MAs only.
   let ohlcvLinesD = $derived(cumulativeLines);
-  // Lines for the Price Comparison chart — main token + every overlay,
-  // each rebased to %.
-  let pcLinesD = $derived([
-    {
-      key: 'pc_main',
-      label: instance.token,
-      color: '#06b6d4',
-      compute: (_d: Candle, i: number) => mainRebased[i] ?? 0
-    },
-    ...(instance.overlayTokens ?? []).map((tok, idx) => ({
-      key: `pc_ovl_${tok}`,
-      label: tok,
+  // One price-ratio line per base token: chart token / base token.
+  let pcLinesD = $derived(
+    (instance.overlayTokens ?? []).map((tok, idx) => ({
+      key: `pc_ratio_${tok}`,
+      label: `${instance.token} / ${tok}`,
       color: OVERLAY_COLORS[idx % OVERLAY_COLORS.length],
-      compute: (_d: Candle, i: number) => (overlayRebasedByToken[tok] ?? [])[i] ?? 0
+      compute: (_d: Candle, i: number) => (pcRatioByToken[tok] ?? [])[i] ?? NaN
     }))
-  ]);
+  );
   let frLinesD = $derived(cumulativeLines);
 
   // ---- book_depth ----------------------------------------------------------
@@ -6159,9 +6144,9 @@
     {#if instance.kind === 'pc'}
       <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-2">
         <div class="text-[10px] uppercase tracking-widest text-zinc-500">
-          Compare
+          Base tokens
           <span class="text-zinc-600 normal-case">
-            — other tokens to overlay against {instance.token} (Y axis is % change from leftmost data)
+            — {instance.token} is shown relative to each (one {instance.token} / base price-ratio line per base)
           </span>
         </div>
         <div class="flex items-center gap-2 flex-wrap">
@@ -6196,7 +6181,7 @@
                 }}
                 class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
               >
-                <option value="">+ add token…</option>
+                <option value="">+ add base token…</option>
                 {#each available as t (t)}
                   <option value={t}>{t}</option>
                 {/each}
@@ -6434,6 +6419,7 @@
         vRefLines={weekVRefLines}
       />
     {:else if instance.kind === 'pc'}
+      <!-- Relative price: chart token / base token ratios (one line per base). -->
       <LineChart
         data={data as Candle[]}
         lines={pcLinesD}
@@ -6444,8 +6430,8 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
-        formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`}
+        formatY={fmtRatio}
+        formatTooltip={(v) => v.toPrecision(5)}
       />
     {:else if instance.kind === 'oi' || instance.kind === 'hl_smart_oi'}
       <!-- HL Long/Short ratio is unitless (1.03, not $1.03). Otherwise USD
