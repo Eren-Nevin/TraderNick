@@ -3639,16 +3639,18 @@
     ...(bsMode === 'both' ? BUYER_SELLER_RATIO_LINES : []),
     ...(anyMaEnabled ? [...BUYER_SELLER_LINES, ...cumulativeLines] : [])
   ]);
-  // Ratio-mode line set (LineChart): the Buyer/Seller line + its MA (cumulative
-  // lines are mode-aware, so they MA the ratio here). cumulativeLines is the
-  // shared unknown[] MA bag — cast to the line shape so the merge stays typed.
+  // Ratio-mode line set (LineChart): the Buyer/Seller line + its MA. The
+  // primary line is gated by the Point toggle (like the sz buckets / bs bars),
+  // so deselecting Point hides it; the MA stays (Point and MA are independent).
+  // cumulativeLines is the shared unknown[] MA bag — cast to the line shape so
+  // the merge stays typed.
   let bsRatioLinesD = $derived([
-    ...BUYER_SELLER_RATIO_LINES,
+    ...(instance.showPoint ? BUYER_SELLER_RATIO_LINES : []),
     ...(cumulativeLines as typeof BUYER_SELLER_RATIO_LINES)
   ]);
-  // Pct-mode line set (LineChart): % Buyer + % Seller + their MAs.
+  // Pct-mode line set (LineChart): % Buyer + % Seller (Point-gated) + their MAs.
   let bsPctLinesD = $derived([
-    ...BUYER_SELLER_PCT_LINES,
+    ...(instance.showPoint ? BUYER_SELLER_PCT_LINES : []),
     ...(cumulativeLines as typeof BUYER_SELLER_PCT_LINES)
   ]);
 
