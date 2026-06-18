@@ -69,6 +69,7 @@
       tokenGroups={data.tokenGroups}
       chainGroups={data.chainGroups}
       {storageKey}
+      currentPageId={pageId}
       availableKinds={AVAILABLE_KINDS}
       categorizedMenu
       defaultChain="ETH"

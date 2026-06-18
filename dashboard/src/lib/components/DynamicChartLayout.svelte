@@ -26,6 +26,7 @@
   } from '$lib/components/charts/config';
   import { sanitizeSmartSelectorState } from '$lib/components/charts/smartSelector';
   import { filtersStore } from '$lib/stores/filters.svelte';
+  import { pagesStore } from '$lib/stores/pages.svelte';
   import type { ChainGroup, Interval, TokenGroup, TransferStream } from '$lib/api';
   import type { View } from '$lib/chart-zoom';
 
@@ -43,7 +44,8 @@
     defaultLayout,
     defaultToken,
     defaultChain,
-    categorizedMenu = false
+    categorizedMenu = false,
+    currentPageId
   }: {
     tokens: string[];
     streams?: TransferStream[];
@@ -63,6 +65,11 @@
     // `chartKindCategory()` instead of the per-page flat+protocol-group
     // layout. Used by the cross-cutting Dashboard page.
     categorizedMenu?: boolean;
+    // The pages-store id of the page this layout belongs to. Present only on
+    // user Dashboard pages; the fixed Trades/Perp pages omit it. Doubles as the
+    // gate for the right-click "Move to Page" menu — the menu is enabled only
+    // when this is set (so it never appears on the non-page example layouts).
+    currentPageId?: string;
   } = $props();
 
   const MAX_CHARTS = 20;
@@ -228,6 +235,54 @@
   }
   function removeChart(id: string) {
     instances = instances.filter((i) => i.id !== id);
+  }
+
+  // ---- right-click context menu ("Move to Page") ----
+  // Enabled only on user Dashboard pages (currentPageId set). Anchored at the
+  // cursor; the "Move to Page" row reveals a submenu of the OTHER user pages on
+  // hover. Picking one writes the chart into that page's stored layout and
+  // removes it from this page's live `instances` (which auto-persists).
+  const MENU_W = 184;
+  const SUBMENU_W = 176;
+  let ctxMenu = $state<{ open: boolean; x: number; y: number; chartId: string | null }>({
+    open: false,
+    x: 0,
+    y: 0,
+    chartId: null
+  });
+  let ctxSubOpen = $state(false);
+  // Other user pages this chart can move to (current page excluded).
+  let movePages = $derived(pagesStore.pages.filter((p) => p.id !== currentPageId));
+
+  function openCtx(e: MouseEvent, chartId: string) {
+    // No-op (leave the native menu) on the non-page example layouts.
+    if (!currentPageId) return;
+    e.preventDefault();
+    // Clamp so the menu (and its right-hand submenu) stay on-screen.
+    const maxX = window.innerWidth - MENU_W - SUBMENU_W - 8;
+    const maxY = window.innerHeight - 80;
+    ctxMenu = {
+      open: true,
+      x: Math.max(8, Math.min(e.clientX, Math.max(8, maxX))),
+      y: Math.max(8, Math.min(e.clientY, Math.max(8, maxY))),
+      chartId
+    };
+    ctxSubOpen = false;
+  }
+  function closeCtx() {
+    ctxMenu = { open: false, x: 0, y: 0, chartId: null };
+    ctxSubOpen = false;
+  }
+  function moveChartTo(targetId: string) {
+    const id = ctxMenu.chartId;
+    const chart = instances.find((i) => i.id === id);
+    if (chart && pagesStore.appendChartToPage(targetId, chart as unknown as Record<string, unknown>)) {
+      instances = instances.filter((i) => i.id !== id);
+    }
+    closeCtx();
+  }
+  function onWindowKey(e: KeyboardEvent) {
+    if (e.key === 'Escape' && ctxMenu.open) closeCtx();
   }
 
   // ---- insert dialog: flat searchable item list ----
@@ -1122,6 +1177,8 @@
   >
 </div>
 
+<svelte:window onkeydown={onWindowKey} />
+
 <section
   use:dndzone={{ items: instances, flipDurationMs: FLIP_MS, dropTargetStyle: {} }}
   onconsider={handleSort}
@@ -1134,6 +1191,8 @@
       animate:flip={{ duration: FLIP_MS }}
       style="grid-column: span {inst.width}; grid-row: span {inst.height};"
       class="relative insert-host"
+      role="presentation"
+      oncontextmenu={(e) => openCtx(e, inst.id)}
     >
       <!-- "+" hover zone sitting in the column-gap to the left of this chart.
            Clicking opens the insert menu pre-set to insert *before* this chart. -->
@@ -1240,6 +1299,59 @@
   >
     <PlusCircle size={28} strokeWidth={1.75} />
   </button>
+{/if}
+
+<!-- Right-click context menu for a chart card. Transparent full-screen
+     backdrop captures click / right-click anywhere to dismiss; the panel is
+     anchored at the cursor. "Move to Page" reveals a submenu of the other user
+     pages on hover. Enabled only on user Dashboard pages (currentPageId set). -->
+{#if ctxMenu.open}
+  <div
+    class="fixed inset-0 z-50"
+    onclick={closeCtx}
+    oncontextmenu={(e) => { e.preventDefault(); closeCtx(); }}
+    role="presentation"
+  ></div>
+  <div
+    class="fixed z-50 min-w-[184px] py-1 bg-zinc-950 border border-zinc-700 rounded-md shadow-2xl shadow-black/60 text-sm text-zinc-200"
+    style="left: {ctxMenu.x}px; top: {ctxMenu.y}px;"
+    role="menu"
+    tabindex="-1"
+    oncontextmenu={(e) => e.preventDefault()}
+  >
+    <div
+      class="relative flex items-center justify-between gap-3 px-3 py-1.5 cursor-default hover:bg-zinc-800"
+      role="menuitem"
+      tabindex="-1"
+      onmouseenter={() => (ctxSubOpen = true)}
+      onmouseleave={() => (ctxSubOpen = false)}
+    >
+      <span>Move to Page</span>
+      <span class="text-zinc-500">▸</span>
+      {#if ctxSubOpen}
+        <!-- Submenu floats to the right, overlapping the parent's top edge. -->
+        <div
+          class="absolute left-full top-0 -mt-1 ml-0.5 min-w-[176px] max-h-[60vh] overflow-y-auto py-1 bg-zinc-950 border border-zinc-700 rounded-md shadow-2xl shadow-black/60"
+          role="menu"
+          tabindex="-1"
+        >
+          {#if movePages.length === 0}
+            <div class="px-3 py-1.5 text-zinc-500">No other pages</div>
+          {:else}
+            {#each movePages as p (p.id)}
+              <button
+                type="button"
+                class="w-full text-left px-3 py-1.5 truncate hover:bg-zinc-800 text-zinc-200"
+                role="menuitem"
+                onclick={() => moveChartTo(p.id)}
+                title={p.name}
+              >{p.name}</button>
+            {/each}
+          {/if}
+        </div>
+      {/if}
+    </div>
+  </div>
 {/if}
 
 <!-- Centered insert dialog with typeahead filter + arrow/Enter keyboard

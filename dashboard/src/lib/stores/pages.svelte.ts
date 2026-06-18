@@ -99,6 +99,31 @@ export const pagesStore = {
     return page;
   },
 
+  /** Append a chart object to another page's stored layout, creating the
+   *  layout if the target was never customised (user pages default to an empty
+   *  canvas). Used by the chart "Move to Page" context menu — the source page
+   *  removes the chart from its live `instances` (which auto-persists), and
+   *  this writes it into the target page's localStorage so it appears there on
+   *  next mount. The layout shape mirrors DynamicChartLayout's persist effect
+   *  ({version,charts}) and duplicate() above. Returns false on any failure. */
+  appendChartToPage(pageId: string, chart: Record<string, unknown>): boolean {
+    if (typeof localStorage === 'undefined') return false;
+    try {
+      const key = pageLayoutKey(pageId);
+      const raw = localStorage.getItem(key);
+      let charts: Record<string, unknown>[] = [];
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed && Array.isArray(parsed.charts)) charts = parsed.charts;
+      }
+      charts.push(chart);
+      localStorage.setItem(key, JSON.stringify({ version: 1, charts }));
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
   rename(id: string, name: string) {
     const trimmed = name.trim();
     if (!trimmed) return;
