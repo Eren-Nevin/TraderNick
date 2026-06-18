@@ -3,6 +3,7 @@
   import StackedBarChart from '$lib/components/charts/lwc/LwcStackedBarChart.svelte';
   import LineChart from '$lib/components/charts/lwc/LwcLineChart.svelte';
   import TableChart from '$lib/components/TableChart.svelte';
+  import TokenLeaderboardTable from '$lib/components/TokenLeaderboardTable.svelte';
   import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
   import HlTopVaultsTable from '$lib/components/HlTopVaultsTable.svelte';
   import HlTopVaultLpsTable from '$lib/components/HlTopVaultLpsTable.svelte';
@@ -662,6 +663,12 @@
   }
 
   function loadKey(): string {
+    if (instance.kind === 'token_leaderboard') {
+      // Single global snapshot — the endpoint computes everything relative to
+      // now() server-side, so there are no per-instance params. Constant key:
+      // one chart's fetch serves every token_leaderboard on the page.
+      return 'token_leaderboard';
+    }
     if (instance.kind === 'sz') {
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}`;
@@ -1447,6 +1454,22 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
+      }
+      // Token Leaderboard: one JSON fetch returns a per-token snapshot row set
+      // (price, 24h volume, avg 24h OI, 24h/7d change). The endpoint computes
+      // everything relative to now() server-side, so since/until are ignored.
+      // Carried as a single AnyDatum payload (same shape trick as the
+      // leaderboard kinds); the table sorts client-side.
+      if (instance.kind === 'token_leaderboard') {
+        const res = await queuedFetch('/api/token_leaderboard', { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = [{ tokens: body.tokens ?? [] } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
       }
       // Hyperliquid top-traders: leaderboard endpoint returns ranked rows
       // (wallet, net_pnl, volume, …, categories). We stash the full response
@@ -4280,6 +4303,7 @@
     && instance.kind !== 'hl_top_vaults'
     && instance.kind !== 'hl_top_vault_lps'
     && instance.kind !== 'hl_vault_detail'
+    && instance.kind !== 'token_leaderboard'
     && !isLeaderboardKind(instance.kind)
   );
 
@@ -5608,6 +5632,11 @@
             {/each}
           {/if}
         </select>
+      {:else if instance.kind === 'token_leaderboard'}
+        <!-- Token Leaderboard: a global per-token table with no token/exchange
+             dimension (Binance-sourced, all tokens). Sorting lives in the table
+             header, so the toolbar just carries a static source chip. -->
+        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">Binance · all tokens</span>
       {:else}
         {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'volume' || instance.kind === 'pc' || instance.kind === 'ls'}
           <!-- Exchange selector picks the data source. ohlcv → *_ohlcv_1m,
@@ -5748,7 +5777,7 @@
           {/each}
         </select>
       {/if}
-      {#if !isLeaderboardKind(instance.kind)}
+      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard'}
         <select
           bind:value={instance.interval}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -6765,6 +6794,12 @@
         vRefLines={weekVRefLines}
         formatY={exchangeFlowUseUsd ? fmtUsdAxis : fmtAmountAxis}
         formatTooltip={exchangeFlowUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
+      />
+    {:else if instance.kind === 'token_leaderboard'}
+      <TokenLeaderboardTable
+        rows={data.length > 0 ? ((data[0] as unknown as {tokens?: Record<string, unknown>[]}).tokens ?? []) : []}
+        loading={loading}
+        error={error}
       />
     {:else if instance.kind === 'hl_top_traders'}
       <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />

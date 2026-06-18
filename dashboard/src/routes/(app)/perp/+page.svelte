@@ -14,7 +14,7 @@
   // swaps / LP via in-chart event selector) plus the Hyperliquid family
   // (OHLCV, bs/sz, funding, PnL, leaderboards, transfers, vault flow).
   // bs / sz / ohlcv / fr support both venues via the exchange selector.
-  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'volume', 'bs', 'sz', 'gmx_v2', ...HL_CHART_KINDS];
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'volume', 'bs', 'sz', 'token_leaderboard', 'gmx_v2', ...HL_CHART_KINDS];
 
   const GMX_DEFAULT_MARKET = 'BTC/USD [WBTC-USDC]';
 

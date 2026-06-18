@@ -42,6 +42,75 @@ async def tokens(_request):
     return response.json({"tokens": [r[0] for r in rows.result_rows]})
 
 
+@bp.get("/token_leaderboard")
+async def token_leaderboard(_request):
+    """Per-token snapshot for the Token Leaderboard tableview: current price,
+    trailing-24h USD volume, trailing-24h average open interest (USD), and 24h
+    / 7d price-change %. Binance-sourced — the fastest path and the canonical
+    token roster. Covers every token with OHLCV in the trailing 8 days; the
+    table sorts client-side, so we return the full set in token order.
+
+    `argMaxIf(close, time, time <= now()-N)` picks each token's most-recent
+    close at or before the lookback boundary as the change baseline; the inner
+    subquery pre-multiplies volume*close because ClickHouse otherwise binds the
+    columns inside `sum(volume*close)` to the outer aggregate aliases. FINAL on
+    both source tables dedupes the ReplacingMergeTree rows so the volume sum and
+    OI average don't double-count un-merged duplicates."""
+    ch = await client()
+    rows = await ch.query(
+        """
+        SELECT
+            o.token                    AS token,
+            o.price                    AS price,
+            o.volume_24h_usd           AS volume_24h_usd,
+            coalesce(oi.avg_oi_usd, 0) AS avg_oi_24h_usd,
+            o.price_24h                AS price_24h,
+            o.price_7d                 AS price_7d
+        FROM (
+            SELECT
+                token,
+                argMax(close, time)                                    AS price,
+                sumIf(volume_usd_row, time >= now() - INTERVAL 24 HOUR) AS volume_24h_usd,
+                argMaxIf(close, time, time <= now() - INTERVAL 24 HOUR) AS price_24h,
+                argMaxIf(close, time, time <= now() - INTERVAL 7 DAY)   AS price_7d
+            FROM (
+                SELECT token, time, close, volume * close AS volume_usd_row
+                FROM tradernick.binance_ohlcv_1m FINAL
+                WHERE time >= now() - INTERVAL 8 DAY
+            )
+            GROUP BY token
+        ) o
+        LEFT JOIN (
+            SELECT token, avg(open_interest_value) AS avg_oi_usd
+            FROM tradernick.binance_open_interest FINAL
+            WHERE time >= now() - INTERVAL 24 HOUR
+            GROUP BY token
+        ) oi ON o.token = oi.token
+        ORDER BY o.token
+        """
+    )
+    out = []
+    for r in rows.result_rows:
+        token, price, vol, oi, p24, p7 = r
+        price = float(price)
+        p24 = float(p24)
+        p7 = float(p7)
+        out.append(
+            {
+                "token": token,
+                "price": price,
+                "volume_24h_usd": float(vol),
+                "avg_oi_24h_usd": float(oi),
+                # null when no baseline candle exists (e.g. a token younger than
+                # the lookback) so the table renders an em-dash rather than a
+                # misleading move off a zero baseline.
+                "pct_24h": ((price - p24) / p24 * 100.0) if p24 > 0 else None,
+                "pct_7d": ((price - p7) / p7 * 100.0) if p7 > 0 else None,
+            }
+        )
+    return response.json({"tokens": out})
+
+
 @bp.get("/ohlcv")
 async def ohlcv(request):
     token = request.args.get("token")

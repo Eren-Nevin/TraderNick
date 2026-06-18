@@ -359,6 +359,7 @@ export type ChartKind =
   | 'sz'
   | 'tt'
   | 'ls'
+  | 'token_leaderboard'
   | 'transfer'
   | 'exchange_flow'
   | 'pc'
@@ -489,6 +490,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   sz: 'Volume by Size',
   tt: 'Top Traders L/S',
   ls: 'Long/Short',
+  token_leaderboard: 'Token Leaderboard',
   transfer: 'Token Flow',
   exchange_flow: 'Exchange Flow',
   pc: 'Relative Price',
@@ -1237,7 +1239,8 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // them once under Exchange rather than duplicating under Perp.
   if (kind === 'ohlcv' || kind === 'price' || kind === 'price_ratio' || kind === 'pc' || kind === 'oi' || kind === 'vol_oi' || kind === 'volume' || kind === 'fr'
       || kind === 'book_depth'
-      || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls') {
+      || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls'
+      || kind === 'token_leaderboard') {
     return 'Exchange';
   }
   // Flows — on-chain token transfers + exchange-flow wrapper.
@@ -1954,7 +1957,7 @@ function _populateDefaultOverlaySeries() {
   // Table kinds are explicitly empty so they get filtered out.
   const tabular: ChartKind[] = [
     'hl_top_vaults','hl_top_vault_lps','hl_vault_detail',
-    'hl_top_traders','hl_top_positions'
+    'hl_top_traders','hl_top_positions','token_leaderboard'
   ];
   for (const k of tabular) OVERLAY_KIND_SERIES[k] = [];
   void valueOnly;
