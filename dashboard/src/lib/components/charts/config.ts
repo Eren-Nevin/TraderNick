@@ -1487,6 +1487,10 @@ export type ChartInstance = {
    *  start of each Saturday and Monday (UTC) inside the visible window.
    *  Helps line up weekly cycles across charts. Off by default. */
   showWeekLines?: boolean;
+  /** When true, this chart is EXCLUDED from the shared zoom/pan sync — it
+   *  zooms/pans independently and neither follows nor drives the other charts.
+   *  Only matters when the global zoom-sync is on. Off by default. */
+  noSync?: boolean;
   mas: MAConfig[]; // length MAX_MAS, each slot independently enabled
   /** When true, the chart plots a running cumulative sum of the same
    *  source the MAs operate on, on a secondary axis. Useful for reading

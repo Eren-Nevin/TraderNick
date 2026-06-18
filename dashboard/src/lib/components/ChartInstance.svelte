@@ -607,15 +607,19 @@
   let error = $state<string | null>(null);
 
   // ---- effective view + hoverTime ----
-  let effectiveView = $derived(syncZoom ? sharedView : localView);
-  let effectiveHoverTime = $derived(syncZoom ? sharedHoverTime : localHoverTime);
+  // A chart follows the shared zoom/pan only when global sync is on AND it
+  // hasn't opted out via its own `noSync` setting. Excluded charts use their
+  // local view/hover so they can be navigated without touching the others.
+  let synced = $derived(syncZoom && !instance.noSync);
+  let effectiveView = $derived(synced ? sharedView : localView);
+  let effectiveHoverTime = $derived(synced ? sharedHoverTime : localHoverTime);
 
   function handleView(v: View) {
-    if (syncZoom) onSharedView(v);
+    if (synced) onSharedView(v);
     else localView = v;
   }
   function handleHover(t: number | null) {
-    if (syncZoom) onSharedHover(t);
+    if (synced) onSharedHover(t);
     else localHoverTime = t;
   }
 
@@ -6034,6 +6038,26 @@
         <input type="checkbox" bind:checked={instance.showWeekLines} class="accent-zinc-400" />
         Week lines
       </label>
+      {#if syncZoom}
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <label
+          class="flex items-center gap-1.5 text-zinc-300 cursor-pointer"
+          title="Zoom/pan this chart on its own — it won't follow or drive the shared zoom of the other charts"
+        >
+          <input
+            type="checkbox"
+            checked={instance.noSync ?? false}
+            onchange={(e) => {
+              instance.noSync = e.currentTarget.checked;
+              // Seed the local view from the current shared one so excluding
+              // the chart doesn't snap it back to its full-window default.
+              if (instance.noSync && sharedView) localView = sharedView;
+            }}
+            class="accent-zinc-400"
+          />
+          Exclude from zoom sync
+        </label>
+      {/if}
       {#if instance.kind === 'transfer' || instance.kind === 'exchange_flow' || isAaveV3Kind(instance.kind) || isAaveV2Kind(instance.kind) || isAaveV4Kind(instance.kind) || isMorphoKind(instance.kind) || isSparkKind(instance.kind) || isLidoKind(instance.kind) || (isUniswapV3Kind(instance.kind) && effectiveKind !== 'uniswap_v3_net_swap_flow') || isUniswapV2Kind(instance.kind) || effectiveKind === 'uniswap_v4_swap' || isAeroClKind(instance.kind) || isAeroBasicKind(instance.kind)}
         <!-- USD ⇆ Amount toggle. For AAVE / Lido the chart shows a single
              series in either mode. For Uniswap (except net_swap_flow which
