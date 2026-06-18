@@ -25,6 +25,7 @@
   } from '$lib/api';
   import {
     BUYER_SELLER_LINES,
+    BUYER_SELLER_PCT_LINES,
     BUYER_SELLER_RATIO_LINES,
     BUYER_SELLER_SERIES,
     CHART_KIND_LABELS,
@@ -3597,19 +3598,23 @@
   ]);
 
   // bs: stacked bar series (Point toggle controls visibility).
-  // bs display mode: 'stacked' (bars), 'ratio' (Buyer/Seller line only), or
-  // 'both' (bars + ratio line on a secondary axis).
+  // bs display mode: 'stacked' (bars), 'ratio' (Buyer/Seller line), 'both'
+  // (bars + ratio line on a secondary axis), or 'pct' (two %-share lines).
   let bsMode = $derived(instance.bsDisplay ?? 'stacked');
-  // Bars only in stacked/both modes (ratio mode is a pure line chart).
-  let bsBars = $derived((bsMode !== 'ratio' && instance.showPoint) ? BUYER_SELLER_SERIES : []);
+  // Bars only in stacked/both modes (ratio + pct are pure line charts).
+  let bsBars = $derived(
+    ((bsMode === 'stacked' || bsMode === 'both') && instance.showPoint) ? BUYER_SELLER_SERIES : []
+  );
   // StackedBarChart overlay lines: the ratio line (secondary axis) in 'both'
   // mode, plus the MA / %-buyer overlays when an MA is enabled.
   let bsLines = $derived([
     ...(bsMode === 'both' ? BUYER_SELLER_RATIO_LINES : []),
     ...(anyMaEnabled ? [...BUYER_SELLER_LINES, ...cumulativeLines] : [])
   ]);
-  // Pure ratio-mode line set (LineChart): the Buyer/Seller line + overlays.
+  // Pure ratio-mode line set (LineChart): the Buyer/Seller line.
   let bsRatioLinesD = $derived(BUYER_SELLER_RATIO_LINES);
+  // Pure pct-mode line set (LineChart): % Buyer + % Seller of total taker vol.
+  let bsPctLinesD = $derived(BUYER_SELLER_PCT_LINES);
 
   // sz (Volume by Size) renders as LINES — three absolute-USD bucket lines
   // (small / mid / large), not a stack. showPoint toggles the bucket lines;
@@ -4554,7 +4559,7 @@
     else if (instance.kind === 'book_depth') primaryLines = bdLinesD;
     else if (instance.kind === 'tt') primaryLines = ttLinesD;
     else if (instance.kind === 'ls') primaryLines = lsLinesD;
-    else if (instance.kind === 'bs') primaryLines = bsMode === 'ratio' ? bsRatioLinesD : bsLines;
+    else if (instance.kind === 'bs') primaryLines = bsMode === 'ratio' ? bsRatioLinesD : bsMode === 'pct' ? bsPctLinesD : bsLines;
     else if (instance.kind === 'sz') primaryLines = szLinesD;
     else if (instance.kind === 'transfer') primaryLines = transferLinesD;
     else if (instance.kind === 'exchange_flow') primaryLines = exchangeFlowLinesD;
@@ -4682,6 +4687,7 @@
   // belong on it, so it's passed through unmerged (already a stable $derived).
   let bsLinesM           = $derived(overlayLinesD.length === 0 ? bsLines : [...bsLines, ...overlayLinesD]);
   let bsRatioLinesM      = $derived(overlayLinesD.length === 0 ? bsRatioLinesD : [...bsRatioLinesD, ...overlayLinesD]);
+  let bsPctLinesM        = $derived(overlayLinesD.length === 0 ? bsPctLinesD : [...bsPctLinesD, ...overlayLinesD]);
   let szLinesM           = $derived(overlayLinesD.length === 0 ? szLinesD : [...szLinesD, ...overlayLinesD]);
   let ttLinesM           = $derived(overlayLinesD.length === 0 ? ttLinesD : [...ttLinesD, ...overlayLinesD]);
   let lsLinesM           = $derived(overlayLinesD.length === 0 ? lsLinesD : [...lsLinesD, ...overlayLinesD]);
@@ -5594,16 +5600,18 @@
         {/if}
         {#if instance.kind === 'bs'}
           <!-- Taker Buyer vs Seller display: stacked $ bars, the Buyer/Seller
-               ratio line, or both (bars + ratio on a secondary axis). -->
+               ratio line, both (bars + ratio on a secondary axis), or the
+               buyer/seller % shares as two lines. -->
           <select
             value={instance.bsDisplay ?? 'stacked'}
-            onchange={(e) => (instance.bsDisplay = e.currentTarget.value as 'stacked' | 'ratio' | 'both')}
+            onchange={(e) => (instance.bsDisplay = e.currentTarget.value as 'stacked' | 'ratio' | 'both' | 'pct')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="How to display taker buyer vs seller"
           >
             <option value="stacked">Stacked</option>
             <option value="ratio">Buyer / Seller</option>
             <option value="both">Both</option>
+            <option value="pct">% Buyer / Seller</option>
           </select>
         {/if}
         {#if instance.kind === 'sz'}
@@ -6571,6 +6579,23 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
+      />
+    {:else if instance.kind === 'bs' && bsMode === 'pct'}
+      <!-- Taker buyer/seller share: two lines (% Buyer, % Seller), summing to
+           100; 50 = balanced. -->
+      <LineChart
+        data={data as VolumeBucket[]}
+        lines={bsPctLinesM}
+        refLines={[{ value: 50 }]}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={(v) => `${v.toFixed(0)}%`}
+        formatTooltip={(v) => `${v.toFixed(1)}%`}
       />
     {:else if instance.kind === 'bs' && bsMode === 'ratio'}
       <!-- Taker Buyer/Seller ratio only: a single line, 1 = balanced. -->

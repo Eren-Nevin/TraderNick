@@ -207,6 +207,30 @@ export const BUYER_SELLER_LINES = [
   }
 ];
 
+// Taker buyer/seller SHARE lines: % of total taker volume on each side (sum to
+// 100). Param typed Datum-compatible (fields optional + time) so it satisfies
+// LineChart's Line[].
+export const BUYER_SELLER_PCT_LINES = [
+  {
+    key: 'bs_buyer_pct',
+    label: '% Buyer',
+    color: '#22c55e',
+    compute: (d: { time: number; buyer_taker_usd?: number; seller_taker_usd?: number }) => {
+      const t = (d.buyer_taker_usd ?? 0) + (d.seller_taker_usd ?? 0);
+      return t > 0 ? ((d.buyer_taker_usd ?? 0) / t) * 100 : 0;
+    }
+  },
+  {
+    key: 'bs_seller_pct',
+    label: '% Seller',
+    color: '#ef4444',
+    compute: (d: { time: number; buyer_taker_usd?: number; seller_taker_usd?: number }) => {
+      const t = (d.buyer_taker_usd ?? 0) + (d.seller_taker_usd ?? 0);
+      return t > 0 ? ((d.seller_taker_usd ?? 0) / t) * 100 : 0;
+    }
+  }
+];
+
 // Taker buyer/seller RATIO line. >1 = more taker buying, <1 = more selling,
 // 1 = balanced. scale:'ratio' puts it on the secondary (left) axis when shown
 // alongside the stacked $ bars ('both' mode); on its own it's a plain line.
@@ -1586,8 +1610,9 @@ export type ChartInstance = {
   oiUnit?: 'usd' | 'token';
   /** bs (Taker Buyer vs Seller) only: what to render — 'stacked' (default, the
    *  buyer+seller $ stacked bars), 'ratio' (a single Buyer/Seller line, ~1 =
-   *  balanced), or 'both' (bars + the ratio line on a secondary axis). */
-  bsDisplay?: 'stacked' | 'ratio' | 'both';
+   *  balanced), 'both' (bars + the ratio line on a secondary axis), or 'pct'
+   *  (two lines: % Buyer and % Seller of total taker volume). */
+  bsDisplay?: 'stacked' | 'ratio' | 'both' | 'pct';
   /** hl_smart_oi only: ids of the saved wallet filters this chart draws —
    *  one OI series group per filter. Filters live in the filters store
    *  (localStorage) and are inline-expanded into the `filter=` param at
