@@ -2628,16 +2628,23 @@
 
   /** Fetch one exchange-flow window: two requests (in / out) merged by time
    *  into the {sum_*_in, sum_*_out, net_*} shape the render-time linesD reads. */
+  // Every concrete exchange the 'combined' mode fans out over.
+  const EXCHANGE_FLOW_SOURCES = ['binance', 'coinbase', 'okx', 'bybit', 'hyperliquid'] as const;
+
   async function fetchExchangeFlowWindow(
     sinceIso: string,
     untilIso: string,
     signal?: AbortSignal
   ): Promise<AnyDatum[]> {
     const ex = instance.exchangeFlowExchange ?? 'binance';
-    const buildQS = (direction: 'in' | 'out') => {
+    const combined = ex === 'combined';
+    // Combined sums every exchange; a single selection fetches just that one.
+    const sources: readonly string[] = combined ? EXCHANGE_FLOW_SOURCES : [ex];
+
+    const buildQS = (exchange: string, direction: 'in' | 'out') => {
       const qs = new URLSearchParams({
         direction,
-        exchange: ex,
+        exchange,
         interval: instance.interval,
         since: sinceIso,
         until: untilIso,
@@ -2649,42 +2656,62 @@
       else qs.set('token', instance.token);
       return qs;
     };
-    const [inRes, outRes] = await Promise.all([
-      queuedFetch(`/api/exchange_flow/aggregate?${buildQS('in')}`, { signal }),
-      queuedFetch(`/api/exchange_flow/aggregate?${buildQS('out')}`, { signal })
-    ]);
-    if (!inRes.ok)  throw new Error(`exchange_flow inflow ${inRes.status}`);
-    if (!outRes.ok) throw new Error(`exchange_flow outflow ${outRes.status}`);
-    const inBody  = await inRes.json();
-    const outBody = await outRes.json();
+
+    // Fetch one exchange's in + out series. In combined mode a failed or
+    // unsupported (e.g. BTC on Hyperliquid) request contributes nothing
+    // rather than failing the whole chart; a single selection still throws.
+    type Series = Array<Record<string, number>>;
+    const fetchOne = async (exchange: string): Promise<{ inS: Series; outS: Series }> => {
+      try {
+        const [inRes, outRes] = await Promise.all([
+          queuedFetch(`/api/exchange_flow/aggregate?${buildQS(exchange, 'in')}`, { signal }),
+          queuedFetch(`/api/exchange_flow/aggregate?${buildQS(exchange, 'out')}`, { signal })
+        ]);
+        if (!inRes.ok || !outRes.ok) {
+          if (combined) return { inS: [], outS: [] };
+          throw new Error(
+            `exchange_flow ${!inRes.ok ? `inflow ${inRes.status}` : `outflow ${outRes.status}`}`
+          );
+        }
+        const inBody = await inRes.json();
+        const outBody = await outRes.json();
+        return { inS: inBody.series ?? [], outS: outBody.series ?? [] };
+      } catch (e) {
+        // Preserve abort semantics; otherwise swallow per-exchange errors in
+        // combined mode (treat as 0) but surface them for a single selection.
+        if (combined && !signal?.aborted) return { inS: [], outS: [] };
+        throw e;
+      }
+    };
+
+    const results = await Promise.all(sources.map(fetchOne));
+
+    // Accumulate inflow / outflow per time bucket across all fetched exchanges.
+    const inByTime = new Map<number, { amount: number; usd: number }>();
     const outByTime = new Map<number, { amount: number; usd: number }>();
-    for (const r of (outBody.series ?? []) as Array<Record<string, number>>) {
-      outByTime.set(r.time, { amount: r.sum_amount, usd: r.sum_value_usd });
-    }
+    const add = (m: Map<number, { amount: number; usd: number }>, s: Series) => {
+      for (const r of s) {
+        const p = m.get(r.time) ?? { amount: 0, usd: 0 };
+        p.amount += r.sum_amount ?? 0;
+        p.usd += r.sum_value_usd ?? 0;
+        m.set(r.time, p);
+      }
+    };
+    for (const { inS, outS } of results) { add(inByTime, inS); add(outByTime, outS); }
+
+    const times = new Set<number>([...inByTime.keys(), ...outByTime.keys()]);
     const out: Record<string, number>[] = [];
-    const seen = new Set<number>();
-    for (const r of (inBody.series ?? []) as Array<Record<string, number>>) {
-      const o = outByTime.get(r.time) ?? { amount: 0, usd: 0 };
+    for (const t of times) {
+      const i = inByTime.get(t) ?? { amount: 0, usd: 0 };
+      const o = outByTime.get(t) ?? { amount: 0, usd: 0 };
       out.push({
-        time: r.time,
-        sum_amount_in:     r.sum_amount,
-        sum_value_usd_in:  r.sum_value_usd,
+        time: t,
+        sum_amount_in:     i.amount,
+        sum_value_usd_in:  i.usd,
         sum_amount_out:    o.amount,
         sum_value_usd_out: o.usd,
-        net_amount:        r.sum_amount - o.amount,
-        net_value_usd:     r.sum_value_usd - o.usd
-      });
-      seen.add(r.time);
-    }
-    for (const r of (outBody.series ?? []) as Array<Record<string, number>>) {
-      if (seen.has(r.time)) continue;
-      out.push({
-        time: r.time,
-        sum_amount_in: 0, sum_value_usd_in: 0,
-        sum_amount_out:    r.sum_amount,
-        sum_value_usd_out: r.sum_value_usd,
-        net_amount:    -r.sum_amount,
-        net_value_usd: -r.sum_value_usd
+        net_amount:        i.amount - o.amount,
+        net_value_usd:     i.usd - o.usd
       });
     }
     out.sort((a, b) => a.time - b.time);
@@ -3422,7 +3449,8 @@
     coinbase: 'Coinbase',
     okx: 'OKX',
     bybit: 'Bybit',
-    hyperliquid: 'Hyperliquid'
+    hyperliquid: 'Hyperliquid',
+    combined: 'Combined'
   };
   function exchangeFlowInFilter(ex: string): TF {
     const label = EXCHANGE_LABEL[ex] ?? ex;
@@ -5589,7 +5617,7 @@
         <select
           value={instance.exchangeFlowExchange ?? 'binance'}
           onchange={(e) => {
-            const v = e.currentTarget.value as 'binance' | 'coinbase' | 'okx' | 'bybit' | 'hyperliquid';
+            const v = e.currentTarget.value as 'binance' | 'coinbase' | 'okx' | 'bybit' | 'hyperliquid' | 'combined';
             instance.exchangeFlowExchange = v;
             if (v === 'hyperliquid') {
               // HL bridge is ARB + USDC only; auto-correct both so the
@@ -5599,8 +5627,9 @@
             }
           }}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          title="Which exchange's deposit/hot-wallet wallets to filter on"
+          title="Which exchange's deposit/hot-wallet wallets to filter on. Combined sums every exchange (unsupported token/chain per exchange counts as 0)."
         >
+          <option value="combined">Combined</option>
           <option value="binance">Binance</option>
           <option value="coinbase">Coinbase</option>
           <option value="okx">OKX</option>

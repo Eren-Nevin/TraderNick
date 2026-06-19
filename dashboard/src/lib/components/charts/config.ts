@@ -1591,8 +1591,10 @@ export type ChartInstance = {
   /** exchange_flow only: which exchange the in/out filters target.
    *  - 'binance' | 'coinbase' | 'okx' | 'bybit': CeX-style filters
    *    (deposit umbrella receiver / hot-wallet sender), per-chain.
-   *  - 'hyperliquid': Perp-style filters; chain is forced to ARB. */
-  exchangeFlowExchange?: 'binance' | 'coinbase' | 'okx' | 'bybit' | 'hyperliquid';
+   *  - 'hyperliquid': Perp-style filters; chain is forced to ARB.
+   *  - 'combined': sum every exchange's flow for the selected token/chain;
+   *    exchanges that don't support that token/chain contribute 0. */
+  exchangeFlowExchange?: 'binance' | 'coinbase' | 'okx' | 'bybit' | 'hyperliquid' | 'combined';
   /** exchange_flow only: which series to plot.
    *  - 'inflow' / 'outflow': single line of that direction.
    *  - 'netflow': single line, computed client-side = inflow - outflow.
