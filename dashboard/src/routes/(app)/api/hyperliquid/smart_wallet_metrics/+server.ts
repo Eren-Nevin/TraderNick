@@ -4,7 +4,7 @@ import type { RequestHandler } from './$types';
 
 const PASSTHROUGH = [
   'token', 'lookback', 'snapshot', 'metric', 'order_by', 'limit',
-  'min_days', 'min_volume', 'min_realized'
+  'min_days', 'min_volume', 'min_realized', 'min_oi'
 ];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {

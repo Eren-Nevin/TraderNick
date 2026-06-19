@@ -1117,6 +1117,8 @@
           typeof r.swMinVolume === 'number' && r.swMinVolume >= 0 ? r.swMinVolume : 100000;
         inst.swMinRealized =
           typeof r.swMinRealized === 'number' ? r.swMinRealized : 0;
+        inst.swMinOi =
+          typeof r.swMinOi === 'number' && r.swMinOi >= 0 ? r.swMinOi : 0;
       }
       // Compound overlays — preserved across reloads. Each entry is validated
       // through sanitizeOverlay() so a corrupt save can't strand the chart.

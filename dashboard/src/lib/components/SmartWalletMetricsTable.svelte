@@ -221,7 +221,7 @@
       <div class="h-full flex items-center justify-center text-rose-400 text-center px-4">{error}</div>
     {:else if !loading && rows.length === 0}
       <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4">
-        No wallets pass the filters for this window.<br />Lower the min-days / min-volume / min-realized guards in settings.
+        No wallets pass the filters for this window.<br />Lower the min-days / min-volume / min-realized / min-OI guards in settings.
       </div>
     {:else}
       <table class="w-full">

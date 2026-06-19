@@ -685,7 +685,7 @@
         'smart_wallets_table', instance.swMetric ?? 'sharpe', instance.swLookback ?? 7,
         instance.swToken ?? '__all__', swSnapshotIso(),
         instance.swMinDays ?? 3, instance.swMinVolume ?? 100000,
-        instance.swMinRealized ?? 0
+        instance.swMinRealized ?? 0, instance.swMinOi ?? 0
       ].join('|');
     }
     if (instance.kind === 'token_leaderboard') {
@@ -1494,7 +1494,8 @@
           limit: '100',
           min_days: String(Math.max(1, instance.swMinDays ?? 3)),
           min_volume: String(Math.max(0, instance.swMinVolume ?? 100000)),
-          min_realized: String(instance.swMinRealized ?? 0)
+          min_realized: String(instance.swMinRealized ?? 0),
+          min_oi: String(Math.max(0, instance.swMinOi ?? 0))
         });
         if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
         const res = await queuedFetch(`/api/hyperliquid/smart_wallet_metrics?${qs}`, { signal });
@@ -4439,6 +4440,20 @@
     && !isLeaderboardKind(instance.kind)
   );
 
+  // TableView kinds render a bespoke table instead of a LineChart, so the
+  // generic chart-only settings (Point, Week lines, zoom-sync exclude, MA) are
+  // meaningless for them — the settings panel hides that whole block.
+  let isTableviewKind = $derived(
+    instance.kind === 'token_leaderboard'
+    || instance.kind === 'smart_wallets_table'
+    || instance.kind === 'hl_top_traders'
+    || instance.kind === 'hl_top_positions'
+    || instance.kind === 'hl_top_vaults'
+    || instance.kind === 'hl_top_vault_lps'
+    || instance.kind === 'hl_vault_detail'
+    || isLeaderboardKind(instance.kind)
+  );
+
   function overlayLoadKey(o: ChartOverlay, iv: Interval, sinceIso: string, untilIso: string): string {
     // Hash the full config + interval + window so any field change re-fetches.
     return [
@@ -6046,6 +6061,15 @@
           class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
         />
         <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min OI ($)</span>
+        <input
+          type="number" min="0" step="10000"
+          value={instance.swMinOi ?? 0}
+          onchange={(e) => (instance.swMinOi = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+          title="Minimum open interest (USD), as of the snapshot, for a wallet to be ranked"
+          class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
       {#if instance.kind === 'ohlcv'}
         <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
@@ -6221,6 +6245,7 @@
         {/each}
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
+      {#if !isTableviewKind}
       <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
         <input
           type="checkbox"
@@ -6370,6 +6395,7 @@
             </select>
           </div>
         {/each}
+      {/if}
       {/if}
       {#if canSum}
         <!-- Cumulative-sum toggle. Plots the running total of the same field

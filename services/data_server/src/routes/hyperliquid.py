@@ -480,6 +480,7 @@ async def smart_wallet_metrics(request):
       min_days  — min active days in window (noise guard; default 3)
       min_volume— min window volume USD (noise guard; default 0)
       min_realized— min window realized PnL USD (default 0 → profitable only)
+      min_oi    — min open interest USD as of the snapshot (default 0)
     """
     token = request.args.get("token")
     if token in ("", "__all__", "__global__", "all"):
@@ -507,6 +508,10 @@ async def smart_wallet_metrics(request):
         min_realized = float(request.args.get("min_realized", "0"))
     except ValueError:
         min_realized = 0.0
+    try:
+        min_oi = float(request.args.get("min_oi", "0"))
+    except ValueError:
+        min_oi = 0.0
 
     snap_arg = request.args.get("snapshot")
     if snap_arg:
@@ -524,7 +529,7 @@ async def smart_wallet_metrics(request):
     params: dict = {
         "until": e_dt, "end_day": end_day, "start_day": start_day,
         "min_days": min_days, "min_volume": min_volume,
-        "min_realized": min_realized, "limit": limit,
+        "min_realized": min_realized, "min_oi": min_oi, "limit": limit,
     }
 
     if token is None:
@@ -713,6 +718,7 @@ async def smart_wallet_metrics(request):
         LEFT JOIN oi_now oi     ON oi.wallet = w.wallet
         WHERE w.volume >= {{min_volume:Float64}}
           AND w.realized >= {{min_realized:Float64}}
+          AND coalesce(oi.oi_usd, 0) >= {{min_oi:Float64}}
           AND coalesce(sa.n_days, 0) >= {{min_days:UInt32}}
         ORDER BY {ORDER_COLS[order_by]} DESC
         LIMIT {{limit:UInt32}}
@@ -737,7 +743,7 @@ async def smart_wallet_metrics(request):
         "metric": metric, "order_by": order_by, "token": token,
         "lookback": lookback, "snapshot": end_day.isoformat(),
         "limit": limit, "min_days": min_days, "min_volume": min_volume,
-        "min_realized": min_realized,
+        "min_realized": min_realized, "min_oi": min_oi,
         "wallets": wallets,
     })
 

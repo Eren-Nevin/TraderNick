@@ -1768,6 +1768,9 @@ export type ChartInstance = {
   /** smart_wallets_table only: minimum window realized PnL (USD) for a wallet
    *  to enter the ranking. Configurable; default 0 (profitable only). */
   swMinRealized?: number;
+  /** smart_wallets_table only: minimum open interest (USD, as of the snapshot)
+   *  for a wallet to enter the ranking. Configurable; default 0. */
+  swMinOi?: number;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */
@@ -2606,6 +2609,7 @@ export function newChartInstance(
     base.swMinDays = 3;
     base.swMinVolume = 100000;
     base.swMinRealized = 0;
+    base.swMinOi = 0;
   }
   return base;
 }
