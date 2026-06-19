@@ -12,7 +12,6 @@
   } from '$lib/components/WalletPositionsTable.svelte';
   import {
     DAY_SLIDER_MAX_BACK,
-    isoToBack,
     backToIso,
     isoToUnix,
     isToday
@@ -33,7 +32,9 @@
   };
 
   // ── State ──────────────────────────────────────────────────────────
-  let snapshotIso = $state(backToIso(0)); // today (UTC)
+  // Slider position is the source of truth (bind:value) so the drag never
+  // fights a re-asserted one-way value. 0 = oldest (left), MAX = today (right).
+  let sliderPos = $state(DAY_SLIDER_MAX_BACK);
   let pnlSeries = $state<PnlPoint[]>([]);
   let pnlStats = $state<PnlStats | null>(null);
   let pnlLoading = $state(true);
@@ -48,10 +49,10 @@
   let copied = $state(false);
 
   // ── Derived ────────────────────────────────────────────────────────
+  const MAX_BACK = DAY_SLIDER_MAX_BACK;
+  const snapshotIso = $derived(backToIso(MAX_BACK - sliderPos));
   const live = $derived(isToday(snapshotIso));
   const selectedUnix = $derived(isoToUnix(snapshotIso));
-  const MAX_BACK = DAY_SLIDER_MAX_BACK;
-  const sliderVal = $derived(MAX_BACK - isoToBack(snapshotIso));
 
   const chartData = $derived(
     pnlSeries.map((p) => ({ time: p.time, value: pnlMode === 'total' ? p.total : p.realized }))
@@ -100,9 +101,6 @@
       setTimeout(() => (copied = false), 1200);
     } catch { /* no-op */ }
   }
-  function onSlider(v: number) {
-    snapshotIso = backToIso(MAX_BACK - v);
-  }
 
   // ── Mappers (live API shape vs stored-snapshot shape → PositionRow) ──
   function mapLive(p: Record<string, unknown>): PositionRow {
@@ -143,27 +141,38 @@
     }
   }
 
+  // Monotonic request token: only the latest loadPositions call may write
+  // state. Without it the slow live-API fetch (mount) can resolve AFTER a fast
+  // ClickHouse fetch for a past day and clobber it back to today's book.
+  let posSeq = 0;
   async function loadPositions(iso: string) {
+    const seq = ++posSeq;
     posLoading = true; posError = null;
     try {
+      let nextPositions: PositionRow[];
+      let nextAccount: number | null = null;
       if (isToday(iso)) {
         const res = await fetch(`/api/hyperliquid/live_positions?wallet=${address}`);
         if (!res.ok) throw new Error(`positions ${res.status}`);
         const body = await res.json();
-        accountValue = body.margin_summary?.account_value ?? null;
-        positions = (body.positions ?? []).map(mapLive);
+        nextAccount = body.margin_summary?.account_value ?? null;
+        nextPositions = (body.positions ?? []).map(mapLive);
       } else {
-        accountValue = null;
         const res = await fetch(`/api/hyperliquid/wallet_positions?wallet=${address}&day=${iso}`);
         if (!res.ok) throw new Error(`positions ${res.status}`);
         const body = await res.json();
-        positions = (body.positions ?? []).map(mapHist);
+        nextPositions = (body.positions ?? []).map(mapHist);
       }
+      if (seq !== posSeq) return; // superseded by a newer request — drop this
+      positions = nextPositions;
+      accountValue = nextAccount;
     } catch (e) {
+      if (seq !== posSeq) return;
       posError = (e as Error).message;
       positions = [];
+      accountValue = null;
     } finally {
-      posLoading = false;
+      if (seq === posSeq) posLoading = false;
     }
   }
 
@@ -268,14 +277,19 @@
   <div class="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/30 px-3 py-2 text-xs">
     <span class="text-zinc-500 whitespace-nowrap">As of:</span>
     <span class="font-mono text-zinc-200 whitespace-nowrap">{snapshotIso}{live ? ' (live)' : ''}</span>
+    {#if posLoading}
+      <span class="inline-block w-3 h-3 rounded-full border-2 border-zinc-600 border-t-blue-400 animate-spin" title="Loading positions…"></span>
+    {/if}
+    <!-- Slider is locked while positions refetch (the historical query is slow)
+         so the view can't get ahead of the data / fire overlapping requests. -->
     <input
-      type="range" min="0" max={MAX_BACK} step="1" value={sliderVal}
-      oninput={(e) => onSlider(parseInt(e.currentTarget.value, 10))}
-      class="flex-1 accent-blue-500 cursor-pointer"
-      title="Drag to view the wallet as of any past day (1-day grain)"
+      type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderPos}
+      disabled={posLoading}
+      class="flex-1 accent-blue-500 {posLoading ? 'opacity-50 cursor-wait' : 'cursor-pointer'}"
+      title={posLoading ? 'Loading…' : 'Drag to view the wallet as of any past day (1-day grain)'}
     />
-    <button type="button" onclick={() => onSlider(MAX_BACK)}
-      class="text-[10px] text-zinc-500 hover:text-zinc-200 underline decoration-dotted whitespace-nowrap"
+    <button type="button" onclick={() => (sliderPos = MAX_BACK)} disabled={posLoading}
+      class="text-[10px] text-zinc-500 hover:text-zinc-200 underline decoration-dotted whitespace-nowrap disabled:opacity-40 disabled:hover:text-zinc-500"
       title="Jump to the latest (live) day">Today</button>
   </div>
 

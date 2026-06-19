@@ -19,6 +19,7 @@
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import { onAuxClickWalletHl, onMouseDownSuppressMiddle } from '$lib/arkham';
   import { DAY_SLIDER_MAX_BACK, isoToBack, backToIso } from '$lib/daySlider';
+  import { untrack } from 'svelte';
 
   export type SmartWalletRow = {
     wallet: string;
@@ -122,12 +123,18 @@
     });
   });
 
-  // ── Snapshot day slider. Shared helpers in $lib/daySlider. Slider goes
-  // oldest(left)→newest(right): sliderVal = MAX_BACK - back. ──
+  // ── Snapshot day slider (oldest left → newest right). Local sliderPos is the
+  // source of truth (bind:value) so dragging isn't fought by a re-asserted
+  // one-way value; we push changes up via onChangeSnapshot and re-sync from the
+  // `snapshot` prop only when it diverges externally (untrack guards the loop). ──
   const MAX_BACK = DAY_SLIDER_MAX_BACK;
-  const sliderVal = $derived(MAX_BACK - isoToBack(snapshot));
-  function onSlider(v: number) {
-    onChangeSnapshot(backToIso(MAX_BACK - v));
+  let sliderPos = $state(MAX_BACK); // synced from `snapshot` by the effect below
+  $effect(() => {
+    const want = MAX_BACK - isoToBack(snapshot);
+    if (untrack(() => sliderPos) !== want) sliderPos = want;
+  });
+  function commitPos() {
+    onChangeSnapshot(backToIso(MAX_BACK - sliderPos));
   }
 </script>
 
@@ -187,14 +194,14 @@
       min="0"
       max={MAX_BACK}
       step="1"
-      value={sliderVal}
-      oninput={(e) => onSlider(parseInt(e.currentTarget.value, 10))}
+      bind:value={sliderPos}
+      oninput={commitPos}
       class="flex-1 accent-blue-500 cursor-pointer"
       title="Drag to change the snapshot day (1-day grain)"
     />
     <button
       type="button"
-      onclick={() => onSlider(MAX_BACK)}
+      onclick={() => { sliderPos = MAX_BACK; commitPos(); }}
       class="text-[10px] text-zinc-500 hover:text-zinc-200 underline decoration-dotted whitespace-nowrap"
       title="Jump to the most recent day"
     >Today</button>

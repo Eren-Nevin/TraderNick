@@ -2,14 +2,23 @@
 // + the HL wallet detail page). A slider value runs oldest(left)→newest(right);
 // we map between an ISO date (YYYY-MM-DD) and a whole-day offset back from today.
 
-export const DAY_SLIDER_MAX_BACK = 540; // days (~18 months)
 const DAY_MS = 86_400_000;
+
+// Oldest day the sliders can reach. We don't have meaningful HL data before
+// 2026, so the slider floor is pinned here rather than a fixed N-days-back.
+export const DAY_SLIDER_FLOOR_ISO = '2026-01-01';
 
 /** UTC midnight of today, in ms. */
 export function startOfTodayMs(): number {
   const now = new Date();
   return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
 }
+
+/** Whole-day span from the floor date to today (= slider's max offset back). */
+export const DAY_SLIDER_MAX_BACK = Math.max(
+  0,
+  Math.round((startOfTodayMs() - Date.parse(DAY_SLIDER_FLOOR_ISO + 'T00:00:00Z')) / DAY_MS)
+);
 
 /** ISO date → whole-day offset back from today (0 = today), clamped. */
 export function isoToBack(iso: string, maxBack = DAY_SLIDER_MAX_BACK): number {

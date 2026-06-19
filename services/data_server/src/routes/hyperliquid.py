@@ -1429,11 +1429,17 @@ async def wallet_positions(request):
     # As of END of `day` → everything strictly before the next day's midnight.
     until_dt = datetime(day.year, day.month, day.day) + timedelta(days=1)
 
+    # Open positions are sampled hourly (dense while open), so the latest bucket
+    # at/​before end-of-day is on the snapshot day itself — look back only ~2 days
+    # so the scan prunes to 2 partitions instead of all history (the table sorts
+    # by token first, so a token-less wallet filter can't use the primary index).
     sql = """
         WITH latest AS (
             SELECT max(bucket) AS b
             FROM tradernick.hl_position_history_1h
-            WHERE wallet = {wallet:String} AND bucket < {until:DateTime}
+            WHERE wallet = {wallet:String}
+              AND bucket < {until:DateTime}
+              AND bucket >= {until:DateTime} - INTERVAL 2 DAY
         )
         SELECT token, side,
             argMaxMerge(amount_state) AS amount,
@@ -1441,7 +1447,9 @@ async def wallet_positions(request):
             argMaxMerge(pnl_state)    AS unrealized,
             toUnixTimestamp((SELECT b FROM latest)) AS bucket
         FROM tradernick.hl_position_history_1h
-        WHERE wallet = {wallet:String} AND bucket = (SELECT b FROM latest)
+        WHERE wallet = {wallet:String}
+          AND bucket = (SELECT b FROM latest)
+          AND bucket >= {until:DateTime} - INTERVAL 2 DAY
         GROUP BY token, side
         HAVING amount != 0
         ORDER BY size_usd DESC

@@ -98,6 +98,9 @@
     <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border {live
       ? 'bg-emerald-950/40 border-emerald-800 text-emerald-400'
       : 'bg-zinc-900 border-zinc-700 text-zinc-400'}">{live ? 'Live' : 'Snapshot'}</span>
+    {#if loading}
+      <span class="inline-block w-3 h-3 rounded-full border-2 border-zinc-600 border-t-blue-400 animate-spin" title="Loading…"></span>
+    {/if}
     {#if positions.length > 0}
       <span class="text-zinc-500 ml-auto">
         {positions.length} open · {fmtUsd(totalNotional)} notional ·
@@ -105,7 +108,7 @@
       </span>
     {/if}
   </div>
-  <div class="flex-1 overflow-auto scrollbar-none">
+  <div class="flex-1 overflow-auto scrollbar-none {loading ? 'opacity-50' : ''}">
     {#if error}
       <div class="h-full flex items-center justify-center text-rose-400 text-center px-4 py-8">{error}</div>
     {:else if !loading && positions.length === 0}
