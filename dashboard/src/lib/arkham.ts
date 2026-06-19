@@ -46,3 +46,20 @@ export function onAuxClickCoinglassHl(addr: string) {
     window.open(coinglassHlUrl(addr), '_blank', 'noopener,noreferrer');
   };
 }
+
+// Internal HL wallet detail page (/wallet/hl/<addr>). Middle-clicking a wallet
+// across the app opens this in a new tab — repointed from the old Coinglass
+// middle-click so the wallet stays inside the dashboard.
+export function walletHlUrl(addr: string): string {
+  return '/wallet/hl/' + addr;
+}
+
+/** auxclick handler: open the internal HL wallet page in a new tab on
+ *  middle-click; ignore other buttons. Pair with onMouseDownSuppressMiddle. */
+export function onAuxClickWalletHl(addr: string) {
+  return (e: MouseEvent) => {
+    if (e.button !== 1 || !addr) return;
+    e.preventDefault();
+    window.open(walletHlUrl(addr), '_blank', 'noopener,noreferrer');
+  };
+}

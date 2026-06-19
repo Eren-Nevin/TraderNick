@@ -1397,6 +1397,76 @@ async def live_positions(request):
     })
 
 
+@bp.get("/hyperliquid/wallet_positions")
+@throttled("heavy")
+async def wallet_positions(request):
+    """A wallet's stored positions AS OF a past day — the historical companion
+    to /live_positions (which only has the real-time book).
+
+    Reads the latest hl_position_history_1h bucket at or before end-of-`day`
+    and returns one row per (token, side) still open at that bucket. This is
+    roster-scoped (only ingested tokens) and ≥ the ingest min-size, sampled
+    hourly — sparser than the live API, but it's what we have historically.
+
+    Query params:
+      wallet — required (0x…; lowercased to match the table).
+      day    — ISO date (YYYY-MM-DD). Positions as of end of that day.
+               Defaults to today (UTC).
+    Returns { wallet, day, bucket (epoch s or null), positions:[{token, side,
+              amount, size_usd, unrealized_pnl}] } sorted by descending notional.
+    """
+    wallet = request.args.get("wallet")
+    if not wallet:
+        return response.json({"error": "missing wallet"}, status=400)
+    wallet = wallet.lower()
+
+    day_arg = request.args.get("day")
+    try:
+        day = (datetime.fromisoformat(day_arg).date() if day_arg
+               else datetime.now(timezone.utc).date())
+    except ValueError:
+        return response.json({"error": "invalid day; expected YYYY-MM-DD"}, status=400)
+    # As of END of `day` → everything strictly before the next day's midnight.
+    until_dt = datetime(day.year, day.month, day.day) + timedelta(days=1)
+
+    sql = """
+        WITH latest AS (
+            SELECT max(bucket) AS b
+            FROM tradernick.hl_position_history_1h
+            WHERE wallet = {wallet:String} AND bucket < {until:DateTime}
+        )
+        SELECT token, side,
+            argMaxMerge(amount_state) AS amount,
+            argMaxMerge(size_state)   AS size_usd,
+            argMaxMerge(pnl_state)    AS unrealized,
+            toUnixTimestamp((SELECT b FROM latest)) AS bucket
+        FROM tradernick.hl_position_history_1h
+        WHERE wallet = {wallet:String} AND bucket = (SELECT b FROM latest)
+        GROUP BY token, side
+        HAVING amount != 0
+        ORDER BY size_usd DESC
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters={"wallet": wallet, "until": until_dt})
+    positions = [
+        {
+            "token": r[0],
+            "side": r[1],
+            "amount": float(r[2]),
+            "size_usd": float(r[3]),
+            "unrealized_pnl": float(r[4]),
+        }
+        for r in rows.result_rows
+    ]
+    bucket = rows.result_rows[0][5] if rows.result_rows else None
+    return response.json({
+        "wallet": wallet,
+        "day": day.isoformat(),
+        "bucket": int(bucket) if bucket else None,
+        "positions": positions,
+    })
+
+
 # ── SmartSelector presets ────────────────────────────────────────────
 # Persistence layer for "criteria groups" — a saved SmartSelectorState
 # (lookback / top_n / scope / sort_by / criteria[…]) under a name. Lets

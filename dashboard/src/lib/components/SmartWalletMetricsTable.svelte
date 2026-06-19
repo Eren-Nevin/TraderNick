@@ -17,7 +17,8 @@
     type SmartWalletLookback
   } from '$lib/components/charts/config';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
-  import { onAuxClickCoinglassHl, onMouseDownSuppressMiddle } from '$lib/arkham';
+  import { onAuxClickWalletHl, onMouseDownSuppressMiddle } from '$lib/arkham';
+  import { DAY_SLIDER_MAX_BACK, isoToBack, backToIso } from '$lib/daySlider';
 
   export type SmartWalletRow = {
     wallet: string;
@@ -121,26 +122,9 @@
     });
   });
 
-  // ── Snapshot day slider. value = whole-day offset back from today (0 = the
-  // most recent day); we map it to/from the ISO date string. Range = last
-  // ~18 months at 1-day granularity. ──
-  const MAX_BACK = 540; // days
-  const DAY_MS = 86_400_000;
-  function startOfTodayMs(): number {
-    const now = new Date();
-    return Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
-  }
-  function isoToBack(iso: string): number {
-    const t = Date.parse(iso + 'T00:00:00Z');
-    if (!isFinite(t)) return 0;
-    const back = Math.round((startOfTodayMs() - t) / DAY_MS);
-    return Math.max(0, Math.min(MAX_BACK, back));
-  }
-  function backToIso(back: number): string {
-    const ms = startOfTodayMs() - back * DAY_MS;
-    return new Date(ms).toISOString().slice(0, 10);
-  }
-  // Slider goes oldest(left)→newest(right): sliderVal = MAX_BACK - back.
+  // ── Snapshot day slider. Shared helpers in $lib/daySlider. Slider goes
+  // oldest(left)→newest(right): sliderVal = MAX_BACK - back. ──
+  const MAX_BACK = DAY_SLIDER_MAX_BACK;
   const sliderVal = $derived(MAX_BACK - isoToBack(snapshot));
   function onSlider(v: number) {
     onChangeSnapshot(backToIso(MAX_BACK - v));
@@ -250,9 +234,9 @@
               <td class="px-3 py-1 text-zinc-500">{idx + 1}</td>
               <td class="px-3 py-1">
                 <button type="button" onclick={() => copyAddr(r.wallet)}
-                        onauxclick={onAuxClickCoinglassHl(r.wallet)}
+                        onauxclick={onAuxClickWalletHl(r.wallet)}
                         onmousedown={onMouseDownSuppressMiddle}
-                        title={r.wallet + ' — click to copy · middle-click to open in Coinglass'}
+                        title={r.wallet + ' — click to copy · middle-click to open wallet page'}
                         class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer">
                   {copiedAddr === r.wallet ? '✓ copied' : truncate(r.wallet)}
                 </button>
