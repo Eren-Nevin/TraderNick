@@ -20,7 +20,7 @@ from sanic import Blueprint, response
 from clickhouse import client
 from routes.ohlcv import INTERVAL_SECONDS
 from throttle import throttled
-from wallets.smart_selector import SmartSelector
+from wallets.smart_selector import SmartSelector, HIP3_EXCLUDE
 from wallets import cache as wallets_cache
 
 log = logging.getLogger(__name__)
@@ -440,6 +440,305 @@ async def leaderboard(request):
         "order_by": order_by, "limit": limit,
         "token": token, "since": since, "until": until,
         "leaders": leaders,
+    })
+
+
+@bp.get("/hyperliquid/smart_wallet_metrics")
+@throttled("heavy")
+async def smart_wallet_metrics(request):
+    """Experimental smart-wallet finder table.
+
+    For a single fixed window (one `lookback` ending at a `snapshot` day) it
+    ranks wallets by the selected `metric` and returns, per wallet, the core
+    columns plus the metric column:
+
+      volume, realized_pnl, unrealized_pnl, oi_token, oi_usd, <metric>
+
+    All figures are Hyperliquid-only. Scope is GLOBAL (all tokens) when `token`
+    is absent/`__all__`, else restricted to that token. Global reads the fast
+    per-(day,wallet) rollups (hl_trade_history_wallet_daily / Table A,
+    hl_position_history_oi_wallet_daily / Table B); token scope reads the
+    source tables.
+
+    metric=sharpe is a SIMPLE (not annualized, not capital-normalized) Sharpe:
+    mean(daily_total_pnl) / stddevPop(daily_total_pnl) over the wallet's
+    *active* (trade) days in the window, where
+    daily_total_pnl[d] = Δrealized[d] + Δunrealized[d] (mark-to-market). This is
+    the same daily series the smart-money Sharpe uses, minus the /OI and ×√365.
+
+    A wallet only enters the ranking if it has >= min_days active days AND >=
+    min_volume window volume (the noise guard — both configurable). Top `limit`
+    by the metric; the client re-sorts the returned set on any column.
+
+    Query params:
+      token     — token symbol; absent or '__all__' → global (all tokens)
+      lookback  — window length in days (1|7|30|90; default 7)
+      snapshot  — ISO date/datetime ending the window (default: start of today)
+      metric    — ranking metric; only 'sharpe' for now (default 'sharpe')
+      order_by  — sharpe|volume|realized|unrealized|oi_usd (default = metric)
+      limit     — top-N cap (default 100, max 500)
+      min_days  — min active days in window (noise guard; default 3)
+      min_volume— min window volume USD (noise guard; default 0)
+      min_realized— min window realized PnL USD (default 0 → profitable only)
+    """
+    token = request.args.get("token")
+    if token in ("", "__all__", "__global__", "all"):
+        token = None
+    lookback = int(request.args.get("lookback", "7"))
+    if lookback not in (1, 7, 30, 90):
+        return response.json({"error": "lookback must be 1|7|30|90"}, status=400)
+    metric = request.args.get("metric", "sharpe")
+    if metric not in ("sharpe",):
+        return response.json({"error": "unsupported metric"}, status=400)
+    order_by = request.args.get("order_by", metric)
+    ORDER_COLS = {
+        "sharpe": "metric", "volume": "volume", "realized": "realized_pnl",
+        "unrealized": "unrealized_pnl", "oi_usd": "oi_usd",
+    }
+    if order_by not in ORDER_COLS:
+        return response.json({"error": "bad order_by"}, status=400)
+    limit = min(int(request.args.get("limit", "100")), 500)
+    min_days = max(int(request.args.get("min_days", "3")), 1)
+    try:
+        min_volume = float(request.args.get("min_volume", "0"))
+    except ValueError:
+        min_volume = 0.0
+    try:
+        min_realized = float(request.args.get("min_realized", "0"))
+    except ValueError:
+        min_realized = 0.0
+
+    snap_arg = request.args.get("snapshot")
+    if snap_arg:
+        try:
+            e_dt = _parse_iso(snap_arg).replace(tzinfo=None)
+        except Exception:  # noqa: BLE001
+            return response.json({"error": "invalid snapshot"}, status=400)
+        e_dt = e_dt.replace(hour=0, minute=0, second=0, microsecond=0)
+    else:
+        e_dt = datetime.now(timezone.utc).replace(
+            hour=0, minute=0, second=0, microsecond=0, tzinfo=None)
+    end_day = e_dt.date()
+    start_day = end_day - timedelta(days=lookback)
+
+    params: dict = {
+        "until": e_dt, "end_day": end_day, "start_day": start_day,
+        "min_days": min_days, "min_volume": min_volume,
+        "min_realized": min_realized, "limit": limit,
+    }
+
+    if token is None:
+        # ── GLOBAL: fast per-(day,wallet) rollups (HIP3 already excluded in A/B).
+        win_cte = """
+        ta_e AS (
+            SELECT wallet, sumMerge(volume_state) AS volume, sumMerge(pnl_state) AS realized
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE day = (SELECT max(day) FROM tradernick.hl_trade_history_wallet_daily WHERE day <= {end_day:Date})
+            GROUP BY wallet
+        ),
+        ta_s AS (
+            SELECT wallet, sumMerge(volume_state) AS volume, sumMerge(pnl_state) AS realized
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE day = (SELECT max(day) FROM tradernick.hl_trade_history_wallet_daily WHERE day <= {start_day:Date})
+            GROUP BY wallet
+        ),
+        win AS (
+            SELECT e.wallet AS wallet,
+                e.volume   - coalesce(s.volume, 0)   AS volume,
+                e.realized - coalesce(s.realized, 0) AS realized
+            FROM ta_e e LEFT JOIN ta_s s ON s.wallet = e.wallet
+        )"""
+        real_daily = """
+        real_daily AS (
+            SELECT day AS d, wallet,
+                sumMerge(pnl_state)         AS cum_pnl,
+                sumMerge(trade_count_state) AS cum_tc
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE day >= {start_day:Date} AND day <= {end_day:Date}
+            GROUP BY day, wallet
+        )"""
+        eod_daily = f"""
+        eod_daily AS (
+            SELECT day AS d, wallet, sum(eod) AS un
+            FROM (
+                SELECT day, wallet, token, side, argMaxMerge(pnl_state) AS eod
+                FROM tradernick.hl_position_history_eod_wallet
+                WHERE day >= {{start_day:Date}} - 2 AND day <= {{end_day:Date}} {HIP3_EXCLUDE}
+                GROUP BY day, wallet, token, side
+            )
+            GROUP BY day, wallet
+        )"""
+        unreal_now = f"""
+        unreal_now AS (
+            SELECT wallet, sum(eod) AS unrealized
+            FROM (
+                SELECT wallet, token, side, argMaxMerge(pnl_state) AS eod
+                FROM tradernick.hl_position_history_eod_wallet
+                WHERE day = (SELECT max(day) FROM tradernick.hl_position_history_eod_wallet WHERE day <= {{end_day:Date}})
+                      {HIP3_EXCLUDE}
+                GROUP BY wallet, token, side
+            )
+            GROUP BY wallet
+        )"""
+        oi_now = """
+        oi_now AS (
+            SELECT wallet,
+                argMaxIfMerge(last_total_oi_usd_state)   AS oi_usd,
+                argMaxIfMerge(last_total_oi_token_state) AS oi_token
+            FROM tradernick.hl_position_history_oi_wallet_daily
+            WHERE day = (SELECT max(day) FROM tradernick.hl_position_history_oi_wallet_daily WHERE day <= {end_day:Date})
+            GROUP BY wallet
+        )"""
+        oi_token_select = "NULL AS oi_token"  # token-unit OI is meaningless across tokens
+    else:
+        # ── TOKEN-scoped: read the source tables, restricted to one token.
+        params["token"] = token
+        win_cte = """
+        win AS (
+            SELECT wallet,
+                argMaxIf(volume, time, toDate(time) <= {end_day:Date})
+                  - argMaxIf(volume, time, toDate(time) <= {start_day:Date}) AS volume,
+                argMaxIf(pnl, time, toDate(time) <= {end_day:Date})
+                  - argMaxIf(pnl, time, toDate(time) <= {start_day:Date})    AS realized
+            FROM tradernick.hl_trade_history FINAL
+            WHERE token = {token:String} AND toDate(time) <= {end_day:Date}
+            GROUP BY wallet
+        )"""
+        real_daily = """
+        real_daily AS (
+            SELECT toDate(time) AS d, wallet,
+                argMax(pnl, time)         AS cum_pnl,
+                argMax(trade_count, time) AS cum_tc
+            FROM tradernick.hl_trade_history FINAL
+            WHERE token = {token:String}
+              AND toDate(time) >= {start_day:Date} AND toDate(time) <= {end_day:Date}
+            GROUP BY d, wallet
+        )"""
+        eod_daily = """
+        eod_daily AS (
+            SELECT day AS d, wallet, sum(eod) AS un
+            FROM (
+                SELECT day, wallet, side, argMaxMerge(pnl_state) AS eod
+                FROM tradernick.hl_position_history_eod_wallet
+                WHERE token = {token:String}
+                  AND day >= {start_day:Date} - 2 AND day <= {end_day:Date}
+                GROUP BY day, wallet, side
+            )
+            GROUP BY day, wallet
+        )"""
+        unreal_now = """
+        unreal_now AS (
+            SELECT wallet, sum(eod) AS unrealized
+            FROM (
+                SELECT wallet, side, argMaxMerge(pnl_state) AS eod
+                FROM tradernick.hl_position_history_eod_wallet
+                WHERE token = {token:String}
+                  AND day = (SELECT max(day) FROM tradernick.hl_position_history_eod_wallet
+                             WHERE day <= {end_day:Date} AND token = {token:String})
+                GROUP BY wallet, side
+            )
+            GROUP BY wallet
+        )"""
+        oi_now = """
+        oi_now AS (
+            SELECT wallet, sum(abs(amount)) AS oi_token, sum(abs(size_usd)) AS oi_usd
+            FROM (
+                SELECT wallet, side, argMax(amt, bucket) AS amount, argMax(sz, bucket) AS size_usd
+                FROM (
+                    SELECT wallet, bucket, side,
+                        argMaxMerge(amount_state) AS amt, argMaxMerge(size_state) AS sz
+                    FROM tradernick.hl_position_history_1h
+                    WHERE token = {token:String}
+                      AND bucket <= {until:DateTime} AND bucket > {until:DateTime} - INTERVAL 3 DAY
+                    GROUP BY wallet, bucket, side
+                )
+                GROUP BY wallet, side
+            )
+            WHERE amount != 0
+            GROUP BY wallet
+        )"""
+        oi_token_select = "coalesce(oi.oi_token, 0) AS oi_token"
+
+    sql = f"""
+        WITH
+        {win_cte},
+        {real_daily},
+        real_delta AS (
+            SELECT d, wallet,
+                cum_pnl - lagInFrame(cum_pnl, 1, 0) OVER w AS d_real,
+                cum_tc  - lagInFrame(cum_tc,  1, 0) OVER w AS d_tc
+            FROM real_daily
+            WINDOW w AS (PARTITION BY wallet ORDER BY d ASC
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+        ),
+        {eod_daily},
+        eod_delta AS (
+            SELECT d, wallet, un - lagInFrame(un, 1, 0) OVER w AS d_un
+            FROM eod_daily
+            WINDOW w AS (PARTITION BY wallet ORDER BY d ASC
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+        ),
+        daily_series AS (
+            SELECT rd.d AS d, rd.wallet AS wallet,
+                rd.d_real + coalesce(ed.d_un, 0) AS daily_total
+            FROM real_delta rd
+            LEFT JOIN eod_delta ed ON ed.wallet = rd.wallet AND ed.d = rd.d
+            WHERE rd.d > {{start_day:Date}} AND rd.d_tc > 0
+        ),
+        sharpe_agg AS (
+            SELECT wallet,
+                count() AS n_days,
+                avg(daily_total)       AS mean_pnl,
+                stddevPop(daily_total) AS sd_pnl,
+                if(count() >= {{min_days:UInt32}} AND stddevPop(daily_total) > 0,
+                   avg(daily_total) / stddevPop(daily_total), 0) AS sharpe
+            FROM daily_series
+            GROUP BY wallet
+        ),
+        {unreal_now},
+        {oi_now}
+        SELECT
+            w.wallet AS wallet,
+            w.volume AS volume,
+            w.realized AS realized_pnl,
+            coalesce(u.unrealized, 0) AS unrealized_pnl,
+            {oi_token_select},
+            coalesce(oi.oi_usd, 0) AS oi_usd,
+            coalesce(sa.sharpe, 0) AS metric,
+            coalesce(sa.n_days, 0) AS n_days,
+            dictGet('tradernick.wallet_labels', 'categories', lower(w.wallet)) AS categories
+        FROM win w
+        LEFT JOIN sharpe_agg sa ON sa.wallet = w.wallet
+        LEFT JOIN unreal_now u  ON u.wallet = w.wallet
+        LEFT JOIN oi_now oi     ON oi.wallet = w.wallet
+        WHERE w.volume >= {{min_volume:Float64}}
+          AND w.realized >= {{min_realized:Float64}}
+          AND coalesce(sa.n_days, 0) >= {{min_days:UInt32}}
+        ORDER BY {ORDER_COLS[order_by]} DESC
+        LIMIT {{limit:UInt32}}
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters=params)
+    wallets = [
+        {
+            "wallet": r[0],
+            "volume": float(r[1]),
+            "realized_pnl": float(r[2]),
+            "unrealized_pnl": float(r[3]),
+            "oi_token": (float(r[4]) if r[4] is not None else None),
+            "oi_usd": float(r[5]),
+            "metric": float(r[6]),
+            "n_days": int(r[7]),
+            "categories": list(r[8]) if r[8] else [],
+        }
+        for r in rows.result_rows
+    ]
+    return response.json({
+        "metric": metric, "order_by": order_by, "token": token,
+        "lookback": lookback, "snapshot": end_day.isoformat(),
+        "limit": limit, "min_days": min_days, "min_volume": min_volume,
+        "min_realized": min_realized,
+        "wallets": wallets,
     })
 
 

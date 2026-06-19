@@ -360,6 +360,7 @@ export type ChartKind =
   | 'tt'
   | 'ls'
   | 'token_leaderboard'
+  | 'smart_wallets_table'
   | 'transfer'
   | 'exchange_flow'
   | 'pc'
@@ -491,6 +492,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   tt: 'Top Traders L/S',
   ls: 'Long/Short',
   token_leaderboard: 'Token Leaderboard',
+  smart_wallets_table: 'Smart Wallets',
   transfer: 'Token Flow',
   exchange_flow: 'Exchange Flow',
   pc: 'Relative Price',
@@ -1260,8 +1262,10 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
       || kind === 'uniswap_v2_top_wallets' || kind === 'uniswap_v3_top_wallets' || kind === 'uniswap_v4_top_wallets') {
     return 'DeX';
   }
-  // Perp — GMX V2 + Hyperliquid family.
-  if (kind === 'gmx_v2' || isHlKind(kind)) return 'Perp';
+  // Perp — GMX V2 + Hyperliquid family. smart_wallets_table is an HL-only
+  // experimental tableview (no hl_ prefix so it stays out of the many
+  // isHlKind() chart-control branches) — categorise it here explicitly.
+  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table') return 'Perp';
   // Staking — Lido (and future Stader/Frax).
   if (kind === 'lido') return 'Staking';
   return null;
@@ -1469,6 +1473,39 @@ export type TransferFilters = {
   involving_addr_in?: string[];
   involving_addr_ex?: string[];
 };
+
+// ── smart_wallets_table (experimental smart-wallet finder) ─────────────────
+// One bespoke tableview kind whose internal "metric" selector swaps the extra
+// (right-most) column and the server-side ranking. Backed by
+// /api/hyperliquid/smart_wallet_metrics. Designed to grow: add a metric here +
+// a backend branch and the toolbar/table pick it up.
+export type SmartWalletMetric = 'sharpe';
+export type SmartWalletLookback = 1 | 7 | 30 | 90;
+export const SMART_WALLET_LOOKBACKS: ReadonlyArray<SmartWalletLookback> = [1, 7, 30, 90];
+
+export type SmartWalletMetricDef = {
+  key: SmartWalletMetric;
+  /** Short selector + column-header label. */
+  label: string;
+  /** Column-header tooltip / longer description. */
+  desc: string;
+  /** How to render the value: 'ratio' = signed 2-dp number; 'usd' = $; */
+  format: 'ratio' | 'usd';
+};
+
+export const SMART_WALLET_METRICS: ReadonlyArray<SmartWalletMetricDef> = [
+  {
+    key: 'sharpe',
+    label: 'Sharpe',
+    desc: 'mean(daily total PnL) / std(daily total PnL) over active days in the window. '
+      + 'Daily total PnL = Δrealized + Δunrealized. Not annualized, not capital-normalized.',
+    format: 'ratio'
+  }
+];
+
+export function smartWalletMetricDef(key: SmartWalletMetric | undefined): SmartWalletMetricDef {
+  return SMART_WALLET_METRICS.find((m) => m.key === key) ?? SMART_WALLET_METRICS[0];
+}
 
 // Width + height are grid-column / grid-row spans. Both axes accept 1–4
 // so the user can drag any chart to anything from 1×1 (compact) up to
@@ -1710,6 +1747,27 @@ export type ChartInstance = {
   leaderboardMetric?: LeaderboardMetric;
   /** Top-wallets leaderboard kinds: how many rows to return. Default 10. */
   leaderboardTopN?: number;
+  /** smart_wallets_table only: which ranking metric is the extra column AND
+   *  the server-side sort that defines the top-N candidate set. Only 'sharpe'
+   *  for now (simple mean/std of daily total PnL — see SMART_WALLET_METRICS). */
+  swMetric?: SmartWalletMetric;
+  /** smart_wallets_table only: window length in days ending at the snapshot. */
+  swLookback?: SmartWalletLookback;
+  /** smart_wallets_table only: token to scope every column to. null/undefined
+   *  or '' = global (all tokens), which reads the fast wallet-daily rollups. */
+  swToken?: string | null;
+  /** smart_wallets_table only: ISO date (YYYY-MM-DD) ending the window. The
+   *  day slider sets this; default = start of the current UTC day. */
+  swSnapshot?: string;
+  /** smart_wallets_table only: noise guard — minimum active (trade) days in
+   *  the window for a wallet to enter the ranking. Configurable; default 3. */
+  swMinDays?: number;
+  /** smart_wallets_table only: noise guard — minimum window volume (USD).
+   *  Configurable; default 100000. */
+  swMinVolume?: number;
+  /** smart_wallets_table only: minimum window realized PnL (USD) for a wallet
+   *  to enter the ranking. Configurable; default 0 (profitable only). */
+  swMinRealized?: number;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */
@@ -1960,7 +2018,7 @@ function _populateDefaultOverlaySeries() {
   // Table kinds are explicitly empty so they get filtered out.
   const tabular: ChartKind[] = [
     'hl_top_vaults','hl_top_vault_lps','hl_vault_detail',
-    'hl_top_traders','hl_top_positions','token_leaderboard'
+    'hl_top_traders','hl_top_positions','token_leaderboard','smart_wallets_table'
   ];
   for (const k of tabular) OVERLAY_KIND_SERIES[k] = [];
   void valueOnly;
@@ -2536,6 +2594,18 @@ export function newChartInstance(
     if (kind === 'lido') {
       base.lidoSubkind = 'lido_deposit';
     }
+  }
+  if (kind === 'smart_wallets_table') {
+    // Experimental smart-wallet finder. Wide + tall so the table breathes.
+    base.width = 3;
+    base.height = 3;
+    base.swMetric = 'sharpe';
+    base.swLookback = 7;
+    base.swToken = null;          // global (all tokens) by default
+    base.swSnapshot = undefined;  // resolved to start-of-today at fetch time
+    base.swMinDays = 3;
+    base.swMinVolume = 100000;
+    base.swMinRealized = 0;
   }
   return base;
 }

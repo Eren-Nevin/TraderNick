@@ -1099,6 +1099,25 @@
           inst.chain = typeof r.chain === 'string' ? r.chain : (defaultChain ?? 'ETH');
         }
       }
+      // smart_wallets_table (experimental smart-wallet finder) — restore the
+      // metric / lookback / token / snapshot selectors + the configurable noise
+      // guards so the chart reloads exactly as the user left it. Not an hl_
+      // kind, so set the display chain chip here.
+      if (inst.kind === 'smart_wallets_table') {
+        inst.chain = 'HL';
+        inst.swMetric = r.swMetric === 'sharpe' ? 'sharpe' : 'sharpe';
+        const lb = r.swLookback;
+        inst.swLookback = (lb === 1 || lb === 7 || lb === 30 || lb === 90) ? lb : 7;
+        inst.swToken =
+          typeof r.swToken === 'string' && r.swToken.length > 0 ? r.swToken : null;
+        inst.swSnapshot = typeof r.swSnapshot === 'string' ? r.swSnapshot : undefined;
+        inst.swMinDays =
+          typeof r.swMinDays === 'number' && r.swMinDays >= 1 ? Math.floor(r.swMinDays) : 3;
+        inst.swMinVolume =
+          typeof r.swMinVolume === 'number' && r.swMinVolume >= 0 ? r.swMinVolume : 100000;
+        inst.swMinRealized =
+          typeof r.swMinRealized === 'number' ? r.swMinRealized : 0;
+      }
       // Compound overlays — preserved across reloads. Each entry is validated
       // through sanitizeOverlay() so a corrupt save can't strand the chart.
       if (Array.isArray(r.overlays)) {

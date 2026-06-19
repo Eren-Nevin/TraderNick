@@ -4,6 +4,7 @@
   import LineChart from '$lib/components/charts/lwc/LwcLineChart.svelte';
   import TableChart from '$lib/components/TableChart.svelte';
   import TokenLeaderboardTable from '$lib/components/TokenLeaderboardTable.svelte';
+  import SmartWalletMetricsTable from '$lib/components/SmartWalletMetricsTable.svelte';
   import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
   import HlTopVaultsTable from '$lib/components/HlTopVaultsTable.svelte';
   import HlTopVaultLpsTable from '$lib/components/HlTopVaultLpsTable.svelte';
@@ -107,6 +108,8 @@
     isLeaderboardKind,
     LEADERBOARD_KIND_CONFIG,
     type LeaderboardMetric,
+    type SmartWalletMetric,
+    type SmartWalletLookback,
     overlayChipLabel,
     nextOverlayColor,
     OVERLAY_KIND_SERIES,
@@ -662,7 +665,29 @@
     return main;
   }
 
+  // smart_wallets_table: resolved snapshot ISO date — instance.swSnapshot when
+  // set, else the start of the current UTC day. The slider writes back into
+  // instance.swSnapshot; this is the single source of truth for the fetch +
+  // the table header.
+  function swSnapshotIso(): string {
+    if (instance.swSnapshot) return instance.swSnapshot;
+    const n = new Date();
+    return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()))
+      .toISOString().slice(0, 10);
+  }
+
   function loadKey(): string {
+    if (instance.kind === 'smart_wallets_table') {
+      // Every selector busts the cache: metric+order change the ranking,
+      // lookback/token/snapshot change the window, and the min-days/min-volume
+      // guards change the candidate set. No interval (single-shot rollup).
+      return [
+        'smart_wallets_table', instance.swMetric ?? 'sharpe', instance.swLookback ?? 7,
+        instance.swToken ?? '__all__', swSnapshotIso(),
+        instance.swMinDays ?? 3, instance.swMinVolume ?? 100000,
+        instance.swMinRealized ?? 0
+      ].join('|');
+    }
     if (instance.kind === 'token_leaderboard') {
       // Single global snapshot — the endpoint computes everything relative to
       // now() server-side, so there are no per-instance params. Constant key:
@@ -1454,6 +1479,33 @@
           loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
           return;
         }
+      }
+      // Smart Wallets finder: one JSON fetch returns the ranked wallet rows for
+      // the selected metric / lookback / token / snapshot window. The endpoint
+      // sorts + top-N caps server-side; the table re-sorts the returned set
+      // client-side. Carried as a single AnyDatum payload (same shape trick as
+      // the leaderboard kinds). since/until are ignored (the window is derived
+      // from lookback + snapshot server-side).
+      if (instance.kind === 'smart_wallets_table') {
+        const qs = new URLSearchParams({
+          lookback: String(instance.swLookback ?? 7),
+          metric: instance.swMetric ?? 'sharpe',
+          snapshot: swSnapshotIso(),
+          limit: '100',
+          min_days: String(Math.max(1, instance.swMinDays ?? 3)),
+          min_volume: String(Math.max(0, instance.swMinVolume ?? 100000)),
+          min_realized: String(instance.swMinRealized ?? 0)
+        });
+        if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
+        const res = await queuedFetch(`/api/hyperliquid/smart_wallet_metrics?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = [{ wallets: body.wallets ?? [] } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        return;
       }
       // Token Leaderboard: one JSON fetch returns a per-token snapshot row set
       // (price, 24h volume, avg 24h OI, 24h/7d change). The endpoint computes
@@ -4383,6 +4435,7 @@
     && instance.kind !== 'hl_top_vault_lps'
     && instance.kind !== 'hl_vault_detail'
     && instance.kind !== 'token_leaderboard'
+    && instance.kind !== 'smart_wallets_table'
     && !isLeaderboardKind(instance.kind)
   );
 
@@ -5719,6 +5772,12 @@
              dimension (Binance-sourced, all tokens). Sorting lives in the table
              header, so the toolbar just carries a static source chip. -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">Binance · all tokens</span>
+      {:else if instance.kind === 'smart_wallets_table'}
+        <!-- Smart Wallets finder: HL-only. Every control (metric / lookback /
+             token selectors + the snapshot slider) lives inside the table's own
+             header; the min-days/min-volume guards live in the gear panel. The
+             toolbar just carries a static source chip. -->
+        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL · smart wallets</span>
       {:else}
         {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'volume' || instance.kind === 'pc' || instance.kind === 'ls'}
           <!-- Exchange selector picks the data source. ohlcv → *_ohlcv_1m,
@@ -5859,7 +5918,7 @@
           {/each}
         </select>
       {/if}
-      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard'}
+      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'smart_wallets_table'}
         <select
           bind:value={instance.interval}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -5955,6 +6014,39 @@
   {#if settingsOpen}
     <div class="absolute inset-0 z-20 bg-zinc-950/95 overflow-y-auto">
     <div class="px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/30 flex items-center gap-3 flex-wrap text-xs">
+      {#if instance.kind === 'smart_wallets_table'}
+        <!-- Noise guards for the smart-wallet finder. A raw mean/std ranking is
+             dominated by wallets with one or two lucky days, so we require a
+             minimum number of active (trade) days AND a minimum window volume
+             before a wallet enters the ranking. Both refetch on commit. -->
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min active days</span>
+        <input
+          type="number" min="1" max="90" step="1"
+          value={instance.swMinDays ?? 3}
+          onchange={(e) => (instance.swMinDays = Math.max(1, parseInt(e.currentTarget.value, 10) || 1))}
+          title="Minimum active (trade) days in the window for a wallet to be ranked"
+          class="w-16 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min volume ($)</span>
+        <input
+          type="number" min="0" step="10000"
+          value={instance.swMinVolume ?? 100000}
+          onchange={(e) => (instance.swMinVolume = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+          title="Minimum window volume (USD) for a wallet to be ranked"
+          class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min realized ($)</span>
+        <input
+          type="number" step="1000"
+          value={instance.swMinRealized ?? 0}
+          onchange={(e) => (instance.swMinRealized = parseFloat(e.currentTarget.value) || 0)}
+          title="Minimum window realized PnL (USD) for a wallet to be ranked. 0 = profitable only; set negative to include losers."
+          class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+      {/if}
       {#if instance.kind === 'ohlcv'}
         <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">
           <input type="checkbox" bind:checked={instance.pin} class="accent-zinc-400" />
@@ -6878,6 +6970,21 @@
         formatTooltip={exchangeFlowUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
         formatY2={instance.showSum ? (exchangeFlowUseUsd ? fmtUsdAxis : fmtAmountAxis) : undefined}
         formatTooltip2={instance.showSum ? (exchangeFlowUseUsd ? fmtUsdTooltip : fmtAmountTooltip) : undefined}
+      />
+    {:else if instance.kind === 'smart_wallets_table'}
+      <SmartWalletMetricsTable
+        rows={data.length > 0 ? ((data[0] as unknown as {wallets?: import('$lib/components/SmartWalletMetricsTable.svelte').SmartWalletRow[]}).wallets ?? []) : []}
+        {tokens}
+        metric={(instance.swMetric ?? 'sharpe') as SmartWalletMetric}
+        lookback={(instance.swLookback ?? 7) as SmartWalletLookback}
+        token={instance.swToken ?? null}
+        snapshot={swSnapshotIso()}
+        onChangeMetric={(m) => (instance.swMetric = m)}
+        onChangeLookback={(l) => (instance.swLookback = l)}
+        onChangeToken={(t) => (instance.swToken = t)}
+        onChangeSnapshot={(iso) => (instance.swSnapshot = iso)}
+        loading={loading}
+        error={error}
       />
     {:else if instance.kind === 'token_leaderboard'}
       <TokenLeaderboardTable
