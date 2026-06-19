@@ -1403,17 +1403,19 @@ async def wallet_positions(request):
     """A wallet's stored positions AS OF a past day — the historical companion
     to /live_positions (which only has the real-time book).
 
-    Reads the latest hl_position_history_1h bucket at or before end-of-`day`
-    and returns one row per (token, side) still open at that bucket. This is
-    roster-scoped (only ingested tokens) and ≥ the ingest min-size, sampled
-    hourly — sparser than the live API, but it's what we have historically.
+    Reads the latest hl_position_history snapshot at or before end-of-`day` and
+    returns one row per (token, side) still open then. Unlike the 1h rollup,
+    the base snapshot table carries the full per-position detail HL's API
+    reports — entry price, cumulative funding-since-open, and fees — so the
+    wallet page can show the same columns historically that it shows live.
 
     Query params:
       wallet — required (0x…; lowercased to match the table).
       day    — ISO date (YYYY-MM-DD). Positions as of end of that day.
                Defaults to today (UTC).
     Returns { wallet, day, bucket (epoch s or null), positions:[{token, side,
-              amount, size_usd, unrealized_pnl}] } sorted by descending notional.
+              amount, size_usd, unrealized_pnl, entry_px, funding, fee}] }
+    sorted by descending notional.
     """
     wallet = request.args.get("wallet")
     if not wallet:
@@ -1429,31 +1431,40 @@ async def wallet_positions(request):
     # As of END of `day` → everything strictly before the next day's midnight.
     until_dt = datetime(day.year, day.month, day.day) + timedelta(days=1)
 
-    # Open positions are sampled hourly (dense while open), so the latest bucket
-    # at/​before end-of-day is on the snapshot day itself — look back only ~2 days
-    # so the scan prunes to 2 partitions instead of all history (the table sorts
-    # by token first, so a token-less wallet filter can't use the primary index).
+    # Positions are snapshotted densely while open, so the latest snapshot
+    # at/​before end-of-day is on the day itself — look back only ~2 days so the
+    # scan stays inside one monthly partition + a narrow time range (the table
+    # sorts token-first, so a token-less wallet filter can't use the index, but
+    # partition + time pruning keeps this fast, ~0.1s).
+    #
+    # NB: do NOT alias the timestamp projection `time` — a SELECT alias that
+    # shadows the `time` column would turn the `time = (SELECT t)` row filter
+    # into a constant tautology and argMax would then return the latest book
+    # for every day (the bug that bit the old `bucket` alias).
+    #
+    # `funding` is stored as the signed funding PnL (negative = paid); the live
+    # API reports cum_funding_since_open with the opposite sign, so negate it
+    # here to match the live-mode column.
     sql = """
         WITH latest AS (
-            SELECT max(bucket) AS b
-            FROM tradernick.hl_position_history_1h
+            SELECT max(time) AS t
+            FROM tradernick.hl_position_history
             WHERE wallet = {wallet:String}
-              AND bucket < {until:DateTime}
-              AND bucket >= {until:DateTime} - INTERVAL 2 DAY
+              AND time < {until:DateTime}
+              AND time >= {until:DateTime} - INTERVAL 2 DAY
         )
         SELECT token, side,
-            argMaxMerge(amount_state) AS amount,
-            argMaxMerge(size_state)   AS size_usd,
-            argMaxMerge(pnl_state)    AS unrealized,
-            -- NB: must NOT alias this `bucket` — a SELECT alias named `bucket`
-            -- shadows the table column in the WHERE below, turning the
-            -- `bucket = (SELECT b)` row filter into a constant-true tautology
-            -- (argMaxMerge then merges ALL buckets → always the latest book).
-            toUnixTimestamp((SELECT b FROM latest)) AS bucket_ts
-        FROM tradernick.hl_position_history_1h
+            argMax(amount, time)         AS amount,
+            argMax(size, time)           AS size_usd,
+            argMax(unrealized_pnl, time) AS unrealized,
+            argMax(avg_entry, time)      AS entry_px,
+            -argMax(funding, time)       AS funding,
+            argMax(fee, time)            AS fee,
+            toUnixTimestamp((SELECT t FROM latest)) AS snap_ts
+        FROM tradernick.hl_position_history
         WHERE wallet = {wallet:String}
-          AND bucket = (SELECT b FROM latest)
-          AND bucket >= {until:DateTime} - INTERVAL 2 DAY
+          AND time = (SELECT t FROM latest)
+          AND time >= {until:DateTime} - INTERVAL 2 DAY
         GROUP BY token, side
         HAVING amount != 0
         ORDER BY size_usd DESC
@@ -1467,10 +1478,13 @@ async def wallet_positions(request):
             "amount": float(r[2]),
             "size_usd": float(r[3]),
             "unrealized_pnl": float(r[4]),
+            "entry_px": float(r[5]),
+            "funding": float(r[6]),
+            "fee": float(r[7]),
         }
         for r in rows.result_rows
     ]
-    bucket = rows.result_rows[0][5] if rows.result_rows else None
+    bucket = rows.result_rows[0][8] if rows.result_rows else None
     return response.json({
         "wallet": wallet,
         "day": day.isoformat(),

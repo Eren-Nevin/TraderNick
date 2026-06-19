@@ -62,10 +62,6 @@
     if (r === null || r === undefined || !isFinite(r)) return '—';
     return (r >= 0 ? '+' : '') + (r * 100).toFixed(1) + '%';
   }
-  function fmtLev(v: number | null | undefined, t: string | null | undefined): string {
-    if (!v) return '—';
-    return v + '×' + (t ? ' ' + t[0].toUpperCase() : '');
-  }
 
   // ── Client-side sort. '' = incoming order (server already sorts by notional). ──
   let sortKey = $state<string>('');
@@ -125,18 +121,12 @@
                 onclick={() => onSort('size_usd')}>Notional{sortArrow('size_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort('amount')}>Size{sortArrow('amount')}</th>
-            {#if live}
-              <th class="text-right px-3 py-1.5 font-normal">Entry</th>
-              <th class="text-right px-3 py-1.5 font-normal">Liq.</th>
-            {/if}
+            <th class="text-right px-3 py-1.5 font-normal">Entry</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort('unrealized_pnl')}>Unrealized{sortArrow('unrealized_pnl')}</th>
-            {#if live}
-              <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
-                  onclick={() => onSort('roe')}>ROE{sortArrow('roe')}</th>
-              <th class="text-right px-3 py-1.5 font-normal">Funding</th>
-              <th class="text-right px-3 py-1.5 font-normal">Lev.</th>
-            {/if}
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
+                onclick={() => onSort('roe')}>ROE{sortArrow('roe')}</th>
+            <th class="text-right px-3 py-1.5 font-normal">Funding</th>
           </tr>
         </thead>
         <tbody>
@@ -150,22 +140,16 @@
               </td>
               <td class="px-3 py-1 text-right font-mono text-zinc-300">{fmtUsd(p.size_usd)}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtSize(p.amount)} {p.token}</td>
-              {#if live}
-                <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtPrice(p.entry_px)}</td>
-                <td class="px-3 py-1 text-right font-mono text-amber-500/80">{fmtPrice(p.liquidation_px)}</td>
-              {/if}
+              <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtPrice(p.entry_px)}</td>
               <td class="px-3 py-1 text-right font-mono"
                   class:text-emerald-400={p.unrealized_pnl > 0}
                   class:text-rose-400={p.unrealized_pnl < 0}
                   class:text-zinc-500={p.unrealized_pnl === 0}>{fmtUsd(p.unrealized_pnl)}</td>
-              {#if live}
-                <td class="px-3 py-1 text-right font-mono"
-                    class:text-emerald-400={(p.roe ?? 0) > 0}
-                    class:text-rose-400={(p.roe ?? 0) < 0}
-                    class:text-zinc-500={(p.roe ?? 0) === 0}>{fmtRoe(p.roe)}</td>
-                <td class="px-3 py-1 text-right font-mono text-zinc-500">{p.funding != null ? fmtUsd(p.funding) : '—'}</td>
-                <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtLev(p.leverage, p.leverage_type)}</td>
-              {/if}
+              <td class="px-3 py-1 text-right font-mono"
+                  class:text-emerald-400={(p.roe ?? 0) > 0}
+                  class:text-rose-400={(p.roe ?? 0) < 0}
+                  class:text-zinc-500={(p.roe ?? 0) === 0}>{fmtRoe(p.roe)}</td>
+              <td class="px-3 py-1 text-right font-mono text-zinc-500">{p.funding != null ? fmtUsd(p.funding) : '—'}</td>
             </tr>
           {/each}
         </tbody>

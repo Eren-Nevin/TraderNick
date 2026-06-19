@@ -104,20 +104,34 @@
 
   // ── Mappers (live API shape vs stored-snapshot shape → PositionRow) ──
   function mapLive(p: Record<string, unknown>): PositionRow {
+    // HL's return_on_equity is leverage-true (PnL / margin). Past-day ROE can't
+    // be (margin isn't stored) so we report return on entry notional there;
+    // de-leverage the live value here (÷ leverage) so both modes mean the same.
+    const lev = Number(p.leverage_value) || 0;
+    const roeLev = Number(p.return_on_equity);
     return {
       token: String(p.token), side: p.side as 'long' | 'short',
       amount: Number(p.amount), size_usd: Number(p.size),
       unrealized_pnl: Number(p.unrealized_pnl),
       entry_px: p.entry_px as number, liquidation_px: p.liquidation_px as number,
-      roe: p.return_on_equity as number, funding: p.cum_funding_since_open as number,
+      roe: lev ? roeLev / lev : roeLev, funding: p.cum_funding_since_open as number,
       leverage: p.leverage_value as number, leverage_type: p.leverage_type as string
     };
   }
   function mapHist(p: Record<string, unknown>): PositionRow {
+    const amount = Number(p.amount);
+    const size_usd = Number(p.size_usd);
+    const unrealized_pnl = Number(p.unrealized_pnl);
+    const entry_px = p.entry_px != null ? Number(p.entry_px) : null;
+    // ROE we can't get leverage-true for past days (margin isn't stored), so
+    // report the return on the position's entry notional (= price move %).
+    // entry_notional = |amount| × entry; equivalently size_usd ∓ unrealized.
+    const entryNotional = entry_px ? Math.abs(amount) * entry_px : 0;
+    const roe = entryNotional ? unrealized_pnl / entryNotional : null;
     return {
       token: String(p.token), side: p.side as 'long' | 'short',
-      amount: Number(p.amount), size_usd: Number(p.size_usd),
-      unrealized_pnl: Number(p.unrealized_pnl)
+      amount, size_usd, unrealized_pnl, entry_px, roe,
+      funding: p.funding != null ? Number(p.funding) : null
     };
   }
 
