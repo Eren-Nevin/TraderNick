@@ -1596,8 +1596,9 @@ export type ChartInstance = {
   /** exchange_flow only: which series to plot.
    *  - 'inflow' / 'outflow': single line of that direction.
    *  - 'netflow': single line, computed client-side = inflow - outflow.
+   *  - 'in_out': two lines (inflow green + outflow red), no net.
    *  - 'all': three lines (inflow green, outflow red, netflow cyan). */
-  exchangeFlowType?: 'inflow' | 'outflow' | 'netflow' | 'all';
+  exchangeFlowType?: 'inflow' | 'outflow' | 'netflow' | 'in_out' | 'all';
   /** hl_top_vaults only: ranking metric for the leaderboard. */
   hlVaultSortBy?: 'net' | 'deposits' | 'withdrawals' | 'commission';
   /** hl_vault_detail only: which vault from the top-N list is currently

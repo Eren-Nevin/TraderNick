@@ -2875,6 +2875,9 @@
       // "where did HL TVL move" read. Uses the windowed-sum variant
       // (instance.sumWindow) so the user can pick a rolling horizon.
       || instance.kind === 'hl_transfers'
+      // CeX Exchange Flow: running sum of the selected direction (net by
+      // default) — cumulative net deposits/withdrawals over the window.
+      || instance.kind === 'exchange_flow'
   );
 
   let cumulativeLines = $derived.by(() => {
@@ -3142,7 +3145,10 @@
             if (t === 'inflow')  pushFlow('in',  'Inflow',  fIn,  SUB_DASH[0]);
             else if (t === 'outflow') pushFlow('out', 'Outflow', fOut, SUB_DASH[0]);
             else if (t === 'netflow') pushFlow('net', 'Netflow', fNet, SUB_DASH[0]);
-            else {
+            else if (t === 'in_out') {
+              pushFlow('in',  'Inflow',  fIn,  SUB_DASH[0]);
+              pushFlow('out', 'Outflow', fOut, SUB_DASH[1]);
+            } else {
               pushFlow('in',  'Inflow',  fIn,  SUB_DASH[0]);
               pushFlow('out', 'Outflow', fOut, SUB_DASH[1]);
               pushFlow('net', 'Netflow', fNet, SUB_DASH[2]);
@@ -3168,7 +3174,10 @@
             if (t === 'inflow')  pushFlow('in',  'Inflow',  'deposit',    SUB_DASH[0]);
             else if (t === 'outflow') pushFlow('out', 'Outflow', 'withdrawal', SUB_DASH[0]);
             else if (t === 'netflow') pushFlow('net', 'Netflow', 'net',        SUB_DASH[0]);
-            else {
+            else if (t === 'in_out') {
+              pushFlow('in',  'Inflow',  'deposit',    SUB_DASH[0]);
+              pushFlow('out', 'Outflow', 'withdrawal', SUB_DASH[1]);
+            } else {
               pushFlow('in',  'Inflow',  'deposit',    SUB_DASH[0]);
               pushFlow('out', 'Outflow', 'withdrawal', SUB_DASH[1]);
               pushFlow('net', 'Netflow', 'net',        SUB_DASH[2]);
@@ -3250,7 +3259,45 @@
       // tracks whichever direction the user selected in the flow-type
       // toggle. Also honours a sliding window via instance.sumWindow (0
       // or unset = strict running total from the first loaded bucket).
-      if (instance.kind === 'hl_transfers') {
+      if (instance.kind === 'exchange_flow') {
+        // CeX flow rows expose {sum_value_usd_in/out, sum_amount_in/out,
+        // net_value_usd, net_amount}. The running sum tracks whichever
+        // direction the flow-type toggle selects; multi-line modes
+        // (netflow / in_out / all) anchor on the signed net so the Σ line
+        // reads as cumulative net flow. Honours the USD/amount toggle and
+        // the optional sliding window (sumWindow).
+        const useUsd = (instance.valueMode ?? 'usd') === 'usd';
+        const t = instance.exchangeFlowType ?? 'netflow';
+        const field = t === 'inflow' ? (useUsd ? 'sum_value_usd_in' : 'sum_amount_in')
+                    : t === 'outflow' ? (useUsd ? 'sum_value_usd_out' : 'sum_amount_out')
+                    : (useUsd ? 'net_value_usd' : 'net_amount');
+        const lineLabel = t === 'inflow' ? 'Inflow'
+                       : t === 'outflow' ? 'Outflow'
+                       : 'Netflow';
+        const win = Math.max(0, Math.floor(instance.sumWindow ?? 0));
+        const src = (data as unknown as Record<string, number>[]).map(
+          (d) => Number(d[field] ?? 0)
+        );
+        const running: number[] = new Array(src.length);
+        let acc = 0;
+        if (win === 0) {
+          for (let i = 0; i < src.length; i++) { acc += src[i] || 0; running[i] = acc; }
+        } else {
+          for (let i = 0; i < src.length; i++) {
+            acc += src[i] || 0;
+            if (i >= win) acc -= src[i - win] || 0;
+            running[i] = acc;
+          }
+        }
+        const winLabel = win > 0 ? ` (last ${win})` : '';
+        out.push({
+          key: 'cum_sum',
+          label: `Σ ${lineLabel}${winLabel}`,
+          color: '#a78bfa',
+          axis: 'secondary' as const,
+          compute: (_d: unknown, i: number) => running[i]
+        });
+      } else if (instance.kind === 'hl_transfers') {
         const t = instance.exchangeFlowType ?? 'netflow';
         const field = t === 'inflow' ? 'deposit'
                     : t === 'outflow' ? 'withdrawal'
@@ -3437,6 +3484,7 @@
     if (t === 'inflow')  return [inLine, ...cumulativeLines];
     if (t === 'outflow') return [outLine, ...cumulativeLines];
     if (t === 'netflow') return [netLine, ...cumulativeLines];
+    if (t === 'in_out')  return [inLine, outLine, ...cumulativeLines];
     return [inLine, outLine, netLine, ...cumulativeLines]; // 'all'
   });
 
@@ -3566,6 +3614,7 @@
     if (t === 'inflow')  return [inLine, ...cumulativeLines];
     if (t === 'outflow') return [outLine, ...cumulativeLines];
     if (t === 'netflow') return [netLine, ...cumulativeLines];
+    if (t === 'in_out')  return [inLine, outLine, ...cumulativeLines];
     return [inLine, outLine, netLine, ...cumulativeLines]; // 'all'
   });
 
@@ -4210,7 +4259,9 @@
     const ex = instance.exchangeFlowExchange ?? 'binance';
     const exLabel = ex.charAt(0).toUpperCase() + ex.slice(1);
     const t = instance.exchangeFlowType ?? 'netflow';
-    const tLabel = t === 'all' ? 'All' : t.charAt(0).toUpperCase() + t.slice(1);
+    const tLabel = t === 'all' ? 'All'
+      : t === 'in_out' ? 'Outflow + Inflow'
+      : t.charAt(0).toUpperCase() + t.slice(1);
     return `${exLabel} ${tLabel}`;
   });
   let displayTitle = $derived(
@@ -5072,13 +5123,14 @@
                  `exchangeFlowType` field so saved layouts round-trip. -->
             <select
               value={instance.exchangeFlowType ?? 'netflow'}
-              onchange={(e) => (instance.exchangeFlowType = e.currentTarget.value as 'inflow' | 'outflow' | 'netflow' | 'all')}
+              onchange={(e) => (instance.exchangeFlowType = e.currentTarget.value as 'inflow' | 'outflow' | 'netflow' | 'in_out' | 'all')}
               class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
               title="Which direction(s) of HL bridge flow to plot"
             >
               <option value="inflow">Inflow</option>
               <option value="outflow">Outflow</option>
               <option value="netflow">Netflow</option>
+              <option value="in_out">Outflow + Inflow</option>
               <option value="all">All</option>
             </select>
           {/if}
@@ -5557,13 +5609,14 @@
         </select>
         <select
           value={instance.exchangeFlowType ?? 'netflow'}
-          onchange={(e) => (instance.exchangeFlowType = e.currentTarget.value as 'inflow' | 'outflow' | 'netflow' | 'all')}
+          onchange={(e) => (instance.exchangeFlowType = e.currentTarget.value as 'inflow' | 'outflow' | 'netflow' | 'in_out' | 'all')}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
           title="Which direction(s) of flow to plot"
         >
           <option value="inflow">Inflow</option>
           <option value="outflow">Outflow</option>
           <option value="netflow">Netflow</option>
+          <option value="in_out">Outflow + Inflow</option>
           <option value="all">All</option>
         </select>
         <select
@@ -6794,6 +6847,8 @@
         vRefLines={weekVRefLines}
         formatY={exchangeFlowUseUsd ? fmtUsdAxis : fmtAmountAxis}
         formatTooltip={exchangeFlowUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
+        formatY2={instance.showSum ? (exchangeFlowUseUsd ? fmtUsdAxis : fmtAmountAxis) : undefined}
+        formatTooltip2={instance.showSum ? (exchangeFlowUseUsd ? fmtUsdTooltip : fmtAmountTooltip) : undefined}
       />
     {:else if instance.kind === 'token_leaderboard'}
       <TokenLeaderboardTable
