@@ -1445,7 +1445,11 @@ async def wallet_positions(request):
             argMaxMerge(amount_state) AS amount,
             argMaxMerge(size_state)   AS size_usd,
             argMaxMerge(pnl_state)    AS unrealized,
-            toUnixTimestamp((SELECT b FROM latest)) AS bucket
+            -- NB: must NOT alias this `bucket` — a SELECT alias named `bucket`
+            -- shadows the table column in the WHERE below, turning the
+            -- `bucket = (SELECT b)` row filter into a constant-true tautology
+            -- (argMaxMerge then merges ALL buckets → always the latest book).
+            toUnixTimestamp((SELECT b FROM latest)) AS bucket_ts
         FROM tradernick.hl_position_history_1h
         WHERE wallet = {wallet:String}
           AND bucket = (SELECT b FROM latest)
