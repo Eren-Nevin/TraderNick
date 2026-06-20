@@ -40,7 +40,7 @@
   let pnlStats = $state<PnlStats | null>(null);
   let pnlLoading = $state(true);
   let pnlError = $state<string | null>(null);
-  let pnlMode = $state<'total' | 'realized'>('total');
+  let pnlMode = $state<'total' | 'realized' | 'unrealized'>('total');
 
   let positions = $state<PositionRow[]>([]);
   let posLoading = $state(false);
@@ -69,8 +69,30 @@
   const selectedUnix = $derived(isoToUnix(snapshotIso));
 
   const chartData = $derived(
-    pnlSeries.map((p) => ({ time: p.time, value: pnlMode === 'total' ? p.total : p.realized }))
+    pnlSeries.map((p) => ({
+      time: p.time,
+      value: pnlMode === 'total' ? p.total : pnlMode === 'realized' ? p.realized : p.unrealized
+    }))
   );
+
+  // The selected token's dominant position (largest notional if both sides are
+  // held) → drives the entry-price line + open-date marker on the chart. Both
+  // sit on the close-price (left) axis. opened_at is snapshot-only (the live
+  // API has no open time), so the vertical line is simply skipped when null.
+  const selectedPos = $derived.by(() => {
+    if (!selectedToken) return null;
+    const rows = positions.filter((p) => p.token === selectedToken);
+    if (!rows.length) return null;
+    return rows.reduce((a, b) => (Math.abs(b.size_usd) > Math.abs(a.size_usd) ? b : a));
+  });
+  const entryPrice = $derived(selectedPos?.entry_px ?? null);
+  // Snap the open time to its UTC midnight — the PnL series only has daily
+  // bars, so an intraday timestamp won't resolve to a chart coordinate.
+  const entryTime = $derived(
+    selectedPos?.opened_at != null ? Math.floor(selectedPos.opened_at / 86400) * 86400 : null
+  );
+  // Entry line green when the position is in profit, red when underwater.
+  const entryColor = $derived((selectedPos?.unrealized_pnl ?? 0) >= 0 ? '#22c55e' : '#ef4444');
 
   // Last daily point at or before the selected day → as-of realized/unrealized.
   const asOf = $derived.by(() => {
@@ -145,7 +167,8 @@
     return {
       token: String(p.token), side: p.side as 'long' | 'short',
       amount, size_usd, unrealized_pnl, entry_px, roe,
-      funding: p.funding != null ? Number(p.funding) : null
+      funding: p.funding != null ? Number(p.funding) : null,
+      opened_at: p.opened_at != null ? Number(p.opened_at) : null
     };
   }
 
@@ -318,6 +341,9 @@
         <button type="button" onclick={() => (pnlMode = 'realized')}
           class={'px-2 py-0.5 text-xs border-l border-zinc-700 ' + (pnlMode === 'realized' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
           title="Cumulative realized PnL only">Realized</button>
+        <button type="button" onclick={() => (pnlMode = 'unrealized')}
+          class={'px-2 py-0.5 text-xs border-l border-zinc-700 ' + (pnlMode === 'unrealized' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+          title="Unrealized (open-position) PnL only">Unrealized</button>
       </div>
       {#if selectedToken}
         <span class="ml-auto inline-flex items-center gap-1.5 text-xs text-blue-300">
@@ -342,12 +368,15 @@
         <WalletPnlChart
           data={chartData}
           closeData={closeSeries}
+          entryPrice={selectedToken ? entryPrice : null}
+          entryTime={selectedToken ? entryTime : null}
+          entryColor={entryColor}
           height={260}
           cutoff={selectedUnix}
           rangeFrom={floorUnix}
           rangeTo={todayUnix}
           onAxisWidth={(w) => (axisWidth = w)}
-          label={pnlMode === 'total' ? 'Total' : 'Realized'}
+          label={pnlMode === 'total' ? 'Total' : pnlMode === 'realized' ? 'Realized' : 'Unrealized'}
         />
       {/if}
     </div>

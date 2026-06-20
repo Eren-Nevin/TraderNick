@@ -1460,6 +1460,7 @@ async def wallet_positions(request):
             argMax(avg_entry, time)      AS entry_px,
             -argMax(funding, time)       AS funding,
             argMax(fee, time)            AS fee,
+            toUnixTimestamp(argMax(opened_at, time)) AS opened_ts,
             toUnixTimestamp((SELECT t FROM latest)) AS snap_ts
         FROM tradernick.hl_position_history
         WHERE wallet = {wallet:String}
@@ -1481,10 +1482,11 @@ async def wallet_positions(request):
             "entry_px": float(r[5]),
             "funding": float(r[6]),
             "fee": float(r[7]),
+            "opened_at": int(r[8]) if r[8] else None,
         }
         for r in rows.result_rows
     ]
-    bucket = rows.result_rows[0][8] if rows.result_rows else None
+    bucket = rows.result_rows[0][9] if rows.result_rows else None
     return response.json({
         "wallet": wallet,
         "day": day.isoformat(),

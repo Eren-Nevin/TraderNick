@@ -19,6 +19,7 @@
     funding?: number | null;    // cumulative funding since open (USD)
     leverage?: number | null;
     leverage_type?: string | null;
+    opened_at?: number | null;  // unix seconds the position was opened (snapshot only)
   };
 
   let {
