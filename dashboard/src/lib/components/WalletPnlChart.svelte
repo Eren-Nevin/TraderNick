@@ -55,11 +55,14 @@
     entryNote = null as string | null,
     // Colour for the entry-price line (green in profit, red underwater).
     entryColor = '#34d399',
+    // When true, show a non-blocking loading overlay (e.g. while the snapshot's
+    // positions are being fetched after the user picks a day).
+    loading = false,
     // Click → pick a single day (unix s). Drag → pick a [start, end] range.
     // When either is set the chart becomes interactive (cursor + selection).
     onPickDay = undefined as ((unix: number) => void) | undefined,
     onPickRange = undefined as ((startUnix: number, endUnix: number) => void) | undefined
-  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void } = $props();
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean } = $props();
 
   // Cutoff = amber (as-of day); lookback start = thinner sky-blue; entry =
   // emerald (the day the selected position was first opened).
@@ -266,12 +269,20 @@
   // Close-price overlay: push data + show/hide the left axis with it.
   $effect(() => {
     if (!chart || !closeSeries) return;
-    closeSeries.setData(
-      closeData
-        .filter((d) => Number.isFinite(d.value))
-        .map((d) => ({ time: d.time as UTCTimestamp, value: d.value }))
-    );
-    chart.priceScale('left').applyOptions({ visible: closeData.length > 0 });
+    // Sort + dedupe defensively — setData throws on unsorted/duplicate times,
+    // which would blank the chart (see the main series effect below).
+    const seen = new Set<number>();
+    const cpts = closeData
+      .filter((d) => Number.isFinite(d.value))
+      .map((d) => ({ time: d.time as UTCTimestamp, value: d.value }))
+      .sort((a, b) => (a.time as number) - (b.time as number))
+      .filter((d) => (seen.has(d.time as number) ? false : (seen.add(d.time as number), true)));
+    try {
+      closeSeries.setData(cpts);
+      chart.priceScale('left').applyOptions({ visible: cpts.length > 0 });
+    } catch (err) {
+      console.error('WalletPnlChart: close setData failed', err);
+    }
   });
 
   // Re-theme on theme toggle. lwcChartOptions() re-enables scroll/scale, so
@@ -306,16 +317,35 @@
       }
       pts.sort((a, b) => (a.time as number) - (b.time as number));
     }
-    series.setData(pts as { time: UTCTimestamp; value: number }[]);
-    if (rangeFrom != null && rangeTo != null) {
-      chart.timeScale().setVisibleRange({
-        from: rangeFrom as UTCTimestamp,
-        to: rangeTo as UTCTimestamp
-      });
-    } else {
-      chart.timeScale().fitContent();
+    // Dedupe by time: several anchor markers can resolve to the same out-of-range
+    // timestamp (e.g. entryTime == rangeFrom), and setData() throws on duplicate
+    // times — an uncaught throw here blanks the whole chart. Keep the valued
+    // point over a bare whitespace anchor when both share a time.
+    const deduped: Array<{ time: UTCTimestamp; value?: number }> = [];
+    for (const p of pts) {
+      const prev = deduped[deduped.length - 1];
+      if (prev && (prev.time as number) === (p.time as number)) {
+        if (prev.value === undefined && p.value !== undefined) deduped[deduped.length - 1] = p;
+      } else {
+        deduped.push(p);
+      }
     }
-    onAxisWidth?.(chart.priceScale('right').width());
+    // setData / setVisibleRange validate their inputs and throw on bad data;
+    // never let that escape the effect (a throw leaves the chart painted black).
+    try {
+      series.setData(deduped as { time: UTCTimestamp; value: number }[]);
+      if (rangeFrom != null && rangeTo != null) {
+        chart.timeScale().setVisibleRange({
+          from: rangeFrom as UTCTimestamp,
+          to: rangeTo as UTCTimestamp
+        });
+      } else {
+        chart.timeScale().fitContent();
+      }
+      onAxisWidth?.(chart.priceScale('right').width());
+    } catch (err) {
+      console.error('WalletPnlChart: setData/setVisibleRange failed', err);
+    }
   });
 </script>
 
@@ -324,6 +354,14 @@
   {#if dragSel}
     <div class="pointer-events-none absolute top-0 bottom-0 z-10 bg-blue-500/15 border-x border-blue-400/60"
       style="left: {dragSel.left}px; width: {dragSel.width}px"></div>
+  {/if}
+  {#if loading}
+    <!-- Non-blocking loading badge: chart stays interactive while the picked
+         snapshot's positions are fetched. -->
+    <div class="pointer-events-none absolute top-1 right-1 z-20 flex items-center gap-1.5 rounded border border-zinc-700 bg-zinc-900/90 px-2 py-1 text-xs text-zinc-300 shadow-lg">
+      <span class="inline-block h-3 w-3 animate-spin rounded-full border-2 border-zinc-600 border-t-blue-400"></span>
+      loading…
+    </div>
   {/if}
   {#if entryNote}
     <div

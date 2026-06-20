@@ -535,6 +535,7 @@
           lookbackStart={rangeMode ? startUnix : null}
           rangeFrom={floorUnix}
           rangeTo={todayUnix}
+          loading={posLoading}
           onPickDay={pickDay}
           onPickRange={pickRange}
           label={pnlMode === 'total' ? 'Total' : pnlMode === 'realized' ? 'Realized' : 'Unrealized'}
