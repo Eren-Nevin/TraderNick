@@ -47,21 +47,36 @@
     // Selected token's entry price → horizontal line on the close (left) axis.
     entryPrice = null as number | null,
     // Selected position's open time (unix s) → vertical marker. null → skipped.
+    // Only set when the open date is inside the visible window; for earlier
+    // opens the caller passes null and supplies `entryNote` instead.
     entryTime = null as number | null,
+    // Note shown in-chart when the selected position opened before the visible
+    // window (so there's no on-axis marker to draw). null → no note.
+    entryNote = null as string | null,
     // Colour for the entry-price line (green in profit, red underwater).
     entryColor = '#34d399',
     // Click → pick a single day (unix s). Drag → pick a [start, end] range.
     // When either is set the chart becomes interactive (cursor + selection).
     onPickDay = undefined as ((unix: number) => void) | undefined,
     onPickRange = undefined as ((startUnix: number, endUnix: number) => void) | undefined
-  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void } = $props();
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void } = $props();
 
   // Cutoff = amber (as-of day); lookback start = thinner sky-blue; entry =
   // emerald (the day the selected position was first opened).
   function buildRefs() {
-    const refs: { time: number; color?: string; dash?: string; width?: number }[] = [];
+    const refs: {
+      time: number;
+      color?: string;
+      dash?: string;
+      width?: number;
+      clamp?: 'left' | 'right';
+      label?: string;
+    }[] = [];
     if (lookbackStart != null) refs.push({ time: lookbackStart, color: '#38bdf8', dash: '2,3', width: 0.6 });
-    if (entryTime != null) refs.push({ time: entryTime, color: '#34d399', dash: '4,3' });
+    // Entry-date line is only drawn when the open date is inside the visible
+    // window (the caller passes entryTime=null otherwise and supplies
+    // `entryNote` instead). Keep it subtle — a thin emerald dash.
+    if (entryTime != null) refs.push({ time: entryTime, color: '#34d399', dash: '4,3', width: 0.7, label: 'entry' });
     if (cutoff != null) refs.push({ time: cutoff, color: '#fbbf24', dash: '4,3' });
     return refs;
   }
@@ -304,6 +319,13 @@
   {#if dragSel}
     <div class="pointer-events-none absolute top-0 bottom-0 z-10 bg-blue-500/15 border-x border-blue-400/60"
       style="left: {dragSel.left}px; width: {dragSel.width}px"></div>
+  {/if}
+  {#if entryNote}
+    <div
+      class="pointer-events-none absolute bottom-1 left-1 z-10 flex items-center gap-1.5 rounded border border-emerald-700/60 bg-zinc-900/90 px-2 py-1 text-xs text-emerald-300 shadow-lg"
+    >
+      <span class="inline-block h-2.5 w-0.5 bg-emerald-400"></span>{entryNote}
+    </div>
   {/if}
   {#if tip}
     <div

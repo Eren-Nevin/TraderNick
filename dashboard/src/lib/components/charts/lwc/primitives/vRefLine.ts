@@ -8,7 +8,18 @@ import type {
   Time
 } from 'lightweight-charts';
 
-export type VRef = { time: number; color?: string; dash?: string; width?: number };
+// `clamp` pins the line to a pane edge when `time` falls outside the chart's
+// data range (timeToCoordinate returns null) — e.g. a position opened before
+// the chart's left edge. 'left' draws it at the start of the plot area.
+export type VRef = {
+  time: number;
+  color?: string;
+  dash?: string;
+  width?: number;
+  clamp?: 'left' | 'right';
+  // Optional text tag drawn at the top of the line (e.g. 'entry').
+  label?: string;
+};
 
 type BitmapScope = {
   readonly context: CanvasRenderingContext2D;
@@ -85,10 +96,26 @@ class VRefLinesRenderer implements ISeriesPrimitivePaneRenderer {
       const ctx = scope.context;
       const ratio = scope.horizontalPixelRatio;
       const height = scope.bitmapSize.height;
+      const widthCss = scope.bitmapSize.width / ratio;
       for (const r of refs) {
-        const x = ts.timeToCoordinate(r.time as Time);
-        if (x === null) continue;
-        const px = Math.round(x * ratio) + 0.5;
+        // A time outside the data range yields a null coordinate; clamp it to
+        // the requested pane edge if asked, otherwise skip it.
+        const coord = ts.timeToCoordinate(r.time as Time);
+        let xCss: number;
+        if (coord === null) {
+          // Outside the data's time scale entirely.
+          if (r.clamp === 'left') xCss = 0;
+          else if (r.clamp === 'right') xCss = widthCss;
+          else continue;
+        } else {
+          xCss = coord;
+        }
+        // The view can be pinned to a sub-range, so a clamped time often maps to
+        // an off-screen coordinate (negative / past the right edge) rather than
+        // null — snap it back onto the visible edge.
+        if (r.clamp === 'left' && xCss < 0) xCss = 0;
+        else if (r.clamp === 'right' && xCss > widthCss) xCss = widthCss;
+        const px = Math.round(xCss * ratio) + 0.5;
         ctx.save();
         ctx.beginPath();
         // `width` is a multiplier on the base device-pixel width (default 1);
@@ -100,6 +127,31 @@ class VRefLinesRenderer implements ISeriesPrimitivePaneRenderer {
         ctx.moveTo(px, 0);
         ctx.lineTo(px, height);
         ctx.stroke();
+        // Optional tag at the top of the line — a small filled chip with the
+        // label, matching the line colour, so the marker is self-explanatory.
+        if (r.label) {
+          ctx.setLineDash([]);
+          const color = r.color ?? defaultColor;
+          const fontPx = 10 * Math.max(1, ratio);
+          ctx.font = `${fontPx}px ui-sans-serif, system-ui, -apple-system, sans-serif`;
+          ctx.textBaseline = 'top';
+          const padX = 4 * ratio;
+          const padY = 2 * ratio;
+          const textW = ctx.measureText(r.label).width;
+          const chipW = textW + padX * 2;
+          const chipH = fontPx + padY * 2;
+          const topY = 2 * ratio;
+          // Place the chip to the right of the line, flipping left if it would
+          // overflow the right edge.
+          const fitsRight = px + 2 * ratio + chipW <= scope.bitmapSize.width;
+          const chipX = fitsRight ? px + 2 * ratio : px - 2 * ratio - chipW;
+          ctx.globalAlpha = 0.92;
+          ctx.fillStyle = color;
+          ctx.fillRect(chipX, topY, chipW, chipH);
+          ctx.globalAlpha = 1;
+          ctx.fillStyle = '#0a0a0a';
+          ctx.fillText(r.label, chipX + padX, topY + padY);
+        }
         ctx.restore();
       }
     });

@@ -121,6 +121,17 @@
   );
   // Entry line green when the position is in profit, red when underwater.
   const entryColor = $derived((selectedPos?.unrealized_pnl ?? 0) >= 0 ? '#22c55e' : '#ef4444');
+  // The open date may predate the chart's visible window (floor). When it's
+  // inside, draw the thin vertical marker; when it's before, draw no marker and
+  // show a note instead (with the actual open date).
+  const entryInRange = $derived(entryTime != null && entryTime >= floorUnix);
+  const entryNote = $derived(
+    selectedToken && entryTime != null && !entryInRange && selectedPos?.opened_at != null
+      ? `${selectedToken} opened ${new Date(selectedPos.opened_at * 1000)
+          .toISOString()
+          .slice(0, 10)} — before chart range`
+      : null
+  );
 
   // Last daily point at or before the selected day → as-of realized/unrealized.
   const asOf = $derived.by(() => {
@@ -522,7 +533,8 @@
           data={chartData}
           closeData={closeSeries}
           entryPrice={selectedToken ? entryPrice : null}
-          entryTime={selectedToken ? entryTime : null}
+          entryTime={selectedToken && entryInRange ? entryTime : null}
+          entryNote={selectedToken ? entryNote : null}
           entryColor={entryColor}
           height={360}
           cutoff={selectedUnix}
