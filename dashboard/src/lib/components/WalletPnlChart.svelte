@@ -82,7 +82,7 @@
 
   let container = $state<HTMLDivElement | null>(null);
   let chart: IChartApi | null = null;
-  let series: ISeriesApi<'Baseline'> | null = null;
+  let series: ISeriesApi<'Area'> | null = null;
   let closeSeries: ISeriesApi<'Line'> | null = null;
   let vref: VRefLinesPrimitive | null = null;
   let ro: ResizeObserver | null = null;
@@ -97,15 +97,14 @@
       ...LOCK_INTERACTION
     });
     chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 } });
-    series = chart.addBaselineSeries({
-      baseValue: { type: 'price', price: 0 },
-      // Green line everywhere; under-curve fill fades green → beige.
-      topLineColor: '#22c55e',
-      topFillColor1: 'rgba(34,197,94,0.35)',
-      topFillColor2: 'rgba(214,201,168,0.06)',
-      bottomLineColor: '#22c55e',
-      bottomFillColor1: 'rgba(214,201,168,0.06)',
-      bottomFillColor2: 'rgba(34,197,94,0.35)',
+    // Area (not baseline) so the fill is always UNDER the line — from the line
+    // down to the pane bottom — regardless of the curve's sign. A baseline
+    // series fills toward price 0, which paints ABOVE the line when PnL is
+    // negative. Green line; fill fades green → beige.
+    series = chart.addAreaSeries({
+      lineColor: '#22c55e',
+      topColor: 'rgba(34,197,94,0.35)',
+      bottomColor: 'rgba(214,201,168,0.06)',
       lineWidth: 3,
       priceLineVisible: false,
       lastValueVisible: false,
