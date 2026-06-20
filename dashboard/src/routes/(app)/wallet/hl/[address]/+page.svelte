@@ -36,6 +36,16 @@
   // Slider position is the source of truth (bind:value) so the drag never
   // fights a re-asserted one-way value. 0 = oldest (left), MAX = today (right).
   let sliderPos = $state(DAY_SLIDER_MAX_BACK);
+  // Range mode: a second knob. The two knobs are unconstrained; the range is
+  // derived as [min, max] so neither needs clamping (avoids drag-fighting).
+  // The MORE RECENT knob (max) drives the as-of stats/positions, exactly as in
+  // single mode; the range stat row uses the span between the two.
+  let rangeMode = $state(false);
+  let sliderStartPos = $state(0);
+  // Range stat row (lazy-fetched; the rest is derived from pnlSeries).
+  let rangeVolume = $state<number | null>(null);
+  let oiStart = $state<number | null>(null);
+  let rangeLoading = $state(false);
   let pnlSeries = $state<PnlPoint[]>([]);
   let pnlStats = $state<PnlStats | null>(null);
   let pnlLoading = $state(true);
@@ -64,9 +74,15 @@
   // so the day marker and the slider thumb track together.
   const floorUnix = isoToUnix(DAY_SLIDER_FLOOR_ISO);
   const todayUnix = isoToUnix(backToIso(0));
-  const snapshotIso = $derived(backToIso(MAX_BACK - sliderPos));
+  // End knob = the more recent of the two (drives as-of stats/positions);
+  // start knob = the older. In single mode only sliderPos matters.
+  const endPos = $derived(rangeMode ? Math.max(sliderStartPos, sliderPos) : sliderPos);
+  const startPos = $derived(Math.min(sliderStartPos, sliderPos));
+  const snapshotIso = $derived(backToIso(MAX_BACK - endPos));
+  const startIso = $derived(backToIso(MAX_BACK - startPos));
   const live = $derived(isToday(snapshotIso));
   const selectedUnix = $derived(isoToUnix(snapshotIso));
+  const startUnix = $derived(isoToUnix(startIso));
 
   const chartData = $derived(
     pnlSeries.map((p) => ({
@@ -112,6 +128,31 @@
     positions.length ? positions.reduce((s, p) => s + p.unrealized_pnl, 0) : asOf ? asOf.unrealized : 0
   );
   const totalAsOf = $derived(realizedAsOf + unrealAsOf);
+
+  // ── Range stats (only meaningful in range mode) ────────────────────
+  // Relative deltas over [start, end] from the already-loaded daily curve:
+  // realized/unrealized are end − start; sharpe = mean/σ of daily realized
+  // flows within (start, end]; volume + start-OI are lazy-fetched.
+  const asOfStart = $derived.by(() => {
+    let pick: PnlPoint | null = null;
+    for (const p of pnlSeries) {
+      if (p.time <= startUnix) pick = p;
+      else break;
+    }
+    return pick;
+  });
+  const realizedRange = $derived((asOf?.realized ?? 0) - (asOfStart?.realized ?? 0));
+  const unrealRange = $derived((asOf?.unrealized ?? 0) - (asOfStart?.unrealized ?? 0));
+  const oiRange = $derived(oiUsd - (oiStart ?? 0));
+  const sharpeRange = $derived.by(() => {
+    const flows = pnlSeries
+      .filter((p) => p.time > startUnix && p.time <= selectedUnix)
+      .map((p) => p.realized_day);
+    if (!flows.length) return 0;
+    const mean = flows.reduce((a, b) => a + b, 0) / flows.length;
+    const sd = Math.sqrt(flows.reduce((a, b) => a + (b - mean) ** 2, 0) / flows.length);
+    return sd > 0 ? mean / sd : 0;
+  });
 
   // ── Formatters ─────────────────────────────────────────────────────
   function fmtUsd(n: number | null | undefined): string {
@@ -270,6 +311,49 @@
   $effect(() => {
     loadClose(selectedToken);
   });
+
+  // Range-mode extras: total volume (backend) + start-day OI (sum of the start
+  // snapshot's notional). realized/unrealized/sharpe are derived from pnlSeries
+  // and need no fetch. Debounced + sequenced like positions.
+  let rangeSeq = 0;
+  let rangeTimer: ReturnType<typeof setTimeout> | undefined;
+  async function loadRange(sIso: string, eIso: string) {
+    const seq = ++rangeSeq;
+    rangeLoading = true;
+    try {
+      const [vRes, pRes] = await Promise.all([
+        fetch(`/api/hyperliquid/wallet_range_volume?wallet=${address}&start=${sIso}&end=${eIso}`),
+        fetch(`/api/hyperliquid/wallet_positions?wallet=${address}&day=${sIso}`)
+      ]);
+      const vol = vRes.ok ? (await vRes.json()).volume ?? 0 : 0;
+      let oi = 0;
+      if (pRes.ok) {
+        const body = await pRes.json();
+        oi = (body.positions ?? []).reduce(
+          (s: number, p: { size_usd: number }) => s + Math.abs(Number(p.size_usd)), 0
+        );
+      }
+      if (seq !== rangeSeq) return;
+      rangeVolume = vol;
+      oiStart = oi;
+    } catch {
+      if (seq === rangeSeq) { rangeVolume = null; oiStart = null; }
+    } finally {
+      if (seq === rangeSeq) rangeLoading = false;
+    }
+  }
+  $effect(() => {
+    if (!rangeMode) { rangeVolume = null; oiStart = null; return; }
+    const s = startIso, e = snapshotIso;
+    clearTimeout(rangeTimer);
+    rangeTimer = setTimeout(() => loadRange(s, e), 200);
+    return () => clearTimeout(rangeTimer);
+  });
+
+  function toggleRange() {
+    if (!rangeMode) sliderStartPos = Math.max(0, sliderPos - 30); // default ~30d span
+    rangeMode = !rangeMode;
+  }
 </script>
 
 <div class="px-8 py-6 space-y-6">
@@ -329,6 +413,28 @@
     {/if}
   </div>
 
+  <!-- Range stat row: relative deltas + volume/sharpe over [start, end] -->
+  {#if rangeMode}
+    {@const rsub = `${startIso} → ${snapshotIso}`}
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+      {#snippet rcard(label: string, value: string, cls = 'text-zinc-200')}
+        <div class="rounded-lg bg-blue-950/30 border border-blue-900/50 px-3 py-2">
+          <div class="text-blue-300/70 text-xs uppercase tracking-wide flex items-center gap-1.5">
+            {label}
+            {#if rangeLoading}<span class="inline-block w-2.5 h-2.5 rounded-full border-2 border-blue-900 border-t-blue-300 animate-spin"></span>{/if}
+          </div>
+          <div class="tabular-nums text-lg font-medium {cls}">{value}</div>
+          <div class="text-zinc-600 text-[11px]">{rsub}</div>
+        </div>
+      {/snippet}
+      {@render rcard('Range Volume', rangeVolume != null ? fmtUsd(rangeVolume) : '…')}
+      {@render rcard('Range OI Δ', oiStart != null ? fmtUsd(oiRange) : '…', pnlClass(oiRange))}
+      {@render rcard('Range Realized', fmtUsd(realizedRange), pnlClass(realizedRange))}
+      {@render rcard('Range Unrealized', fmtUsd(unrealRange), pnlClass(unrealRange))}
+      {@render rcard('Range Sharpe', sharpeRange.toFixed(2), 'text-zinc-300')}
+    </div>
+  {/if}
+
   <!-- PnL equity curve + aligned date slider -->
   <div class="rounded-lg border border-zinc-800 overflow-hidden">
     <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
@@ -373,6 +479,7 @@
           entryColor={entryColor}
           height={260}
           cutoff={selectedUnix}
+          lookbackStart={rangeMode ? startUnix : null}
           rangeFrom={floorUnix}
           rangeTo={todayUnix}
           onAxisWidth={(w) => (axisWidth = w)}
@@ -382,15 +489,38 @@
     </div>
     <!-- Date slider: track is padded on the right by the chart's price-axis
          width so the slider thumb sits directly under the chart's day marker.
-         Locked while positions refetch (slow query) to avoid stale clobbering. -->
+         Locked while positions refetch (slow query) to avoid stale clobbering.
+         Range mode swaps the single knob for a two-knob range. -->
     <div class="px-2 pb-2 pt-1">
+      <div class="flex items-center justify-between mb-1.5">
+        <button type="button" onclick={toggleRange}
+          class="text-xs px-2 py-0.5 rounded border transition-colors {rangeMode
+            ? 'bg-blue-600 border-blue-500 text-white'
+            : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
+          title="Toggle a two-knob date range. Stats/positions stay as-of the more recent knob; a range row is added.">Range</button>
+        {#if rangeMode}
+          <span class="text-xs text-zinc-500 font-mono tabular-nums">{startIso} → {snapshotIso}</span>
+        {/if}
+      </div>
       <div style="padding-right: {axisWidth}px">
-        <input
-          type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderPos}
-          disabled={posLoading}
-          class="aligned-slider w-full block {posLoading ? 'is-loading' : ''}"
-          title={posLoading ? 'Loading…' : 'Drag to view the wallet as of any past day (1-day grain)'}
-        />
+        {#if rangeMode}
+          <div class="dual-wrap" class:is-loading={posLoading}>
+            <div class="dual-track"></div>
+            <div class="dual-fill"
+              style="left: {(startPos / MAX_BACK) * 100}%; width: {((endPos - startPos) / MAX_BACK) * 100}%"></div>
+            <input type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderStartPos}
+              disabled={posLoading} aria-label="Range start day" />
+            <input type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderPos}
+              disabled={posLoading} aria-label="Range end day" />
+          </div>
+        {:else}
+          <input
+            type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderPos}
+            disabled={posLoading}
+            class="aligned-slider w-full block {posLoading ? 'is-loading' : ''}"
+            title={posLoading ? 'Loading…' : 'Drag to view the wallet as of any past day (1-day grain)'}
+          />
+        {/if}
         <div class="flex items-center justify-between mt-1 text-xs text-zinc-500 font-mono tabular-nums">
           <span>{DAY_SLIDER_FLOOR_ISO}</span>
           <button type="button" onclick={() => (sliderPos = MAX_BACK)} disabled={posLoading}
@@ -445,5 +575,67 @@
   .aligned-slider.is-loading {
     opacity: 0.5;
     cursor: wait;
+  }
+
+  /* Two-knob range slider: two native inputs stacked over a shared track, with
+     only the thumbs interactive (pointer-events) so either knob is grabbable.
+     16px thumbs keep the same 8px-radius alignment as the single slider. */
+  .dual-wrap {
+    position: relative;
+    height: 16px;
+  }
+  .dual-wrap.is-loading {
+    opacity: 0.5;
+  }
+  .dual-track {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 6px;
+    border-radius: 9999px;
+    background: #3f3f46;
+  }
+  .dual-fill {
+    position: absolute;
+    top: 50%;
+    transform: translateY(-50%);
+    height: 6px;
+    border-radius: 9999px;
+    background: #3b82f6;
+    opacity: 0.45;
+  }
+  .dual-wrap input[type='range'] {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 16px;
+    margin: 0;
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    pointer-events: none;
+  }
+  .dual-wrap input[type='range']::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    pointer-events: auto;
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: #3b82f6;
+    border: 2px solid #0a0a0a;
+    cursor: pointer;
+  }
+  .dual-wrap input[type='range']::-moz-range-thumb {
+    pointer-events: auto;
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: #3b82f6;
+    border: 2px solid #0a0a0a;
+    cursor: pointer;
   }
 </style>

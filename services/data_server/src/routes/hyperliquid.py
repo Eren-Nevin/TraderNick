@@ -1495,6 +1495,58 @@ async def wallet_positions(request):
     })
 
 
+@bp.get("/hyperliquid/wallet_range_volume")
+@throttled("light")
+async def wallet_range_volume(request):
+    """Total HL trading volume for a wallet over a [start, end] day range.
+
+    Powers the wallet page's range-mode stats. hl_trade_history_wallet_daily
+    stores per-day *cumulative* (from-inception) volume, so the range total is
+    the snapshot diff cum(end) − cum(start) — NOT a sum over the days (which
+    would add up cumulative curves). Both ends take the latest snapshot ≤ the
+    target day so a non-trading boundary day still resolves.
+
+    Query params: wallet (required), start, end (ISO dates).
+    Returns { wallet, start, end, volume }.
+    """
+    wallet = request.args.get("wallet")
+    if not wallet:
+        return response.json({"error": "missing wallet"}, status=400)
+    wallet = wallet.lower()
+    try:
+        start_dt = datetime.fromisoformat(request.args.get("start")).replace(tzinfo=None)
+        end_dt = datetime.fromisoformat(request.args.get("end")).replace(tzinfo=None)
+    except (ValueError, TypeError):
+        return response.json({"error": "invalid/missing start|end; expected YYYY-MM-DD"}, status=400)
+
+    sql = """
+        WITH
+        end_day AS (
+            SELECT max(day) AS d FROM tradernick.hl_trade_history_wallet_daily
+            WHERE wallet = {wallet:String} AND day <= toDate({end:DateTime})
+        ),
+        start_day AS (
+            SELECT max(day) AS d FROM tradernick.hl_trade_history_wallet_daily
+            WHERE wallet = {wallet:String} AND day <= toDate({start:DateTime})
+        )
+        SELECT
+            coalesce((SELECT sumMerge(volume_state) FROM tradernick.hl_trade_history_wallet_daily
+                      WHERE wallet = {wallet:String} AND day = (SELECT d FROM end_day)), 0)
+          - coalesce((SELECT sumMerge(volume_state) FROM tradernick.hl_trade_history_wallet_daily
+                      WHERE wallet = {wallet:String} AND day = (SELECT d FROM start_day)), 0)
+          AS volume
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters={"wallet": wallet, "start": start_dt, "end": end_dt})
+    volume = float(rows.result_rows[0][0]) if rows.result_rows else 0.0
+    return response.json({
+        "wallet": wallet,
+        "start": start_dt.date().isoformat(),
+        "end": end_dt.date().isoformat(),
+        "volume": volume,
+    })
+
+
 # ── SmartSelector presets ────────────────────────────────────────────
 # Persistence layer for "criteria groups" — a saved SmartSelectorState
 # (lookback / top_n / scope / sort_by / criteria[…]) under a name. Lets
