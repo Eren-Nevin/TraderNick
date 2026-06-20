@@ -88,11 +88,29 @@
     return refs;
   }
 
-  // The selected range to tint (range mode): [bandFrom, bandTo]. Null unless
-  // both ends are set (and distinct).
-  function currentBand() {
+  // Range-mode shading. The selected [bandFrom, bandTo] window gets a subtle
+  // blue tint behind the curve; everything outside it is dimmed by a heavy gray
+  // mask drawn on top, so attention is pinned to the selected range.
+  const BLUE = 'rgba(59,130,246,0.12)';
+  const GRAY = 'rgba(24,24,27,0.72)';
+  function bandRange(): { lo: number; hi: number } | null {
     if (bandFrom == null || bandTo == null || bandFrom === bandTo) return null;
-    return { from: Math.min(bandFrom, bandTo), to: Math.max(bandFrom, bandTo) };
+    return { lo: Math.min(bandFrom, bandTo), hi: Math.max(bandFrom, bandTo) };
+  }
+  // Blue highlight over the selected range (drawn behind the curve).
+  function highlightBands() {
+    const r = bandRange();
+    return r ? [{ from: r.lo, to: r.hi, color: BLUE }] : [];
+  }
+  // Gray dimming of the regions before/after the selected range (drawn on top).
+  // Null edges clamp to the chart's left/right border.
+  function maskBands() {
+    const r = bandRange();
+    if (!r) return [];
+    return [
+      { from: null, to: r.lo, color: GRAY },
+      { from: r.hi, to: null, color: GRAY }
+    ];
   }
 
   // Fully locked view: no zoom/pan from any input. Reasserted after every
@@ -118,7 +136,8 @@
   let series: ISeriesApi<'Baseline'> | null = null;
   let closeSeries: ISeriesApi<'Line'> | null = null;
   let vref: VRefLinesPrimitive | null = null;
-  let band: VBandPrimitive | null = null;
+  let bandHi: VBandPrimitive | null = null;
+  let bandMask: VBandPrimitive | null = null;
   let ro: ResizeObserver | null = null;
 
   let tip = $state<{ x: number; time: number; value: number } | null>(null);
@@ -222,12 +241,16 @@
 
     // Dashed vertical markers: amber cutoff ("as-of" day) + optional
     // thinner sky-blue lookback-start line.
-    // Blue selected-range band (range mode) — drawn behind the curve.
-    band = new VBandPrimitive(currentBand());
-    series.attachPrimitive(band);
+    // Range-mode shading: blue highlight behind the curve, gray mask on top.
+    bandHi = new VBandPrimitive(highlightBands(), 'bottom');
+    series.attachPrimitive(bandHi);
 
     vref = new VRefLinesPrimitive(buildRefs(), '#fbbf24');
     series.attachPrimitive(vref);
+
+    // Attached last + drawn on top so it dims the curve outside the range.
+    bandMask = new VBandPrimitive(maskBands(), 'top');
+    series.attachPrimitive(bandMask);
 
     chart.subscribeCrosshairMove((p) => {
       if (!p.time || !series || !p.point) { tip = null; return; }
@@ -260,7 +283,8 @@
       series = null;
       closeSeries = null;
       vref = null;
-      band = null;
+      bandHi = null;
+      bandMask = null;
     };
   });
 
@@ -270,10 +294,11 @@
     vref?.setRefs(buildRefs(), '#fbbf24');
   });
 
-  // Keep the selected-range band in sync.
+  // Keep the range-mode shading in sync.
   $effect(() => {
     void bandFrom; void bandTo;
-    band?.setBand(currentBand());
+    bandHi?.setBands(highlightBands());
+    bandMask?.setBands(maskBands());
   });
 
   // Entry-price horizontal line on the close (left) price scale.

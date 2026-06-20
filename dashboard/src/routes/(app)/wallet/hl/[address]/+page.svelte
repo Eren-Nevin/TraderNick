@@ -96,15 +96,27 @@
   const selectedUnix = $derived(isoToUnix(snapshotIso));
   const startUnix = $derived(isoToUnix(startIso));
 
+  const modeVal = (p: PnlPoint) =>
+    pnlMode === 'total' ? p.total
+      : pnlMode === 'realized' ? p.realized
+        : pnlMode === 'unrealized' ? p.unrealized
+          : p.oi;
+  // In range mode the curve is rebased so the range-start day reads 0 on the
+  // y-axis (and the green/red split is relative to that start, since the
+  // baseline series' zero now sits at the start value). Base = the as-of value
+  // at the start day (last point ≤ startUnix); 0 if the range starts before any
+  // data. Single mode keeps absolute values (base 0).
+  const rangeBase = $derived.by(() => {
+    if (!rangeMode) return 0;
+    let base = 0;
+    for (const p of pnlSeries) {
+      if (p.time <= startUnix) base = modeVal(p);
+      else break;
+    }
+    return base;
+  });
   const chartData = $derived(
-    pnlSeries.map((p) => ({
-      time: p.time,
-      value:
-        pnlMode === 'total' ? p.total
-          : pnlMode === 'realized' ? p.realized
-            : pnlMode === 'unrealized' ? p.unrealized
-              : p.oi
-    }))
+    pnlSeries.map((p) => ({ time: p.time, value: modeVal(p) - rangeBase }))
   );
 
   // The selected token's dominant position (largest notional if both sides are
