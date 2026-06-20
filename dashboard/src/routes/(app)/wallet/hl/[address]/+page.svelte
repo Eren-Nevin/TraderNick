@@ -467,11 +467,11 @@
     </div>
     <div class="px-2 pt-2">
       {#if pnlError}
-        <div class="h-[260px] flex items-center justify-center text-rose-400">{pnlError}</div>
+        <div class="h-[360px] flex items-center justify-center text-rose-400">{pnlError}</div>
       {:else if pnlLoading && pnlSeries.length === 0}
-        <div class="h-[260px] flex items-center justify-center text-zinc-500">loading…</div>
+        <div class="h-[360px] flex items-center justify-center text-zinc-500">loading…</div>
       {:else if pnlSeries.length === 0}
-        <div class="h-[260px] flex items-center justify-center text-zinc-500">No PnL history for this wallet.</div>
+        <div class="h-[360px] flex items-center justify-center text-zinc-500">No PnL history for this wallet.</div>
       {:else}
         <WalletPnlChart
           data={chartData}
@@ -479,7 +479,7 @@
           entryPrice={selectedToken ? entryPrice : null}
           entryTime={selectedToken ? entryTime : null}
           entryColor={entryColor}
-          height={260}
+          height={360}
           cutoff={selectedUnix}
           lookbackStart={rangeMode ? startUnix : null}
           rangeFrom={floorUnix}

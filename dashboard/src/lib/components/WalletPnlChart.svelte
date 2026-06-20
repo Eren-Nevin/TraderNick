@@ -91,8 +91,11 @@
 
   onMount(() => {
     if (!container) return;
+    const base = lwcChartOptions();
     chart = createChart(container, {
-      ...lwcChartOptions(),
+      ...base,
+      // Larger axis labels than the default 11px.
+      layout: { ...base.layout, fontSize: 13 },
       height,
       ...LOCK_INTERACTION
     });
@@ -200,7 +203,10 @@
   // re-merge the lock to keep the view pinned.
   $effect(() => {
     void themeStore.theme;
-    if (chart) chart.applyOptions({ ...lwcChartOptions(), ...LOCK_INTERACTION });
+    if (chart) {
+      const base = lwcChartOptions();
+      chart.applyOptions({ ...base, layout: { ...base.layout, fontSize: 13 }, ...LOCK_INTERACTION });
+    }
   });
 
   // Push data + fit.
@@ -242,8 +248,8 @@
   <div bind:this={container} class="absolute inset-0"></div>
   {#if tip}
     <div
-      class="pointer-events-none absolute top-1 z-10 rounded border border-zinc-700 bg-zinc-900/95 px-2 py-1 text-[10px] leading-tight shadow-lg"
-      style="left: {Math.min(Math.max(tip.x - 60, 4), (container?.clientWidth ?? 200) - 124)}px"
+      class="pointer-events-none absolute top-1 z-10 rounded border border-zinc-700 bg-zinc-900/95 px-2.5 py-1.5 text-sm leading-snug shadow-lg"
+      style="left: {Math.min(Math.max(tip.x - 80, 4), (container?.clientWidth ?? 200) - 170)}px"
     >
       <div class="text-zinc-400">{fmtUtcTime(tip.time).slice(0, 14)}</div>
       <div class={tip.value >= 0 ? 'text-emerald-300' : 'text-red-300'}>
