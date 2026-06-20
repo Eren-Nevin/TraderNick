@@ -66,19 +66,12 @@
   let pinMenuOpen = $state(false);
   onMount(() => walletPinsStore.hydrate());
   const pinnedGroups = $derived(walletPinsStore.groupsForWallet(address));
-  // Right price-axis width (px) reported by the chart, used to pad the slider
-  // so its track lines up with the chart's plot area (excludes the axis).
-  let axisWidth = $state(0);
 
   // Single token (max one) whose daily close price is overlaid on the PnL
   // chart, toggled from the positions table.
   let selectedToken = $state<string | null>(null);
   let closeSeries = $state<{ time: number; value: number }[]>([]);
   let closeCtl: AbortController | null = null;
-
-  // Date slider is hidden for now — the day/range is set by clicking/dragging
-  // the chart. Flip back to true to restore the slider (kept for later).
-  const SHOW_DATE_SLIDER = false;
 
   // ── Derived ────────────────────────────────────────────────────────
   const MAX_BACK = DAY_SLIDER_MAX_BACK;
@@ -380,15 +373,16 @@
     rangeMode = !rangeMode;
   }
 
-  // Chart picking → slider positions. unix (UTC-midnight bar) → slider value.
+  // Chart picking → snapshot/range state. unix (UTC-midnight bar) → day index.
   const isoFromUnix = (unix: number) => new Date(unix * 1000).toISOString().slice(0, 10);
   const posForIso = (iso: string) => Math.max(0, Math.min(MAX_BACK, MAX_BACK - isoToBack(iso)));
 
-  // Click a point on the chart → set the snapshot (end) day, like the slider.
+  // Click a point on the chart → single snapshot at that day (exits range mode).
   function pickDay(unix: number) {
+    rangeMode = false;
     sliderPos = posForIso(isoFromUnix(unix));
   }
-  // Drag across the chart → enable range mode over the dragged [start, end].
+  // Drag across the chart → range mode over the dragged [start, end] days.
   function pickRange(startUnix: number, endUnix: number) {
     sliderStartPos = posForIso(isoFromUnix(startUnix));
     sliderPos = posForIso(isoFromUnix(endUnix));
@@ -541,58 +535,12 @@
           lookbackStart={rangeMode ? startUnix : null}
           rangeFrom={floorUnix}
           rangeTo={todayUnix}
-          onAxisWidth={(w) => (axisWidth = w)}
           onPickDay={pickDay}
           onPickRange={pickRange}
           label={pnlMode === 'total' ? 'Total' : pnlMode === 'realized' ? 'Realized' : 'Unrealized'}
         />
       {/if}
     </div>
-    {#if SHOW_DATE_SLIDER}
-    <!-- Date slider (hidden for now — the day/range is set by clicking or
-         dragging the chart). Kept wrapped for possible later use. -->
-    <div class="px-2 pb-2 pt-1">
-      <div class="flex items-center justify-between mb-1.5">
-        <button type="button" onclick={toggleRange}
-          class="text-xs px-2 py-0.5 rounded border transition-colors {rangeMode
-            ? 'bg-blue-600 border-blue-500 text-white'
-            : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
-          title="Toggle a two-knob date range. Stats/positions stay as-of the more recent knob; a range row is added.">Range</button>
-        {#if rangeMode}
-          <span class="text-xs text-zinc-500 font-mono tabular-nums">{startIso} → {snapshotIso}</span>
-        {/if}
-      </div>
-      <div style="padding-right: {axisWidth}px">
-        {#if rangeMode}
-          <!-- No `disabled` here: toggling it as posLoading flips mid/post-drag
-               leaves a pointer-events thumb stuck (can't drag again). Stale
-               responses are already guarded by posSeq; just dim during load. -->
-          <div class="dual-wrap" class:is-loading={posLoading}>
-            <div class="dual-track"></div>
-            <div class="dual-fill"
-              style="left: {(startPos / MAX_BACK) * 100}%; width: {((endPos - startPos) / MAX_BACK) * 100}%"></div>
-            <input type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderStartPos}
-              aria-label="Range start day" />
-            <input type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderPos}
-              aria-label="Range end day" />
-          </div>
-        {:else}
-          <input
-            type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderPos}
-            disabled={posLoading}
-            class="aligned-slider w-full block {posLoading ? 'is-loading' : ''}"
-            title={posLoading ? 'Loading…' : 'Drag to view the wallet as of any past day (1-day grain)'}
-          />
-        {/if}
-        <div class="flex items-center justify-between mt-1 text-xs text-zinc-500 font-mono tabular-nums">
-          <span>{DAY_SLIDER_FLOOR_ISO}</span>
-          <button type="button" onclick={() => (sliderPos = MAX_BACK)} disabled={posLoading}
-            class="hover:text-zinc-200 underline decoration-dotted disabled:opacity-40 disabled:hover:text-zinc-500"
-            title="Jump to the latest (live) day">Today</button>
-        </div>
-      </div>
-    </div>
-    {/if}
   </div>
 
   <!-- Positions table -->
@@ -604,102 +552,3 @@
     />
   </div>
 </div>
-
-<style>
-  /* Day slider sized so its thumb RADIUS (8px) equals the chart wrapper's
-     px-2 (8px) left inset. With the track's right padding set to the chart's
-     price-axis width, the thumb centre at min/max lands exactly on the plot
-     area's left/right edges — i.e. under the chart's day marker. */
-  .aligned-slider {
-    -webkit-appearance: none;
-    appearance: none;
-    height: 6px;
-    border-radius: 9999px;
-    background: #3f3f46; /* zinc-700 */
-    cursor: pointer;
-  }
-  .aligned-slider::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    width: 16px;
-    height: 16px;
-    border-radius: 9999px;
-    background: #3b82f6; /* blue-500 */
-    border: 2px solid #0a0a0a;
-    cursor: pointer;
-  }
-  .aligned-slider::-moz-range-thumb {
-    width: 16px;
-    height: 16px;
-    border-radius: 9999px;
-    background: #3b82f6;
-    border: 2px solid #0a0a0a;
-    cursor: pointer;
-  }
-  .aligned-slider.is-loading {
-    opacity: 0.5;
-    cursor: wait;
-  }
-
-  /* Two-knob range slider: two native inputs stacked over a shared track, with
-     only the thumbs interactive (pointer-events) so either knob is grabbable.
-     16px thumbs keep the same 8px-radius alignment as the single slider. */
-  .dual-wrap {
-    position: relative;
-    height: 16px;
-  }
-  .dual-wrap.is-loading {
-    opacity: 0.5;
-  }
-  .dual-track {
-    position: absolute;
-    left: 0;
-    right: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    height: 6px;
-    border-radius: 9999px;
-    background: #3f3f46;
-  }
-  .dual-fill {
-    position: absolute;
-    top: 50%;
-    transform: translateY(-50%);
-    height: 6px;
-    border-radius: 9999px;
-    background: #3b82f6;
-    opacity: 0.45;
-  }
-  .dual-wrap input[type='range'] {
-    position: absolute;
-    left: 0;
-    top: 0;
-    width: 100%;
-    height: 16px;
-    margin: 0;
-    -webkit-appearance: none;
-    appearance: none;
-    background: transparent;
-    pointer-events: none;
-  }
-  .dual-wrap input[type='range']::-webkit-slider-thumb {
-    -webkit-appearance: none;
-    appearance: none;
-    pointer-events: auto;
-    width: 16px;
-    height: 16px;
-    border-radius: 9999px;
-    background: #3b82f6;
-    border: 2px solid #0a0a0a;
-    cursor: pointer;
-  }
-  .dual-wrap input[type='range']::-moz-range-thumb {
-    pointer-events: auto;
-    width: 16px;
-    height: 16px;
-    border-radius: 9999px;
-    background: #3b82f6;
-    border: 2px solid #0a0a0a;
-    cursor: pointer;
-  }
-</style>

@@ -120,7 +120,12 @@
   }
   function timeAtX(x: number): number | null {
     if (!chart) return null;
-    const t = chart.timeScale().coordinateToTime(x);
+    // `x` is measured from the container's left edge, but the time scale's
+    // coordinate space starts at the plot area — i.e. AFTER the left price axis
+    // (the close-price scale, shown when a token is selected). Subtract its
+    // width or clicks drift right by that many pixels (the snapshot-time bug).
+    const leftAxisW = chart.priceScale('left').width();
+    const t = chart.timeScale().coordinateToTime(x - leftAxisW);
     return t == null ? null : (t as unknown as number);
   }
   function onPointerDown(e: PointerEvent) {
