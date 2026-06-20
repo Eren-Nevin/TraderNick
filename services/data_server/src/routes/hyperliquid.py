@@ -1297,6 +1297,79 @@ async def token_close(request):
     return response.json({"token": token, "series": series})
 
 
+@bp.get("/hyperliquid/wallet_trades")
+@throttled("light")
+async def wallet_trades(request):
+    """Per-day net buy/sell flow for a wallet — drives the 'Show Trades'
+    markers on the wallet PnL chart.
+
+    For each day, the net signed USD traded = Σ(buy size·price) −
+    Σ(sell size·price) over the wallet's fills. side 'B' = buy, 'A' = sell.
+    Buys and sells of the same token on the same day net out (that's just the
+    sum); a positive net day is a net BUY, negative a net SELL. When `token` is
+    given the flow is scoped to that token, otherwise it's summed across all
+    tokens (one net value per day either way).
+
+    hl_fills is a ReplacingMergeTree — read FINAL so re-backfilled duplicate
+    (token, time, tid, wallet) rows collapse instead of double-counting.
+
+    Query params:
+      wallet — required (0x…; lowercased to match the table).
+      token  — optional (e.g. AAVE). Scopes the flow to one token.
+      since  — ISO date (inclusive). Defaults to until − 180 days.
+      until  — ISO date (inclusive). Defaults to today (UTC).
+    Returns { wallet, token, series:[{time (epoch s, UTC midnight), net_usd}] }.
+    """
+    wallet = request.args.get("wallet")
+    if not wallet:
+        return response.json({"error": "missing wallet"}, status=400)
+    wallet = wallet.lower()
+    token = request.args.get("token") or None
+
+    until_arg = request.args.get("until")
+    since_arg = request.args.get("since")
+    try:
+        until_dt = (datetime.fromisoformat(until_arg).replace(tzinfo=None)
+                    if until_arg else datetime.utcnow())
+        since_dt = (datetime.fromisoformat(since_arg).replace(tzinfo=None)
+                    if since_arg else until_dt - timedelta(days=180))
+    except ValueError:
+        return response.json({"error": "invalid since/until; expected YYYY-MM-DD"}, status=400)
+    if since_dt > until_dt:
+        return response.json({"error": "since must be <= until"}, status=400)
+
+    tok_filter = "AND token = {token:String}" if token else ""
+    # net_usd = signed Σ(size·price); net_tokens = signed Σ(size). Token units
+    # only make sense for a single token (summing different tokens' sizes is
+    # meaningless), so the client only surfaces net_tokens when `token` is set.
+    sql = f"""
+        SELECT toDate(time) AS day,
+               sum(if(side = 'B', size * price, -size * price)) AS net_usd,
+               sum(if(side = 'B', size, -size)) AS net_tokens
+        FROM tradernick.hl_fills FINAL
+        WHERE wallet = {{wallet:String}}
+          AND time >= {{since:DateTime}}
+          AND time <  {{until:DateTime}} + INTERVAL 1 DAY
+          {tok_filter}
+        GROUP BY day
+        HAVING round(net_usd, 2) != 0
+        ORDER BY day
+    """
+    params = {"wallet": wallet, "since": since_dt, "until": until_dt}
+    if token:
+        params["token"] = token
+    ch = await client()
+    rows = await ch.query(sql, parameters=params)
+    series = [
+        {"time": int(datetime(r[0].year, r[0].month, r[0].day,
+                              tzinfo=timezone.utc).timestamp()),
+         "net_usd": float(r[1]),
+         "net_tokens": float(r[2])}
+        for r in rows.result_rows
+    ]
+    return response.json({"wallet": wallet, "token": token, "series": series})
+
+
 # ── Live positions from the official Hyperliquid clearinghouse ───────
 # Ground-truth check: our hl_position_history is sourced from DeFiStream and
 # is, by design, snapshotted on a grid (and only for the INGEST_TOKENS roster)

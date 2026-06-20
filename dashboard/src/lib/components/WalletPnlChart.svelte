@@ -18,6 +18,7 @@
   import { fmtUsdAxis, fmtUsdTooltip, fmtUtcTime } from '$lib/components/charts/config';
   import { VRefLinesPrimitive } from '$lib/components/charts/lwc/primitives/vRefLine';
   import { VBandPrimitive } from '$lib/components/charts/lwc/primitives/vBand';
+  import { TradeChipsPrimitive } from '$lib/components/charts/lwc/primitives/tradeChips';
 
   type Point = { time: number; value: number };
 
@@ -62,11 +63,18 @@
     // Selected date-range band (range mode): tints [bandFrom, bandTo] blue.
     bandFrom = null as number | null,
     bandTo = null as number | null,
+    // Buy/sell chips ('Show Trades'): one per day. `value` anchors the chip to
+    // the curve point at that time; `side` sets colour/position; `text` is the
+    // label (net magnitude).
+    trades = [] as Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string }>,
+    // Range mode: left-drag selects a range (else it pans; middle-drag always
+    // pans). Changes the gesture the pointer handler performs on a body drag.
+    rangeMode = false,
     // Click → pick a single day (unix s). Drag → pick a [start, end] range.
     // When either is set the chart becomes interactive (cursor + selection).
     onPickDay = undefined as ((unix: number) => void) | undefined,
     onPickRange = undefined as ((startUnix: number, endUnix: number) => void) | undefined
-  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean; bandFrom?: number | null; bandTo?: number | null } = $props();
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean; bandFrom?: number | null; bandTo?: number | null; trades?: Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string }>; rangeMode?: boolean } = $props();
 
   // Cutoff = amber (as-of day); lookback start = thinner sky-blue; entry =
   // emerald (the day the selected position was first opened).
@@ -116,17 +124,24 @@
   // Fully locked view: no zoom/pan from any input. Reasserted after every
   // applyOptions(lwcChartOptions()) because lwcChartOptions() turns these
   // back ON — without re-merging, the theme effect re-enables interaction.
-  const LOCK_INTERACTION = {
+  //
+  // X-axis only: wheel/pinch zoom + horizontal-wheel/touch/axis-drag pan, with
+  // the PRICE (vertical) axis locked. Body `pressedMouseMove` stays OFF so a
+  // plain drag remains a range-selection (not a pan); panning by drag is done
+  // on the time axis (axisPressedMouseMove), which the pointer handler yields to
+  // by ignoring presses that start in the axis strip. Double-click the axis to
+  // reset the zoom.
+  const INTERACTION = {
     handleScale: {
-      mouseWheel: false,
-      pinch: false,
-      axisPressedMouseMove: false,
-      axisDoubleClickReset: false
+      mouseWheel: true,
+      pinch: true,
+      axisPressedMouseMove: { time: true, price: false },
+      axisDoubleClickReset: { time: true, price: false }
     },
     handleScroll: {
-      mouseWheel: false,
+      mouseWheel: true,
       pressedMouseMove: false,
-      horzTouchDrag: false,
+      horzTouchDrag: true,
       vertTouchDrag: false
     }
   };
@@ -138,15 +153,30 @@
   let vref: VRefLinesPrimitive | null = null;
   let bandHi: VBandPrimitive | null = null;
   let bandMask: VBandPrimitive | null = null;
+  let tradeChips: TradeChipsPrimitive | null = null;
   let ro: ResizeObserver | null = null;
+  // Last applied initial window. Pin setVisibleRange only when the window
+  // (rangeFrom/rangeTo) actually changes — NOT on every cutoff/marker/data
+  // update — so the user's manual zoom/pan isn't reset on each interaction.
+  let pinnedFrom: number | null = null;
+  let pinnedTo: number | null = null;
 
   let tip = $state<{ x: number; time: number; value: number } | null>(null);
 
-  // Click-to-pick-day / drag-to-pick-range. Pixel x → bar time via the time
-  // scale. A tiny move counts as a click; a real drag is a range selection.
+  // Pointer gestures:
+  //   • click (any mode)            → pick a single day (snapshot)
+  //   • drag in range mode (left)   → select a range
+  //   • drag otherwise / middle-drag→ pan the x-axis
   const interactive = $derived(!!onPickDay || !!onPickRange);
+  let gesture: 'none' | 'range' | 'pan' = 'none';
   let dragStartX: number | null = null;
+  let dragIsLeft = true;
   let dragSel = $state<{ left: number; width: number } | null>(null);
+  // Pan state captured at press: the visible window + seconds-per-pixel, so the
+  // drag maps pixels → a window shift.
+  let panFrom = 0;
+  let panTo = 0;
+  let panPerPx = 0;
 
   function xInContainer(clientX: number): number {
     const rect = container!.getBoundingClientRect();
@@ -162,29 +192,110 @@
     const t = chart.timeScale().coordinateToTime(x - leftAxisW);
     return t == null ? null : (t as unknown as number);
   }
+  function beginPan(): boolean {
+    if (!chart) return false;
+    const r = chart.timeScale().getVisibleRange();
+    const w = chart.timeScale().width();
+    if (!r || w <= 0) return false;
+    panFrom = r.from as unknown as number;
+    panTo = r.to as unknown as number;
+    panPerPx = (panTo - panFrom) / w;
+    return true;
+  }
+  function doPan(x: number) {
+    if (!chart || dragStartX == null) return;
+    // Drag right → reveal earlier data (window shifts left). clampVisible (the
+    // visible-range subscription) keeps it inside [rangeFrom, rangeTo].
+    const dt = -(x - dragStartX) * panPerPx;
+    try {
+      chart.timeScale().setVisibleRange({
+        from: (panFrom + dt) as UTCTimestamp,
+        to: (panTo + dt) as UTCTimestamp
+      });
+    } catch {
+      /* out-of-range edge — ignore */
+    }
+  }
+  // Keep the visible window inside the fixed total range [rangeFrom, rangeTo]:
+  // never wider (no zooming out past the full span) and never panned past an
+  // edge. Runs on every visible-range change (native zoom/pan + manual pan).
+  let clamping = false;
+  function clampVisible() {
+    if (clamping || !chart || rangeFrom == null || rangeTo == null) return;
+    const r = chart.timeScale().getVisibleRange();
+    if (!r) return;
+    const from = r.from as unknown as number;
+    const to = r.to as unknown as number;
+    const total = rangeTo - rangeFrom;
+    let nf = from;
+    let nt = to;
+    if (to - from >= total) {
+      // Wider than the full span → snap to the full range.
+      nf = rangeFrom;
+      nt = rangeTo;
+    } else {
+      // Same width, shifted out of bounds → slide back inside.
+      if (nf < rangeFrom) { nt += rangeFrom - nf; nf = rangeFrom; }
+      if (nt > rangeTo) { nf -= nt - rangeTo; nt = rangeTo; }
+      nf = Math.max(nf, rangeFrom);
+      nt = Math.min(nt, rangeTo);
+    }
+    if (Math.abs(nf - from) > 0.5 || Math.abs(nt - to) > 0.5) {
+      clamping = true;
+      try {
+        chart.timeScale().setVisibleRange({ from: nf as UTCTimestamp, to: nt as UTCTimestamp });
+      } catch {
+        /* ignore */
+      }
+      clamping = false;
+    }
+  }
   function onPointerDown(e: PointerEvent) {
-    if (!interactive || !container) return;
+    if (!interactive || !container || !chart) return;
+    // Yield presses that start in the bottom time-axis strip to the chart's
+    // native handlers (axis drag = pan/scale, double-click = reset zoom).
+    const rect = container.getBoundingClientRect();
+    const axisH = chart.timeScale().height();
+    if (e.clientY - rect.top >= rect.height - axisH) return;
+    if (e.button !== 0 && e.button !== 1) return; // left or middle only
+    dragIsLeft = e.button === 0;
     dragStartX = xInContainer(e.clientX);
+    // Left-drag in range mode selects; everything else (non-range left, or any
+    // middle drag) pans.
+    if (rangeMode && dragIsLeft) {
+      gesture = 'range';
+    } else {
+      gesture = beginPan() ? 'pan' : 'none';
+      if (e.button === 1) e.preventDefault(); // suppress middle-click autoscroll
+    }
   }
   function onPointerMove(e: PointerEvent) {
-    if (dragStartX == null || !container) return;
+    if (gesture === 'none' || dragStartX == null || !container) return;
     const x = xInContainer(e.clientX);
-    dragSel = Math.abs(x - dragStartX) > 3
-      ? { left: Math.min(x, dragStartX), width: Math.abs(x - dragStartX) }
-      : null;
+    if (gesture === 'range') {
+      dragSel = Math.abs(x - dragStartX) > 3
+        ? { left: Math.min(x, dragStartX), width: Math.abs(x - dragStartX) }
+        : null;
+    } else {
+      doPan(x);
+    }
   }
   function onPointerUp(e: PointerEvent) {
-    if (dragStartX == null || !container) return;
+    if (gesture === 'none' || dragStartX == null || !container) return;
     const x = xInContainer(e.clientX);
     const moved = Math.abs(x - dragStartX);
     if (moved < 4) {
-      const t = timeAtX(dragStartX);
-      if (t != null) onPickDay?.(t);
-    } else {
+      // A click (negligible movement) picks the day — but only on left button.
+      if (dragIsLeft) {
+        const t = timeAtX(dragStartX);
+        if (t != null) onPickDay?.(t);
+      }
+    } else if (gesture === 'range') {
       const a = timeAtX(Math.min(x, dragStartX));
       const b = timeAtX(Math.max(x, dragStartX));
       if (a != null && b != null) onPickRange?.(a, b);
     }
+    gesture = 'none';
     dragStartX = null;
     dragSel = null;
   }
@@ -197,7 +308,7 @@
       // Larger axis labels than the default 11px.
       layout: { ...base.layout, fontSize: 13 },
       height,
-      ...LOCK_INTERACTION
+      ...INTERACTION
     });
     chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 } });
     // Baseline series split at PnL = 0: green line + green fill above the zero
@@ -252,6 +363,10 @@
     bandMask = new VBandPrimitive(maskBands(), 'top');
     series.attachPrimitive(bandMask);
 
+    // Buy/sell chips on top of everything (incl. the mask) so they stay legible.
+    tradeChips = new TradeChipsPrimitive(trades);
+    series.attachPrimitive(tradeChips);
+
     chart.subscribeCrosshairMove((p) => {
       if (!p.time || !series || !p.point) { tip = null; return; }
       const v = p.seriesData.get(series) as { value?: number } | undefined;
@@ -273,8 +388,12 @@
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
 
+    // Enforce the zoom-out / pan bounds on every visible-range change.
+    chart.timeScale().subscribeVisibleTimeRangeChange(clampVisible);
+
     return () => {
       ro?.disconnect();
+      chart?.timeScale().unsubscribeVisibleTimeRangeChange(clampVisible);
       container?.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
@@ -285,6 +404,7 @@
       vref = null;
       bandHi = null;
       bandMask = null;
+      tradeChips = null;
     };
   });
 
@@ -299,6 +419,12 @@
     void bandFrom; void bandTo;
     bandHi?.setBands(highlightBands());
     bandMask?.setBands(maskBands());
+  });
+
+  // Buy/sell chips ('Show Trades') — styled tags anchored to the curve.
+  $effect(() => {
+    void trades;
+    tradeChips?.setChips(trades.map((t) => ({ ...t })));
   });
 
   // Entry-price horizontal line on the close (left) price scale.
@@ -343,7 +469,7 @@
     void themeStore.theme;
     if (chart) {
       const base = lwcChartOptions();
-      chart.applyOptions({ ...base, layout: { ...base.layout, fontSize: 13 }, ...LOCK_INTERACTION });
+      chart.applyOptions({ ...base, layout: { ...base.layout, fontSize: 13 }, ...INTERACTION });
     }
   });
 
@@ -387,10 +513,16 @@
     try {
       series.setData(deduped as { time: UTCTimestamp; value: number }[]);
       if (rangeFrom != null && rangeTo != null) {
-        chart.timeScale().setVisibleRange({
-          from: rangeFrom as UTCTimestamp,
-          to: rangeTo as UTCTimestamp
-        });
+        // Only (re)pin when the requested window changes; otherwise leave the
+        // user's current zoom/pan untouched (setData keeps the visible range).
+        if (rangeFrom !== pinnedFrom || rangeTo !== pinnedTo) {
+          chart.timeScale().setVisibleRange({
+            from: rangeFrom as UTCTimestamp,
+            to: rangeTo as UTCTimestamp
+          });
+          pinnedFrom = rangeFrom;
+          pinnedTo = rangeTo;
+        }
       } else {
         chart.timeScale().fitContent();
       }
@@ -402,7 +534,9 @@
 </script>
 
 <div class="relative w-full" style="height: {height}px">
-  <div bind:this={container} class="absolute inset-0" class:cursor-crosshair={interactive}></div>
+  <div bind:this={container} class="absolute inset-0"
+    class:cursor-crosshair={interactive && rangeMode}
+    class:cursor-grab={interactive && !rangeMode}></div>
   {#if dragSel}
     <div class="pointer-events-none absolute top-0 bottom-0 z-10 bg-blue-500/15 border-x border-blue-400/60"
       style="left: {dragSel.left}px; width: {dragSel.width}px"></div>

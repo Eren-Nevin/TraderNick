@@ -80,6 +80,16 @@
   let closeSeries = $state<{ time: number; value: number }[]>([]);
   let closeCtl: AbortController | null = null;
 
+  // 'Show Trades': per-day net buy/sell flow markers. Scoped to the selected
+  // token when one is chosen, else summed across all tokens (one tag per day).
+  let showTrades = $state(false);
+  let tradesRaw = $state<Array<{ time: number; net_usd: number; net_tokens: number }>>([]);
+  let tradesLoading = $state(false);
+  let tradesCtl: AbortController | null = null;
+  // Chip label unit. 'token' (size in token units) is only meaningful for a
+  // single token, so it's offered only when a token is selected.
+  let tradeUnit = $state<'usd' | 'token'>('usd');
+
   // ── Derived ────────────────────────────────────────────────────────
   const MAX_BACK = DAY_SLIDER_MAX_BACK;
   // Fixed chart window: floor (01-01) → today. The slider spans the same span,
@@ -118,6 +128,34 @@
   const chartData = $derived(
     pnlSeries.map((p) => ({ time: p.time, value: modeVal(p) - rangeBase }))
   );
+
+  // Token-unit labels only make sense for a single token; fall back to USD
+  // whenever no token is selected.
+  const tradeUnitEff = $derived(tradeUnit === 'token' && selectedToken ? 'token' : 'usd');
+  // Compact token-amount formatter (the chip is small).
+  function fmtAmt(n: number): string {
+    const a = Math.abs(n);
+    if (a >= 1e9) return (a / 1e9).toFixed(2) + 'B';
+    if (a >= 1e6) return (a / 1e6).toFixed(2) + 'M';
+    if (a >= 1e3) return (a / 1e3).toFixed(1) + 'K';
+    return a.toFixed(a >= 100 ? 0 : 2);
+  }
+  // Buy/sell chips from the per-day net flow. net ≥ 0 → net buy, < 0 → sell.
+  // Label = the net magnitude (the arrow + colour already show direction);
+  // `value` anchors each chip to the curve point on that day.
+  const tradeMarkers = $derived.by(() => {
+    if (!showTrades) return [];
+    const byTime = new Map(chartData.map((p) => [p.time, p.value]));
+    return tradesRaw.map((t) => ({
+      time: t.time,
+      value: byTime.get(t.time) ?? 0,
+      side: (t.net_usd >= 0 ? 'buy' : 'sell') as 'buy' | 'sell',
+      text:
+        tradeUnitEff === 'token'
+          ? fmtAmt(t.net_tokens)
+          : fmtUsd(Math.abs(t.net_usd)).replace('$', '')
+    }));
+  });
 
   // The selected token's dominant position (largest notional if both sides are
   // held) → drives the entry-price line + open-date marker on the chart. Both
@@ -353,6 +391,40 @@
     loadClose(selectedToken);
   });
 
+  // 'Show Trades': fetch the per-day net buy/sell flow. Scoped to the selected
+  // token when one is chosen; refetched when the toggle or token changes.
+  async function loadTrades() {
+    if (tradesCtl) { tradesCtl.abort(); tradesCtl = null; }
+    if (!showTrades) { tradesRaw = []; tradesLoading = false; return; }
+    // Clear the previous token's markers immediately so they don't linger while
+    // the new token's flow loads (otherwise stale chips confuse the user).
+    tradesRaw = [];
+    const ctl = new AbortController();
+    tradesCtl = ctl;
+    tradesLoading = true;
+    const since = backToIso(MAX_BACK);
+    const until = backToIso(0);
+    const tokQ = selectedToken ? `&token=${encodeURIComponent(selectedToken)}` : '';
+    try {
+      const res = await fetch(
+        `/api/hyperliquid/wallet_trades?wallet=${address}&since=${since}&until=${until}${tokQ}`,
+        { signal: ctl.signal }
+      );
+      if (!res.ok) throw new Error(`wallet_trades ${res.status}`);
+      const body = await res.json();
+      tradesRaw = (body.series ?? []) as Array<{ time: number; net_usd: number; net_tokens: number }>;
+    } catch (e) {
+      if ((e as DOMException)?.name !== 'AbortError') tradesRaw = [];
+    } finally {
+      // Only the latest in-flight request clears the spinner.
+      if (tradesCtl === ctl) tradesLoading = false;
+    }
+  }
+  $effect(() => {
+    void showTrades; void selectedToken; void address;
+    loadTrades();
+  });
+
   // Range-mode extras: total volume (backend) + start-day OI (sum of the start
   // snapshot's notional). realized/unrealized/sharpe are derived from pnlSeries
   // and need no fetch. Debounced + sequenced like positions.
@@ -400,9 +472,10 @@
   const isoFromUnix = (unix: number) => new Date(unix * 1000).toISOString().slice(0, 10);
   const posForIso = (iso: string) => Math.max(0, Math.min(MAX_BACK, MAX_BACK - isoToBack(iso)));
 
-  // Click a point on the chart → single snapshot at that day (exits range mode).
+  // Click a point on the chart → set the snapshot (as-of) day. Range mode is
+  // now toggled explicitly, so a click no longer exits it — in range mode this
+  // just moves the as-of (end) knob.
   function pickDay(unix: number) {
-    rangeMode = false;
     sliderPos = posForIso(isoFromUnix(unix));
   }
   // Drag across the chart → range mode over the dragged [start, end] days.
@@ -529,6 +602,21 @@
           ? 'bg-blue-600 border-blue-500 text-white'
           : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
         title="Range mode: drag across the chart to pick a [start, end] window; a range stat row is added below.">Range</button>
+      <button type="button" onclick={() => (showTrades = !showTrades)}
+        class="text-xs px-2 py-0.5 rounded border transition-colors {showTrades
+          ? 'bg-blue-600 border-blue-500 text-white'
+          : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
+        title="Show per-day net buy (green ▲) / sell (red ▼) markers. Scoped to the selected token, else summed across all tokens.">Show Trades</button>
+      {#if showTrades}
+        <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
+          <button type="button" onclick={() => (tradeUnit = 'usd')}
+            class={'px-2 py-0.5 text-xs ' + (tradeUnitEff === 'usd' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="Label trades by net USD value">USD</button>
+          <button type="button" onclick={() => (tradeUnit = 'token')} disabled={!selectedToken}
+            class={'px-2 py-0.5 text-xs border-l border-zinc-700 ' + (tradeUnitEff === 'token' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200') + (!selectedToken ? ' opacity-40 cursor-not-allowed' : '')}
+            title={selectedToken ? 'Label trades by net token amount' : 'Select a token (from the positions table) to label by token amount'}>Token</button>
+        </div>
+      {/if}
       {#if selectedToken}
         <span class="ml-auto inline-flex items-center gap-1.5 text-xs text-blue-300">
           <span class="inline-block w-3 h-0.5 rounded bg-blue-500"></span>
@@ -563,7 +651,9 @@
           rangeTo={todayUnix}
           bandFrom={rangeMode ? startUnix : null}
           bandTo={rangeMode ? selectedUnix : null}
-          loading={posLoading}
+          trades={tradeMarkers}
+          rangeMode={rangeMode}
+          loading={posLoading || tradesLoading}
           onPickDay={pickDay}
           onPickRange={pickRange}
           label={modeLabel}
