@@ -14,6 +14,7 @@
     DAY_SLIDER_MAX_BACK,
     DAY_SLIDER_FLOOR_ISO,
     backToIso,
+    isoToBack,
     isoToUnix,
     isToday
   } from '$lib/daySlider';
@@ -67,6 +68,10 @@
   let selectedToken = $state<string | null>(null);
   let closeSeries = $state<{ time: number; value: number }[]>([]);
   let closeCtl: AbortController | null = null;
+
+  // Date slider is hidden for now — the day/range is set by clicking/dragging
+  // the chart. Flip back to true to restore the slider (kept for later).
+  const SHOW_DATE_SLIDER = false;
 
   // ── Derived ────────────────────────────────────────────────────────
   const MAX_BACK = DAY_SLIDER_MAX_BACK;
@@ -356,6 +361,21 @@
     if (!rangeMode) sliderStartPos = Math.max(0, sliderPos - 30); // default ~30d span
     rangeMode = !rangeMode;
   }
+
+  // Chart picking → slider positions. unix (UTC-midnight bar) → slider value.
+  const isoFromUnix = (unix: number) => new Date(unix * 1000).toISOString().slice(0, 10);
+  const posForIso = (iso: string) => Math.max(0, Math.min(MAX_BACK, MAX_BACK - isoToBack(iso)));
+
+  // Click a point on the chart → set the snapshot (end) day, like the slider.
+  function pickDay(unix: number) {
+    sliderPos = posForIso(isoFromUnix(unix));
+  }
+  // Drag across the chart → enable range mode over the dragged [start, end].
+  function pickRange(startUnix: number, endUnix: number) {
+    sliderStartPos = posForIso(isoFromUnix(startUnix));
+    sliderPos = posForIso(isoFromUnix(endUnix));
+    rangeMode = true;
+  }
 </script>
 
 <div class="px-8 py-6 space-y-6">
@@ -453,6 +473,11 @@
           class={'px-2 py-0.5 text-xs border-l border-zinc-700 ' + (pnlMode === 'unrealized' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
           title="Unrealized (open-position) PnL only">Unrealized</button>
       </div>
+      <button type="button" onclick={toggleRange}
+        class="ml-1 text-xs px-2 py-0.5 rounded border transition-colors {rangeMode
+          ? 'bg-blue-600 border-blue-500 text-white'
+          : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
+        title="Range mode: drag across the chart to pick a [start, end] window; a range stat row is added below.">Range</button>
       {#if selectedToken}
         <span class="ml-auto inline-flex items-center gap-1.5 text-xs text-blue-300">
           <span class="inline-block w-3 h-0.5 rounded bg-blue-500"></span>
@@ -485,14 +510,15 @@
           rangeFrom={floorUnix}
           rangeTo={todayUnix}
           onAxisWidth={(w) => (axisWidth = w)}
+          onPickDay={pickDay}
+          onPickRange={pickRange}
           label={pnlMode === 'total' ? 'Total' : pnlMode === 'realized' ? 'Realized' : 'Unrealized'}
         />
       {/if}
     </div>
-    <!-- Date slider: track is padded on the right by the chart's price-axis
-         width so the slider thumb sits directly under the chart's day marker.
-         Locked while positions refetch (slow query) to avoid stale clobbering.
-         Range mode swaps the single knob for a two-knob range. -->
+    {#if SHOW_DATE_SLIDER}
+    <!-- Date slider (hidden for now — the day/range is set by clicking or
+         dragging the chart). Kept wrapped for possible later use. -->
     <div class="px-2 pb-2 pt-1">
       <div class="flex items-center justify-between mb-1.5">
         <button type="button" onclick={toggleRange}
@@ -534,6 +560,7 @@
         </div>
       </div>
     </div>
+    {/if}
   </div>
 
   <!-- Positions table -->

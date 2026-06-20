@@ -49,8 +49,12 @@
     // Selected position's open time (unix s) → vertical marker. null → skipped.
     entryTime = null as number | null,
     // Colour for the entry-price line (green in profit, red underwater).
-    entryColor = '#34d399'
-  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryColor?: string } = $props();
+    entryColor = '#34d399',
+    // Click → pick a single day (unix s). Drag → pick a [start, end] range.
+    // When either is set the chart becomes interactive (cursor + selection).
+    onPickDay = undefined as ((unix: number) => void) | undefined,
+    onPickRange = undefined as ((startUnix: number, endUnix: number) => void) | undefined
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void } = $props();
 
   // Cutoff = amber (as-of day); lookback start = thinner sky-blue; entry =
   // emerald (the day the selected position was first opened).
@@ -88,6 +92,48 @@
   let ro: ResizeObserver | null = null;
 
   let tip = $state<{ x: number; time: number; value: number } | null>(null);
+
+  // Click-to-pick-day / drag-to-pick-range. Pixel x → bar time via the time
+  // scale. A tiny move counts as a click; a real drag is a range selection.
+  const interactive = $derived(!!onPickDay || !!onPickRange);
+  let dragStartX: number | null = null;
+  let dragSel = $state<{ left: number; width: number } | null>(null);
+
+  function xInContainer(clientX: number): number {
+    const rect = container!.getBoundingClientRect();
+    return clientX - rect.left;
+  }
+  function timeAtX(x: number): number | null {
+    if (!chart) return null;
+    const t = chart.timeScale().coordinateToTime(x);
+    return t == null ? null : (t as unknown as number);
+  }
+  function onPointerDown(e: PointerEvent) {
+    if (!interactive || !container) return;
+    dragStartX = xInContainer(e.clientX);
+  }
+  function onPointerMove(e: PointerEvent) {
+    if (dragStartX == null || !container) return;
+    const x = xInContainer(e.clientX);
+    dragSel = Math.abs(x - dragStartX) > 3
+      ? { left: Math.min(x, dragStartX), width: Math.abs(x - dragStartX) }
+      : null;
+  }
+  function onPointerUp(e: PointerEvent) {
+    if (dragStartX == null || !container) return;
+    const x = xInContainer(e.clientX);
+    const moved = Math.abs(x - dragStartX);
+    if (moved < 4) {
+      const t = timeAtX(dragStartX);
+      if (t != null) onPickDay?.(t);
+    } else {
+      const a = timeAtX(Math.min(x, dragStartX));
+      const b = timeAtX(Math.max(x, dragStartX));
+      if (a != null && b != null) onPickRange?.(a, b);
+    }
+    dragStartX = null;
+    dragSel = null;
+  }
 
   onMount(() => {
     if (!container) return;
@@ -155,8 +201,17 @@
     });
     ro.observe(container);
 
+    // Click/drag picking: pointerdown on the chart, move/up on the window so a
+    // drag that leaves the chart still resolves.
+    container.addEventListener('pointerdown', onPointerDown);
+    window.addEventListener('pointermove', onPointerMove);
+    window.addEventListener('pointerup', onPointerUp);
+
     return () => {
       ro?.disconnect();
+      container?.removeEventListener('pointerdown', onPointerDown);
+      window.removeEventListener('pointermove', onPointerMove);
+      window.removeEventListener('pointerup', onPointerUp);
       chart?.remove();
       chart = null;
       series = null;
@@ -245,7 +300,11 @@
 </script>
 
 <div class="relative w-full" style="height: {height}px">
-  <div bind:this={container} class="absolute inset-0"></div>
+  <div bind:this={container} class="absolute inset-0" class:cursor-crosshair={interactive}></div>
+  {#if dragSel}
+    <div class="pointer-events-none absolute top-0 bottom-0 z-10 bg-blue-500/15 border-x border-blue-400/60"
+      style="left: {dragSel.left}px; width: {dragSel.width}px"></div>
+  {/if}
   {#if tip}
     <div
       class="pointer-events-none absolute top-1 z-10 rounded border border-zinc-700 bg-zinc-900/95 px-2.5 py-1.5 text-sm leading-snug shadow-lg"
