@@ -25,12 +25,18 @@
     positions = [],
     live = false,
     loading = false,
-    error = null
+    error = null,
+    // Token whose close-price is overlaid on the PnL chart (max one). The row
+    // toggle is single-select: picking a token replaces any prior one.
+    selectedToken = null,
+    onToggleToken = undefined
   }: {
     positions: PositionRow[];
     live?: boolean;
     loading?: boolean;
     error?: string | null;
+    selectedToken?: string | null;
+    onToggleToken?: (token: string) => void;
   } = $props();
 
   function fmtUsd(n: number): string {
@@ -88,7 +94,7 @@
   const totalUnreal = $derived(positions.reduce((s, p) => s + p.unrealized_pnl, 0));
 </script>
 
-<div class="h-full flex flex-col text-xs border border-zinc-800 rounded-lg overflow-hidden" use:stopDragEvents>
+<div class="h-full flex flex-col text-sm border border-zinc-800 rounded-lg overflow-hidden" use:stopDragEvents>
   <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
     <span class="text-zinc-200 font-medium">Positions</span>
     <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border {live
@@ -115,6 +121,7 @@
       <table class="w-full">
         <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
           <tr>
+            <th class="text-center px-2 py-1.5 font-normal" title="Overlay this token's close price on the PnL chart">Price</th>
             <th class="text-left px-3 py-1.5 font-normal">Token</th>
             <th class="text-left px-3 py-1.5 font-normal">Side</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
@@ -131,7 +138,18 @@
         </thead>
         <tbody>
           {#each sortedRows as p (p.token + '|' + p.side)}
-            <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
+            <tr class="border-b border-zinc-900 hover:bg-zinc-900/40"
+                class:bg-blue-950={selectedToken === p.token}>
+              <td class="px-2 py-1 text-center">
+                <button type="button" onclick={() => onToggleToken?.(p.token)}
+                  title={selectedToken === p.token ? 'Hide close-price overlay' : 'Overlay this token’s close price on the PnL chart'}
+                  aria-pressed={selectedToken === p.token}
+                  class="inline-flex h-4 w-4 items-center justify-center rounded-full border transition-colors {selectedToken === p.token
+                    ? 'bg-blue-500 border-blue-400'
+                    : 'border-zinc-600 hover:border-blue-400'}">
+                  {#if selectedToken === p.token}<span class="h-2 w-2 rounded-full bg-white"></span>{/if}
+                </button>
+              </td>
               <td class="px-3 py-1 font-mono text-zinc-200">{p.token}</td>
               <td class="px-3 py-1">
                 <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border {p.side === 'long'

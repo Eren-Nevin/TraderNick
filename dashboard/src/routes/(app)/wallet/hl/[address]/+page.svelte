@@ -12,6 +12,7 @@
   } from '$lib/components/WalletPositionsTable.svelte';
   import {
     DAY_SLIDER_MAX_BACK,
+    DAY_SLIDER_FLOOR_ISO,
     backToIso,
     isoToUnix,
     isToday
@@ -47,9 +48,22 @@
   let accountValue = $state<number | null>(null);
 
   let copied = $state(false);
+  // Right price-axis width (px) reported by the chart, used to pad the slider
+  // so its track lines up with the chart's plot area (excludes the axis).
+  let axisWidth = $state(0);
+
+  // Single token (max one) whose daily close price is overlaid on the PnL
+  // chart, toggled from the positions table.
+  let selectedToken = $state<string | null>(null);
+  let closeSeries = $state<{ time: number; value: number }[]>([]);
+  let closeCtl: AbortController | null = null;
 
   // ── Derived ────────────────────────────────────────────────────────
   const MAX_BACK = DAY_SLIDER_MAX_BACK;
+  // Fixed chart window: floor (01-01) → today. The slider spans the same span,
+  // so the day marker and the slider thumb track together.
+  const floorUnix = isoToUnix(DAY_SLIDER_FLOOR_ISO);
+  const todayUnix = isoToUnix(backToIso(0));
   const snapshotIso = $derived(backToIso(MAX_BACK - sliderPos));
   const live = $derived(isToday(snapshotIso));
   const selectedUnix = $derived(isoToUnix(snapshotIso));
@@ -180,6 +194,11 @@
       if (seq !== posSeq) return; // superseded by a newer request — drop this
       positions = nextPositions;
       accountValue = nextAccount;
+      // Drop the close overlay if the newly-loaded day no longer holds that
+      // token (the $effect on selectedToken then clears the chart series).
+      if (selectedToken && !nextPositions.some((p) => p.token === selectedToken)) {
+        selectedToken = null;
+      }
     } catch (e) {
       if (seq !== posSeq) return;
       posError = (e as Error).message;
@@ -205,6 +224,29 @@
     posTimer = setTimeout(() => loadPositions(iso), 200);
     return () => clearTimeout(posTimer);
   });
+
+  // Close-price overlay: (re)fetch the selected token's daily close series.
+  // token_close already returns the full history from the floor date.
+  async function loadClose(tok: string | null) {
+    if (closeCtl) { closeCtl.abort(); closeCtl = null; }
+    if (!tok) { closeSeries = []; return; }
+    closeCtl = new AbortController();
+    try {
+      const res = await fetch(
+        `/api/hyperliquid/token_close?token=${encodeURIComponent(tok)}`,
+        { signal: closeCtl.signal }
+      );
+      if (!res.ok) throw new Error(`token_close ${res.status}`);
+      const body = await res.json();
+      closeSeries = ((body.series ?? []) as Array<{ time: number; close: number }>)
+        .map((r) => ({ time: r.time, value: r.close }));
+    } catch (e) {
+      if ((e as DOMException)?.name !== 'AbortError') { selectedToken = null; closeSeries = []; }
+    }
+  }
+  $effect(() => {
+    loadClose(selectedToken);
+  });
 </script>
 
 <div class="px-8 py-6 space-y-6">
@@ -212,21 +254,33 @@
   <div class="flex items-end justify-between gap-4 flex-wrap">
     <div>
       <div class="flex items-center gap-2">
-        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL</span>
-        <h1 class="text-xl font-semibold font-mono">{truncate(address)}</h1>
+        <span class="text-zinc-300 text-sm px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL</span>
+        <h1 class="text-2xl font-semibold font-mono">{truncate(address)}</h1>
         <button
           type="button"
           onclick={copyAddr}
           title="Copy full address"
-          class="text-xs text-zinc-500 hover:text-zinc-200 px-1.5 py-0.5 rounded border border-zinc-800 hover:border-zinc-600"
+          class="text-sm text-zinc-500 hover:text-zinc-200 px-1.5 py-0.5 rounded border border-zinc-800 hover:border-zinc-600"
         >{copied ? '✓ copied' : 'copy'}</button>
       </div>
-      <div class="text-xs text-zinc-500 mt-1 flex items-center gap-3">
+      <div class="text-sm text-zinc-500 mt-1 flex items-center gap-3">
         <span class="font-mono break-all">{address}</span>
         <a href={coinglassHlUrl(address)} target="_blank" rel="noopener noreferrer"
            class="underline decoration-dotted hover:text-zinc-200">Coinglass ↗</a>
         <a href={arkhamUrl(address)} target="_blank" rel="noopener noreferrer"
            class="underline decoration-dotted hover:text-zinc-200">Arkham ↗</a>
+      </div>
+    </div>
+    <!-- As-of indicator (drives the positions/stats below the chart) -->
+    <div class="text-right">
+      <div class="text-zinc-500 text-xs uppercase tracking-wide flex items-center justify-end gap-2">
+        As of
+        {#if posLoading}
+          <span class="inline-block w-3 h-3 rounded-full border-2 border-zinc-600 border-t-blue-400 animate-spin" title="Loading positions…"></span>
+        {/if}
+      </div>
+      <div class="font-mono text-xl text-zinc-100 tabular-nums">
+        {snapshotIso}{#if live}<span class="text-emerald-400 text-sm ml-1">· live</span>{/if}
       </div>
     </div>
   </div>
@@ -235,9 +289,9 @@
   <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
     {#snippet card(label: string, value: string, cls = 'text-zinc-200', sub = '')}
       <div class="rounded-lg bg-zinc-900/70 border border-zinc-800 px-3 py-2">
-        <div class="text-zinc-500 text-[10px] uppercase tracking-wide">{label}</div>
-        <div class="tabular-nums text-sm font-medium {cls}">{value}</div>
-        {#if sub}<div class="text-zinc-600 text-[10px]">{sub}</div>{/if}
+        <div class="text-zinc-500 text-xs uppercase tracking-wide">{label}</div>
+        <div class="tabular-nums text-lg font-medium {cls}">{value}</div>
+        {#if sub}<div class="text-zinc-600 text-[11px]">{sub}</div>{/if}
       </div>
     {/snippet}
     {@render card('Realized PnL', fmtUsd(realizedAsOf), pnlClass(realizedAsOf))}
@@ -252,24 +306,32 @@
     {/if}
   </div>
 
-  <!-- PnL equity curve -->
+  <!-- PnL equity curve + aligned date slider -->
   <div class="rounded-lg border border-zinc-800 overflow-hidden">
     <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
-      <span class="text-zinc-200 font-medium text-sm">PnL</span>
-      <span class="text-[10px] text-zinc-600">global · all tokens</span>
+      <span class="text-zinc-200 font-medium text-base">PnL</span>
+      <span class="text-xs text-zinc-600">global · all tokens</span>
       <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden ml-2">
         <button type="button" onclick={() => (pnlMode = 'total')}
-          class={'px-2 py-0.5 text-[11px] ' + (pnlMode === 'total' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+          class={'px-2 py-0.5 text-xs ' + (pnlMode === 'total' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
           title="Realized + unrealized equity curve">Total</button>
         <button type="button" onclick={() => (pnlMode = 'realized')}
-          class={'px-2 py-0.5 text-[11px] border-l border-zinc-700 ' + (pnlMode === 'realized' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+          class={'px-2 py-0.5 text-xs border-l border-zinc-700 ' + (pnlMode === 'realized' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
           title="Cumulative realized PnL only">Realized</button>
       </div>
+      {#if selectedToken}
+        <span class="ml-auto inline-flex items-center gap-1.5 text-xs text-blue-300">
+          <span class="inline-block w-3 h-0.5 rounded bg-blue-500"></span>
+          {selectedToken} close
+          <button type="button" onclick={() => (selectedToken = null)}
+            class="text-zinc-500 hover:text-zinc-200" title="Remove overlay">✕</button>
+        </span>
+      {/if}
       {#if pnlStats}
-        <span class="text-[10px] text-zinc-500 ml-auto">σ {pnlStats.volatility.toFixed(0)} · Sharpe {pnlStats.sharpe.toFixed(2)}</span>
+        <span class="text-xs text-zinc-500 {selectedToken ? '' : 'ml-auto'}">σ {pnlStats.volatility.toFixed(0)} · Sharpe {pnlStats.sharpe.toFixed(2)}</span>
       {/if}
     </div>
-    <div class="px-2 py-2">
+    <div class="px-2 pt-2">
       {#if pnlError}
         <div class="h-[260px] flex items-center justify-center text-rose-400">{pnlError}</div>
       {:else if pnlLoading && pnlSeries.length === 0}
@@ -279,36 +341,80 @@
       {:else}
         <WalletPnlChart
           data={chartData}
+          closeData={closeSeries}
           height={260}
           cutoff={selectedUnix}
+          rangeFrom={floorUnix}
+          rangeTo={todayUnix}
+          onAxisWidth={(w) => (axisWidth = w)}
           label={pnlMode === 'total' ? 'Total' : 'Realized'}
         />
       {/if}
     </div>
-  </div>
-
-  <!-- Date slider -->
-  <div class="flex items-center gap-3 rounded-lg border border-zinc-800 bg-zinc-900/30 px-3 py-2 text-xs">
-    <span class="text-zinc-500 whitespace-nowrap">As of:</span>
-    <span class="font-mono text-zinc-200 whitespace-nowrap">{snapshotIso}{live ? ' (live)' : ''}</span>
-    {#if posLoading}
-      <span class="inline-block w-3 h-3 rounded-full border-2 border-zinc-600 border-t-blue-400 animate-spin" title="Loading positions…"></span>
-    {/if}
-    <!-- Slider is locked while positions refetch (the historical query is slow)
-         so the view can't get ahead of the data / fire overlapping requests. -->
-    <input
-      type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderPos}
-      disabled={posLoading}
-      class="flex-1 accent-blue-500 {posLoading ? 'opacity-50 cursor-wait' : 'cursor-pointer'}"
-      title={posLoading ? 'Loading…' : 'Drag to view the wallet as of any past day (1-day grain)'}
-    />
-    <button type="button" onclick={() => (sliderPos = MAX_BACK)} disabled={posLoading}
-      class="text-[10px] text-zinc-500 hover:text-zinc-200 underline decoration-dotted whitespace-nowrap disabled:opacity-40 disabled:hover:text-zinc-500"
-      title="Jump to the latest (live) day">Today</button>
+    <!-- Date slider: track is padded on the right by the chart's price-axis
+         width so the slider thumb sits directly under the chart's day marker.
+         Locked while positions refetch (slow query) to avoid stale clobbering. -->
+    <div class="px-2 pb-2 pt-1">
+      <div style="padding-right: {axisWidth}px">
+        <input
+          type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderPos}
+          disabled={posLoading}
+          class="aligned-slider w-full block {posLoading ? 'is-loading' : ''}"
+          title={posLoading ? 'Loading…' : 'Drag to view the wallet as of any past day (1-day grain)'}
+        />
+        <div class="flex items-center justify-between mt-1 text-xs text-zinc-500 font-mono tabular-nums">
+          <span>{DAY_SLIDER_FLOOR_ISO}</span>
+          <button type="button" onclick={() => (sliderPos = MAX_BACK)} disabled={posLoading}
+            class="hover:text-zinc-200 underline decoration-dotted disabled:opacity-40 disabled:hover:text-zinc-500"
+            title="Jump to the latest (live) day">Today</button>
+        </div>
+      </div>
+    </div>
   </div>
 
   <!-- Positions table -->
   <div class="h-[420px]">
-    <WalletPositionsTable {positions} {live} loading={posLoading} error={posError} />
+    <WalletPositionsTable
+      {positions} {live} loading={posLoading} error={posError}
+      {selectedToken}
+      onToggleToken={(t) => (selectedToken = selectedToken === t ? null : t)}
+    />
   </div>
 </div>
+
+<style>
+  /* Day slider sized so its thumb RADIUS (8px) equals the chart wrapper's
+     px-2 (8px) left inset. With the track's right padding set to the chart's
+     price-axis width, the thumb centre at min/max lands exactly on the plot
+     area's left/right edges — i.e. under the chart's day marker. */
+  .aligned-slider {
+    -webkit-appearance: none;
+    appearance: none;
+    height: 6px;
+    border-radius: 9999px;
+    background: #3f3f46; /* zinc-700 */
+    cursor: pointer;
+  }
+  .aligned-slider::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: #3b82f6; /* blue-500 */
+    border: 2px solid #0a0a0a;
+    cursor: pointer;
+  }
+  .aligned-slider::-moz-range-thumb {
+    width: 16px;
+    height: 16px;
+    border-radius: 9999px;
+    background: #3b82f6;
+    border: 2px solid #0a0a0a;
+    cursor: pointer;
+  }
+  .aligned-slider.is-loading {
+    opacity: 0.5;
+    cursor: wait;
+  }
+</style>

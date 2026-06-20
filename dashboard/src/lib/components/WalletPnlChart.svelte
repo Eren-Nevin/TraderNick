@@ -33,8 +33,17 @@
     // left price scale. Empty → not shown. Must be timeframe-aligned with `data`.
     closeData = [] as Point[],
     // Tooltip label for the plotted value (e.g. "Realized", "Total").
-    label = 'PnL'
-  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string } = $props();
+    label = 'PnL',
+    // Fixed visible time range (unix seconds). When both are set the time
+    // scale is pinned to exactly [rangeFrom, rangeTo] instead of fitting the
+    // data — so the plot edges map to known times (lets callers align an
+    // external day-slider to the plot area). null/null → fitContent().
+    rangeFrom = null as number | null,
+    rangeTo = null as number | null,
+    // Reports the right price-axis width (px) on mount / resize / data change.
+    // Callers use it to pad a slider so its track lines up with the plot area.
+    onAxisWidth = undefined as ((w: number) => void) | undefined
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void } = $props();
 
   // Cutoff = amber (filter/as-of day); lookback start = thinner sky-blue.
   function buildRefs() {
@@ -58,8 +67,21 @@
     chart = createChart(container, {
       ...lwcChartOptions(),
       height,
-      handleScale: false,
-      handleScroll: false
+      // Fully lock the view — no zoom or pan from any input. The time scale is
+      // pinned to a fixed [from,to] range (so an external slider can align to
+      // it); letting the user scroll/scale would desync that.
+      handleScale: {
+        mouseWheel: false,
+        pinch: false,
+        axisPressedMouseMove: false,
+        axisDoubleClickReset: false
+      },
+      handleScroll: {
+        mouseWheel: false,
+        pressedMouseMove: false,
+        horzTouchDrag: false,
+        vertTouchDrag: false
+      }
     });
     chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 } });
     series = chart.addBaselineSeries({
@@ -110,7 +132,10 @@
     });
 
     ro = new ResizeObserver(() => {
-      if (chart && container) chart.applyOptions({ width: container.clientWidth });
+      if (chart && container) {
+        chart.applyOptions({ width: container.clientWidth });
+        onAxisWidth?.(chart.priceScale('right').width());
+      }
     });
     ro.observe(container);
 
@@ -162,13 +187,22 @@
     if (pts.length) {
       const minT = pts[0].time as number;
       const maxT = pts[pts.length - 1].time as number;
-      for (const t of [cutoff, lookbackStart]) {
+      // Also anchor the fixed range edges so setVisibleRange has bars to pin to.
+      for (const t of [cutoff, lookbackStart, rangeFrom, rangeTo]) {
         if (t != null && (t < minT || t > maxT)) pts.push({ time: t as UTCTimestamp });
       }
       pts.sort((a, b) => (a.time as number) - (b.time as number));
     }
     series.setData(pts as { time: UTCTimestamp; value: number }[]);
-    chart.timeScale().fitContent();
+    if (rangeFrom != null && rangeTo != null) {
+      chart.timeScale().setVisibleRange({
+        from: rangeFrom as UTCTimestamp,
+        to: rangeTo as UTCTimestamp
+      });
+    } else {
+      chart.timeScale().fitContent();
+    }
+    onAxisWidth?.(chart.priceScale('right').width());
   });
 </script>
 
