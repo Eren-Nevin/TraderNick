@@ -15,11 +15,6 @@
 
   let { lps = [] }: { lps: Lp[] } = $props();
 
-  function truncate(addr: string): string {
-    if (!addr) return '';
-    if (addr.length < 14) return addr;
-    return addr.slice(0, 6) + '…' + addr.slice(-4);
-  }
   function fmtUsd(n: number): string {
     const abs = Math.abs(n);
     const sign = n < 0 ? '-' : '';
@@ -33,16 +28,7 @@
     return n.toFixed(0);
   }
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
-  import { onAuxClickArkham, onMouseDownSuppressMiddle } from '$lib/arkham';
-
-  let copiedAddr = $state('');
-  async function copyAddr(addr: string) {
-    try {
-      await navigator.clipboard.writeText(addr);
-      copiedAddr = addr;
-      setTimeout(() => { if (copiedAddr === addr) copiedAddr = ''; }, 1200);
-    } catch { /* no-op */ }
-  }
+  import WalletAddress from '$lib/components/WalletAddress.svelte';
 </script>
 
 <!-- use:stopDragEvents — see actions/stopDragEvents.ts. -->
@@ -68,13 +54,7 @@
           <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
             <td class="px-3 py-1 text-zinc-500">{l.rank}</td>
             <td class="px-3 py-1">
-              <button type="button" onclick={() => copyAddr(l.wallet)}
-                      onauxclick={onAuxClickArkham(l.wallet)}
-                      onmousedown={onMouseDownSuppressMiddle}
-                      title={l.wallet + ' — click to copy · middle-click to open in Arkham'}
-                      class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer">
-                {copiedAddr === l.wallet ? '✓ copied' : truncate(l.wallet)}
-              </button>
+              <WalletAddress address={l.wallet} auxKind="arkham" />
             </td>
             <td class="px-3 py-1 text-right font-mono text-emerald-400">{fmtUsd(l.deposits)}</td>
             <td class="px-3 py-1 text-right font-mono text-rose-400">{fmtUsd(l.withdrawals)}</td>

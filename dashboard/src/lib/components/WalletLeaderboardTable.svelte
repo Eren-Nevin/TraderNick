@@ -8,7 +8,7 @@
 
   import type { LeaderboardColumn, LeaderboardMetric } from '$lib/components/charts/config';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
-  import { onAuxClickArkham, onMouseDownSuppressMiddle } from '$lib/arkham';
+  import WalletAddress from '$lib/components/WalletAddress.svelte';
 
   export type LeaderboardRow = {
     rank: number;
@@ -39,11 +39,6 @@
     protocolLabel?: string;
   } = $props();
 
-  function truncate(addr: string): string {
-    if (!addr) return '';
-    if (addr.length < 14) return addr;
-    return addr.slice(0, 6) + '…' + addr.slice(-4);
-  }
   function fmtUsd(n: number): string {
     if (!isFinite(n) || n === 0) return '—';
     const abs = Math.abs(n);
@@ -58,15 +53,6 @@
     if (n >= 1e6) return (n / 1e6).toFixed(1) + 'M';
     if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
     return n.toFixed(0);
-  }
-
-  let copiedAddr = $state('');
-  async function copyAddr(addr: string) {
-    try {
-      await navigator.clipboard.writeText(addr);
-      copiedAddr = addr;
-      setTimeout(() => { if (copiedAddr === addr) copiedAddr = ''; }, 1200);
-    } catch { /* no-op */ }
   }
 
   // Client-side resort of the returned set. '' = use server order (which
@@ -162,13 +148,7 @@
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
               <td class="px-3 py-1 text-zinc-500">{sortKey ? idx + 1 : r.rank}</td>
               <td class="px-3 py-1">
-                <button type="button" onclick={() => copyAddr(r.wallet)}
-                        onauxclick={onAuxClickArkham(r.wallet)}
-                        onmousedown={onMouseDownSuppressMiddle}
-                        title={r.wallet + ' — click to copy · middle-click to open in Arkham'}
-                        class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer">
-                  {copiedAddr === r.wallet ? '✓ copied' : truncate(r.wallet)}
-                </button>
+                <WalletAddress address={r.wallet} auxKind="arkham" />
                 {#if r.labels}
                   <span class="ml-1 inline-block text-[9px] uppercase tracking-wide px-1 py-0 rounded bg-zinc-900 border border-zinc-700 text-zinc-400"
                         title={String(r.labels)}>{String(r.labels).split(',')[0]}</span>

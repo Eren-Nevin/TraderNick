@@ -63,3 +63,21 @@ export function onAuxClickWalletHl(addr: string) {
     window.open(walletHlUrl(addr), '_blank', 'noopener,noreferrer');
   };
 }
+
+// ── Shared address helpers ──────────────────────────────────────────────
+/** True for an EVM-style address (0x + 40 hex). HL wallets are EVM addresses. */
+export function isValidWalletAddress(addr: string): boolean {
+  return /^0x[0-9a-fA-F]{40}$/.test(addr.trim());
+}
+
+/** Canonical lowercased form used as the storage/lookup key for a wallet. */
+export function normalizeAddress(addr: string): string {
+  return addr.trim().toLowerCase();
+}
+
+/** `0x1234…abcd` short form (was duplicated inline in every address table). */
+export function truncateAddr(addr: string): string {
+  if (!addr) return '';
+  if (addr.length < 14) return addr;
+  return addr.slice(0, 6) + '…' + addr.slice(-4);
+}

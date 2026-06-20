@@ -4,6 +4,7 @@
   import { page } from '$app/stores';
   import { themeStore } from '$lib/stores/theme.svelte';
   import { pagesStore } from '$lib/stores/pages.svelte';
+  import { walletPinsStore } from '$lib/stores/walletPins.svelte';
 
   let collapsed = $state(false);
 
@@ -16,12 +17,14 @@
   let editingName = $state('');
   let editingIsNew = $state(false);
 
-  // Active state for the Filters nav entry (route /filters).
+  // Active state for the Wallets / Filters nav entries.
+  let walletsActive = $derived($page.url.pathname.startsWith('/wallets'));
   let filtersActive = $derived($page.url.pathname.startsWith('/filters'));
 
   onMount(() => {
     themeStore.hydrate();
     pagesStore.hydrate();
+    walletPinsStore.hydrate();
   });
 
   function activePage(): string | null {
@@ -241,9 +244,25 @@
   </nav>
 
   <!-- =========================================================
+       Wallets: jump-to-address + pinned wallets / groups.
+       ========================================================= -->
+  <div class="px-2 pt-3 border-t border-zinc-800">
+    <a
+      href="/wallets"
+      title="Wallets"
+      class="w-full flex items-center gap-2 rounded text-sm transition-colors {walletsActive
+        ? 'bg-zinc-800 text-zinc-50'
+        : 'text-zinc-300 hover:bg-zinc-900 hover:text-zinc-100'} {collapsed ? 'px-0 py-2 justify-center' : 'px-3 py-2'}"
+    >
+      <span class="text-base leading-none">👛</span>
+      {#if !collapsed}<span>Wallets</span>{/if}
+    </a>
+  </div>
+
+  <!-- =========================================================
        First-class wallet filters (create / compose / reuse).
        ========================================================= -->
-  <div class="px-2 py-3 border-t border-zinc-800">
+  <div class="px-2 pt-1 pb-3">
     <a
       href="/filters"
       title="Wallet filters"

@@ -1,0 +1,78 @@
+<script lang="ts">
+  // Shared wallet-address cell. Renders the truncated address as a button
+  // (click = copy, middle-click = open wallet page or Arkham), and on hover
+  // shows the wallet's group pins as colored capsules in a fixed-position
+  // popover (escapes table overflow clipping). Display-only for now.
+
+  import {
+    truncateAddr,
+    onAuxClickWalletHl,
+    onAuxClickArkham,
+    onMouseDownSuppressMiddle
+  } from '$lib/arkham';
+  import { walletPinsStore, NEUTRAL_GROUP_COLOR } from '$lib/stores/walletPins.svelte';
+
+  let {
+    address,
+    auxKind = 'arkham',
+    class: extraClass = ''
+  }: {
+    address: string;
+    auxKind?: 'wallet' | 'arkham';
+    class?: string;
+  } = $props();
+
+  let copied = $state(false);
+  const aux = $derived(auxKind === 'wallet' ? onAuxClickWalletHl(address) : onAuxClickArkham(address));
+  const pins = $derived(walletPinsStore.groupsForWallet(address));
+
+  async function copyAddr() {
+    try {
+      await navigator.clipboard.writeText(address);
+      copied = true;
+      setTimeout(() => (copied = false), 1000);
+    } catch {
+      /* clipboard unavailable */
+    }
+  }
+
+  // Fixed-position hover popover (so it isn't clipped by overflow-auto tables).
+  let pop = $state<{ left: number; top: number } | null>(null);
+  function showPop(e: MouseEvent) {
+    if (pins.length === 0) return;
+    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    pop = { left: r.left, top: r.bottom + 4 };
+  }
+  function hidePop() {
+    pop = null;
+  }
+
+  const auxTitle = $derived(
+    auxKind === 'wallet' ? 'middle-click to open wallet page' : 'middle-click to open in Arkham'
+  );
+</script>
+
+<button
+  type="button"
+  onclick={copyAddr}
+  onauxclick={aux}
+  onmousedown={onMouseDownSuppressMiddle}
+  onmouseenter={showPop}
+  onmouseleave={hidePop}
+  title={`${address} — click to copy · ${auxTitle}`}
+  class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer {extraClass}"
+>{copied ? '✓ copied' : truncateAddr(address)}</button>
+
+{#if pop && pins.length}
+  <div
+    class="fixed z-50 pointer-events-none flex flex-wrap gap-1 rounded-md border border-zinc-700 bg-zinc-900/95 px-2 py-1.5 shadow-lg max-w-[16rem]"
+    style="left: {pop.left}px; top: {pop.top}px"
+  >
+    {#each pins as g (g.id)}
+      <span
+        class="text-[10px] leading-none px-1.5 py-1 rounded-full text-zinc-100 border"
+        style="background-color: {(g.color ?? NEUTRAL_GROUP_COLOR) + '33'}; border-color: {g.color ?? NEUTRAL_GROUP_COLOR}"
+      >{g.name}</span>
+    {/each}
+  </div>
+{/if}

@@ -17,7 +17,7 @@
     type SmartWalletLookback
   } from '$lib/components/charts/config';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
-  import { onAuxClickWalletHl, onMouseDownSuppressMiddle } from '$lib/arkham';
+  import WalletAddress from '$lib/components/WalletAddress.svelte';
   import { DAY_SLIDER_MAX_BACK, isoToBack, backToIso } from '$lib/daySlider';
   import { untrack } from 'svelte';
 
@@ -64,11 +64,6 @@
   const metricDef = $derived(smartWalletMetricDef(metric));
   const isGlobal = $derived(token === null || token === '');
 
-  function truncate(addr: string): string {
-    if (!addr) return '';
-    if (addr.length < 14) return addr;
-    return addr.slice(0, 6) + '…' + addr.slice(-4);
-  }
   function fmtUsd(n: number): string {
     if (!isFinite(n) || n === 0) return '—';
     const abs = Math.abs(n);
@@ -91,15 +86,6 @@
     if (!isFinite(n)) return '—';
     if (metricDef.format === 'usd') return fmtUsd(n);
     return (n >= 0 ? '+' : '') + n.toFixed(2);
-  }
-
-  let copiedAddr = $state('');
-  async function copyAddr(addr: string) {
-    try {
-      await navigator.clipboard.writeText(addr);
-      copiedAddr = addr;
-      setTimeout(() => { if (copiedAddr === addr) copiedAddr = ''; }, 1200);
-    } catch { /* no-op */ }
   }
 
   // ── Client-side resort. '' = server order (already sorted by the metric). ──
@@ -240,13 +226,7 @@
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
               <td class="px-3 py-1 text-zinc-500">{idx + 1}</td>
               <td class="px-3 py-1">
-                <button type="button" onclick={() => copyAddr(r.wallet)}
-                        onauxclick={onAuxClickWalletHl(r.wallet)}
-                        onmousedown={onMouseDownSuppressMiddle}
-                        title={r.wallet + ' — click to copy · middle-click to open wallet page'}
-                        class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer">
-                  {copiedAddr === r.wallet ? '✓ copied' : truncate(r.wallet)}
-                </button>
+                <WalletAddress address={r.wallet} auxKind="wallet" />
                 {#if r.categories && r.categories.length > 0}
                   <span class="ml-1 inline-block text-[9px] uppercase tracking-wide px-1 py-0 rounded bg-zinc-900 border border-zinc-700 text-zinc-400"
                         title={r.categories.join(', ')}>{r.categories[0]}</span>

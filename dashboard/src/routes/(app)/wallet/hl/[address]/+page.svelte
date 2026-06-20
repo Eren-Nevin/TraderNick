@@ -19,6 +19,9 @@
     isToday
   } from '$lib/daySlider';
   import { arkhamUrl, coinglassHlUrl } from '$lib/arkham';
+  import WalletPinMenu from '$lib/components/WalletPinMenu.svelte';
+  import { walletPinsStore } from '$lib/stores/walletPins.svelte';
+  import { onMount } from 'svelte';
   import type { PageData } from './$types';
 
   let { data }: { data: PageData } = $props();
@@ -59,6 +62,10 @@
   let accountValue = $state<number | null>(null);
 
   let copied = $state(false);
+  // Pin menu (group checkboxes) open state. Reflect pinned groups in the button.
+  let pinMenuOpen = $state(false);
+  onMount(() => walletPinsStore.hydrate());
+  const pinnedGroups = $derived(walletPinsStore.groupsForWallet(address));
   // Right price-axis width (px) reported by the chart, used to pad the slider
   // so its track lines up with the chart's plot area (excludes the axis).
   let axisWidth = $state(0);
@@ -391,6 +398,19 @@
           title="Copy full address"
           class="text-sm text-zinc-500 hover:text-zinc-200 px-1.5 py-0.5 rounded border border-zinc-800 hover:border-zinc-600"
         >{copied ? '✓ copied' : 'copy'}</button>
+        <div class="relative">
+          <button
+            type="button"
+            onclick={() => (pinMenuOpen = !pinMenuOpen)}
+            title="Pin this wallet to groups"
+            class="text-sm px-1.5 py-0.5 rounded border transition-colors {pinnedGroups.length
+              ? 'border-amber-700 bg-amber-950/40 text-amber-300 hover:border-amber-600'
+              : 'border-zinc-800 text-zinc-500 hover:text-zinc-200 hover:border-zinc-600'}"
+          >{pinnedGroups.length ? `★ Pinned (${pinnedGroups.length})` : '☆ Pin'}</button>
+          {#if pinMenuOpen}
+            <WalletPinMenu {address} onClose={() => (pinMenuOpen = false)} />
+          {/if}
+        </div>
       </div>
       <div class="text-sm text-zinc-500 mt-1 flex items-center gap-3">
         <span class="font-mono break-all">{address}</span>

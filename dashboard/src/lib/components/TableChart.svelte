@@ -22,11 +22,6 @@
 
   let { leaders = [] }: { leaders: Record<string, unknown>[] | Leader[] } = $props();
 
-  function truncate(addr: string): string {
-    if (!addr) return '';
-    if (addr.length < 14) return addr;
-    return addr.slice(0, 6) + '…' + addr.slice(-4);
-  }
   function fmtUsd(n: number): string {
     const abs = Math.abs(n);
     const sign = n < 0 ? '-' : '';
@@ -40,20 +35,8 @@
     if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
     return n.toFixed(0);
   }
-  // Copy + transient "✓ copied" feedback on the wallet button.
-  let copiedAddr = $state('');
-  async function copy(addr: string) {
-    try {
-      await navigator.clipboard.writeText(addr);
-      copiedAddr = addr;
-      setTimeout(() => { if (copiedAddr === addr) copiedAddr = ''; }, 1200);
-    } catch {
-      // older browsers / non-secure context — silently no-op
-    }
-  }
-
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
-  import { onAuxClickArkham, onMouseDownSuppressMiddle } from '$lib/arkham';
+  import WalletAddress from '$lib/components/WalletAddress.svelte';
 
   // Sortable columns. Default '' = server order (net_pnl DESC).
   type SortKey = '' | 'net_pnl' | 'volume' | 'trade_count';
@@ -101,14 +84,7 @@
           <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
             <td class="px-3 py-1 text-zinc-500">{idx + 1}</td>
             <td class="px-3 py-1">
-              <button
-                type="button"
-                onclick={() => copy(l.wallet as string)}
-                onauxclick={onAuxClickArkham(l.wallet as string)}
-                onmousedown={onMouseDownSuppressMiddle}
-                class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer"
-                title={(l.wallet as string) + ' — click to copy · middle-click to open in Arkham'}
-              >{copiedAddr === l.wallet ? '✓ copied' : truncate(l.wallet as string)}</button>
+              <WalletAddress address={l.wallet as string} auxKind="arkham" />
             </td>
             <td class="px-3 py-1 text-right font-mono"
                 class:text-emerald-400={Number(l.net_pnl) > 0}
