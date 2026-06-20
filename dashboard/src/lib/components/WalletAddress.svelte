@@ -46,12 +46,9 @@
   function hidePop() {
     pop = null;
   }
-
-  const auxTitle = $derived(
-    auxKind === 'wallet' ? 'middle-click to open wallet page' : 'middle-click to open in Arkham'
-  );
 </script>
 
+<!-- No native `title`: its tooltip overlaps the pin-capsule hover popover. -->
 <button
   type="button"
   onclick={copyAddr}
@@ -59,7 +56,6 @@
   onmousedown={onMouseDownSuppressMiddle}
   onmouseenter={showPop}
   onmouseleave={hidePop}
-  title={`${address} — click to copy · ${auxTitle}`}
   class="font-mono text-zinc-200 hover:text-blue-400 cursor-pointer {extraClass}"
 >{copied ? '✓ copied' : truncateAddr(address)}</button>
 

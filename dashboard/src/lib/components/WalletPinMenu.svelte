@@ -3,11 +3,18 @@
   // plus an inline "+ New group" with an optional color. Parent renders it in a
   // `relative` container and controls visibility; closes on click-away / Esc.
 
+  import { onMount } from 'svelte';
   import { walletPinsStore } from '$lib/stores/walletPins.svelte';
 
   let { address, onClose }: { address: string; onClose: () => void } = $props();
 
   const groups = $derived(walletPinsStore.groups);
+
+  // Opening the menu on a not-yet-pinned wallet selects Default by default
+  // (the default pin target). Already-pinned wallets keep their groups.
+  onMount(() => {
+    if (!walletPinsStore.isPinned(address)) walletPinsStore.quickPin(address);
+  });
 
   // New-group form.
   let newName = $state('');
