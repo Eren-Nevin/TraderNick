@@ -17,6 +17,7 @@
   import { lwcChartOptions, lwcTooltipColors } from '$lib/components/charts/lwc/theme';
   import { fmtUsdAxis, fmtUsdTooltip, fmtUtcTime } from '$lib/components/charts/config';
   import { VRefLinesPrimitive } from '$lib/components/charts/lwc/primitives/vRefLine';
+  import { VBandPrimitive } from '$lib/components/charts/lwc/primitives/vBand';
 
   type Point = { time: number; value: number };
 
@@ -58,11 +59,14 @@
     // When true, show a non-blocking loading overlay (e.g. while the snapshot's
     // positions are being fetched after the user picks a day).
     loading = false,
+    // Selected date-range band (range mode): tints [bandFrom, bandTo] blue.
+    bandFrom = null as number | null,
+    bandTo = null as number | null,
     // Click → pick a single day (unix s). Drag → pick a [start, end] range.
     // When either is set the chart becomes interactive (cursor + selection).
     onPickDay = undefined as ((unix: number) => void) | undefined,
     onPickRange = undefined as ((startUnix: number, endUnix: number) => void) | undefined
-  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean } = $props();
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean; bandFrom?: number | null; bandTo?: number | null } = $props();
 
   // Cutoff = amber (as-of day); lookback start = thinner sky-blue; entry =
   // emerald (the day the selected position was first opened).
@@ -82,6 +86,13 @@
     if (entryTime != null) refs.push({ time: entryTime, color: '#34d399', dash: '4,3', width: 0.7, label: 'entry' });
     if (cutoff != null) refs.push({ time: cutoff, color: '#fbbf24', dash: '4,3' });
     return refs;
+  }
+
+  // The selected range to tint (range mode): [bandFrom, bandTo]. Null unless
+  // both ends are set (and distinct).
+  function currentBand() {
+    if (bandFrom == null || bandTo == null || bandFrom === bandTo) return null;
+    return { from: Math.min(bandFrom, bandTo), to: Math.max(bandFrom, bandTo) };
   }
 
   // Fully locked view: no zoom/pan from any input. Reasserted after every
@@ -104,9 +115,10 @@
 
   let container = $state<HTMLDivElement | null>(null);
   let chart: IChartApi | null = null;
-  let series: ISeriesApi<'Area'> | null = null;
+  let series: ISeriesApi<'Baseline'> | null = null;
   let closeSeries: ISeriesApi<'Line'> | null = null;
   let vref: VRefLinesPrimitive | null = null;
+  let band: VBandPrimitive | null = null;
   let ro: ResizeObserver | null = null;
 
   let tip = $state<{ x: number; time: number; value: number } | null>(null);
@@ -169,14 +181,18 @@
       ...LOCK_INTERACTION
     });
     chart.priceScale('right').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 } });
-    // Area (not baseline) so the fill is always UNDER the line — from the line
-    // down to the pane bottom — regardless of the curve's sign. A baseline
-    // series fills toward price 0, which paints ABOVE the line when PnL is
-    // negative. Green line; fill fades green → beige.
-    series = chart.addAreaSeries({
-      lineColor: '#22c55e',
-      topColor: 'rgba(34,197,94,0.35)',
-      bottomColor: 'rgba(214,201,168,0.06)',
+    // Baseline series split at PnL = 0: green line + green fill above the zero
+    // line, red line + red fill below it. The fill spans line → baseline (0),
+    // so above-zero it sits under the line and below-zero it sits above the
+    // line, up to zero — the standard sign-coded equity-curve look.
+    series = chart.addBaselineSeries({
+      baseValue: { type: 'price', price: 0 },
+      topLineColor: '#22c55e',
+      topFillColor1: 'rgba(34,197,94,0.35)',
+      topFillColor2: 'rgba(34,197,94,0.04)',
+      bottomLineColor: '#ef4444',
+      bottomFillColor1: 'rgba(239,68,68,0.04)',
+      bottomFillColor2: 'rgba(239,68,68,0.35)',
       lineWidth: 3,
       priceLineVisible: false,
       lastValueVisible: false,
@@ -206,6 +222,10 @@
 
     // Dashed vertical markers: amber cutoff ("as-of" day) + optional
     // thinner sky-blue lookback-start line.
+    // Blue selected-range band (range mode) — drawn behind the curve.
+    band = new VBandPrimitive(currentBand());
+    series.attachPrimitive(band);
+
     vref = new VRefLinesPrimitive(buildRefs(), '#fbbf24');
     series.attachPrimitive(vref);
 
@@ -240,6 +260,7 @@
       series = null;
       closeSeries = null;
       vref = null;
+      band = null;
     };
   });
 
@@ -247,6 +268,12 @@
   $effect(() => {
     void cutoff; void lookbackStart; void entryTime;
     vref?.setRefs(buildRefs(), '#fbbf24');
+  });
+
+  // Keep the selected-range band in sync.
+  $effect(() => {
+    void bandFrom; void bandTo;
+    band?.setBand(currentBand());
   });
 
   // Entry-price horizontal line on the close (left) price scale.

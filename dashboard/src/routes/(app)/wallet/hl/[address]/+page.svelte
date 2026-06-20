@@ -29,7 +29,7 @@
 
   type PnlPoint = {
     time: number; realized: number; total: number;
-    realized_day: number; unrealized: number;
+    realized_day: number; unrealized: number; oi: number;
   };
   type PnlStats = {
     realized_pnl: number; unrealized_pnl: number;
@@ -54,7 +54,14 @@
   let pnlStats = $state<PnlStats | null>(null);
   let pnlLoading = $state(true);
   let pnlError = $state<string | null>(null);
-  let pnlMode = $state<'total' | 'realized' | 'unrealized'>('total');
+  let pnlMode = $state<'total' | 'realized' | 'unrealized' | 'oi'>('total');
+  // PnL modes carry a 'PnL' suffix; OI is not a PnL metric so it stays bare.
+  const modeLabel = $derived(
+    pnlMode === 'total' ? 'Total PnL'
+      : pnlMode === 'realized' ? 'Realized PnL'
+        : pnlMode === 'unrealized' ? 'Unrealized PnL'
+          : 'OI'
+  );
 
   let positions = $state<PositionRow[]>([]);
   let posLoading = $state(false);
@@ -92,7 +99,11 @@
   const chartData = $derived(
     pnlSeries.map((p) => ({
       time: p.time,
-      value: pnlMode === 'total' ? p.total : pnlMode === 'realized' ? p.realized : p.unrealized
+      value:
+        pnlMode === 'total' ? p.total
+          : pnlMode === 'realized' ? p.realized
+            : pnlMode === 'unrealized' ? p.unrealized
+              : p.oi
     }))
   );
 
@@ -485,7 +496,7 @@
   <!-- PnL equity curve + aligned date slider -->
   <div class="rounded-lg border border-zinc-800 overflow-hidden">
     <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
-      <span class="text-zinc-200 font-medium text-base">PnL</span>
+      <span class="text-zinc-200 font-medium text-base">{modeLabel}</span>
       <span class="text-xs text-zinc-600">global · all tokens</span>
       <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden ml-2">
         <button type="button" onclick={() => (pnlMode = 'total')}
@@ -497,6 +508,9 @@
         <button type="button" onclick={() => (pnlMode = 'unrealized')}
           class={'px-2 py-0.5 text-xs border-l border-zinc-700 ' + (pnlMode === 'unrealized' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
           title="Unrealized (open-position) PnL only">Unrealized</button>
+        <button type="button" onclick={() => (pnlMode = 'oi')}
+          class={'px-2 py-0.5 text-xs border-l border-zinc-700 ' + (pnlMode === 'oi' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+          title="End-of-day open interest (total notional $)">OI</button>
       </div>
       <button type="button" onclick={toggleRange}
         class="ml-1 text-xs px-2 py-0.5 rounded border transition-colors {rangeMode
@@ -535,10 +549,12 @@
           lookbackStart={rangeMode ? startUnix : null}
           rangeFrom={floorUnix}
           rangeTo={todayUnix}
+          bandFrom={rangeMode ? startUnix : null}
+          bandTo={rangeMode ? selectedUnix : null}
           loading={posLoading}
           onPickDay={pickDay}
           onPickRange={pickRange}
-          label={pnlMode === 'total' ? 'Total' : pnlMode === 'realized' ? 'Realized' : 'Unrealized'}
+          label={modeLabel}
         />
       {/if}
     </div>

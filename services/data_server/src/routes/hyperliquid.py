@@ -1104,14 +1104,17 @@ async def wallet_pnl(request):
                 GROUP BY day, token, side
             )
             GROUP BY day
-        )
+        ),
+        @@OICTE@@
         SELECT d.day AS day,
                coalesce(r.realized, 0) + coalesce(rt.tail, 0) AS realized,
-               coalesce(u.unrealized, 0) AS unrealized
+               coalesce(u.unrealized, 0) AS unrealized,
+               coalesce(o.oi, 0) AS oi
         FROM days d
         LEFT JOIN realized r       ON r.day  = d.day
         LEFT JOIN unreal   u       ON u.day  = d.day
         LEFT JOIN realized_tail rt ON rt.day = d.day
+        LEFT JOIN oi_daily o       ON o.day  = d.day
         ORDER BY d.day
     """
     # realized daily-flow CTE: GLOBAL reads the pre-aggregated per-(day,wallet)
@@ -1155,6 +1158,23 @@ async def wallet_pnl(request):
             )
         )"""
     sql = sql.replace("@@REALIZED@@", realized_cte)
+    # Daily EOD open-interest (total notional $) curve. GLOBAL only — the
+    # per-(day,wallet) OI rollup has the token dimension collapsed, so a
+    # token-scoped request gets an empty CTE (oi → 0). last_total_oi_usd_state
+    # is argMaxIf(value, bucket, non-HIP3) → the value at the day's last bucket.
+    if token:
+        oi_cte = ("oi_daily AS (SELECT toDate({since:DateTime}) AS day, "
+                  "toFloat64(0) AS oi FROM numbers(0))")
+    else:
+        oi_cte = """oi_daily AS (
+            SELECT day, argMaxIfMerge(last_total_oi_usd_state) AS oi
+            FROM tradernick.hl_position_history_oi_wallet_daily
+            WHERE wallet = {wallet:String}
+              AND day >= toDate({since:DateTime})
+              AND day <= toDate({until:DateTime})
+            GROUP BY day
+        )"""
+    sql = sql.replace("@@OICTE@@", oi_cte)
     # Splice the token filter into the remaining sources (fills tail + eod
     # unrealized), or strip the sentinel for the global curve.
     sql = sql.replace("@@TOK@@", "AND token = {token:String}" if token else "")
@@ -1174,9 +1194,10 @@ async def wallet_pnl(request):
     # counting returns) at the first day with any realized / unrealized value.
     started = False
     for r in rows.result_rows:
-        day, realized, unrealized = r
+        day, realized, unrealized, oi = r
         realized = float(realized)
         unrealized = float(unrealized)
+        oi = float(oi)
         if not started:
             if realized == 0.0 and unrealized == 0.0:
                 continue
@@ -1194,6 +1215,8 @@ async def wallet_pnl(request):
             # Per-day components (for reference / future tooltips).
             "realized_day": realized,
             "unrealized": unrealized,
+            # End-of-day open interest (total notional $), GLOBAL.
+            "oi": oi,
         })
         # Daily return = that day's realized PnL (= Δ of the realized curve).
         daily_returns.append(realized)
