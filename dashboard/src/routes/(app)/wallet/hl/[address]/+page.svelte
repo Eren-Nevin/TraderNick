@@ -144,6 +144,8 @@
   const realizedRange = $derived((asOf?.realized ?? 0) - (asOfStart?.realized ?? 0));
   const unrealRange = $derived((asOf?.unrealized ?? 0) - (asOfStart?.unrealized ?? 0));
   const oiRange = $derived(oiUsd - (oiStart ?? 0));
+  // Annualized so ranges of different lengths are comparable: the daily
+  // mean/σ ratio is scaled by √365 (24/7 crypto), matching the smart_selector.
   const sharpeRange = $derived.by(() => {
     const flows = pnlSeries
       .filter((p) => p.time > startUnix && p.time <= selectedUnix)
@@ -151,7 +153,7 @@
     if (!flows.length) return 0;
     const mean = flows.reduce((a, b) => a + b, 0) / flows.length;
     const sd = Math.sqrt(flows.reduce((a, b) => a + (b - mean) ** 2, 0) / flows.length);
-    return sd > 0 ? mean / sd : 0;
+    return sd > 0 ? (mean / sd) * Math.sqrt(365) : 0;
   });
 
   // ── Formatters ─────────────────────────────────────────────────────
@@ -431,7 +433,7 @@
       {@render rcard('Range OI Δ', oiStart != null ? fmtUsd(oiRange) : '…', pnlClass(oiRange))}
       {@render rcard('Range Realized', fmtUsd(realizedRange), pnlClass(realizedRange))}
       {@render rcard('Range Unrealized', fmtUsd(unrealRange), pnlClass(unrealRange))}
-      {@render rcard('Range Sharpe', sharpeRange.toFixed(2), 'text-zinc-300')}
+      {@render rcard('Range Sharpe (ann.)', sharpeRange.toFixed(2), 'text-zinc-300')}
     </div>
   {/if}
 
@@ -504,14 +506,17 @@
       </div>
       <div style="padding-right: {axisWidth}px">
         {#if rangeMode}
+          <!-- No `disabled` here: toggling it as posLoading flips mid/post-drag
+               leaves a pointer-events thumb stuck (can't drag again). Stale
+               responses are already guarded by posSeq; just dim during load. -->
           <div class="dual-wrap" class:is-loading={posLoading}>
             <div class="dual-track"></div>
             <div class="dual-fill"
               style="left: {(startPos / MAX_BACK) * 100}%; width: {((endPos - startPos) / MAX_BACK) * 100}%"></div>
             <input type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderStartPos}
-              disabled={posLoading} aria-label="Range start day" />
+              aria-label="Range start day" />
             <input type="range" min="0" max={MAX_BACK} step="1" bind:value={sliderPos}
-              disabled={posLoading} aria-label="Range end day" />
+              aria-label="Range end day" />
           </div>
         {:else}
           <input
