@@ -66,6 +66,15 @@
   const metricDef = $derived(smartWalletMetricDef(metric));
   const isGlobal = $derived(token === null || token === '');
 
+  // The lookback window is ANCHORED to the chosen end date: [end − lookback,
+  // end]. The slider sets the end (`snapshot`); we surface the resolved start
+  // here so the window is explicit (e.g. end 06-01, 30d ⇒ starts 05-02).
+  const lookbackStartIso = $derived.by(() => {
+    const t = Date.parse(snapshot + 'T00:00:00Z');
+    if (!isFinite(t)) return '';
+    return new Date(t - lookback * 86_400_000).toISOString().slice(0, 10);
+  });
+
   function fmtUsd(n: number): string {
     if (!isFinite(n) || n === 0) return '—';
     const abs = Math.abs(n);
@@ -166,9 +175,15 @@
     </span>
   </div>
 
-  <!-- Snapshot slider row (just below the header selectors) -->
+  <!-- Lookback end-date slider: sets the day the lookback window ENDS on; the
+       window is [end − lookback, end]. The resolved start is shown as a hint. -->
   <div class="flex items-center px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/30">
-    <SnapshotSlider {snapshot} {onChangeSnapshot} />
+    <SnapshotSlider
+      {snapshot}
+      {onChangeSnapshot}
+      label="End date"
+      hint={lookbackStartIso ? `← ${lookbackStartIso} (${lookback}d window)` : ''}
+    />
   </div>
 
   <div class="flex-1 overflow-auto scrollbar-none">

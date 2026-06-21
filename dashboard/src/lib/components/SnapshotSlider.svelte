@@ -9,10 +9,14 @@
 
   let {
     snapshot,
-    onChangeSnapshot
+    onChangeSnapshot,
+    label = 'Snapshot',
+    hint = ''
   }: {
     snapshot: string; // resolved ISO date YYYY-MM-DD (the APPLIED day)
     onChangeSnapshot: (iso: string) => void;
+    label?: string; // leading caption (e.g. "End date")
+    hint?: string; // muted suffix after the date (e.g. the resolved window)
   } = $props();
 
   const MAX_BACK = DAY_SLIDER_MAX_BACK;
@@ -32,11 +36,14 @@
 </script>
 
 <div class="flex items-center gap-3 w-full text-xs">
-  <span class="text-zinc-500 whitespace-nowrap">Snapshot:</span>
+  <span class="text-zinc-500 whitespace-nowrap">{label}:</span>
   <span
     class={'font-mono whitespace-nowrap ' + (pendingDirty ? 'text-amber-300' : 'text-zinc-200')}
     title={pendingDirty ? 'Pending — click OK to apply' : undefined}
   >{pendingSnapshot}</span>
+  {#if hint}
+    <span class="text-[10px] text-zinc-500 whitespace-nowrap">{hint}</span>
+  {/if}
   <input
     type="range"
     min="0"

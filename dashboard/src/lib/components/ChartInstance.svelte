@@ -5,7 +5,6 @@
   import TableChart from '$lib/components/TableChart.svelte';
   import TokenLeaderboardTable from '$lib/components/TokenLeaderboardTable.svelte';
   import SmartWalletMetricsTable from '$lib/components/SmartWalletMetricsTable.svelte';
-  import SnapshotSlider from '$lib/components/SnapshotSlider.svelte';
   import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
   import HlTopVaultsTable from '$lib/components/HlTopVaultsTable.svelte';
   import HlTopVaultLpsTable from '$lib/components/HlTopVaultLpsTable.svelte';
@@ -6160,17 +6159,6 @@
         title="Add overlay series"
         class="text-zinc-400 hover:text-zinc-100 leading-none cursor-pointer flex items-center"
       ><PlusCircle size={14} strokeWidth={1.75} /></button>
-    </div>
-  {/if}
-
-  {#if isDualViewKind(instance.kind) && instance.viewMode === 'chart'}
-    <!-- Snapshot picker for chart mode — the SAME control the table uses
-         (shared SnapshotSlider, same range/grain/OK-gating), so the chosen day,
-         the filtered wallet set, and the resulting OI are identical whether
-         picked here or in the table. Snapshot only changes WHICH wallets
-         qualify, never the OI window. -->
-    <div class="flex items-center px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/30">
-      <SnapshotSlider snapshot={swSnapshotIso()} onChangeSnapshot={(iso) => (instance.swSnapshot = iso)} />
     </div>
   {/if}
 
