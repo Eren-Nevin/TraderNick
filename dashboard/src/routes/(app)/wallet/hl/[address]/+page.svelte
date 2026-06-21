@@ -185,7 +185,10 @@
         time: t.time,
         value: byTime.get(t.time) ?? 0,
         side: (t.net_usd >= 0 ? 'buy' : 'sell') as 'buy' | 'sell',
-        text: fmtLeg(t.net_usd, t.net_tokens)
+        text: fmtLeg(t.net_usd, t.net_tokens),
+        // Single-row breakdown so the hover (price + value/amount) shows in
+        // token mode too — same tooltip the multi-token chips get.
+        tokens: [{ token: t.token, label: fmtLeg(t.net_usd, t.net_tokens), price: fmtPx(t.avg_px) }]
       }));
     }
 

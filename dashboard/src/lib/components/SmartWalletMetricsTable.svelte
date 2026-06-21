@@ -30,6 +30,7 @@
     oi_usd: number;
     metric: number;
     n_days: number;
+    n_tokens: number;
     categories: string[];
   };
 
@@ -127,7 +128,9 @@
 <div class="h-full flex flex-col text-xs" use:stopDragEvents>
   <!-- Selectors row -->
   <div class="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
-    <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-700 text-zinc-400">Smart Wallets</span>
+    <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-700 text-zinc-400"
+      >Smart Wallets{#if !loading} ({rows.length}){/if}</span
+    >
     <span class="text-zinc-500">Metric:</span>
     <select
       value={metric}
@@ -209,6 +212,8 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort('volume')} title="Window volume (USD)">Volume{sortArrow('volume')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
+                onclick={() => onSort('n_tokens')} title="Distinct tokens traded over the window">Tokens{sortArrow('n_tokens')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort(isGlobal ? 'oi_usd' : 'oi_token')}
                 title={isGlobal ? 'Open interest (USD) as of the snapshot' : 'Open interest (token units) as of the snapshot'}
             >OI{isGlobal ? ' ($)' : ` (${token})`}{sortArrow(isGlobal ? 'oi_usd' : 'oi_token')}</th>
@@ -234,6 +239,7 @@
                 <span class="ml-1 text-[9px] text-zinc-600">{r.n_days}d</span>
               </td>
               <td class="px-3 py-1 text-right font-mono text-zinc-300">{fmtUsd(r.volume)}</td>
+              <td class="px-3 py-1 text-right font-mono text-zinc-400">{r.n_tokens}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-300">
                 {#if isGlobal}{fmtUsd(r.oi_usd)}{:else}<div>{fmtToken(r.oi_token)}</div><div class="text-[10px] text-zinc-500">{fmtUsd(r.oi_usd)}</div>{/if}
               </td>
