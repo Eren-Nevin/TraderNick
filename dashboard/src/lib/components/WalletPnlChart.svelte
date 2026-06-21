@@ -66,15 +66,17 @@
     // Buy/sell chips ('Show Trades'): one per day. `value` anchors the chip to
     // the curve point at that time; `side` sets colour/position; `text` is the
     // label (net magnitude).
-    trades = [] as Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string }>,
+    trades = [] as Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string; tokens?: Array<{ token: string; label: string }> }>,
     // Range mode: left-drag selects a range (else it pans; middle-drag always
     // pans). Changes the gesture the pointer handler performs on a body drag.
     rangeMode = false,
+    // Header for the value column in the trade-chip hover ('Value($)' / 'Amount').
+    valueHeader = 'Value($)',
     // Click → pick a single day (unix s). Drag → pick a [start, end] range.
     // When either is set the chart becomes interactive (cursor + selection).
     onPickDay = undefined as ((unix: number) => void) | undefined,
     onPickRange = undefined as ((startUnix: number, endUnix: number) => void) | undefined
-  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean; bandFrom?: number | null; bandTo?: number | null; trades?: Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string }>; rangeMode?: boolean } = $props();
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean; bandFrom?: number | null; bandTo?: number | null; trades?: Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string; tokens?: Array<{ token: string; label: string }> }>; rangeMode?: boolean; valueHeader?: string } = $props();
 
   // Cutoff = amber (as-of day); lookback start = thinner sky-blue; entry =
   // emerald (the day the selected position was first opened).
@@ -145,6 +147,12 @@
       vertTouchDrag: false
     }
   };
+  // Lock both time-scale edges so zoom-out can't go past the data range (no
+  // empty space before/after) and pans stop cleanly at the first/last bar.
+  // rightOffset:0 removes the theme's 8-bar right whitespace (fixRightEdge
+  // suppresses it anyway). The data spans exactly [floor, today] (the close
+  // overlay is fetched from the floor too), so the edges == the fixed window.
+  const EDGE_LOCK = { fixLeftEdge: true, fixRightEdge: true, rightOffset: 0 };
 
   let container = $state<HTMLDivElement | null>(null);
   let chart: IChartApi | null = null;
@@ -162,6 +170,8 @@
   let pinnedTo: number | null = null;
 
   let tip = $state<{ x: number; time: number; value: number } | null>(null);
+  // Buy/sell chip hover (token breakdown). x/y are pane-relative CSS px.
+  let chipTip = $state<{ x: number; y: number; side: 'buy' | 'sell'; rows: Array<{ token: string; label: string }> } | null>(null);
 
   // Pointer gestures:
   //   • click (any mode)            → pick a single day (snapshot)
@@ -204,50 +214,19 @@
   }
   function doPan(x: number) {
     if (!chart || dragStartX == null) return;
-    // Drag right → reveal earlier data (window shifts left). clampVisible (the
-    // visible-range subscription) keeps it inside [rangeFrom, rangeTo].
+    // Drag right → reveal earlier data (window shifts left). Clamp the shifted
+    // window to [rangeFrom, rangeTo] PRESERVING WIDTH, so panning into an edge
+    // stops there instead of shrinking the window (which looked like a zoom).
     const dt = -(x - dragStartX) * panPerPx;
+    const width = panTo - panFrom;
+    let from = panFrom + dt;
+    let to = panTo + dt;
+    if (rangeFrom != null && from < rangeFrom) { from = rangeFrom; to = rangeFrom + width; }
+    if (rangeTo != null && to > rangeTo) { to = rangeTo; from = rangeTo - width; }
     try {
-      chart.timeScale().setVisibleRange({
-        from: (panFrom + dt) as UTCTimestamp,
-        to: (panTo + dt) as UTCTimestamp
-      });
+      chart.timeScale().setVisibleRange({ from: from as UTCTimestamp, to: to as UTCTimestamp });
     } catch {
       /* out-of-range edge — ignore */
-    }
-  }
-  // Keep the visible window inside the fixed total range [rangeFrom, rangeTo]:
-  // never wider (no zooming out past the full span) and never panned past an
-  // edge. Runs on every visible-range change (native zoom/pan + manual pan).
-  let clamping = false;
-  function clampVisible() {
-    if (clamping || !chart || rangeFrom == null || rangeTo == null) return;
-    const r = chart.timeScale().getVisibleRange();
-    if (!r) return;
-    const from = r.from as unknown as number;
-    const to = r.to as unknown as number;
-    const total = rangeTo - rangeFrom;
-    let nf = from;
-    let nt = to;
-    if (to - from >= total) {
-      // Wider than the full span → snap to the full range.
-      nf = rangeFrom;
-      nt = rangeTo;
-    } else {
-      // Same width, shifted out of bounds → slide back inside.
-      if (nf < rangeFrom) { nt += rangeFrom - nf; nf = rangeFrom; }
-      if (nt > rangeTo) { nf -= nt - rangeTo; nt = rangeTo; }
-      nf = Math.max(nf, rangeFrom);
-      nt = Math.min(nt, rangeTo);
-    }
-    if (Math.abs(nf - from) > 0.5 || Math.abs(nt - to) > 0.5) {
-      clamping = true;
-      try {
-        chart.timeScale().setVisibleRange({ from: nf as UTCTimestamp, to: nt as UTCTimestamp });
-      } catch {
-        /* ignore */
-      }
-      clamping = false;
     }
   }
   function onPointerDown(e: PointerEvent) {
@@ -307,6 +286,7 @@
       ...base,
       // Larger axis labels than the default 11px.
       layout: { ...base.layout, fontSize: 13 },
+      timeScale: { ...base.timeScale, ...EDGE_LOCK },
       height,
       ...INTERACTION
     });
@@ -368,6 +348,19 @@
     series.attachPrimitive(tradeChips);
 
     chart.subscribeCrosshairMove((p) => {
+      // Chip hover (token breakdown) takes precedence over the value tooltip.
+      const hit = p.point && tradeChips ? tradeChips.chipAt(p.point.x, p.point.y) : null;
+      if (hit) {
+        chipTip = {
+          x: p.point!.x,
+          y: p.point!.y,
+          side: hit.side,
+          rows: hit.tokens
+        };
+        tip = null;
+        return;
+      }
+      chipTip = null;
       if (!p.time || !series || !p.point) { tip = null; return; }
       const v = p.seriesData.get(series) as { value?: number } | undefined;
       if (v?.value === undefined) { tip = null; return; }
@@ -388,12 +381,8 @@
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
 
-    // Enforce the zoom-out / pan bounds on every visible-range change.
-    chart.timeScale().subscribeVisibleTimeRangeChange(clampVisible);
-
     return () => {
       ro?.disconnect();
-      chart?.timeScale().unsubscribeVisibleTimeRangeChange(clampVisible);
       container?.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
@@ -469,7 +458,7 @@
     void themeStore.theme;
     if (chart) {
       const base = lwcChartOptions();
-      chart.applyOptions({ ...base, layout: { ...base.layout, fontSize: 13 }, ...INTERACTION });
+      chart.applyOptions({ ...base, layout: { ...base.layout, fontSize: 13 }, timeScale: { ...base.timeScale, ...EDGE_LOCK }, ...INTERACTION });
     }
   });
 
@@ -564,6 +553,24 @@
       <div class="text-zinc-400">{fmtUtcTime(tip.time).slice(0, 14)}</div>
       <div class={tip.value >= 0 ? 'text-emerald-300' : 'text-red-300'}>
         {label} {fmtUsdTooltip(tip.value)}
+      </div>
+    </div>
+  {/if}
+  {#if chipTip}
+    <div
+      class="pointer-events-none absolute z-20 rounded bg-zinc-900/95 px-2.5 py-1.5 text-xs leading-snug shadow-lg"
+      style="left: {Math.min(Math.max(chipTip.x + 10, 4), (container?.clientWidth ?? 200) - 170)}px; top: {Math.min(Math.max(chipTip.y + 10, 4), (container?.clientHeight ?? 200) - 28 - chipTip.rows.length * 16)}px"
+    >
+      <div class="uppercase tracking-wide mb-1 {chipTip.side === 'buy' ? 'text-emerald-400' : 'text-rose-400'}">
+        {chipTip.side === 'buy' ? '▲ Bought' : '▼ Sold'}
+      </div>
+      <div class="grid grid-cols-[auto_auto] gap-x-6 gap-y-0.5">
+        <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Token</div>
+        <div class="text-zinc-500 text-[10px] uppercase tracking-wide text-right">{valueHeader}</div>
+        {#each chipTip.rows as r (r.token)}
+          <div class="text-zinc-400 font-mono">{r.token}</div>
+          <div class="font-mono tabular-nums text-right {chipTip.side === 'buy' ? 'text-emerald-300' : 'text-rose-300'}">{r.label}</div>
+        {/each}
       </div>
     </div>
   {/if}

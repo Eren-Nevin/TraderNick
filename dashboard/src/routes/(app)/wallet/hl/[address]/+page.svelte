@@ -30,6 +30,7 @@
   type PnlPoint = {
     time: number; realized: number; total: number;
     realized_day: number; unrealized: number; oi: number;
+    volume: number; trades: number;
   };
   type PnlStats = {
     realized_pnl: number; unrealized_pnl: number;
@@ -47,7 +48,6 @@
   let rangeMode = $state(false);
   let sliderStartPos = $state(0);
   // Range stat row (lazy-fetched; the rest is derived from pnlSeries).
-  let rangeVolume = $state<number | null>(null);
   let oiStart = $state<number | null>(null);
   let rangeLoading = $state(false);
   let pnlSeries = $state<PnlPoint[]>([]);
@@ -83,11 +83,12 @@
   // 'Show Trades': per-day net buy/sell flow markers. Scoped to the selected
   // token when one is chosen, else summed across all tokens (one tag per day).
   let showTrades = $state(false);
-  let tradesRaw = $state<Array<{ time: number; net_usd: number; net_tokens: number }>>([]);
+  let tradesRaw = $state<Array<{ time: number; token: string; net_usd: number; net_tokens: number }>>([]);
   let tradesLoading = $state(false);
   let tradesCtl: AbortController | null = null;
-  // Chip label unit. 'token' (size in token units) is only meaningful for a
-  // single token, so it's offered only when a token is selected.
+  // Chip label / hover unit. USD or per-token size. Aggregate (multi-token)
+  // chip LABELS are always USD (token units can't sum across tokens); the unit
+  // applies to single-token labels and to per-token hover lines.
   let tradeUnit = $state<'usd' | 'token'>('usd');
 
   // ── Derived ────────────────────────────────────────────────────────
@@ -129,9 +130,6 @@
     pnlSeries.map((p) => ({ time: p.time, value: modeVal(p) - rangeBase }))
   );
 
-  // Token-unit labels only make sense for a single token; fall back to USD
-  // whenever no token is selected.
-  const tradeUnitEff = $derived(tradeUnit === 'token' && selectedToken ? 'token' : 'usd');
   // Compact token-amount formatter (the chip is small).
   function fmtAmt(n: number): string {
     const a = Math.abs(n);
@@ -140,21 +138,60 @@
     if (a >= 1e3) return (a / 1e3).toFixed(1) + 'K';
     return a.toFixed(a >= 100 ? 0 : 2);
   }
-  // Buy/sell chips from the per-day net flow. net ≥ 0 → net buy, < 0 → sell.
-  // Label = the net magnitude (the arrow + colour already show direction);
+  // Format one (token) leg per the unit selector.
+  const fmtLeg = (usd: number, tokens: number) =>
+    tradeUnit === 'token' ? fmtAmt(tokens) : fmtUsd(Math.abs(usd)).replace('$', '');
+  // Buy/sell chips from the per-(day, token) net flow.
+  //   • single token selected → one chip/day for that token (no hover)
+  //   • otherwise → per day, one net-BUY chip (all net-bought tokens) and/or
+  //     one net-SELL chip (all net-sold tokens); the chip label is the USD
+  //     total and the hover lists each token (per the unit selector).
   // `value` anchors each chip to the curve point on that day.
   const tradeMarkers = $derived.by(() => {
     if (!showTrades) return [];
     const byTime = new Map(chartData.map((p) => [p.time, p.value]));
-    return tradesRaw.map((t) => ({
-      time: t.time,
-      value: byTime.get(t.time) ?? 0,
-      side: (t.net_usd >= 0 ? 'buy' : 'sell') as 'buy' | 'sell',
-      text:
-        tradeUnitEff === 'token'
-          ? fmtAmt(t.net_tokens)
-          : fmtUsd(Math.abs(t.net_usd)).replace('$', '')
-    }));
+
+    if (selectedToken) {
+      return tradesRaw.map((t) => ({
+        time: t.time,
+        value: byTime.get(t.time) ?? 0,
+        side: (t.net_usd >= 0 ? 'buy' : 'sell') as 'buy' | 'sell',
+        text: fmtLeg(t.net_usd, t.net_tokens)
+      }));
+    }
+
+    const byDay = new Map<number, typeof tradesRaw>();
+    for (const t of tradesRaw) {
+      const arr = byDay.get(t.time);
+      if (arr) arr.push(t);
+      else byDay.set(t.time, [t]);
+    }
+    const out: Array<{
+      time: number; value: number; side: 'buy' | 'sell'; text: string;
+      tokens: Array<{ token: string; label: string }>;
+    }> = [];
+    for (const [time, rows] of byDay) {
+      const value = byTime.get(time) ?? 0;
+      const buys = rows.filter((r) => r.net_usd > 0);
+      const sells = rows.filter((r) => r.net_usd < 0);
+      if (buys.length) {
+        const sum = buys.reduce((s, r) => s + r.net_usd, 0);
+        out.push({
+          time, value, side: 'buy',
+          text: fmtUsd(sum).replace('$', ''),
+          tokens: buys.map((r) => ({ token: r.token, label: fmtLeg(r.net_usd, r.net_tokens) }))
+        });
+      }
+      if (sells.length) {
+        const sum = sells.reduce((s, r) => s + Math.abs(r.net_usd), 0);
+        out.push({
+          time, value, side: 'sell',
+          text: fmtUsd(sum).replace('$', ''),
+          tokens: sells.map((r) => ({ token: r.token, label: fmtLeg(r.net_usd, r.net_tokens) }))
+        });
+      }
+    }
+    return out;
   });
 
   // The selected token's dominant position (largest notional if both sides are
@@ -205,6 +242,9 @@
     positions.length ? positions.reduce((s, p) => s + p.unrealized_pnl, 0) : asOf ? asOf.unrealized : 0
   );
   const totalAsOf = $derived(realizedAsOf + unrealAsOf);
+  // Cumulative within-window volume ($) + trade count as of the selected day.
+  const volumeAsOf = $derived(asOf ? asOf.volume : 0);
+  const tradesAsOf = $derived(asOf ? asOf.trades : 0);
 
   // ── Range stats (only meaningful in range mode) ────────────────────
   // Relative deltas over [start, end] from the already-loaded daily curve:
@@ -221,6 +261,9 @@
   const realizedRange = $derived((asOf?.realized ?? 0) - (asOfStart?.realized ?? 0));
   const unrealRange = $derived((asOf?.unrealized ?? 0) - (asOfStart?.unrealized ?? 0));
   const oiRange = $derived(oiUsd - (oiStart ?? 0));
+  // Volume + trades traded within (start, end] = cumulative end − cumulative start.
+  const volumeRange = $derived((asOf?.volume ?? 0) - (asOfStart?.volume ?? 0));
+  const tradesRange = $derived((asOf?.trades ?? 0) - (asOfStart?.trades ?? 0));
   // Annualized so ranges of different lengths are comparable: the daily
   // mean/σ ratio is scaled by √365 (24/7 crypto), matching the smart_selector.
   const sharpeRange = $derived.by(() => {
@@ -375,8 +418,12 @@
     if (!tok) { closeSeries = []; return; }
     closeCtl = new AbortController();
     try {
+      // Scope to the chart window [floor, today] so the close overlay doesn't
+      // extend the time-scale data range past the edge-locked bounds.
+      const since = backToIso(MAX_BACK);
+      const until = backToIso(0);
       const res = await fetch(
-        `/api/hyperliquid/token_close?token=${encodeURIComponent(tok)}`,
+        `/api/hyperliquid/token_close?token=${encodeURIComponent(tok)}&since=${since}&until=${until}`,
         { signal: closeCtl.signal }
       );
       if (!res.ok) throw new Error(`token_close ${res.status}`);
@@ -412,7 +459,7 @@
       );
       if (!res.ok) throw new Error(`wallet_trades ${res.status}`);
       const body = await res.json();
-      tradesRaw = (body.series ?? []) as Array<{ time: number; net_usd: number; net_tokens: number }>;
+      tradesRaw = (body.series ?? []) as Array<{ time: number; token: string; net_usd: number; net_tokens: number }>;
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') tradesRaw = [];
     } finally {
@@ -430,15 +477,13 @@
   // and need no fetch. Debounced + sequenced like positions.
   let rangeSeq = 0;
   let rangeTimer: ReturnType<typeof setTimeout> | undefined;
-  async function loadRange(sIso: string, eIso: string) {
+  async function loadRange(sIso: string) {
     const seq = ++rangeSeq;
     rangeLoading = true;
     try {
-      const [vRes, pRes] = await Promise.all([
-        fetch(`/api/hyperliquid/wallet_range_volume?wallet=${address}&start=${sIso}&end=${eIso}`),
-        fetch(`/api/hyperliquid/wallet_positions?wallet=${address}&day=${sIso}`)
-      ]);
-      const vol = vRes.ok ? (await vRes.json()).volume ?? 0 : 0;
+      // Only the start-day OI needs a fetch now; range volume + trades are
+      // derived from the cumulative pnl series (see volumeRange / tradesRange).
+      const pRes = await fetch(`/api/hyperliquid/wallet_positions?wallet=${address}&day=${sIso}`);
       let oi = 0;
       if (pRes.ok) {
         const body = await pRes.json();
@@ -447,19 +492,18 @@
         );
       }
       if (seq !== rangeSeq) return;
-      rangeVolume = vol;
       oiStart = oi;
     } catch {
-      if (seq === rangeSeq) { rangeVolume = null; oiStart = null; }
+      if (seq === rangeSeq) oiStart = null;
     } finally {
       if (seq === rangeSeq) rangeLoading = false;
     }
   }
   $effect(() => {
-    if (!rangeMode) { rangeVolume = null; oiStart = null; return; }
-    const s = startIso, e = snapshotIso;
+    if (!rangeMode) { oiStart = null; return; }
+    const s = startIso;
     clearTimeout(rangeTimer);
-    rangeTimer = setTimeout(() => loadRange(s, e), 200);
+    rangeTimer = setTimeout(() => loadRange(s), 200);
     return () => clearTimeout(rangeTimer);
   });
 
@@ -536,7 +580,7 @@
   </div>
 
   <!-- Stat cards (as of the selected day) -->
-  <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
+  <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
     {#snippet card(label: string, value: string, cls = 'text-zinc-200', sub = '')}
       <div class="rounded-lg bg-zinc-900/70 border border-zinc-800 px-3 py-2">
         <div class="text-zinc-500 text-xs uppercase tracking-wide">{label}</div>
@@ -548,9 +592,11 @@
     {@render card('Unrealized PnL', fmtUsd(unrealAsOf), pnlClass(unrealAsOf))}
     {@render card('Total PnL', fmtUsd(totalAsOf), pnlClass(totalAsOf))}
     {@render card('Open Interest', fmtUsd(oiUsd))}
+    {@render card('Volume', fmtUsd(volumeAsOf), 'text-zinc-200', 'since 01-01')}
+    {@render card('Trades', tradesAsOf.toLocaleString('en-US'), 'text-zinc-200', 'since 01-01')}
     {@render card('Positions', String(positions.length))}
     {#if live && accountValue !== null}
-      {@render card('Account Value', fmtUsd(accountValue))}
+      {@render card('Account Value', fmtUsd(accountValue), 'text-zinc-200', 'only perp')}
     {:else}
       {@render card('Sharpe', pnlStats ? pnlStats.sharpe.toFixed(2) : '—', 'text-zinc-300', 'window')}
     {/if}
@@ -559,7 +605,7 @@
   <!-- Range stat row: relative deltas + volume/sharpe over [start, end] -->
   {#if rangeMode}
     {@const rsub = `${startIso} → ${snapshotIso}`}
-    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
+    <div class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2">
       {#snippet rcard(label: string, value: string, cls = 'text-zinc-200')}
         <div class="rounded-lg bg-blue-950/30 border border-blue-900/50 px-3 py-2">
           <div class="text-blue-300/70 text-xs uppercase tracking-wide flex items-center gap-1.5">
@@ -570,7 +616,8 @@
           <div class="text-zinc-600 text-[11px]">{rsub}</div>
         </div>
       {/snippet}
-      {@render rcard('Range Volume', rangeVolume != null ? fmtUsd(rangeVolume) : '…')}
+      {@render rcard('Range Volume', fmtUsd(volumeRange))}
+      {@render rcard('Range Trades', tradesRange.toLocaleString('en-US'))}
       {@render rcard('Range OI Δ', oiStart != null ? fmtUsd(oiRange) : '…', pnlClass(oiRange))}
       {@render rcard('Range Realized', fmtUsd(realizedRange), pnlClass(realizedRange))}
       {@render rcard('Range Unrealized', fmtUsd(unrealRange), pnlClass(unrealRange))}
@@ -610,11 +657,11 @@
       {#if showTrades}
         <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
           <button type="button" onclick={() => (tradeUnit = 'usd')}
-            class={'px-2 py-0.5 text-xs ' + (tradeUnitEff === 'usd' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
-            title="Label trades by net USD value">USD</button>
-          <button type="button" onclick={() => (tradeUnit = 'token')} disabled={!selectedToken}
-            class={'px-2 py-0.5 text-xs border-l border-zinc-700 ' + (tradeUnitEff === 'token' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200') + (!selectedToken ? ' opacity-40 cursor-not-allowed' : '')}
-            title={selectedToken ? 'Label trades by net token amount' : 'Select a token (from the positions table) to label by token amount'}>Token</button>
+            class={'px-2 py-0.5 text-xs ' + (tradeUnit === 'usd' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="Show trade values in USD">USD</button>
+          <button type="button" onclick={() => (tradeUnit = 'token')}
+            class={'px-2 py-0.5 text-xs border-l border-zinc-700 ' + (tradeUnit === 'token' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="Show trade values in token units (single-token labels and per-token hover; multi-token chip totals stay in USD)">Token</button>
         </div>
       {/if}
       {#if selectedToken}
@@ -653,6 +700,7 @@
           bandTo={rangeMode ? selectedUnix : null}
           trades={tradeMarkers}
           rangeMode={rangeMode}
+          valueHeader={tradeUnit === 'token' ? 'Amount' : 'Value($)'}
           loading={posLoading || tradesLoading}
           onPickDay={pickDay}
           onPickRange={pickRange}

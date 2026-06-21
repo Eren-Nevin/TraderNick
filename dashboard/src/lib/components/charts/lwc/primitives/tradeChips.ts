@@ -19,6 +19,19 @@ export type TradeChip = {
   value: number; // curve value at `time` — used to anchor the chip to the bar
   side: 'buy' | 'sell';
   text: string;
+  // Per-token breakdown for the hover tooltip (omitted when a single token is
+  // selected — there's nothing to break down).
+  tokens?: Array<{ token: string; label: string }>;
+};
+
+// A drawn chip's hit-box (pane-relative CSS px) + payload, for hover testing.
+export type ChipHit = {
+  x1: number;
+  y1: number;
+  x2: number;
+  y2: number;
+  side: 'buy' | 'sell';
+  tokens: Array<{ token: string; label: string }>;
 };
 
 type BitmapScope = {
@@ -59,9 +72,21 @@ export class TradeChipsPrimitive implements ISeriesPrimitive<Time> {
   private _series: ISeriesApi<SeriesType> | null = null;
   private _requestUpdate: (() => void) | null = null;
   private readonly _view = new TradeChipsPaneView(this);
+  // Hit-boxes from the last draw (pane-relative CSS px), newest on top.
+  _hitboxes: ChipHit[] = [];
 
   constructor(chips: TradeChip[]) {
     this._chips = chips;
+  }
+
+  // Return the topmost chip (with a token breakdown) under the pane-relative
+  // point, or null. Used by the chart to drive the hover tooltip.
+  chipAt(x: number, y: number): ChipHit | null {
+    for (let i = this._hitboxes.length - 1; i >= 0; i--) {
+      const b = this._hitboxes[i];
+      if (b.tokens.length && x >= b.x1 && x <= b.x2 && y >= b.y1 && y <= b.y2) return b;
+    }
+    return null;
   }
 
   attached(param: SeriesAttachedParameter<Time, SeriesType>): void {
@@ -121,6 +146,7 @@ class TradeChipsRenderer implements ISeriesPrimitivePaneRenderer {
       const gap = 7 * vr; // distance from the bar point to the chip
       const radius = 3 * hr;
 
+      const boxes: ChipHit[] = [];
       for (const c of chips) {
         const x = ts.timeToCoordinate(c.time as Time);
         const yBar = series.priceToCoordinate(c.value);
@@ -155,7 +181,18 @@ class TradeChipsRenderer implements ISeriesPrimitivePaneRenderer {
         ctx.textAlign = 'left';
         ctx.fillText(label, left + padX, top + h / 2 + 0.5 * vr);
         ctx.restore();
+
+        // Record the hit-box in pane-relative CSS px for hover testing.
+        boxes.push({
+          x1: left / hr,
+          y1: top / vr,
+          x2: (left + w) / hr,
+          y2: (top + h) / vr,
+          side: c.side,
+          tokens: c.tokens ?? []
+        });
       }
+      this._src._hitboxes = boxes;
     });
   }
 }

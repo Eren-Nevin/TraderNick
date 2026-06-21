@@ -126,9 +126,9 @@
             <th class="text-left px-3 py-1.5 font-normal">Token</th>
             <th class="text-left px-3 py-1.5 font-normal">Side</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
-                onclick={() => onSort('size_usd')}>Notional{sortArrow('size_usd')}</th>
+                onclick={() => onSort('size_usd')}>Volume{sortArrow('size_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
-                onclick={() => onSort('amount')}>Size{sortArrow('amount')}</th>
+                onclick={() => onSort('amount')}>Amount{sortArrow('amount')}</th>
             <th class="text-right px-3 py-1.5 font-normal">Entry</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort('unrealized_pnl')}>Unrealized{sortArrow('unrealized_pnl')}</th>
@@ -157,18 +157,18 @@
                   ? 'bg-emerald-950/40 border-emerald-800 text-emerald-400'
                   : 'bg-rose-950/40 border-rose-800 text-rose-400'}">{p.side}</span>
               </td>
-              <td class="px-3 py-1 text-right font-mono text-zinc-300">{fmtUsd(p.size_usd)}</td>
-              <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtSize(p.amount)} {p.token}</td>
-              <td class="px-3 py-1 text-right font-mono text-zinc-400">{fmtPrice(p.entry_px)}</td>
-              <td class="px-3 py-1 text-right font-mono"
+              <td class="px-3 py-1 text-right font-mono text-[15px] text-zinc-300">{fmtUsd(p.size_usd)}</td>
+              <td class="px-3 py-1 text-right font-mono text-[15px] text-zinc-400">{fmtSize(p.amount)}</td>
+              <td class="px-3 py-1 text-right font-mono text-[15px] text-zinc-400">{fmtPrice(p.entry_px)}</td>
+              <td class="px-3 py-1 text-right font-mono text-[15px]"
                   class:text-emerald-400={p.unrealized_pnl > 0}
                   class:text-rose-400={p.unrealized_pnl < 0}
                   class:text-zinc-500={p.unrealized_pnl === 0}>{fmtUsd(p.unrealized_pnl)}</td>
-              <td class="px-3 py-1 text-right font-mono"
+              <td class="px-3 py-1 text-right font-mono text-[15px]"
                   class:text-emerald-400={(p.roe ?? 0) > 0}
                   class:text-rose-400={(p.roe ?? 0) < 0}
                   class:text-zinc-500={(p.roe ?? 0) === 0}>{fmtRoe(p.roe)}</td>
-              <td class="px-3 py-1 text-right font-mono text-zinc-500">{p.funding != null ? fmtUsd(p.funding) : '—'}</td>
+              <td class="px-3 py-1 text-right font-mono text-[15px] text-zinc-500">{p.funding != null ? fmtUsd(p.funding) : '—'}</td>
             </tr>
           {/each}
         </tbody>

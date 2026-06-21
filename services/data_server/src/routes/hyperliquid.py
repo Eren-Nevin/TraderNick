@@ -1105,16 +1105,20 @@ async def wallet_pnl(request):
             )
             GROUP BY day
         ),
-        @@OICTE@@
+        @@OICTE@@,
+        @@VOLCTE@@
         SELECT d.day AS day,
                coalesce(r.realized, 0) + coalesce(rt.tail, 0) AS realized,
                coalesce(u.unrealized, 0) AS unrealized,
-               coalesce(o.oi, 0) AS oi
+               coalesce(o.oi, 0) AS oi,
+               coalesce(v.volume, 0) AS volume,
+               coalesce(v.trades, 0) AS trades
         FROM days d
         LEFT JOIN realized r       ON r.day  = d.day
         LEFT JOIN unreal   u       ON u.day  = d.day
         LEFT JOIN realized_tail rt ON rt.day = d.day
         LEFT JOIN oi_daily o       ON o.day  = d.day
+        LEFT JOIN vol_daily v      ON v.day  = d.day
         ORDER BY d.day
     """
     # realized daily-flow CTE: GLOBAL reads the pre-aggregated per-(day,wallet)
@@ -1175,6 +1179,31 @@ async def wallet_pnl(request):
             GROUP BY day
         )"""
     sql = sql.replace("@@OICTE@@", oi_cte)
+    # Daily within-window volume ($) + trade count. GLOBAL only (the wallet-daily
+    # rollup has no token column); token scope → empty CTE (0). trade_history is
+    # cumulative-snapshot, so the per-day flow is the snapshot-diff cum − lag.
+    if token:
+        vol_cte = ("vol_daily AS (SELECT toDate({since:DateTime}) AS day, "
+                   "toFloat64(0) AS volume, toUInt64(0) AS trades FROM numbers(0))")
+    else:
+        vol_cte = """vol_daily AS (
+            SELECT day,
+                   cum_v - lagInFrame(cum_v, 1, 0) OVER w AS volume,
+                   cum_t - lagInFrame(cum_t, 1, 0) OVER w AS trades
+            FROM (
+                SELECT day,
+                       sumMerge(volume_state)      AS cum_v,
+                       sumMerge(trade_count_state) AS cum_t
+                FROM tradernick.hl_trade_history_wallet_daily
+                WHERE wallet = {wallet:String}
+                  AND day >= toDate({since:DateTime}) - 1
+                  AND day <  toDate({until:DateTime}) + 1
+                GROUP BY day
+            )
+            WINDOW w AS (ORDER BY day ASC
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+        )"""
+    sql = sql.replace("@@VOLCTE@@", vol_cte)
     # Splice the token filter into the remaining sources (fills tail + eod
     # unrealized), or strip the sentinel for the global curve.
     sql = sql.replace("@@TOK@@", "AND token = {token:String}" if token else "")
@@ -1186,6 +1215,8 @@ async def wallet_pnl(request):
 
     series = []
     cum_realized = 0.0
+    cum_volume = 0.0
+    cum_trades = 0
     daily_returns: list[float] = []
     last_unrealized = 0.0
     # Skip the dead lead-in: a 180-day default window can start before the
@@ -1194,7 +1225,7 @@ async def wallet_pnl(request):
     # counting returns) at the first day with any realized / unrealized value.
     started = False
     for r in rows.result_rows:
-        day, realized, unrealized, oi = r
+        day, realized, unrealized, oi, volume, trades = r
         realized = float(realized)
         unrealized = float(unrealized)
         oi = float(oi)
@@ -1203,6 +1234,8 @@ async def wallet_pnl(request):
                 continue
             started = True
         cum_realized += realized
+        cum_volume += float(volume)
+        cum_trades += int(trades)
         last_unrealized = unrealized
         # Unix seconds at UTC midnight — Lightweight Charts time format.
         t = int(datetime(day.year, day.month, day.day,
@@ -1217,6 +1250,9 @@ async def wallet_pnl(request):
             "unrealized": unrealized,
             # End-of-day open interest (total notional $), GLOBAL.
             "oi": oi,
+            # Cumulative within-window volume ($) + trade count (GLOBAL).
+            "volume": cum_volume,
+            "trades": cum_trades,
         })
         # Daily return = that day's realized PnL (= Δ of the realized curve).
         daily_returns.append(realized)
@@ -1300,15 +1336,17 @@ async def token_close(request):
 @bp.get("/hyperliquid/wallet_trades")
 @throttled("light")
 async def wallet_trades(request):
-    """Per-day net buy/sell flow for a wallet — drives the 'Show Trades'
-    markers on the wallet PnL chart.
+    """Per-(day, token) net buy/sell flow for a wallet — drives the 'Show
+    Trades' markers on the wallet PnL chart.
 
-    For each day, the net signed USD traded = Σ(buy size·price) −
-    Σ(sell size·price) over the wallet's fills. side 'B' = buy, 'A' = sell.
-    Buys and sells of the same token on the same day net out (that's just the
-    sum); a positive net day is a net BUY, negative a net SELL. When `token` is
-    given the flow is scoped to that token, otherwise it's summed across all
-    tokens (one net value per day either way).
+    For each (day, token), the net signed USD traded = Σ(buy size·price) −
+    Σ(sell size·price) over the wallet's fills (side 'B' = buy, 'A' = sell);
+    net_tokens is the same in token units. Buys and sells of the SAME token on
+    the same day net out (it's a signed sum); a positive net is a net BUY,
+    negative a net SELL. Rows are per token (NOT summed across tokens), so the
+    client can show a same-day net-buy and net-sell marker for different tokens
+    and break the totals down by token on hover. When `token` is given, only
+    that token's rows are returned.
 
     hl_fills is a ReplacingMergeTree — read FINAL so re-backfilled duplicate
     (token, time, tid, wallet) rows collapse instead of double-counting.
@@ -1318,7 +1356,8 @@ async def wallet_trades(request):
       token  — optional (e.g. AAVE). Scopes the flow to one token.
       since  — ISO date (inclusive). Defaults to until − 180 days.
       until  — ISO date (inclusive). Defaults to today (UTC).
-    Returns { wallet, token, series:[{time (epoch s, UTC midnight), net_usd}] }.
+    Returns { wallet, token,
+              series:[{time (epoch s, UTC midnight), token, net_usd, net_tokens}] }.
     """
     wallet = request.args.get("wallet")
     if not wallet:
@@ -1339,11 +1378,11 @@ async def wallet_trades(request):
         return response.json({"error": "since must be <= until"}, status=400)
 
     tok_filter = "AND token = {token:String}" if token else ""
-    # net_usd = signed Σ(size·price); net_tokens = signed Σ(size). Token units
-    # only make sense for a single token (summing different tokens' sizes is
-    # meaningless), so the client only surfaces net_tokens when `token` is set.
+    # net_usd = signed Σ(size·price); net_tokens = signed Σ(size). Grouped per
+    # (day, token) so same-token buys/sells net out but different tokens stay
+    # separate (the client aggregates per side and lists tokens on hover).
     sql = f"""
-        SELECT toDate(time) AS day,
+        SELECT toDate(time) AS day, token,
                sum(if(side = 'B', size * price, -size * price)) AS net_usd,
                sum(if(side = 'B', size, -size)) AS net_tokens
         FROM tradernick.hl_fills FINAL
@@ -1351,9 +1390,9 @@ async def wallet_trades(request):
           AND time >= {{since:DateTime}}
           AND time <  {{until:DateTime}} + INTERVAL 1 DAY
           {tok_filter}
-        GROUP BY day
+        GROUP BY day, token
         HAVING round(net_usd, 2) != 0
-        ORDER BY day
+        ORDER BY day, abs(net_usd) DESC
     """
     params = {"wallet": wallet, "since": since_dt, "until": until_dt}
     if token:
@@ -1363,8 +1402,9 @@ async def wallet_trades(request):
     series = [
         {"time": int(datetime(r[0].year, r[0].month, r[0].day,
                               tzinfo=timezone.utc).timestamp()),
-         "net_usd": float(r[1]),
-         "net_tokens": float(r[2])}
+         "token": r[1],
+         "net_usd": float(r[2]),
+         "net_tokens": float(r[3])}
         for r in rows.result_rows
     ]
     return response.json({"wallet": wallet, "token": token, "series": series})
