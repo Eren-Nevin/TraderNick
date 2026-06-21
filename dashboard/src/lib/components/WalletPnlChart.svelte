@@ -92,8 +92,13 @@
     if (lookbackStart != null) refs.push({ time: lookbackStart, color: '#38bdf8', dash: '2,3', width: 0.6 });
     // Entry-date line is only drawn when the open date is inside the visible
     // window (the caller passes entryTime=null otherwise and supplies
-    // `entryNote` instead). Keep it subtle — a thin emerald dash.
-    if (entryTime != null) refs.push({ time: entryTime, color: '#34d399', dash: '4,3', width: 0.7, label: 'entry' });
+    // `entryNote` instead). Keep it subtle — a thin emerald dash. The tag shows
+    // the open date so the marker is self-describing.
+    if (entryTime != null) {
+      const d = new Date(entryTime * 1000);
+      const date = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+      refs.push({ time: entryTime, color: '#34d399', dash: '4,3', width: 0.7, label: `entry ${date}` });
+    }
     if (cutoff != null) refs.push({ time: cutoff, color: '#fbbf24', dash: '4,3' });
     return refs;
   }
