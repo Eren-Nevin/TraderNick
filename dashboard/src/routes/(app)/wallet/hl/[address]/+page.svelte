@@ -331,7 +331,9 @@
       unrealized_pnl: Number(p.unrealized_pnl),
       entry_px: p.entry_px as number, liquidation_px: p.liquidation_px as number,
       roe: lev ? roeLev / lev : roeLev, funding: p.cum_funding_since_open as number,
-      leverage: p.leverage_value as number, leverage_type: p.leverage_type as string
+      leverage: p.leverage_value as number, leverage_type: p.leverage_type as string,
+      // Live API has no open time; enriched from our latest stored snapshot.
+      opened_at: p.opened_at != null ? Number(p.opened_at) : null
     };
   }
   function mapHist(p: Record<string, unknown>): PositionRow {

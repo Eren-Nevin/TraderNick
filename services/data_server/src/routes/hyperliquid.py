@@ -1556,6 +1556,39 @@ async def live_positions(request):
         })
     positions.sort(key=lambda x: x["size"], reverse=True)
 
+    # The live HL API has no position open time, but our latest stored snapshot
+    # does (roster tokens only). Attach opened_at per (token, side) so the chart
+    # can draw the entry-date marker in live mode too. Cheap: latest snapshot
+    # within a 2-day lookback (partition + time pruning).
+    if positions:
+        try:
+            ch = await client()
+            op_rows = await ch.query(
+                """
+                WITH latest AS (
+                    SELECT max(time) AS t
+                    FROM tradernick.hl_position_history
+                    WHERE wallet = {wallet:String}
+                      AND time < now()
+                      AND time >= now() - INTERVAL 2 DAY
+                )
+                SELECT token, side,
+                       toUnixTimestamp(argMax(opened_at, time)) AS opened
+                FROM tradernick.hl_position_history
+                WHERE wallet = {wallet:String}
+                  AND time = (SELECT t FROM latest)
+                  AND time >= now() - INTERVAL 2 DAY
+                GROUP BY token, side
+                """,
+                parameters={"wallet": wallet},
+            )
+            opened_by = {(r[0], r[1]): int(r[2]) for r in op_rows.result_rows if r[2]}
+            for p in positions:
+                p["opened_at"] = opened_by.get((p["token"], p["side"]))
+        except Exception:  # opened_at is best-effort enrichment — never fail the book
+            for p in positions:
+                p.setdefault("opened_at", None)
+
     return response.json({
         "wallet": wallet,
         "time": data.get("time"),
