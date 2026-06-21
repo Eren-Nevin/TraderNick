@@ -66,7 +66,7 @@
     // Buy/sell chips ('Show Trades'): one per day. `value` anchors the chip to
     // the curve point at that time; `side` sets colour/position; `text` is the
     // label (net magnitude).
-    trades = [] as Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string; tokens?: Array<{ token: string; label: string }> }>,
+    trades = [] as Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string; tokens?: Array<{ token: string; label: string; price: string }> }>,
     // Range mode: left-drag selects a range (else it pans; middle-drag always
     // pans). Changes the gesture the pointer handler performs on a body drag.
     rangeMode = false,
@@ -76,7 +76,7 @@
     // When either is set the chart becomes interactive (cursor + selection).
     onPickDay = undefined as ((unix: number) => void) | undefined,
     onPickRange = undefined as ((startUnix: number, endUnix: number) => void) | undefined
-  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean; bandFrom?: number | null; bandTo?: number | null; trades?: Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string; tokens?: Array<{ token: string; label: string }> }>; rangeMode?: boolean; valueHeader?: string } = $props();
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean; bandFrom?: number | null; bandTo?: number | null; trades?: Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string; tokens?: Array<{ token: string; label: string; price: string }> }>; rangeMode?: boolean; valueHeader?: string } = $props();
 
   // Cutoff = amber (as-of day); lookback start = thinner sky-blue; entry =
   // emerald (the day the selected position was first opened).
@@ -171,7 +171,7 @@
 
   let tip = $state<{ x: number; time: number; value: number } | null>(null);
   // Buy/sell chip hover (token breakdown). x/y are pane-relative CSS px.
-  let chipTip = $state<{ x: number; y: number; side: 'buy' | 'sell'; rows: Array<{ token: string; label: string }> } | null>(null);
+  let chipTip = $state<{ x: number; y: number; side: 'buy' | 'sell'; rows: Array<{ token: string; label: string; price: string }> } | null>(null);
 
   // Pointer gestures:
   //   • click (any mode)            → pick a single day (snapshot)
@@ -564,12 +564,14 @@
       <div class="uppercase tracking-wide mb-1 {chipTip.side === 'buy' ? 'text-emerald-400' : 'text-rose-400'}">
         {chipTip.side === 'buy' ? '▲ Bought' : '▼ Sold'}
       </div>
-      <div class="grid grid-cols-[auto_auto] gap-x-6 gap-y-0.5">
+      <div class="grid grid-cols-[auto_auto_auto] gap-x-6 gap-y-0.5">
         <div class="text-zinc-500 text-[10px] uppercase tracking-wide">Token</div>
         <div class="text-zinc-500 text-[10px] uppercase tracking-wide text-right">{valueHeader}</div>
+        <div class="text-zinc-500 text-[10px] uppercase tracking-wide text-right">Price</div>
         {#each chipTip.rows as r (r.token)}
           <div class="text-zinc-400 font-mono">{r.token}</div>
           <div class="font-mono tabular-nums text-right {chipTip.side === 'buy' ? 'text-emerald-300' : 'text-rose-300'}">{r.label}</div>
+          <div class="font-mono tabular-nums text-right text-zinc-300">{r.price}</div>
         {/each}
       </div>
     </div>

@@ -1384,7 +1384,8 @@ async def wallet_trades(request):
     sql = f"""
         SELECT toDate(time) AS day, token,
                sum(if(side = 'B', size * price, -size * price)) AS net_usd,
-               sum(if(side = 'B', size, -size)) AS net_tokens
+               sum(if(side = 'B', size, -size)) AS net_tokens,
+               sum(size * price) / nullIf(sum(size), 0) AS avg_px
         FROM tradernick.hl_fills FINAL
         WHERE wallet = {{wallet:String}}
           AND time >= {{since:DateTime}}
@@ -1399,12 +1400,15 @@ async def wallet_trades(request):
         params["token"] = token
     ch = await client()
     rows = await ch.query(sql, parameters=params)
+    # avg_px = volume-weighted execution price across the day's fills (both
+    # sides), in USD per token — independent of the net direction.
     series = [
         {"time": int(datetime(r[0].year, r[0].month, r[0].day,
                               tzinfo=timezone.utc).timestamp()),
          "token": r[1],
          "net_usd": float(r[2]),
-         "net_tokens": float(r[3])}
+         "net_tokens": float(r[3]),
+         "avg_px": float(r[4]) if r[4] is not None else 0.0}
         for r in rows.result_rows
     ]
     return response.json({"wallet": wallet, "token": token, "series": series})

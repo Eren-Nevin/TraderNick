@@ -83,7 +83,7 @@
   // 'Show Trades': per-day net buy/sell flow markers. Scoped to the selected
   // token when one is chosen, else summed across all tokens (one tag per day).
   let showTrades = $state(false);
-  let tradesRaw = $state<Array<{ time: number; token: string; net_usd: number; net_tokens: number }>>([]);
+  let tradesRaw = $state<Array<{ time: number; token: string; net_usd: number; net_tokens: number; avg_px: number }>>([]);
   let tradesLoading = $state(false);
   let tradesCtl: AbortController | null = null;
   // Chip label / hover unit. USD or per-token size. Aggregate (multi-token)
@@ -141,6 +141,13 @@
   // Format one (token) leg per the unit selector.
   const fmtLeg = (usd: number, tokens: number) =>
     tradeUnit === 'token' ? fmtAmt(tokens) : fmtUsd(Math.abs(usd)).replace('$', '');
+  // Execution price (USD/token); precision scales with magnitude.
+  function fmtPx(n: number): string {
+    if (!isFinite(n) || n === 0) return '—';
+    const a = Math.abs(n);
+    const dp = a >= 1000 ? 2 : a >= 1 ? 3 : a >= 0.01 ? 5 : 8;
+    return '$' + n.toLocaleString('en-US', { minimumFractionDigits: dp, maximumFractionDigits: dp });
+  }
   // Buy/sell chips from the per-(day, token) net flow.
   //   • single token selected → one chip/day for that token (no hover)
   //   • otherwise → per day, one net-BUY chip (all net-bought tokens) and/or
@@ -168,7 +175,7 @@
     }
     const out: Array<{
       time: number; value: number; side: 'buy' | 'sell'; text: string;
-      tokens: Array<{ token: string; label: string }>;
+      tokens: Array<{ token: string; label: string; price: string }>;
     }> = [];
     for (const [time, rows] of byDay) {
       const value = byTime.get(time) ?? 0;
@@ -179,7 +186,7 @@
         out.push({
           time, value, side: 'buy',
           text: fmtUsd(sum).replace('$', ''),
-          tokens: buys.map((r) => ({ token: r.token, label: fmtLeg(r.net_usd, r.net_tokens) }))
+          tokens: buys.map((r) => ({ token: r.token, label: fmtLeg(r.net_usd, r.net_tokens), price: fmtPx(r.avg_px) }))
         });
       }
       if (sells.length) {
@@ -187,7 +194,7 @@
         out.push({
           time, value, side: 'sell',
           text: fmtUsd(sum).replace('$', ''),
-          tokens: sells.map((r) => ({ token: r.token, label: fmtLeg(r.net_usd, r.net_tokens) }))
+          tokens: sells.map((r) => ({ token: r.token, label: fmtLeg(r.net_usd, r.net_tokens), price: fmtPx(r.avg_px) }))
         });
       }
     }
@@ -459,7 +466,7 @@
       );
       if (!res.ok) throw new Error(`wallet_trades ${res.status}`);
       const body = await res.json();
-      tradesRaw = (body.series ?? []) as Array<{ time: number; token: string; net_usd: number; net_tokens: number }>;
+      tradesRaw = (body.series ?? []) as Array<{ time: number; token: string; net_usd: number; net_tokens: number; avg_px: number }>;
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') tradesRaw = [];
     } finally {

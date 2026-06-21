@@ -21,7 +21,7 @@ export type TradeChip = {
   text: string;
   // Per-token breakdown for the hover tooltip (omitted when a single token is
   // selected — there's nothing to break down).
-  tokens?: Array<{ token: string; label: string }>;
+  tokens?: Array<{ token: string; label: string; price: string }>;
 };
 
 // A drawn chip's hit-box (pane-relative CSS px) + payload, for hover testing.
@@ -31,7 +31,7 @@ export type ChipHit = {
   x2: number;
   y2: number;
   side: 'buy' | 'sell';
-  tokens: Array<{ token: string; label: string }>;
+  tokens: Array<{ token: string; label: string; price: string }>;
 };
 
 type BitmapScope = {

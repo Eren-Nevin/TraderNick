@@ -126,7 +126,7 @@
             <th class="text-left px-3 py-1.5 font-normal">Token</th>
             <th class="text-left px-3 py-1.5 font-normal">Side</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
-                onclick={() => onSort('size_usd')}>Volume{sortArrow('size_usd')}</th>
+                onclick={() => onSort('size_usd')}>Value($){sortArrow('size_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort('amount')}>Amount{sortArrow('amount')}</th>
             <th class="text-right px-3 py-1.5 font-normal">Entry</th>
