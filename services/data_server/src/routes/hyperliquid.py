@@ -534,6 +534,14 @@ async def smart_wallet_metrics(request):
         max_funding_pct = float(request.args.get("max_funding_pct", str(NO_MAX)))
     except ValueError:
         max_funding_pct = NO_MAX
+    try:
+        min_account_duration = int(request.args.get("min_account_duration", "0"))
+    except ValueError:
+        min_account_duration = 0
+    try:
+        min_tokens = int(request.args.get("min_tokens", "0"))
+    except ValueError:
+        min_tokens = 0
 
     snap_arg = request.args.get("snapshot")
     if snap_arg:
@@ -554,7 +562,16 @@ async def smart_wallet_metrics(request):
         "min_realized": min_realized, "min_oi": min_oi, "limit": limit,
         "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
         "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
+        "min_account_duration": min_account_duration, "min_tokens": min_tokens,
     }
+    # Account age: first recorded trade day per wallet, over ALL history (the
+    # rollup only goes back to its TTL horizon, so this is "first seen by us").
+    first_seen = """
+        first_seen AS (
+            SELECT wallet, min(day) AS first_day
+            FROM tradernick.hl_trade_history_wallet_daily
+            GROUP BY wallet
+        )"""
     # Execution-quality CTEs (same for both scopes; token-scoped variant adds the
     # token filter). taker = taker fill volume / total fill volume; funding =
     # net funding PnL (positive = received). Window = (start_day, end_day].
@@ -563,7 +580,8 @@ async def smart_wallet_metrics(request):
         taker_agg AS (
             SELECT wallet,
                 sumMerge(taker_buy_vol_usd_state) + sumMerge(taker_sell_vol_usd_state) AS taker_vol,
-                sumMerge(vol_usd_state) AS total_vol
+                sumMerge(vol_usd_state) AS total_vol,
+                uniqExact(token) AS n_tokens
             FROM tradernick.hl_fills_vol_daily
             WHERE day > {{start_day:Date}} AND day <= {{end_day:Date}} {tok_pred}
             GROUP BY wallet
@@ -761,7 +779,8 @@ async def smart_wallet_metrics(request):
         {unreal_now},
         {oi_now},
         {taker_agg},
-        {funding_agg}
+        {funding_agg},
+        {first_seen}
         SELECT
             w.wallet AS wallet,
             w.volume AS volume,
@@ -775,6 +794,8 @@ async def smart_wallet_metrics(request):
             100 * coalesce(tk.taker_vol, 0) / nullIf(tk.total_vol, 0) AS taker_pct,
             100 * w.fees / nullIf(w.realized, 0) AS fee_pct,
             100 * coalesce(fn.funding, 0) / nullIf(w.realized, 0) AS funding_pct,
+            coalesce(tk.n_tokens, 0) AS n_tokens,
+            dateDiff('day', fseen.first_day, {{end_day:Date}}) AS account_age_days,
             dictGet('tradernick.wallet_labels', 'categories', lower(w.wallet)) AS categories
         FROM win w
         LEFT JOIN sharpe_agg sa ON sa.wallet = w.wallet
@@ -782,6 +803,7 @@ async def smart_wallet_metrics(request):
         LEFT JOIN oi_now oi     ON oi.wallet = w.wallet
         LEFT JOIN taker_agg tk  ON tk.wallet = w.wallet
         LEFT JOIN funding_agg fn ON fn.wallet = w.wallet
+        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet
         WHERE w.volume >= {{min_volume:Float64}}
           AND w.realized >= {{min_realized:Float64}}
           AND coalesce(oi.oi_usd, 0) >= {{min_oi:Float64}}
@@ -790,6 +812,8 @@ async def smart_wallet_metrics(request):
           AND coalesce(100 * tk.taker_vol / nullIf(tk.total_vol, 0), 0) >= {{min_taker_pct:Float64}}
           AND (w.realized <= 0 OR 100 * w.fees / w.realized <= {{max_fee_pct:Float64}})
           AND (w.realized <= 0 OR 100 * coalesce(fn.funding, 0) / w.realized <= {{max_funding_pct:Float64}})
+          AND coalesce(tk.n_tokens, 0) >= {{min_tokens:UInt32}}
+          AND coalesce(dateDiff('day', fseen.first_day, {{end_day:Date}}), 0) >= {{min_account_duration:UInt32}}
         ORDER BY {ORDER_COLS[order_by]} DESC
         LIMIT {{limit:UInt32}}
     """
@@ -809,7 +833,9 @@ async def smart_wallet_metrics(request):
             "taker_pct": (float(r[9]) if r[9] is not None else None),
             "fee_pct": (float(r[10]) if r[10] is not None else None),
             "funding_pct": (float(r[11]) if r[11] is not None else None),
-            "categories": list(r[12]) if r[12] else [],
+            "n_tokens": int(r[12]) if r[12] is not None else 0,
+            "account_age_days": int(r[13]) if r[13] is not None else 0,
+            "categories": list(r[14]) if r[14] else [],
         }
         for r in rows.result_rows
     ]
@@ -820,6 +846,7 @@ async def smart_wallet_metrics(request):
         "min_realized": min_realized, "min_oi": min_oi,
         "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
         "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
+        "min_account_duration": min_account_duration, "min_tokens": min_tokens,
         "wallets": wallets,
     })
 
@@ -1582,7 +1609,8 @@ async def wallet_trade_stats(request):
         ),
         taker AS (
             SELECT sumMerge(taker_buy_vol_usd_state) + sumMerge(taker_sell_vol_usd_state) AS tk,
-                   sumMerge(vol_usd_state) AS tot
+                   sumMerge(vol_usd_state) AS tot,
+                   uniqExact(day) AS active_days
             FROM tradernick.hl_fills_vol_daily
             WHERE wallet = {wallet:String}
               AND day >= toDate({since:DateTime}) AND day <= toDate({until:DateTime})
@@ -1592,15 +1620,24 @@ async def wallet_trade_stats(request):
             FROM tradernick.hl_funding_daily
             WHERE wallet = {wallet:String}
               AND day >= toDate({since:DateTime}) AND day <= toDate({until:DateTime})
+        ),
+        fs AS (
+            -- First recorded trade day (account age), over ALL history (no window).
+            SELECT min(day) AS first_day
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE wallet = {wallet:String}
         )
         SELECT th_e.vol - th_s.vol, th_e.tc - th_s.tc, th_e.pnl - th_s.pnl,
-               th_e.fees - th_s.fees, taker.tk, taker.tot, fund.f
-        FROM th_e, th_s, taker, fund
+               th_e.fees - th_s.fees, taker.tk, taker.tot, fund.f, taker.active_days,
+               dateDiff('day', fs.first_day, toDate({until:DateTime})) AS account_duration_days
+        FROM th_e, th_s, taker, fund, fs
     """
     ch = await client()
     rows = await ch.query(sql, parameters={"wallet": wallet, "since": since_dt, "until": until_dt})
-    r = rows.result_rows[0] if rows.result_rows else (0, 0, 0, 0, 0, 0, 0)
-    volume, trades, realized, fees, taker_vol, total_vol, funding = (float(x or 0) for x in r)
+    r = rows.result_rows[0] if rows.result_rows else (0, 0, 0, 0, 0, 0, 0, 0, None)
+    volume, trades, realized, fees, taker_vol, total_vol, funding, active_days = (float(x or 0) for x in r[:8])
+    active_days = int(active_days)
+    account_duration_days = int(r[8]) if r[8] is not None else 0
     trades = int(trades)
 
     # Per-token traded volume (from the per-day fills-volume rollup), for the
@@ -1616,20 +1653,53 @@ async def wallet_trade_stats(request):
         """,
         parameters={"wallet": wallet, "since": since_dt, "until": until_dt},
     )
+    # Per-token total PnL = window realized (gross) + current open unrealized.
+    real_rows = await ch.query(
+        """
+        SELECT token,
+            argMaxIf(pnl, time, toDate(time) <= toDate({until:DateTime}))
+            - argMaxIf(pnl, time, toDate(time) < toDate({since:DateTime})) AS realized
+        FROM tradernick.hl_trade_history FINAL
+        WHERE wallet = {wallet:String} AND toDate(time) <= toDate({until:DateTime})
+        GROUP BY token
+        """,
+        parameters={"wallet": wallet, "since": since_dt, "until": until_dt},
+    )
+    realized_by = {t[0]: float(t[1]) for t in real_rows.result_rows}
+    unreal_rows = await ch.query(
+        f"""
+        SELECT token, sum(eod) AS un FROM (
+            SELECT token, side, argMaxMerge(pnl_state) AS eod
+            FROM tradernick.hl_position_history_eod_wallet
+            WHERE wallet = {{wallet:String}}
+              AND day = (SELECT max(day) FROM tradernick.hl_position_history_eod_wallet
+                         WHERE wallet = {{wallet:String}} AND day <= toDate({{until:DateTime}}))
+              {HIP3_EXCLUDE}
+            GROUP BY token, side
+        ) GROUP BY token
+        """,
+        parameters={"wallet": wallet, "until": until_dt},
+    )
+    unreal_by = {t[0]: float(t[1]) for t in unreal_rows.result_rows}
+    pnl_of = lambda tok: realized_by.get(tok, 0.0) + unreal_by.get(tok, 0.0)
+
     tok_total = sum(float(t[1]) for t in tok_rows.result_rows)
     tokens: list[dict] = []
     other_vol = 0.0
+    other_pnl = 0.0
     for t in tok_rows.result_rows:
         v = float(t[1])
         pct = (100.0 * v / tok_total) if tok_total else 0.0
         if pct < 0.1:
             other_vol += v
+            other_pnl += pnl_of(t[0])
         else:
-            tokens.append({"token": t[0], "volume": v, "pct": pct})
+            tokens.append({"token": t[0], "volume": v, "pct": pct, "pnl": pnl_of(t[0])})
     if other_vol > 0:
         tokens.append({
             "token": "Other", "volume": other_vol,
             "pct": (100.0 * other_vol / tok_total) if tok_total else 0.0,
+            "pnl": other_pnl,
         })
 
     return response.json({
@@ -1641,6 +1711,9 @@ async def wallet_trade_stats(request):
         "funding": funding,
         "taker_vol": taker_vol,
         "total_vol": total_vol,
+        "active_days": active_days,
+        "account_duration_days": account_duration_days,
+        "trades_per_day": (trades / active_days) if active_days else 0.0,
         "avg_trade_size": (volume / trades) if trades else 0.0,
         "taker_pct": (100.0 * taker_vol / total_vol) if total_vol else 0.0,
         "fee_pct": (100.0 * fees / realized) if realized else None,

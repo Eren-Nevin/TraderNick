@@ -79,9 +79,10 @@
   // Execution-quality stats over the window (taker %, fee/PnL %, funding/PnL %),
   // snapshot-independent.
   let tradeStats = $state<{
-    avg_trade_size: number; taker_pct: number;
+    avg_trade_size: number; taker_pct: number; trades_per_day: number;
+    account_duration_days: number;
     fee_pct: number | null; funding_pct: number | null;
-    tokens?: Array<{ token: string; volume: number; pct: number }>;
+    tokens?: Array<{ token: string; volume: number; pct: number; pnl: number }>;
   } | null>(null);
 
   let copied = $state(false);
@@ -228,6 +229,17 @@
     return rows.reduce((a, b) => (Math.abs(b.size_usd) > Math.abs(a.size_usd) ? b : a));
   });
   const entryPrice = $derived(selectedPos?.entry_px ?? null);
+  // Current price = the selected token's close as of the snapshot day (the
+  // close-overlay value at/just before selectedUnix). Drawn like the entry line.
+  const currentPrice = $derived.by(() => {
+    if (!selectedToken || !closeSeries.length) return null;
+    let v: number | null = null;
+    for (const p of closeSeries) {
+      if (p.time <= selectedUnix) v = p.value;
+      else break;
+    }
+    return v;
+  });
   // Snap the open time to its UTC midnight — the PnL series only has daily
   // bars, so an intraday timestamp won't resolve to a chart coordinate.
   const entryTime = $derived(
@@ -671,19 +683,21 @@
       {@render card('Sharpe (ann.)', pnlStats ? pnlStats.sharpe.toFixed(2) : '—', 'text-zinc-300', 'window')}
     </div>
     <!-- Row 2: OI, Positions, Account Value -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
       {@render card('Open Interest', fmtUsd(oiUsd))}
       {@render card('Positions', String(positions.length))}
       {@render card('Account Value', fmtUsd(accountValue), 'text-zinc-200', 'only perp')}
+      {@render card('Account Age', tradeStats ? tradeStats.account_duration_days.toLocaleString('en-US') + ' d' : '—', 'text-zinc-200', 'since 1st trade')}
     </div>
-    <!-- Row 3: Volume, Trades, Avg trade value -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+    <!-- Row 3: Volume, Trades, Avg trade value, Trades/day -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
       {@render card('Volume', fmtUsd(volumeAsOf), 'text-zinc-200', 'since 01-01')}
       {@render card('Trades', tradesAsOf.toLocaleString('en-US'), 'text-zinc-200', 'since 01-01')}
       {@render card('Avg Trade Value', fmtUsd(avgTradeAsOf), 'text-zinc-200', 'per trade')}
+      {@render card('Trades / Day', tradeStats ? tradeStats.trades_per_day.toLocaleString('en-US', { maximumFractionDigits: 1 }) : '—', 'text-zinc-200', 'per active day')}
     </div>
     <!-- Row 4: execution-quality (taker %, fee/PnL %, funding/PnL %); full window -->
-    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
       {@render card('Taker %', tradeStats ? tradeStats.taker_pct.toFixed(1) + '%' : '—', 'text-zinc-200', 'by volume')}
       {@render card('Fee / PnL %', tradeStats && tradeStats.fee_pct != null ? tradeStats.fee_pct.toFixed(1) + '%' : '—', 'text-zinc-300', 'since 01-01')}
       {@render card('Funding / PnL %', tradeStats && tradeStats.funding_pct != null ? tradeStats.funding_pct.toFixed(1) + '%' : '—', 'text-zinc-300', 'since 01-01')}
@@ -691,13 +705,19 @@
     <!-- Token mix: traded-volume share per token (since 01-01); tokens under
          0.1% are folded into "Other". TODO: swap token name for token icon. -->
     {#if tradeStats?.tokens?.length}
+      {@const pnlTotal = tradeStats.tokens.reduce((s, t) => s + t.pnl, 0)}
       <div class="rounded-lg bg-zinc-900/70 border border-zinc-800 px-3 py-2">
         <div class="text-zinc-500 text-xs uppercase tracking-wide mb-1.5">Traded tokens · volume share <span class="text-zinc-600 normal-case">(since 01-01)</span></div>
         <div class="flex flex-wrap gap-1.5">
           {#each tradeStats.tokens as t (t.token)}
-            <span class="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border bg-zinc-950 {t.token === 'Other' ? 'border-zinc-800 text-zinc-500' : 'border-zinc-700 text-zinc-200'}">
-              <span class="font-mono">{t.token}</span>
-              <span class="tabular-nums {t.token === 'Other' ? 'text-zinc-500' : 'text-zinc-400'}">{t.pct.toFixed(1)}%</span>
+            <span class="inline-flex flex-col items-start gap-0.5 text-xs px-2 py-1 rounded-md border bg-zinc-950 {t.token === 'Other' ? 'border-zinc-800' : 'border-zinc-700'}">
+              <span class="flex items-center gap-1.5">
+                <span class="font-mono {t.token === 'Other' ? 'text-zinc-500' : 'text-zinc-200'}">{t.token}</span>
+                <span class="tabular-nums text-zinc-400">{t.pct.toFixed(1)}%</span>
+              </span>
+              <span class="tabular-nums text-[11px] {t.pnl > 0 ? 'text-emerald-400' : t.pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">
+                {fmtUsd(t.pnl)}{#if pnlTotal}<span class="text-zinc-500"> ({((100 * t.pnl) / pnlTotal).toFixed(1)}%)</span>{/if}
+              </span>
             </span>
           {/each}
         </div>
@@ -791,6 +811,7 @@
           data={chartData}
           closeData={closeSeries}
           entryPrice={selectedToken ? entryPrice : null}
+          currentPrice={selectedToken ? currentPrice : null}
           entryTime={selectedToken && entryInRange ? entryTime : null}
           entryNote={selectedToken ? entryNote : null}
           entryColor={entryColor}

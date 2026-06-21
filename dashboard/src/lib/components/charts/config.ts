@@ -1785,6 +1785,12 @@ export type ChartInstance = {
   /** smart_wallets_table only: maximum funding PnL as a % of realized PnL.
    *  null = no ceiling. */
   swMaxFundingPct?: number | null;
+  /** smart_wallets_table only: minimum account age — days since the wallet's
+   *  first recorded trade. Default 0. */
+  swMinAccountDuration?: number;
+  /** smart_wallets_table only: minimum distinct tokens traded in the window
+   *  (tight vs wide scope). Default 0. */
+  swMinTokens?: number;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */

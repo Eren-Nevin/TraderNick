@@ -1127,6 +1127,11 @@
           typeof r.swMaxFeePct === 'number' ? r.swMaxFeePct : null;
         inst.swMaxFundingPct =
           typeof r.swMaxFundingPct === 'number' ? r.swMaxFundingPct : null;
+        inst.swMinAccountDuration =
+          typeof r.swMinAccountDuration === 'number' && r.swMinAccountDuration >= 0
+            ? Math.floor(r.swMinAccountDuration) : 0;
+        inst.swMinTokens =
+          typeof r.swMinTokens === 'number' && r.swMinTokens >= 0 ? Math.floor(r.swMinTokens) : 0;
       }
       // Compound overlays — preserved across reloads. Each entry is validated
       // through sanitizeOverlay() so a corrupt save can't strand the chart.

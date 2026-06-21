@@ -687,7 +687,8 @@
         instance.swMinDays ?? 3, instance.swMinVolume ?? 100000,
         instance.swMinRealized ?? 0, instance.swMinOi ?? 0,
         instance.swMinAvgTradeSize ?? 0, instance.swMinTakerPct ?? 0,
-        instance.swMaxFeePct ?? '', instance.swMaxFundingPct ?? ''
+        instance.swMaxFeePct ?? '', instance.swMaxFundingPct ?? '',
+        instance.swMinAccountDuration ?? 0, instance.swMinTokens ?? 0
       ].join('|');
     }
     if (instance.kind === 'token_leaderboard') {
@@ -1499,7 +1500,9 @@
           min_realized: String(instance.swMinRealized ?? 0),
           min_oi: String(Math.max(0, instance.swMinOi ?? 0)),
           min_avg_trade_size: String(Math.max(0, instance.swMinAvgTradeSize ?? 0)),
-          min_taker_pct: String(Math.max(0, instance.swMinTakerPct ?? 0))
+          min_taker_pct: String(Math.max(0, instance.swMinTakerPct ?? 0)),
+          min_account_duration: String(Math.max(0, instance.swMinAccountDuration ?? 0)),
+          min_tokens: String(Math.max(0, instance.swMinTokens ?? 0))
         });
         if (instance.swMaxFeePct != null) qs.set('max_fee_pct', String(instance.swMaxFeePct));
         if (instance.swMaxFundingPct != null) qs.set('max_funding_pct', String(instance.swMaxFundingPct));
@@ -6112,6 +6115,24 @@
           onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxFundingPct = Number.isFinite(v) ? v : null; }}
           title="Maximum funding PnL as a % of realized PnL (blank = no limit). Filters out carry-dominated wallets."
           class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min account age (d)</span>
+        <input
+          type="number" min="0" step="1"
+          value={instance.swMinAccountDuration ?? 0}
+          onchange={(e) => (instance.swMinAccountDuration = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))}
+          title="Minimum days since the wallet's first recorded trade"
+          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min tokens</span>
+        <input
+          type="number" min="0" step="1"
+          value={instance.swMinTokens ?? 0}
+          onchange={(e) => (instance.swMinTokens = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))}
+          title="Minimum number of distinct tokens traded in the window (tight vs wide scope)"
+          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
         />
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}

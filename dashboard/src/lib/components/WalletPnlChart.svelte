@@ -48,6 +48,9 @@
     onAxisWidth = undefined as ((w: number) => void) | undefined,
     // Selected token's entry price → horizontal line on the close (left) axis.
     entryPrice = null as number | null,
+    // Selected token's CURRENT (snapshot-day) close price → horizontal line on
+    // the close axis, like the entry line. null → skipped.
+    currentPrice = null as number | null,
     // Selected position's open time (unix s) → vertical marker. null → skipped.
     // Only set when the open date is inside the visible window; for earlier
     // opens the caller passes null and supplies `entryNote` instead.
@@ -76,7 +79,7 @@
     // When either is set the chart becomes interactive (cursor + selection).
     onPickDay = undefined as ((unix: number) => void) | undefined,
     onPickRange = undefined as ((startUnix: number, endUnix: number) => void) | undefined
-  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean; bandFrom?: number | null; bandTo?: number | null; trades?: Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string; tokens?: Array<{ token: string; label: string; price: string }> }>; rangeMode?: boolean; valueHeader?: string } = $props();
+  }: { data?: Point[]; height?: number; cutoff?: number | null; lookbackStart?: number | null; closeData?: Point[]; label?: string; rangeFrom?: number | null; rangeTo?: number | null; onAxisWidth?: (w: number) => void; entryPrice?: number | null; currentPrice?: number | null; entryTime?: number | null; entryNote?: string | null; entryColor?: string; onPickDay?: (unix: number) => void; onPickRange?: (startUnix: number, endUnix: number) => void; loading?: boolean; bandFrom?: number | null; bandTo?: number | null; trades?: Array<{ time: number; value: number; side: 'buy' | 'sell'; text: string; tokens?: Array<{ token: string; label: string; price: string }> }>; rangeMode?: boolean; valueHeader?: string } = $props();
 
   // Cutoff = amber (as-of day); lookback start = thinner sky-blue; entry =
   // emerald (the day the selected position was first opened).
@@ -455,6 +458,7 @@
   // when there's none — never left empty/hidden (which corrupts the time
   // scale → black chart on deselect). The entry line lives on the close series.
   let entryLine: IPriceLine | null = null;
+  let nowLine: IPriceLine | null = null;
   $effect(() => {
     if (!chart) return;
     const seen = new Set<number>();
@@ -464,8 +468,9 @@
       .sort((a, b) => (a.time as number) - (b.time as number))
       .filter((d) => (seen.has(d.time as number) ? false : (seen.add(d.time as number), true)));
     try {
-      // Drop the existing entry line first (it lives on the close series).
+      // Drop existing price lines first (they live on the close series).
       if (entryLine && closeSeries) { closeSeries.removePriceLine(entryLine); entryLine = null; }
+      if (nowLine && closeSeries) { closeSeries.removePriceLine(nowLine); nowLine = null; }
       if (cpts.length === 0) {
         // No token: remove the series entirely (don't leave it empty).
         if (closeSeries) { chart.removeSeries(closeSeries); closeSeries = null; }
@@ -495,6 +500,18 @@
           lineWidth: 1,
           axisLabelVisible: true,
           title: 'entry'
+        });
+      }
+      // Current (snapshot-day) close price — a teal line, distinct from the
+      // green/red entry line and the blue close curve.
+      if (currentPrice != null && Number.isFinite(currentPrice)) {
+        nowLine = closeSeries.createPriceLine({
+          price: currentPrice,
+          color: '#2dd4bf',
+          lineStyle: LineStyle.Dashed,
+          lineWidth: 1,
+          axisLabelVisible: true,
+          title: 'now'
         });
       }
     } catch (err) {
