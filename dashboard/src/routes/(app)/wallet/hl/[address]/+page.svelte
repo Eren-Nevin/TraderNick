@@ -81,6 +81,7 @@
   let tradeStats = $state<{
     avg_trade_size: number; taker_pct: number;
     fee_pct: number | null; funding_pct: number | null;
+    tokens?: Array<{ token: string; volume: number; pct: number }>;
   } | null>(null);
 
   let copied = $state(false);
@@ -687,6 +688,21 @@
       {@render card('Fee / PnL %', tradeStats && tradeStats.fee_pct != null ? tradeStats.fee_pct.toFixed(1) + '%' : '—', 'text-zinc-300', 'since 01-01')}
       {@render card('Funding / PnL %', tradeStats && tradeStats.funding_pct != null ? tradeStats.funding_pct.toFixed(1) + '%' : '—', 'text-zinc-300', 'since 01-01')}
     </div>
+    <!-- Token mix: traded-volume share per token (since 01-01); tokens under
+         0.1% are folded into "Other". TODO: swap token name for token icon. -->
+    {#if tradeStats?.tokens?.length}
+      <div class="rounded-lg bg-zinc-900/70 border border-zinc-800 px-3 py-2">
+        <div class="text-zinc-500 text-xs uppercase tracking-wide mb-1.5">Traded tokens · volume share <span class="text-zinc-600 normal-case">(since 01-01)</span></div>
+        <div class="flex flex-wrap gap-1.5">
+          {#each tradeStats.tokens as t (t.token)}
+            <span class="inline-flex items-center gap-1.5 text-xs px-2 py-1 rounded-md border bg-zinc-950 {t.token === 'Other' ? 'border-zinc-800 text-zinc-500' : 'border-zinc-700 text-zinc-200'}">
+              <span class="font-mono">{t.token}</span>
+              <span class="tabular-nums {t.token === 'Other' ? 'text-zinc-500' : 'text-zinc-400'}">{t.pct.toFixed(1)}%</span>
+            </span>
+          {/each}
+        </div>
+      </div>
+    {/if}
   </div>
 
   <!-- Range stat row: relative deltas + volume/sharpe over [start, end] -->

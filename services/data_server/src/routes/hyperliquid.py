@@ -1602,6 +1602,36 @@ async def wallet_trade_stats(request):
     r = rows.result_rows[0] if rows.result_rows else (0, 0, 0, 0, 0, 0, 0)
     volume, trades, realized, fees, taker_vol, total_vol, funding = (float(x or 0) for x in r)
     trades = int(trades)
+
+    # Per-token traded volume (from the per-day fills-volume rollup), for the
+    # token-mix breakdown. Tokens under 0.1% of the total fold into "Other".
+    tok_rows = await ch.query(
+        """
+        SELECT token, sumMerge(vol_usd_state) AS vol
+        FROM tradernick.hl_fills_vol_daily
+        WHERE wallet = {wallet:String}
+          AND day >= toDate({since:DateTime}) AND day <= toDate({until:DateTime})
+        GROUP BY token HAVING vol > 0
+        ORDER BY vol DESC
+        """,
+        parameters={"wallet": wallet, "since": since_dt, "until": until_dt},
+    )
+    tok_total = sum(float(t[1]) for t in tok_rows.result_rows)
+    tokens: list[dict] = []
+    other_vol = 0.0
+    for t in tok_rows.result_rows:
+        v = float(t[1])
+        pct = (100.0 * v / tok_total) if tok_total else 0.0
+        if pct < 0.1:
+            other_vol += v
+        else:
+            tokens.append({"token": t[0], "volume": v, "pct": pct})
+    if other_vol > 0:
+        tokens.append({
+            "token": "Other", "volume": other_vol,
+            "pct": (100.0 * other_vol / tok_total) if tok_total else 0.0,
+        })
+
     return response.json({
         "wallet": wallet,
         "volume": volume,
@@ -1615,6 +1645,7 @@ async def wallet_trade_stats(request):
         "taker_pct": (100.0 * taker_vol / total_vol) if total_vol else 0.0,
         "fee_pct": (100.0 * fees / realized) if realized else None,
         "funding_pct": (100.0 * funding / realized) if realized else None,
+        "tokens": tokens,
     })
 
 
