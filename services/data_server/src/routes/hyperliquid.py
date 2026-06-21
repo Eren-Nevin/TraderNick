@@ -1780,9 +1780,20 @@ async def wallet_trade_stats(request):
 @bp.get("/hyperliquid/wallet_token_last_day")
 @throttled("light")
 async def wallet_token_last_day(request):
-    """The most recent day a wallet held an open position in a token, from
-    hl_position_history (amount != 0). Lets the wallet page jump to the last
-    snapshot that showed a given token. Returns { day: ISO | null }.
+    """The most recent day whose END-OF-DAY snapshot still held the token — i.e.
+    the last day /wallet_positions actually SHOWS it. Matching that is important:
+    a position closed mid-day is non-zero earlier in the day but zero at the
+    day's last snapshot (which wallet_positions reads), so keying off the last
+    non-zero time would jump to a day that no longer shows the token.
+
+    Performance note: hl_position_history is ORDER BY (token, time, side,
+    wallet), so a wallet-only filter over all history can't use the primary
+    index and full-scans every partition (~8-10s). We avoid that by mirroring
+    /wallet_positions' trick — only ever scan the wallet within a *narrow*
+    (≤2-day) time window, which prunes to one partition + a tight time range
+    (~0.1s). Candidate days come cheaply from the token (token-indexed), then
+    we check each, most-recent first, until one still holds the token at the
+    wallet's end-of-day snapshot.
 
     Query params: wallet, token (both required).
     """
@@ -1792,21 +1803,60 @@ async def wallet_token_last_day(request):
         return response.json({"error": "missing wallet/token"}, status=400)
     wallet = wallet.lower()
     ch = await client()
-    # token-leading sort key → fast token prune.
-    rows = await ch.query(
+
+    # Step 1 — candidate days (newest first). Source these from the small,
+    # day-partitioned eod_wallet rollup (one row per day/wallet/token) rather
+    # than the raw snapshot table: filtering raw by (token, wallet) without a
+    # time bound full-scans every snapshot of a popular token across ALL
+    # wallets (~3s for BTC), whereas the rollup seeks per-day partitions in
+    # ~0.04s. The rollup has a mid-day-close blind spot (it can list a day the
+    # token closed before end-of-day), but that only over-produces candidates —
+    # the authoritative narrow check below rejects them.
+    cand = await ch.query(
         """
-        SELECT toDate(max(time)) AS d
-        FROM tradernick.hl_position_history
-        WHERE token = {token:String} AND wallet = {wallet:String} AND amount != 0
+        SELECT day AS d
+        FROM tradernick.hl_position_history_eod_wallet
+        WHERE wallet = {wallet:String} AND token = {token:String}
+        GROUP BY day
+        ORDER BY day DESC
         """,
         parameters={"wallet": wallet, "token": token},
     )
+    cand_days = [r[0] for r in (cand.result_rows if cand else [])]
+
+    # Step 2 — for each candidate day (newest first), confirm the token was
+    # still in the WALLET's day-last snapshot (what /wallet_positions reads):
+    # find the wallet's max snapshot time in a 2-day window ending at the next
+    # midnight, then check the token's summed |amount| at exactly that time.
+    # A position closed mid-day drops off the grid before the day's final
+    # snapshot, so this correctly skips it. Loop is capped so a pathological
+    # wallet (token closed mid-day every day) can't run unbounded; the common
+    # case resolves on the first check.
     day = None
-    if rows and rows.result_rows and rows.result_rows[0][0] is not None:
-        d = rows.result_rows[0][0]
-        # toDate(max(...)) of no rows yields 1970-01-01; treat that as null.
-        if d.year > 1971:
+    for d in cand_days[:45]:
+        until = datetime(d.year, d.month, d.day) + timedelta(days=1)
+        chk = await ch.query(
+            """
+            WITH latest AS (
+                SELECT max(time) AS t
+                FROM tradernick.hl_position_history
+                WHERE wallet = {wallet:String}
+                  AND time < {until:DateTime}
+                  AND time >= {until:DateTime} - INTERVAL 2 DAY
+            )
+            SELECT sum(abs(amount)) AS amt
+            FROM tradernick.hl_position_history
+            WHERE token = {token:String} AND wallet = {wallet:String}
+              AND time = (SELECT t FROM latest)
+              AND time >= {until:DateTime} - INTERVAL 2 DAY
+            """,
+            parameters={"wallet": wallet, "token": token, "until": until},
+        )
+        amt = chk.result_rows[0][0] if (chk and chk.result_rows) else None
+        if amt and amt != 0:
             day = d.isoformat()
+            break
+
     return response.json({"wallet": wallet, "token": token, "day": day})
 
 
