@@ -460,11 +460,14 @@ async def smart_wallet_metrics(request):
     hl_position_history_oi_wallet_daily / Table B); token scope reads the
     source tables.
 
-    metric=sharpe is a SIMPLE (not annualized, not capital-normalized) Sharpe:
-    mean(daily_total_pnl) / stddevPop(daily_total_pnl) over the wallet's
-    *active* (trade) days in the window, where
-    daily_total_pnl[d] = Δrealized[d] + Δunrealized[d] (mark-to-market). This is
-    the same daily series the smart-money Sharpe uses, minus the /OI and ×√365.
+    metric=sharpe is an ANNUALIZED (×√365), non-capital-normalized Sharpe:
+    mean(daily_total_pnl) / stddevPop(daily_total_pnl) × √365 over ALL days in
+    the window (including idle, non-trade days — an idle day's daily_total is its
+    mark-to-market unrealized change), where
+    daily_total_pnl[d] = Δrealized[d] + Δunrealized[d]. Counting all days avoids
+    flattering wallets that look great on their few trade days but bleed on the
+    days in between. `min_days` is still a minimum on ACTIVE (trade) days. Minus
+    the /OI normalization vs the smart-money Sharpe.
 
     A wallet only enters the ranking if it has >= min_days active days AND >=
     min_volume window volume (the noise guard — both configurable). Top `limit`
@@ -512,6 +515,25 @@ async def smart_wallet_metrics(request):
         min_oi = float(request.args.get("min_oi", "0"))
     except ValueError:
         min_oi = 0.0
+    # Execution-quality filters. min_* default to 0 (no floor); max_* default to
+    # a huge number (no ceiling). fee%/funding% are ratios to GROSS realized.
+    NO_MAX = 1e12
+    try:
+        min_avg_trade_size = float(request.args.get("min_avg_trade_size", "0"))
+    except ValueError:
+        min_avg_trade_size = 0.0
+    try:
+        min_taker_pct = float(request.args.get("min_taker_pct", "0"))
+    except ValueError:
+        min_taker_pct = 0.0
+    try:
+        max_fee_pct = float(request.args.get("max_fee_pct", str(NO_MAX)))
+    except ValueError:
+        max_fee_pct = NO_MAX
+    try:
+        max_funding_pct = float(request.args.get("max_funding_pct", str(NO_MAX)))
+    except ValueError:
+        max_funding_pct = NO_MAX
 
     snap_arg = request.args.get("snapshot")
     if snap_arg:
@@ -530,19 +552,43 @@ async def smart_wallet_metrics(request):
         "until": e_dt, "end_day": end_day, "start_day": start_day,
         "min_days": min_days, "min_volume": min_volume,
         "min_realized": min_realized, "min_oi": min_oi, "limit": limit,
+        "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
+        "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
     }
+    # Execution-quality CTEs (same for both scopes; token-scoped variant adds the
+    # token filter). taker = taker fill volume / total fill volume; funding =
+    # net funding PnL (positive = received). Window = (start_day, end_day].
+    tok_pred = "AND token = {token:String}" if token else ""
+    taker_agg = f"""
+        taker_agg AS (
+            SELECT wallet,
+                sumMerge(taker_buy_vol_usd_state) + sumMerge(taker_sell_vol_usd_state) AS taker_vol,
+                sumMerge(vol_usd_state) AS total_vol
+            FROM tradernick.hl_fills_vol_daily
+            WHERE day > {{start_day:Date}} AND day <= {{end_day:Date}} {tok_pred}
+            GROUP BY wallet
+        )"""
+    funding_agg = f"""
+        funding_agg AS (
+            SELECT wallet, sumMerge(funding_pnl_state) AS funding
+            FROM tradernick.hl_funding_daily
+            WHERE day > {{start_day:Date}} AND day <= {{end_day:Date}} {tok_pred}
+            GROUP BY wallet
+        )"""
 
     if token is None:
         # ── GLOBAL: fast per-(day,wallet) rollups (HIP3 already excluded in A/B).
         win_cte = """
         ta_e AS (
-            SELECT wallet, sumMerge(volume_state) AS volume, sumMerge(pnl_state) AS realized
+            SELECT wallet, sumMerge(volume_state) AS volume, sumMerge(pnl_state) AS realized,
+                   sumMerge(trade_count_state) AS trades, sumMerge(fees_state) AS fees
             FROM tradernick.hl_trade_history_wallet_daily
             WHERE day = (SELECT max(day) FROM tradernick.hl_trade_history_wallet_daily WHERE day <= {end_day:Date})
             GROUP BY wallet
         ),
         ta_s AS (
-            SELECT wallet, sumMerge(volume_state) AS volume, sumMerge(pnl_state) AS realized
+            SELECT wallet, sumMerge(volume_state) AS volume, sumMerge(pnl_state) AS realized,
+                   sumMerge(trade_count_state) AS trades, sumMerge(fees_state) AS fees
             FROM tradernick.hl_trade_history_wallet_daily
             WHERE day = (SELECT max(day) FROM tradernick.hl_trade_history_wallet_daily WHERE day <= {start_day:Date})
             GROUP BY wallet
@@ -550,7 +596,9 @@ async def smart_wallet_metrics(request):
         win AS (
             SELECT e.wallet AS wallet,
                 e.volume   - coalesce(s.volume, 0)   AS volume,
-                e.realized - coalesce(s.realized, 0) AS realized
+                e.realized - coalesce(s.realized, 0) AS realized,
+                e.trades   - coalesce(s.trades, 0)   AS trades,
+                e.fees     - coalesce(s.fees, 0)     AS fees
             FROM ta_e e LEFT JOIN ta_s s ON s.wallet = e.wallet
         )"""
         real_daily = """
@@ -604,7 +652,11 @@ async def smart_wallet_metrics(request):
                 argMaxIf(volume, time, toDate(time) <= {end_day:Date})
                   - argMaxIf(volume, time, toDate(time) <= {start_day:Date}) AS volume,
                 argMaxIf(pnl, time, toDate(time) <= {end_day:Date})
-                  - argMaxIf(pnl, time, toDate(time) <= {start_day:Date})    AS realized
+                  - argMaxIf(pnl, time, toDate(time) <= {start_day:Date})    AS realized,
+                argMaxIf(trade_count, time, toDate(time) <= {end_day:Date})
+                  - argMaxIf(trade_count, time, toDate(time) <= {start_day:Date}) AS trades,
+                argMaxIf(fees, time, toDate(time) <= {end_day:Date})
+                  - argMaxIf(fees, time, toDate(time) <= {start_day:Date})   AS fees
             FROM tradernick.hl_trade_history FINAL
             WHERE token = {token:String} AND toDate(time) <= {end_day:Date}
             GROUP BY wallet
@@ -684,24 +736,32 @@ async def smart_wallet_metrics(request):
                          ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
         ),
         daily_series AS (
+            -- ALL days in the window (not just trade days): an idle day still
+            -- has a daily_total = its mark-to-market unrealized change, so a
+            -- wallet bleeding on days it doesn't trade is reflected honestly.
+            -- d_tc is kept to count ACTIVE days for the min_days noise guard.
             SELECT rd.d AS d, rd.wallet AS wallet,
-                rd.d_real + coalesce(ed.d_un, 0) AS daily_total
+                rd.d_real + coalesce(ed.d_un, 0) AS daily_total,
+                rd.d_tc AS d_tc
             FROM real_delta rd
             LEFT JOIN eod_delta ed ON ed.wallet = rd.wallet AND ed.d = rd.d
-            WHERE rd.d > {{start_day:Date}} AND rd.d_tc > 0
+            WHERE rd.d > {{start_day:Date}}
         ),
         sharpe_agg AS (
+            -- Sharpe over ALL days; n_days = ACTIVE (trade) days for the guard.
             SELECT wallet,
-                count() AS n_days,
+                countIf(d_tc > 0)      AS n_days,
                 avg(daily_total)       AS mean_pnl,
                 stddevPop(daily_total) AS sd_pnl,
-                if(count() >= {{min_days:UInt32}} AND stddevPop(daily_total) > 0,
-                   avg(daily_total) / stddevPop(daily_total), 0) AS sharpe
+                if(countIf(d_tc > 0) >= {{min_days:UInt32}} AND stddevPop(daily_total) > 0,
+                   avg(daily_total) / stddevPop(daily_total) * sqrt(365), 0) AS sharpe
             FROM daily_series
             GROUP BY wallet
         ),
         {unreal_now},
-        {oi_now}
+        {oi_now},
+        {taker_agg},
+        {funding_agg}
         SELECT
             w.wallet AS wallet,
             w.volume AS volume,
@@ -711,15 +771,25 @@ async def smart_wallet_metrics(request):
             coalesce(oi.oi_usd, 0) AS oi_usd,
             coalesce(sa.sharpe, 0) AS metric,
             coalesce(sa.n_days, 0) AS n_days,
+            w.volume / nullIf(w.trades, 0) AS avg_trade_size,
+            100 * coalesce(tk.taker_vol, 0) / nullIf(tk.total_vol, 0) AS taker_pct,
+            100 * w.fees / nullIf(w.realized, 0) AS fee_pct,
+            100 * coalesce(fn.funding, 0) / nullIf(w.realized, 0) AS funding_pct,
             dictGet('tradernick.wallet_labels', 'categories', lower(w.wallet)) AS categories
         FROM win w
         LEFT JOIN sharpe_agg sa ON sa.wallet = w.wallet
         LEFT JOIN unreal_now u  ON u.wallet = w.wallet
         LEFT JOIN oi_now oi     ON oi.wallet = w.wallet
+        LEFT JOIN taker_agg tk  ON tk.wallet = w.wallet
+        LEFT JOIN funding_agg fn ON fn.wallet = w.wallet
         WHERE w.volume >= {{min_volume:Float64}}
           AND w.realized >= {{min_realized:Float64}}
           AND coalesce(oi.oi_usd, 0) >= {{min_oi:Float64}}
           AND coalesce(sa.n_days, 0) >= {{min_days:UInt32}}
+          AND coalesce(w.volume / nullIf(w.trades, 0), 0) >= {{min_avg_trade_size:Float64}}
+          AND coalesce(100 * tk.taker_vol / nullIf(tk.total_vol, 0), 0) >= {{min_taker_pct:Float64}}
+          AND (w.realized <= 0 OR 100 * w.fees / w.realized <= {{max_fee_pct:Float64}})
+          AND (w.realized <= 0 OR 100 * coalesce(fn.funding, 0) / w.realized <= {{max_funding_pct:Float64}})
         ORDER BY {ORDER_COLS[order_by]} DESC
         LIMIT {{limit:UInt32}}
     """
@@ -735,7 +805,11 @@ async def smart_wallet_metrics(request):
             "oi_usd": float(r[5]),
             "metric": float(r[6]),
             "n_days": int(r[7]),
-            "categories": list(r[8]) if r[8] else [],
+            "avg_trade_size": (float(r[8]) if r[8] is not None else None),
+            "taker_pct": (float(r[9]) if r[9] is not None else None),
+            "fee_pct": (float(r[10]) if r[10] is not None else None),
+            "funding_pct": (float(r[11]) if r[11] is not None else None),
+            "categories": list(r[12]) if r[12] else [],
         }
         for r in rows.result_rows
     ]
@@ -744,6 +818,8 @@ async def smart_wallet_metrics(request):
         "lookback": lookback, "snapshot": end_day.isoformat(),
         "limit": limit, "min_days": min_days, "min_volume": min_volume,
         "min_realized": min_realized, "min_oi": min_oi,
+        "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
+        "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
         "wallets": wallets,
     })
 
@@ -1030,7 +1106,7 @@ async def wallet_pnl(request):
 
         realized_pnl   — Σ realized over the window (= realized at last day)
         unrealized_pnl — latest EOD unrealized snapshot
-        sharpe         — mean / stddevPop of daily realized returns
+        sharpe         — mean / stddevPop of daily realized returns, ANNUALIZED (×√365)
         volatility     — stddevPop of daily realized returns ($)
 
     Query params:
@@ -1260,12 +1336,15 @@ async def wallet_pnl(request):
     # Sharpe / volatility from daily realized returns (population stddev to
     # match the smart_selector Sharpe definition). Volatility is reported as
     # a plain number — the daily-returns standard deviation — not a currency.
+    # Sharpe is ANNUALIZED (×√365, 24/7 crypto) so it matches the wallet page's
+    # annualized range-Sharpe and is comparable across windows.
+    ANNUALIZE = 365 ** 0.5
     n = len(daily_returns)
     if n > 0:
         mean = sum(daily_returns) / n
         var = sum((x - mean) ** 2 for x in daily_returns) / n
         vol = var ** 0.5
-        sharpe = mean / vol if vol > 0 else 0.0
+        sharpe = (mean / vol) * ANNUALIZE if vol > 0 else 0.0
     else:
         vol = 0.0
         sharpe = 0.0
@@ -1446,6 +1525,97 @@ async def wallet_transfers(request):
         for r in rows.result_rows
     ]
     return response.json({"wallet": wallet, "transfers": transfers})
+
+
+@bp.get("/hyperliquid/wallet_trade_stats")
+@throttled("light")
+async def wallet_trade_stats(request):
+    """Per-wallet execution-quality stats over a window (GLOBAL, all tokens):
+
+      avg_trade_size = volume / trade_count                        ($/trade)
+      taker_pct      = taker_volume / total_fill_volume × 100      (%)
+      fee_pct        = fees / realized_pnl × 100                   (%)
+      funding_pct    = funding_pnl / realized_pnl × 100            (%)
+
+    realized_pnl is GROSS (pnl, pre-fee); fees are the trading fees (a cost,
+    maker rebates → negative); funding_pnl is signed net (positive = received)
+    from hl_funding_daily (matches the smart-money funding share). volume/trades/
+    realized/fees come from the per-(day,wallet) trade-history rollup via
+    snapshot-diff (cumulative end − start); taker/total volume from the per-day
+    fills-volume rollup; funding from the per-day funding rollup.
+
+    Query params: wallet (required), since/until ISO (default until−180 / today).
+    """
+    wallet = request.args.get("wallet")
+    if not wallet:
+        return response.json({"error": "missing wallet"}, status=400)
+    wallet = wallet.lower()
+    until_arg = request.args.get("until")
+    since_arg = request.args.get("since")
+    try:
+        until_dt = (datetime.fromisoformat(until_arg).replace(tzinfo=None)
+                    if until_arg else datetime.utcnow())
+        since_dt = (datetime.fromisoformat(since_arg).replace(tzinfo=None)
+                    if since_arg else until_dt - timedelta(days=180))
+    except ValueError:
+        return response.json({"error": "invalid since/until; expected YYYY-MM-DD"}, status=400)
+    if since_dt > until_dt:
+        return response.json({"error": "since must be <= until"}, status=400)
+
+    sql = """
+        WITH
+        th_e AS (
+            SELECT sumMerge(pnl_state) AS pnl, sumMerge(fees_state) AS fees,
+                   sumMerge(volume_state) AS vol, sumMerge(trade_count_state) AS tc
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE wallet = {wallet:String}
+              AND day = (SELECT max(day) FROM tradernick.hl_trade_history_wallet_daily
+                         WHERE wallet = {wallet:String} AND day <= toDate({until:DateTime}))
+        ),
+        th_s AS (
+            SELECT sumMerge(pnl_state) AS pnl, sumMerge(fees_state) AS fees,
+                   sumMerge(volume_state) AS vol, sumMerge(trade_count_state) AS tc
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE wallet = {wallet:String}
+              AND day = (SELECT max(day) FROM tradernick.hl_trade_history_wallet_daily
+                         WHERE wallet = {wallet:String} AND day < toDate({since:DateTime}))
+        ),
+        taker AS (
+            SELECT sumMerge(taker_buy_vol_usd_state) + sumMerge(taker_sell_vol_usd_state) AS tk,
+                   sumMerge(vol_usd_state) AS tot
+            FROM tradernick.hl_fills_vol_daily
+            WHERE wallet = {wallet:String}
+              AND day >= toDate({since:DateTime}) AND day <= toDate({until:DateTime})
+        ),
+        fund AS (
+            SELECT sumMerge(funding_pnl_state) AS f
+            FROM tradernick.hl_funding_daily
+            WHERE wallet = {wallet:String}
+              AND day >= toDate({since:DateTime}) AND day <= toDate({until:DateTime})
+        )
+        SELECT th_e.vol - th_s.vol, th_e.tc - th_s.tc, th_e.pnl - th_s.pnl,
+               th_e.fees - th_s.fees, taker.tk, taker.tot, fund.f
+        FROM th_e, th_s, taker, fund
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters={"wallet": wallet, "since": since_dt, "until": until_dt})
+    r = rows.result_rows[0] if rows.result_rows else (0, 0, 0, 0, 0, 0, 0)
+    volume, trades, realized, fees, taker_vol, total_vol, funding = (float(x or 0) for x in r)
+    trades = int(trades)
+    return response.json({
+        "wallet": wallet,
+        "volume": volume,
+        "trades": trades,
+        "realized_pnl": realized,
+        "fees": fees,
+        "funding": funding,
+        "taker_vol": taker_vol,
+        "total_vol": total_vol,
+        "avg_trade_size": (volume / trades) if trades else 0.0,
+        "taker_pct": (100.0 * taker_vol / total_vol) if total_vol else 0.0,
+        "fee_pct": (100.0 * fees / realized) if realized else None,
+        "funding_pct": (100.0 * funding / realized) if realized else None,
+    })
 
 
 # ── Live positions from the official Hyperliquid clearinghouse ───────

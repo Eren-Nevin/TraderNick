@@ -685,7 +685,9 @@
         'smart_wallets_table', instance.swMetric ?? 'sharpe', instance.swLookback ?? 7,
         instance.swToken ?? '__all__', swSnapshotIso(),
         instance.swMinDays ?? 3, instance.swMinVolume ?? 100000,
-        instance.swMinRealized ?? 0, instance.swMinOi ?? 0
+        instance.swMinRealized ?? 0, instance.swMinOi ?? 0,
+        instance.swMinAvgTradeSize ?? 0, instance.swMinTakerPct ?? 0,
+        instance.swMaxFeePct ?? '', instance.swMaxFundingPct ?? ''
       ].join('|');
     }
     if (instance.kind === 'token_leaderboard') {
@@ -1495,8 +1497,12 @@
           min_days: String(Math.max(1, instance.swMinDays ?? 3)),
           min_volume: String(Math.max(0, instance.swMinVolume ?? 100000)),
           min_realized: String(instance.swMinRealized ?? 0),
-          min_oi: String(Math.max(0, instance.swMinOi ?? 0))
+          min_oi: String(Math.max(0, instance.swMinOi ?? 0)),
+          min_avg_trade_size: String(Math.max(0, instance.swMinAvgTradeSize ?? 0)),
+          min_taker_pct: String(Math.max(0, instance.swMinTakerPct ?? 0))
         });
+        if (instance.swMaxFeePct != null) qs.set('max_fee_pct', String(instance.swMaxFeePct));
+        if (instance.swMaxFundingPct != null) qs.set('max_funding_pct', String(instance.swMaxFundingPct));
         if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
         const res = await queuedFetch(`/api/hyperliquid/smart_wallet_metrics?${qs}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
@@ -6068,6 +6074,44 @@
           onchange={(e) => (instance.swMinOi = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
           title="Minimum open interest (USD), as of the snapshot, for a wallet to be ranked"
           class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min avg trade ($)</span>
+        <input
+          type="number" min="0" step="50"
+          value={instance.swMinAvgTradeSize ?? 0}
+          onchange={(e) => (instance.swMinAvgTradeSize = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+          title="Minimum average trade size (volume ÷ trades, USD)"
+          class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min taker %</span>
+        <input
+          type="number" min="0" max="100" step="5"
+          value={instance.swMinTakerPct ?? 0}
+          onchange={(e) => (instance.swMinTakerPct = Math.min(100, Math.max(0, parseFloat(e.currentTarget.value) || 0)))}
+          title="Minimum taker fill percentage (taker volume ÷ total fill volume)"
+          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Max fee/PnL %</span>
+        <input
+          type="number" step="5"
+          value={instance.swMaxFeePct ?? ''}
+          placeholder="∞"
+          onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxFeePct = Number.isFinite(v) ? v : null; }}
+          title="Maximum fees as a % of realized PnL (blank = no limit). Only applies to profitable wallets."
+          class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Max funding/PnL %</span>
+        <input
+          type="number" step="5"
+          value={instance.swMaxFundingPct ?? ''}
+          placeholder="∞"
+          onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxFundingPct = Number.isFinite(v) ? v : null; }}
+          title="Maximum funding PnL as a % of realized PnL (blank = no limit). Filters out carry-dominated wallets."
+          class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
         />
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}

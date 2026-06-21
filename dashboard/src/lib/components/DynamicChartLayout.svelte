@@ -1119,6 +1119,14 @@
           typeof r.swMinRealized === 'number' ? r.swMinRealized : 0;
         inst.swMinOi =
           typeof r.swMinOi === 'number' && r.swMinOi >= 0 ? r.swMinOi : 0;
+        inst.swMinAvgTradeSize =
+          typeof r.swMinAvgTradeSize === 'number' && r.swMinAvgTradeSize >= 0 ? r.swMinAvgTradeSize : 0;
+        inst.swMinTakerPct =
+          typeof r.swMinTakerPct === 'number' && r.swMinTakerPct >= 0 ? r.swMinTakerPct : 0;
+        inst.swMaxFeePct =
+          typeof r.swMaxFeePct === 'number' ? r.swMaxFeePct : null;
+        inst.swMaxFundingPct =
+          typeof r.swMaxFundingPct === 'number' ? r.swMaxFundingPct : null;
       }
       // Compound overlays — preserved across reloads. Each entry is validated
       // through sanitizeOverlay() so a corrupt save can't strand the chart.

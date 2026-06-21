@@ -539,7 +539,7 @@
                               </div>
                             </div>
                             <div class="rounded bg-zinc-900/70 px-2 py-1.5">
-                              <div class="text-zinc-500 text-[11px] uppercase tracking-wide">Sharpe</div>
+                              <div class="text-zinc-500 text-[11px] uppercase tracking-wide">Sharpe (ann.)</div>
                               <div class="text-zinc-200">{pnlStats.sharpe.toFixed(2)}</div>
                             </div>
                             <div class="rounded bg-zinc-900/70 px-2 py-1.5">

@@ -1496,9 +1496,11 @@ export type SmartWalletMetricDef = {
 export const SMART_WALLET_METRICS: ReadonlyArray<SmartWalletMetricDef> = [
   {
     key: 'sharpe',
-    label: 'Sharpe',
-    desc: 'mean(daily total PnL) / std(daily total PnL) over active days in the window. '
-      + 'Daily total PnL = Δrealized + Δunrealized. Not annualized, not capital-normalized.',
+    label: 'Sharpe (ann.)',
+    desc: 'mean(daily total PnL) / std(daily total PnL) × √365 over ALL days in the window '
+      + '(idle days count — their PnL is the mark-to-market change). '
+      + 'Daily total PnL = Δrealized + Δunrealized. Annualized, not capital-normalized. '
+      + 'min_days is a guard on active (trade) days.',
     format: 'ratio'
   }
 ];
@@ -1771,6 +1773,18 @@ export type ChartInstance = {
   /** smart_wallets_table only: minimum open interest (USD, as of the snapshot)
    *  for a wallet to enter the ranking. Configurable; default 0. */
   swMinOi?: number;
+  /** smart_wallets_table only: minimum average trade size (volume ÷ trades,
+   *  USD). Default 0 (no floor). */
+  swMinAvgTradeSize?: number;
+  /** smart_wallets_table only: minimum taker fill % (taker volume ÷ total fill
+   *  volume). Default 0 (no floor). */
+  swMinTakerPct?: number;
+  /** smart_wallets_table only: maximum fees as a % of realized PnL. null = no
+   *  ceiling. */
+  swMaxFeePct?: number | null;
+  /** smart_wallets_table only: maximum funding PnL as a % of realized PnL.
+   *  null = no ceiling. */
+  swMaxFundingPct?: number | null;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */

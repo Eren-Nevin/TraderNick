@@ -76,6 +76,13 @@
   let transfersLoading = $state(false);
   let transfersError = $state<string | null>(null);
 
+  // Execution-quality stats over the window (taker %, fee/PnL %, funding/PnL %),
+  // snapshot-independent.
+  let tradeStats = $state<{
+    avg_trade_size: number; taker_pct: number;
+    fee_pct: number | null; funding_pct: number | null;
+  } | null>(null);
+
   let copied = $state(false);
   // Pin menu (group checkboxes) open state. Reflect pinned groups in the button.
   let pinMenuOpen = $state(false);
@@ -441,6 +448,23 @@
     loadTransfers();
   });
 
+  // Execution-quality stats over the full window [floor, today].
+  async function loadTradeStats() {
+    try {
+      const since = backToIso(MAX_BACK);
+      const until = backToIso(0);
+      const res = await fetch(`/api/hyperliquid/wallet_trade_stats?wallet=${address}&since=${since}&until=${until}`);
+      if (!res.ok) throw new Error(`trade_stats ${res.status}`);
+      tradeStats = await res.json();
+    } catch {
+      tradeStats = null;
+    }
+  }
+  $effect(() => {
+    address;
+    loadTradeStats();
+  });
+
   // Positions refetch when the snapshot day changes — debounced so dragging
   // the slider doesn't fire a request (incl. the live API) per integer step.
   let posTimer: ReturnType<typeof setTimeout> | undefined;
@@ -643,7 +667,7 @@
       {@render card('Realized PnL', fmtUsd(realizedAsOf), pnlClass(realizedAsOf))}
       {@render card('Unrealized PnL', fmtUsd(unrealAsOf), pnlClass(unrealAsOf))}
       {@render card('Total PnL', fmtUsd(totalAsOf), pnlClass(totalAsOf))}
-      {@render card('Sharpe', pnlStats ? pnlStats.sharpe.toFixed(2) : '—', 'text-zinc-300', 'window')}
+      {@render card('Sharpe (ann.)', pnlStats ? pnlStats.sharpe.toFixed(2) : '—', 'text-zinc-300', 'window')}
     </div>
     <!-- Row 2: OI, Positions, Account Value -->
     <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -656,6 +680,12 @@
       {@render card('Volume', fmtUsd(volumeAsOf), 'text-zinc-200', 'since 01-01')}
       {@render card('Trades', tradesAsOf.toLocaleString('en-US'), 'text-zinc-200', 'since 01-01')}
       {@render card('Avg Trade Value', fmtUsd(avgTradeAsOf), 'text-zinc-200', 'per trade')}
+    </div>
+    <!-- Row 4: execution-quality (taker %, fee/PnL %, funding/PnL %); full window -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      {@render card('Taker %', tradeStats ? tradeStats.taker_pct.toFixed(1) + '%' : '—', 'text-zinc-200', 'by volume')}
+      {@render card('Fee / PnL %', tradeStats && tradeStats.fee_pct != null ? tradeStats.fee_pct.toFixed(1) + '%' : '—', 'text-zinc-300', 'since 01-01')}
+      {@render card('Funding / PnL %', tradeStats && tradeStats.funding_pct != null ? tradeStats.funding_pct.toFixed(1) + '%' : '—', 'text-zinc-300', 'since 01-01')}
     </div>
   </div>
 
@@ -730,7 +760,7 @@
         </span>
       {/if}
       {#if pnlStats}
-        <span class="text-xs text-zinc-500 {selectedToken ? '' : 'ml-auto'}">σ {pnlStats.volatility.toFixed(0)} · Sharpe {pnlStats.sharpe.toFixed(2)}</span>
+        <span class="text-xs text-zinc-500 {selectedToken ? '' : 'ml-auto'}">σ {pnlStats.volatility.toFixed(0)} · Sharpe(ann.) {pnlStats.sharpe.toFixed(2)}</span>
       {/if}
     </div>
     <div class="px-2 pt-2">
