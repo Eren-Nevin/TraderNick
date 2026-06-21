@@ -1777,6 +1777,39 @@ async def wallet_trade_stats(request):
     })
 
 
+@bp.get("/hyperliquid/wallet_token_last_day")
+@throttled("light")
+async def wallet_token_last_day(request):
+    """The most recent day a wallet held an open position in a token, from
+    hl_position_history (amount != 0). Lets the wallet page jump to the last
+    snapshot that showed a given token. Returns { day: ISO | null }.
+
+    Query params: wallet, token (both required).
+    """
+    wallet = request.args.get("wallet")
+    token = request.args.get("token")
+    if not wallet or not token:
+        return response.json({"error": "missing wallet/token"}, status=400)
+    wallet = wallet.lower()
+    ch = await client()
+    # token-leading sort key → fast token prune.
+    rows = await ch.query(
+        """
+        SELECT toDate(max(time)) AS d
+        FROM tradernick.hl_position_history
+        WHERE token = {token:String} AND wallet = {wallet:String} AND amount != 0
+        """,
+        parameters={"wallet": wallet, "token": token},
+    )
+    day = None
+    if rows and rows.result_rows and rows.result_rows[0][0] is not None:
+        d = rows.result_rows[0][0]
+        # toDate(max(...)) of no rows yields 1970-01-01; treat that as null.
+        if d.year > 1971:
+            day = d.isoformat()
+    return response.json({"wallet": wallet, "token": token, "day": day})
+
+
 # ── Live positions from the official Hyperliquid clearinghouse ───────
 # Ground-truth check: our hl_position_history is sourced from DeFiStream and
 # is, by design, snapshotted on a grid (and only for the INGEST_TOKENS roster)

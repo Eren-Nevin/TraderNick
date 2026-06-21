@@ -663,6 +663,22 @@
     sliderPos = posForIso(isoFromUnix(endUnix));
     rangeMode = true;
   }
+  // Click a token chip → jump to the last snapshot that held it + select it.
+  async function jumpToToken(token: string) {
+    try {
+      const res = await fetch(
+        `/api/hyperliquid/wallet_token_last_day?wallet=${address}&token=${encodeURIComponent(token)}`
+      );
+      const body = res.ok ? await res.json() : null;
+      if (body?.day) {
+        rangeMode = false;
+        sliderPos = posForIso(body.day);
+      }
+    } catch {
+      /* ignore — still select the token for the overlay */
+    }
+    selectedToken = token;
+  }
 </script>
 
 <div class="px-8 py-6 space-y-6">
@@ -766,15 +782,29 @@
         </div>
         <div class="flex flex-wrap gap-1.5">
           {#each tokenView as t (t.token)}
-            <span class="inline-flex flex-col items-start gap-0.5 text-xs px-2 py-1 rounded-md border bg-zinc-950 {t.token === 'Other' ? 'border-zinc-800' : 'border-zinc-700'}">
-              <span class="flex items-center gap-1.5">
-                <span class="font-mono {t.token === 'Other' ? 'text-zinc-500' : 'text-zinc-200'}">{t.token}</span>
-                <span class="tabular-nums text-zinc-400">{t.share.toFixed(1)}%</span>
+            {#if t.token === 'Other'}
+              <span class="inline-flex flex-col items-start gap-0.5 text-xs px-2 py-1 rounded-md border bg-zinc-950 border-zinc-800">
+                <span class="flex items-center gap-1.5">
+                  <span class="font-mono text-zinc-500">{t.token}</span>
+                  <span class="tabular-nums text-zinc-400">{t.share.toFixed(1)}%</span>
+                </span>
+                <span class="tabular-nums text-[11px] {t.pnl > 0 ? 'text-emerald-400' : t.pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">
+                  {fmtUsd(t.pnl)}{#if tokenMetric === 'volume'}<span class="text-zinc-500"> ({t.pnlPct.toFixed(1)}%)</span>{/if}
+                </span>
               </span>
-              <span class="tabular-nums text-[11px] {t.pnl > 0 ? 'text-emerald-400' : t.pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">
-                {fmtUsd(t.pnl)}{#if tokenMetric === 'volume'}<span class="text-zinc-500"> ({t.pnlPct.toFixed(1)}%)</span>{/if}
-              </span>
-            </span>
+            {:else}
+              <button type="button" onclick={() => jumpToToken(t.token)}
+                title="Jump to the last snapshot holding {t.token} and select it"
+                class="inline-flex flex-col items-start gap-0.5 text-xs px-2 py-1 rounded-md border bg-zinc-950 cursor-pointer transition-colors hover:border-blue-500 hover:bg-zinc-900 {selectedToken === t.token ? 'border-blue-500' : 'border-zinc-700'}">
+                <span class="flex items-center gap-1.5">
+                  <span class="font-mono text-zinc-200">{t.token}</span>
+                  <span class="tabular-nums text-zinc-400">{t.share.toFixed(1)}%</span>
+                </span>
+                <span class="tabular-nums text-[11px] {t.pnl > 0 ? 'text-emerald-400' : t.pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">
+                  {fmtUsd(t.pnl)}{#if tokenMetric === 'volume'}<span class="text-zinc-500"> ({t.pnlPct.toFixed(1)}%)</span>{/if}
+                </span>
+              </button>
+            {/if}
           {/each}
         </div>
       </div>
