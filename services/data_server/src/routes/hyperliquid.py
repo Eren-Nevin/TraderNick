@@ -1414,6 +1414,40 @@ async def wallet_trades(request):
     return response.json({"wallet": wallet, "token": token, "series": series})
 
 
+@bp.get("/hyperliquid/wallet_transfers")
+@throttled("light")
+async def wallet_transfers(request):
+    """All bridge transfers (deposits / withdrawals) for a wallet, newest
+    first — independent of any snapshot day.
+
+    hl_transfers is a ReplacingMergeTree; read FINAL so re-ingested duplicate
+    (direction, time, wallet) rows collapse. Capped at the 1000 most recent
+    (a few high-frequency wallets have tens of thousands).
+
+    Query params:
+      wallet — required (0x…; lowercased to match the table).
+    Returns { wallet, transfers:[{time (epoch s), direction, amount}] }.
+    """
+    wallet = request.args.get("wallet")
+    if not wallet:
+        return response.json({"error": "missing wallet"}, status=400)
+    wallet = wallet.lower()
+    sql = """
+        SELECT toUnixTimestamp(time) AS ts, direction, amount
+        FROM tradernick.hl_transfers FINAL
+        WHERE wallet = {wallet:String}
+        ORDER BY time DESC
+        LIMIT 1000
+    """
+    ch = await client()
+    rows = await ch.query(sql, parameters={"wallet": wallet})
+    transfers = [
+        {"time": int(r[0]), "direction": r[1], "amount": float(r[2])}
+        for r in rows.result_rows
+    ]
+    return response.json({"wallet": wallet, "transfers": transfers})
+
+
 # ── Live positions from the official Hyperliquid clearinghouse ───────
 # Ground-truth check: our hl_position_history is sourced from DeFiStream and
 # is, by design, snapshotted on a grid (and only for the INGEST_TOKENS roster)

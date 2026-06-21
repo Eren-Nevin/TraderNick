@@ -10,6 +10,9 @@
   import WalletPositionsTable, {
     type PositionRow
   } from '$lib/components/WalletPositionsTable.svelte';
+  import WalletTransfersTable, {
+    type TransferRow
+  } from '$lib/components/WalletTransfersTable.svelte';
   import {
     DAY_SLIDER_MAX_BACK,
     DAY_SLIDER_FLOOR_ISO,
@@ -67,6 +70,11 @@
   let posLoading = $state(false);
   let posError = $state<string | null>(null);
   let accountValue = $state<number | null>(null);
+
+  // Transfers (deposits/withdrawals) — full history, snapshot-independent.
+  let transfers = $state<TransferRow[]>([]);
+  let transfersLoading = $state(false);
+  let transfersError = $state<string | null>(null);
 
   let copied = $state(false);
   // Pin menu (group checkboxes) open state. Reflect pinned groups in the button.
@@ -252,6 +260,8 @@
   // Cumulative within-window volume ($) + trade count as of the selected day.
   const volumeAsOf = $derived(asOf ? asOf.volume : 0);
   const tradesAsOf = $derived(asOf ? asOf.trades : 0);
+  // Average notional traded per trade over the window.
+  const avgTradeAsOf = $derived(tradesAsOf > 0 ? volumeAsOf / tradesAsOf : 0);
 
   // ── Range stats (only meaningful in range mode) ────────────────────
   // Relative deltas over [start, end] from the already-loaded daily curve:
@@ -406,6 +416,27 @@
   $effect(() => {
     address; // re-run if the route address ever changes
     loadPnl();
+  });
+
+  // Transfers load once per wallet (snapshot-independent full history).
+  async function loadTransfers() {
+    transfersLoading = true;
+    transfersError = null;
+    try {
+      const res = await fetch(`/api/hyperliquid/wallet_transfers?wallet=${address}`);
+      if (!res.ok) throw new Error(`transfers ${res.status}`);
+      const body = await res.json();
+      transfers = (body.transfers ?? []) as TransferRow[];
+    } catch (e) {
+      transfersError = (e as Error).message;
+      transfers = [];
+    } finally {
+      transfersLoading = false;
+    }
+  }
+  $effect(() => {
+    address;
+    loadTransfers();
   });
 
   // Positions refetch when the snapshot day changes — debounced so dragging
@@ -586,8 +617,8 @@
     </div>
   </div>
 
-  <!-- Stat cards (as of the selected day) -->
-  <div class="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-8 gap-2">
+  <!-- Stat cards (as of the selected day), in three rows. -->
+  <div class="space-y-2">
     {#snippet card(label: string, value: string, cls = 'text-zinc-200', sub = '')}
       <div class="rounded-lg bg-zinc-900/70 border border-zinc-800 px-3 py-2">
         <div class="text-zinc-500 text-xs uppercase tracking-wide">{label}</div>
@@ -595,18 +626,25 @@
         {#if sub}<div class="text-zinc-600 text-[11px]">{sub}</div>{/if}
       </div>
     {/snippet}
-    {@render card('Realized PnL', fmtUsd(realizedAsOf), pnlClass(realizedAsOf))}
-    {@render card('Unrealized PnL', fmtUsd(unrealAsOf), pnlClass(unrealAsOf))}
-    {@render card('Total PnL', fmtUsd(totalAsOf), pnlClass(totalAsOf))}
-    {@render card('Open Interest', fmtUsd(oiUsd))}
-    {@render card('Volume', fmtUsd(volumeAsOf), 'text-zinc-200', 'since 01-01')}
-    {@render card('Trades', tradesAsOf.toLocaleString('en-US'), 'text-zinc-200', 'since 01-01')}
-    {@render card('Positions', String(positions.length))}
-    {#if live && accountValue !== null}
-      {@render card('Account Value', fmtUsd(accountValue), 'text-zinc-200', 'only perp')}
-    {:else}
+    <!-- Row 1: PnLs + Sharpe -->
+    <div class="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      {@render card('Realized PnL', fmtUsd(realizedAsOf), pnlClass(realizedAsOf))}
+      {@render card('Unrealized PnL', fmtUsd(unrealAsOf), pnlClass(unrealAsOf))}
+      {@render card('Total PnL', fmtUsd(totalAsOf), pnlClass(totalAsOf))}
       {@render card('Sharpe', pnlStats ? pnlStats.sharpe.toFixed(2) : '—', 'text-zinc-300', 'window')}
-    {/if}
+    </div>
+    <!-- Row 2: OI, Positions, Account Value -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      {@render card('Open Interest', fmtUsd(oiUsd))}
+      {@render card('Positions', String(positions.length))}
+      {@render card('Account Value', fmtUsd(accountValue), 'text-zinc-200', 'only perp')}
+    </div>
+    <!-- Row 3: Volume, Trades, Avg trade value -->
+    <div class="grid grid-cols-2 sm:grid-cols-3 gap-2">
+      {@render card('Volume', fmtUsd(volumeAsOf), 'text-zinc-200', 'since 01-01')}
+      {@render card('Trades', tradesAsOf.toLocaleString('en-US'), 'text-zinc-200', 'since 01-01')}
+      {@render card('Avg Trade Value', fmtUsd(avgTradeAsOf), 'text-zinc-200', 'per trade')}
+    </div>
   </div>
 
   <!-- Range stat row: relative deltas + volume/sharpe over [start, end] -->
@@ -724,5 +762,10 @@
       {selectedToken}
       onToggleToken={(t) => (selectedToken = selectedToken === t ? null : t)}
     />
+  </div>
+
+  <!-- Transfers (deposits / withdrawals) — full history, snapshot-independent -->
+  <div class="h-[360px]">
+    <WalletTransfersTable transfers={transfers} loading={transfersLoading} error={transfersError} />
   </div>
 </div>
