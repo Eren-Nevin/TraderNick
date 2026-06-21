@@ -78,12 +78,17 @@
 
   // Execution-quality stats over the window (taker %, fee/PnL %, funding/PnL %),
   // snapshot-independent.
-  let tradeStats = $state<{
+  type TradeStats = {
     avg_trade_size: number; taker_pct: number; trades_per_day: number;
-    account_duration_days: number;
+    account_duration_days: number; win_rate: number | null;
     fee_pct: number | null; funding_pct: number | null;
-    tokens?: Array<{ token: string; volume: number; pct: number; pnl: number }>;
-  } | null>(null);
+    tokens?: Array<{ token: string; volume: number; pnl: number }>;
+  };
+  let tradeStats = $state<TradeStats | null>(null);
+  // Same stats recomputed over the selected range (range mode only).
+  let rangeTradeStats = $state<TradeStats | null>(null);
+  // Tokens row metric: distribute by traded Volume (default) or by total PnL.
+  let tokenMetric = $state<'volume' | 'pnl'>('volume');
 
   let copied = $state(false);
   // Pin menu (group checkboxes) open state. Reflect pinned groups in the button.
@@ -229,6 +234,31 @@
     return rows.reduce((a, b) => (Math.abs(b.size_usd) > Math.abs(a.size_usd) ? b : a));
   });
   const entryPrice = $derived(selectedPos?.entry_px ?? null);
+  // Tokens-row view: sort + percentage + "Other" bucketing by the selected
+  // metric (Volume or PnL). Tokens under 0.1% of the metric fold into "Other".
+  const tokenView = $derived.by(() => {
+    const toks = tradeStats?.tokens ?? [];
+    if (!toks.length) return [] as Array<{ token: string; pnl: number; share: number; pnlPct: number }>;
+    const totVol = toks.reduce((s, t) => s + t.volume, 0);
+    const totPnl = toks.reduce((s, t) => s + t.pnl, 0);
+    const metricVal = (t: { volume: number; pnl: number }) => (tokenMetric === 'volume' ? t.volume : t.pnl);
+    const total = tokenMetric === 'volume' ? totVol : totPnl;
+    const shareOf = (t: { volume: number; pnl: number }) => (total ? (100 * metricVal(t)) / total : 0);
+    const kept: Array<{ token: string; volume: number; pnl: number }> = [];
+    let oVol = 0, oPnl = 0, oHas = false;
+    for (const t of toks) {
+      if (Math.abs(shareOf(t)) < 0.1) { oVol += t.volume; oPnl += t.pnl; oHas = true; }
+      else kept.push(t);
+    }
+    if (oHas) kept.push({ token: 'Other', volume: oVol, pnl: oPnl });
+    kept.sort((a, b) => metricVal(b) - metricVal(a));
+    return kept.map((t) => ({
+      token: t.token,
+      pnl: t.pnl,
+      share: shareOf(t),
+      pnlPct: totPnl ? (100 * t.pnl) / totPnl : 0
+    }));
+  });
   // Current price = the selected token's close as of the snapshot day (the
   // close-overlay value at/just before selectedUnix). Drawn like the entry line.
   const currentPrice = $derived.by(() => {
@@ -478,6 +508,24 @@
     loadTradeStats();
   });
 
+  // Same execution-quality stats recomputed over the selected range (range mode
+  // only), debounced like the other range fetches.
+  let rangeTsTimer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    if (!rangeMode) { rangeTradeStats = null; return; }
+    const s = startIso, e = snapshotIso;
+    clearTimeout(rangeTsTimer);
+    rangeTsTimer = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/hyperliquid/wallet_trade_stats?wallet=${address}&since=${s}&until=${e}`);
+        rangeTradeStats = res.ok ? ((await res.json()) as TradeStats) : null;
+      } catch {
+        rangeTradeStats = null;
+      }
+    }, 200);
+    return () => clearTimeout(rangeTsTimer);
+  });
+
   // Positions refetch when the snapshot day changes — debounced so dragging
   // the slider doesn't fire a request (incl. the live API) per integer step.
   let posTimer: ReturnType<typeof setTimeout> | undefined;
@@ -701,22 +749,30 @@
       {@render card('Taker %', tradeStats ? tradeStats.taker_pct.toFixed(1) + '%' : '—', 'text-zinc-200', 'by volume')}
       {@render card('Fee / PnL %', tradeStats && tradeStats.fee_pct != null ? tradeStats.fee_pct.toFixed(1) + '%' : '—', 'text-zinc-300', 'since 01-01')}
       {@render card('Funding / PnL %', tradeStats && tradeStats.funding_pct != null ? tradeStats.funding_pct.toFixed(1) + '%' : '—', 'text-zinc-300', 'since 01-01')}
+      {@render card('Win Rate', tradeStats && tradeStats.win_rate != null ? tradeStats.win_rate.toFixed(1) + '%' : '—', 'text-zinc-200', 'profitable days')}
     </div>
-    <!-- Token mix: traded-volume share per token (since 01-01); tokens under
-         0.1% are folded into "Other". TODO: swap token name for token icon. -->
-    {#if tradeStats?.tokens?.length}
-      {@const pnlTotal = tradeStats.tokens.reduce((s, t) => s + t.pnl, 0)}
+    <!-- Token mix: share per token by Volume or PnL (since 01-01); tokens under
+         0.1% of the selected metric fold into "Other". TODO: token icons. -->
+    {#if tokenView.length}
       <div class="rounded-lg bg-zinc-900/70 border border-zinc-800 px-3 py-2">
-        <div class="text-zinc-500 text-xs uppercase tracking-wide mb-1.5">Traded tokens · volume share <span class="text-zinc-600 normal-case">(since 01-01)</span></div>
+        <div class="flex items-center gap-2 mb-1.5">
+          <span class="text-zinc-500 text-xs uppercase tracking-wide">Traded tokens · {tokenMetric === 'volume' ? 'volume' : 'PnL'} share <span class="text-zinc-600 normal-case">(since 01-01)</span></span>
+          <div class="ml-auto inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
+            <button type="button" onclick={() => (tokenMetric = 'volume')}
+              class={'px-2 py-0.5 text-xs ' + (tokenMetric === 'volume' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}>Volume</button>
+            <button type="button" onclick={() => (tokenMetric = 'pnl')}
+              class={'px-2 py-0.5 text-xs border-l border-zinc-700 ' + (tokenMetric === 'pnl' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}>PnL</button>
+          </div>
+        </div>
         <div class="flex flex-wrap gap-1.5">
-          {#each tradeStats.tokens as t (t.token)}
+          {#each tokenView as t (t.token)}
             <span class="inline-flex flex-col items-start gap-0.5 text-xs px-2 py-1 rounded-md border bg-zinc-950 {t.token === 'Other' ? 'border-zinc-800' : 'border-zinc-700'}">
               <span class="flex items-center gap-1.5">
                 <span class="font-mono {t.token === 'Other' ? 'text-zinc-500' : 'text-zinc-200'}">{t.token}</span>
-                <span class="tabular-nums text-zinc-400">{t.pct.toFixed(1)}%</span>
+                <span class="tabular-nums text-zinc-400">{t.share.toFixed(1)}%</span>
               </span>
               <span class="tabular-nums text-[11px] {t.pnl > 0 ? 'text-emerald-400' : t.pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">
-                {fmtUsd(t.pnl)}{#if pnlTotal}<span class="text-zinc-500"> ({((100 * t.pnl) / pnlTotal).toFixed(1)}%)</span>{/if}
+                {fmtUsd(t.pnl)}{#if tokenMetric === 'volume'}<span class="text-zinc-500"> ({t.pnlPct.toFixed(1)}%)</span>{/if}
               </span>
             </span>
           {/each}
@@ -745,6 +801,12 @@
       {@render rcard('Range Realized', fmtUsd(realizedRange), pnlClass(realizedRange))}
       {@render rcard('Range Unrealized', fmtUsd(unrealRange), pnlClass(unrealRange))}
       {@render rcard('Range Sharpe (ann.)', sharpeRange.toFixed(2), 'text-zinc-300')}
+      {@render rcard('Range Avg Trade', rangeTradeStats ? fmtUsd(rangeTradeStats.avg_trade_size) : '…')}
+      {@render rcard('Range Trades / Day', rangeTradeStats ? rangeTradeStats.trades_per_day.toLocaleString('en-US', { maximumFractionDigits: 1 }) : '…')}
+      {@render rcard('Range Taker %', rangeTradeStats ? rangeTradeStats.taker_pct.toFixed(1) + '%' : '…')}
+      {@render rcard('Range Fee / PnL %', rangeTradeStats && rangeTradeStats.fee_pct != null ? rangeTradeStats.fee_pct.toFixed(1) + '%' : '…', 'text-zinc-300')}
+      {@render rcard('Range Funding / PnL %', rangeTradeStats && rangeTradeStats.funding_pct != null ? rangeTradeStats.funding_pct.toFixed(1) + '%' : '…', 'text-zinc-300')}
+      {@render rcard('Range Win Rate', rangeTradeStats && rangeTradeStats.win_rate != null ? rangeTradeStats.win_rate.toFixed(1) + '%' : '…')}
     </div>
   {/if}
 

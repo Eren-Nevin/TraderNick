@@ -1791,6 +1791,14 @@ export type ChartInstance = {
   /** smart_wallets_table only: minimum distinct tokens traded in the window
    *  (tight vs wide scope). Default 0. */
   swMinTokens?: number;
+  /** smart_wallets_table only: minimum win rate — % of active trade days with
+   *  positive total PnL. Default 0. */
+  swMinWinRate?: number;
+  /** smart_wallets_table only: minimum trades per active day. Default 0. */
+  swMinTradesPerDay?: number;
+  /** smart_wallets_table only: maximum trades per active day. null = no
+   *  ceiling. */
+  swMaxTradesPerDay?: number | null;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */

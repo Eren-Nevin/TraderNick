@@ -542,6 +542,18 @@ async def smart_wallet_metrics(request):
         min_tokens = int(request.args.get("min_tokens", "0"))
     except ValueError:
         min_tokens = 0
+    try:
+        min_win_rate = float(request.args.get("min_win_rate", "0"))
+    except ValueError:
+        min_win_rate = 0.0
+    try:
+        max_trades_per_day = float(request.args.get("max_trades_per_day", str(NO_MAX)))
+    except ValueError:
+        max_trades_per_day = NO_MAX
+    try:
+        min_trades_per_day = float(request.args.get("min_trades_per_day", "0"))
+    except ValueError:
+        min_trades_per_day = 0.0
 
     snap_arg = request.args.get("snapshot")
     if snap_arg:
@@ -563,6 +575,8 @@ async def smart_wallet_metrics(request):
         "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
         "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
         "min_account_duration": min_account_duration, "min_tokens": min_tokens,
+        "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
+        "min_trades_per_day": min_trades_per_day,
     }
     # Account age: first recorded trade day per wallet, over ALL history (the
     # rollup only goes back to its TTL horizon, so this is "first seen by us").
@@ -772,7 +786,8 @@ async def smart_wallet_metrics(request):
                 avg(daily_total)       AS mean_pnl,
                 stddevPop(daily_total) AS sd_pnl,
                 if(countIf(d_tc > 0) >= {{min_days:UInt32}} AND stddevPop(daily_total) > 0,
-                   avg(daily_total) / stddevPop(daily_total) * sqrt(365), 0) AS sharpe
+                   avg(daily_total) / stddevPop(daily_total) * sqrt(365), 0) AS sharpe,
+                100 * countIf(d_tc > 0 AND daily_total > 0) / nullIf(countIf(d_tc > 0), 0) AS win_rate
             FROM daily_series
             GROUP BY wallet
         ),
@@ -796,6 +811,8 @@ async def smart_wallet_metrics(request):
             100 * coalesce(fn.funding, 0) / nullIf(w.realized, 0) AS funding_pct,
             coalesce(tk.n_tokens, 0) AS n_tokens,
             dateDiff('day', fseen.first_day, {{end_day:Date}}) AS account_age_days,
+            coalesce(sa.win_rate, 0) AS win_rate,
+            w.trades / nullIf(sa.n_days, 0) AS trades_per_day,
             dictGet('tradernick.wallet_labels', 'categories', lower(w.wallet)) AS categories
         FROM win w
         LEFT JOIN sharpe_agg sa ON sa.wallet = w.wallet
@@ -814,6 +831,9 @@ async def smart_wallet_metrics(request):
           AND (w.realized <= 0 OR 100 * coalesce(fn.funding, 0) / w.realized <= {{max_funding_pct:Float64}})
           AND coalesce(tk.n_tokens, 0) >= {{min_tokens:UInt32}}
           AND coalesce(dateDiff('day', fseen.first_day, {{end_day:Date}}), 0) >= {{min_account_duration:UInt32}}
+          AND coalesce(sa.win_rate, 0) >= {{min_win_rate:Float64}}
+          AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) <= {{max_trades_per_day:Float64}}
+          AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) >= {{min_trades_per_day:Float64}}
         ORDER BY {ORDER_COLS[order_by]} DESC
         LIMIT {{limit:UInt32}}
     """
@@ -835,7 +855,9 @@ async def smart_wallet_metrics(request):
             "funding_pct": (float(r[11]) if r[11] is not None else None),
             "n_tokens": int(r[12]) if r[12] is not None else 0,
             "account_age_days": int(r[13]) if r[13] is not None else 0,
-            "categories": list(r[14]) if r[14] else [],
+            "win_rate": (float(r[14]) if r[14] is not None else None),
+            "trades_per_day": (float(r[15]) if r[15] is not None else None),
+            "categories": list(r[16]) if r[16] else [],
         }
         for r in rows.result_rows
     ]
@@ -847,6 +869,8 @@ async def smart_wallet_metrics(request):
         "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
         "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
         "min_account_duration": min_account_duration, "min_tokens": min_tokens,
+        "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
+        "min_trades_per_day": min_trades_per_day,
         "wallets": wallets,
     })
 
@@ -1682,27 +1706,58 @@ async def wallet_trade_stats(request):
     )
     unreal_by = {t[0]: float(t[1]) for t in unreal_rows.result_rows}
     pnl_of = lambda tok: realized_by.get(tok, 0.0) + unreal_by.get(tok, 0.0)
+    # All traded tokens with volume + total PnL (realized + current unrealized).
+    # The client sorts/percentages/buckets ("Other") by the selected metric.
+    tokens = [
+        {"token": t[0], "volume": float(t[1]), "pnl": pnl_of(t[0])}
+        for t in tok_rows.result_rows
+    ]
 
-    tok_total = sum(float(t[1]) for t in tok_rows.result_rows)
-    tokens: list[dict] = []
-    other_vol = 0.0
-    other_pnl = 0.0
-    for t in tok_rows.result_rows:
-        v = float(t[1])
-        pct = (100.0 * v / tok_total) if tok_total else 0.0
-        if pct < 0.1:
-            other_vol += v
-            other_pnl += pnl_of(t[0])
-        else:
-            tokens.append({"token": t[0], "volume": v, "pct": pct, "pnl": pnl_of(t[0])})
-    if other_vol > 0:
-        tokens.append({
-            "token": "Other", "volume": other_vol,
-            "pct": (100.0 * other_vol / tok_total) if tok_total else 0.0,
-            "pnl": other_pnl,
-        })
+    # Win rate: % of ACTIVE (trade) days in the window with positive daily total
+    # PnL (Δrealized + Δunrealized) — same definition as smart_wallet_metrics.
+    wr_rows = await ch.query(
+        f"""
+        WITH
+        rd AS (
+            SELECT day AS d, sumMerge(pnl_state) AS cp, sumMerge(trade_count_state) AS ctc
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE wallet = {{wallet:String}}
+              AND day >= toDate({{since:DateTime}}) - 1 AND day <= toDate({{until:DateTime}})
+            GROUP BY day
+        ),
+        rdd AS (
+            SELECT d, cp - lagInFrame(cp, 1, 0) OVER w AS dr,
+                   ctc - lagInFrame(ctc, 1, 0) OVER w AS dtc
+            FROM rd WINDOW w AS (ORDER BY d ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+        ),
+        ed AS (
+            SELECT day AS d, sum(e) AS un FROM (
+                SELECT day, token, side, argMaxMerge(pnl_state) AS e
+                FROM tradernick.hl_position_history_eod_wallet
+                WHERE wallet = {{wallet:String}}
+                  AND day >= toDate({{since:DateTime}}) - 2 AND day <= toDate({{until:DateTime}}) {HIP3_EXCLUDE}
+                GROUP BY day, token, side
+            ) GROUP BY d
+        ),
+        edd AS (
+            SELECT d, un - lagInFrame(un, 1, 0) OVER w AS du
+            FROM ed WINDOW w AS (ORDER BY d ASC ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+        ),
+        ds AS (
+            SELECT rdd.d AS d, rdd.dr + coalesce(edd.du, 0) AS dt, rdd.dtc AS dtc
+            FROM rdd LEFT JOIN edd ON edd.d = rdd.d
+            WHERE rdd.d >= toDate({{since:DateTime}})
+        )
+        SELECT 100 * countIf(dtc > 0 AND dt > 0) / nullIf(countIf(dtc > 0), 0) AS win_rate
+        FROM ds
+        """,
+        parameters={"wallet": wallet, "since": since_dt, "until": until_dt},
+    )
+    win_rate = (float(wr_rows.result_rows[0][0])
+                if wr_rows.result_rows and wr_rows.result_rows[0][0] is not None else None)
 
     return response.json({
+        "win_rate": win_rate,
         "wallet": wallet,
         "volume": volume,
         "trades": trades,

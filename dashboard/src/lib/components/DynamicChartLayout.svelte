@@ -1132,6 +1132,12 @@
             ? Math.floor(r.swMinAccountDuration) : 0;
         inst.swMinTokens =
           typeof r.swMinTokens === 'number' && r.swMinTokens >= 0 ? Math.floor(r.swMinTokens) : 0;
+        inst.swMinWinRate =
+          typeof r.swMinWinRate === 'number' && r.swMinWinRate >= 0 ? r.swMinWinRate : 0;
+        inst.swMinTradesPerDay =
+          typeof r.swMinTradesPerDay === 'number' && r.swMinTradesPerDay >= 0 ? r.swMinTradesPerDay : 0;
+        inst.swMaxTradesPerDay =
+          typeof r.swMaxTradesPerDay === 'number' ? r.swMaxTradesPerDay : null;
       }
       // Compound overlays — preserved across reloads. Each entry is validated
       // through sanitizeOverlay() so a corrupt save can't strand the chart.

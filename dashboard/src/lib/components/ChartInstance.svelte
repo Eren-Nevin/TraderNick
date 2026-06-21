@@ -688,7 +688,9 @@
         instance.swMinRealized ?? 0, instance.swMinOi ?? 0,
         instance.swMinAvgTradeSize ?? 0, instance.swMinTakerPct ?? 0,
         instance.swMaxFeePct ?? '', instance.swMaxFundingPct ?? '',
-        instance.swMinAccountDuration ?? 0, instance.swMinTokens ?? 0
+        instance.swMinAccountDuration ?? 0, instance.swMinTokens ?? 0,
+        instance.swMinWinRate ?? 0,
+        instance.swMinTradesPerDay ?? 0, instance.swMaxTradesPerDay ?? ''
       ].join('|');
     }
     if (instance.kind === 'token_leaderboard') {
@@ -1502,8 +1504,11 @@
           min_avg_trade_size: String(Math.max(0, instance.swMinAvgTradeSize ?? 0)),
           min_taker_pct: String(Math.max(0, instance.swMinTakerPct ?? 0)),
           min_account_duration: String(Math.max(0, instance.swMinAccountDuration ?? 0)),
-          min_tokens: String(Math.max(0, instance.swMinTokens ?? 0))
+          min_tokens: String(Math.max(0, instance.swMinTokens ?? 0)),
+          min_win_rate: String(Math.max(0, instance.swMinWinRate ?? 0)),
+          min_trades_per_day: String(Math.max(0, instance.swMinTradesPerDay ?? 0))
         });
+        if (instance.swMaxTradesPerDay != null) qs.set('max_trades_per_day', String(instance.swMaxTradesPerDay));
         if (instance.swMaxFeePct != null) qs.set('max_fee_pct', String(instance.swMaxFeePct));
         if (instance.swMaxFundingPct != null) qs.set('max_funding_pct', String(instance.swMaxFundingPct));
         if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
@@ -6132,6 +6137,34 @@
           value={instance.swMinTokens ?? 0}
           onchange={(e) => (instance.swMinTokens = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))}
           title="Minimum number of distinct tokens traded in the window (tight vs wide scope)"
+          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min win rate %</span>
+        <input
+          type="number" min="0" max="100" step="5"
+          value={instance.swMinWinRate ?? 0}
+          onchange={(e) => (instance.swMinWinRate = Math.min(100, Math.max(0, parseFloat(e.currentTarget.value) || 0)))}
+          title="Minimum win rate — % of active trade days with positive total PnL"
+          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min trades/day</span>
+        <input
+          type="number" min="0" step="1"
+          value={instance.swMinTradesPerDay ?? 0}
+          onchange={(e) => (instance.swMinTradesPerDay = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+          title="Minimum trades per active day (window trades ÷ active days)"
+          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        />
+        <span class="w-px h-4 bg-zinc-800"></span>
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Max trades/day</span>
+        <input
+          type="number" min="0" step="1"
+          value={instance.swMaxTradesPerDay ?? ''}
+          placeholder="∞"
+          onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxTradesPerDay = Number.isFinite(v) ? v : null; }}
+          title="Maximum trades per active day (blank = no limit). Low caps find discretionary, non-HFT wallets."
           class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
         />
         <span class="w-px h-4 bg-zinc-800"></span>
