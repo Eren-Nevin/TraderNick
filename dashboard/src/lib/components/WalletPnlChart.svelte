@@ -168,6 +168,37 @@
   // update — so the user's manual zoom/pan isn't reset on each interaction.
   let pinnedFrom: number | null = null;
   let pinnedTo: number | null = null;
+  // Self-heal the visible range: toggling the close overlay (show/hide/empty)
+  // can collapse the time scale's visible range to null under fixLeftEdge/
+  // fixRightEdge, which blanks the chart. Whenever the range goes null, restore
+  // the last good (zoomed) range — or the full window as a fallback.
+  let lastGoodRange: { from: UTCTimestamp; to: UTCTimestamp } | null = null;
+  let restoringRange = false;
+  function restoreIfNull(vr: { from: unknown; to: unknown } | null) {
+    if (!chart || !series) return;
+    if (vr) {
+      lastGoodRange = vr as { from: UTCTimestamp; to: UTCTimestamp };
+      return;
+    }
+    if (restoringRange) return;
+    restoringRange = true;
+    try {
+      // The time scale's point list is empty here, so setVisibleRange THROWS
+      // ("Value is null") and fitContent() is a no-op. Re-setting the main
+      // series' OWN data rebuilds the points (and the range); only then can we
+      // re-apply the last good (zoomed) range.
+      series.setData(series.data() as Parameters<typeof series.setData>[0]);
+      const r =
+        lastGoodRange ??
+        (rangeFrom != null && rangeTo != null
+          ? { from: rangeFrom as UTCTimestamp, to: rangeTo as UTCTimestamp }
+          : null);
+      if (r) chart.timeScale().setVisibleRange(r);
+    } catch {
+      /* ignore */
+    }
+    restoringRange = false;
+  }
 
   let tip = $state<{ x: number; time: number; value: number } | null>(null);
   // Buy/sell chip hover (token breakdown). x/y are pane-relative CSS px.
@@ -194,10 +225,10 @@
   }
   function timeAtX(x: number): number | null {
     if (!chart) return null;
-    // `x` is measured from the container's left edge, but the time scale's
-    // coordinate space starts at the plot area — i.e. AFTER the left price axis
-    // (the close-price scale, shown when a token is selected). Subtract its
-    // width or clicks drift right by that many pixels (the snapshot-time bug).
+    // `x` is measured from the container's left edge; the time scale's
+    // coordinate space starts after any left price axis. The close overlay now
+    // uses an invisible overlay scale (no left axis), so this is normally 0 —
+    // kept defensive in case a left axis is ever reintroduced.
     const leftAxisW = chart.priceScale('left').width();
     const t = chart.timeScale().coordinateToTime(x - leftAxisW);
     return t == null ? null : (t as unknown as number);
@@ -318,17 +349,11 @@
       title: ''
     });
 
-    // Close-price overlay: a blue line on its own LEFT price scale (price units
-    // differ from PnL $). Data pushed by the effect below; hidden when empty.
-    closeSeries = chart.addLineSeries({
-      color: '#3b82f6',
-      lineWidth: 1,
-      priceScaleId: 'left',
-      priceLineVisible: false,
-      lastValueVisible: false,
-      crosshairMarkerVisible: false
-    });
-    chart.priceScale('left').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 }, visible: false });
+    // Close-price overlay is created LAZILY (see the close effect). It must not
+    // exist in an empty state after having had data: emptying/hiding a
+    // populated series corrupts the time scale (visible range → null, even
+    // setData/fitContent can't recover), blanking the chart on deselect. So we
+    // addSeries on select and removeSeries on deselect instead.
 
     // Dashed vertical markers: amber cutoff ("as-of" day) + optional
     // thinner sky-blue lookback-start line.
@@ -381,8 +406,12 @@
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp);
 
+    // Restore the visible range if a series toggle collapses it to null.
+    chart.timeScale().subscribeVisibleTimeRangeChange(restoreIfNull);
+
     return () => {
       ro?.disconnect();
+      chart?.timeScale().unsubscribeVisibleTimeRangeChange(restoreIfNull);
       container?.removeEventListener('pointerdown', onPointerDown);
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
@@ -416,28 +445,13 @@
     tradeChips?.setChips(trades.map((t) => ({ ...t })));
   });
 
-  // Entry-price horizontal line on the close (left) price scale.
+  // Close-price overlay + entry-price line lifecycle (merged so ordering is
+  // deterministic). The close series is created when data arrives and REMOVED
+  // when there's none — never left empty/hidden (which corrupts the time
+  // scale → black chart on deselect). The entry line lives on the close series.
   let entryLine: IPriceLine | null = null;
   $effect(() => {
-    if (!closeSeries) return;
-    if (entryLine) { closeSeries.removePriceLine(entryLine); entryLine = null; }
-    if (entryPrice != null && Number.isFinite(entryPrice)) {
-      entryLine = closeSeries.createPriceLine({
-        price: entryPrice,
-        color: entryColor,
-        lineStyle: LineStyle.Dashed,
-        lineWidth: 1,
-        axisLabelVisible: true,
-        title: 'entry'
-      });
-    }
-  });
-
-  // Close-price overlay: push data + show/hide the left axis with it.
-  $effect(() => {
-    if (!chart || !closeSeries) return;
-    // Sort + dedupe defensively — setData throws on unsorted/duplicate times,
-    // which would blank the chart (see the main series effect below).
+    if (!chart) return;
     const seen = new Set<number>();
     const cpts = closeData
       .filter((d) => Number.isFinite(d.value))
@@ -445,10 +459,41 @@
       .sort((a, b) => (a.time as number) - (b.time as number))
       .filter((d) => (seen.has(d.time as number) ? false : (seen.add(d.time as number), true)));
     try {
+      // Drop the existing entry line first (it lives on the close series).
+      if (entryLine && closeSeries) { closeSeries.removePriceLine(entryLine); entryLine = null; }
+      if (cpts.length === 0) {
+        // No token: remove the series entirely (don't leave it empty).
+        if (closeSeries) { chart.removeSeries(closeSeries); closeSeries = null; }
+        return;
+      }
+      if (!closeSeries) {
+        // Close price on the LEFT axis (its own scale — price units differ from
+        // PnL $). The axis appears with the series and collapses when it's
+        // removed on deselect; the null-range self-heal (restoreIfNull) covers
+        // the time-scale collapse that used to black the chart.
+        closeSeries = chart.addLineSeries({
+          color: '#3b82f6',
+          lineWidth: 1,
+          priceScaleId: 'left',
+          priceLineVisible: false,
+          lastValueVisible: false,
+          crosshairMarkerVisible: false
+        });
+        chart.priceScale('left').applyOptions({ scaleMargins: { top: 0.12, bottom: 0.12 }, visible: true });
+      }
       closeSeries.setData(cpts);
-      chart.priceScale('left').applyOptions({ visible: cpts.length > 0 });
+      if (entryPrice != null && Number.isFinite(entryPrice)) {
+        entryLine = closeSeries.createPriceLine({
+          price: entryPrice,
+          color: entryColor,
+          lineStyle: LineStyle.Dashed,
+          lineWidth: 1,
+          axisLabelVisible: true,
+          title: 'entry'
+        });
+      }
     } catch (err) {
-      console.error('WalletPnlChart: close setData failed', err);
+      console.error('WalletPnlChart: close overlay update failed', err);
     }
   });
 

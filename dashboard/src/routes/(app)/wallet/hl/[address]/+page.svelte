@@ -453,10 +453,16 @@
 
   // Close-price overlay: (re)fetch the selected token's daily close series.
   // token_close already returns the full history from the floor date.
+  // Monotonic token so a slow close fetch from a *select* can't resolve after a
+  // later *deselect* and clobber state (the deselect→black race; the 2nd cycle
+  // hid it because the response was HTTP-cached and resolved before deselect).
+  let closeSeq = 0;
   async function loadClose(tok: string | null) {
+    const seq = ++closeSeq;
     if (closeCtl) { closeCtl.abort(); closeCtl = null; }
     if (!tok) { closeSeries = []; return; }
-    closeCtl = new AbortController();
+    const ctl = new AbortController();
+    closeCtl = ctl;
     try {
       // Scope to the chart window [floor, today] so the close overlay doesn't
       // extend the time-scale data range past the edge-locked bounds.
@@ -464,14 +470,18 @@
       const until = backToIso(0);
       const res = await fetch(
         `/api/hyperliquid/token_close?token=${encodeURIComponent(tok)}&since=${since}&until=${until}`,
-        { signal: closeCtl.signal }
+        { signal: ctl.signal }
       );
       if (!res.ok) throw new Error(`token_close ${res.status}`);
       const body = await res.json();
+      if (seq !== closeSeq) return; // superseded by a newer select/deselect
       closeSeries = ((body.series ?? []) as Array<{ time: number; close: number }>)
         .map((r) => ({ time: r.time, value: r.close }));
     } catch (e) {
-      if ((e as DOMException)?.name !== 'AbortError') { selectedToken = null; closeSeries = []; }
+      if (seq === closeSeq && (e as DOMException)?.name !== 'AbortError') {
+        selectedToken = null;
+        closeSeries = [];
+      }
     }
   }
   $effect(() => {

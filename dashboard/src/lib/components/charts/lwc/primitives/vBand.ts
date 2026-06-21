@@ -81,6 +81,7 @@ class VBandRenderer implements ISeriesPrimitivePaneRenderer {
   draw(target: unknown): void {
     const t = target as Target;
     t.useBitmapCoordinateSpace((scope) => {
+     try {
       const { bands, chart } = this._src._state();
       if (!chart || bands.length === 0) return;
       const ts = chart.timeScale();
@@ -104,6 +105,9 @@ class VBandRenderer implements ISeriesPrimitivePaneRenderer {
         ctx.fillRect(x1, 0, x2 - x1, scope.bitmapSize.height);
         ctx.restore();
       }
+     } catch (err) {
+       console.error('VBandPrimitive draw failed', err);
+     }
     });
   }
 }

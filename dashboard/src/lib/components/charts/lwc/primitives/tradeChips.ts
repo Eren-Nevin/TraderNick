@@ -133,6 +133,7 @@ class TradeChipsRenderer implements ISeriesPrimitivePaneRenderer {
   draw(target: unknown): void {
     const t = target as Target;
     t.useBitmapCoordinateSpace((scope) => {
+     try {
       const { chips, chart, series } = this._src._state();
       if (!chart || !series || chips.length === 0) return;
       const ts = chart.timeScale();
@@ -193,6 +194,11 @@ class TradeChipsRenderer implements ISeriesPrimitivePaneRenderer {
         });
       }
       this._src._hitboxes = boxes;
+     } catch (err) {
+       // A throw inside draw() (called by lightweight-charts' paint loop) would
+       // blank the whole pane — contain it so the chart never blacks out.
+       console.error('TradeChipsPrimitive draw failed', err);
+     }
     });
   }
 }

@@ -90,6 +90,7 @@ class VRefLinesRenderer implements ISeriesPrimitivePaneRenderer {
   draw(target: unknown): void {
     const t = target as Target;
     t.useBitmapCoordinateSpace((scope) => {
+     try {
       const { refs, defaultColor, chart } = this._src._state();
       if (!chart || refs.length === 0) return;
       const ts = chart.timeScale();
@@ -154,6 +155,9 @@ class VRefLinesRenderer implements ISeriesPrimitivePaneRenderer {
         }
         ctx.restore();
       }
+     } catch (err) {
+       console.error('VRefLinesPrimitive draw failed', err);
+     }
     });
   }
 }
