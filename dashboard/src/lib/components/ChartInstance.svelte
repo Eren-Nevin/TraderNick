@@ -5,6 +5,7 @@
   import TableChart from '$lib/components/TableChart.svelte';
   import TokenLeaderboardTable from '$lib/components/TokenLeaderboardTable.svelte';
   import SmartWalletMetricsTable from '$lib/components/SmartWalletMetricsTable.svelte';
+  import SnapshotSlider from '$lib/components/SnapshotSlider.svelte';
   import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
   import HlTopVaultsTable from '$lib/components/HlTopVaultsTable.svelte';
   import HlTopVaultLpsTable from '$lib/components/HlTopVaultLpsTable.svelte';
@@ -107,6 +108,8 @@
     isLidoKind,
     isLeaderboardKind,
     LEADERBOARD_KIND_CONFIG,
+    isDualViewKind,
+    DUAL_VIEW_KINDS,
     type LeaderboardMetric,
     type SmartWalletMetric,
     type SmartWalletLookback,
@@ -145,6 +148,14 @@
     overlayData?: Record<string, Candle[]>;
   };
   const loadCache: Map<string, LoadCacheEntry> = new Map();
+  // Cache slot id. Dual-view widgets (table ⇄ chart) keep a SEPARATE entry per
+  // view so switching modes restores the other view's data instantly instead of
+  // refetching — `${id}:table` and `${id}:chart`. Single-view kinds key on id.
+  function cacheId(): string {
+    return isDualViewKind(instance.kind)
+      ? `${instance.id}:${instance.viewMode ?? 'table'}`
+      : instance.id;
+  }
 
   type AnyDatum =
     | Candle
@@ -222,6 +233,10 @@
       ? ((instance.lidoSubkind ?? 'lido_deposit') as ChartInstanceT['kind'])
       : instance.kind === 'gmx_v2'
       ? ((instance.gmxV2Subkind ?? 'gmx_v2_position_increase') as ChartInstanceT['kind'])
+      // Dual-view widgets in 'chart' mode borrow their mapped chart kind's
+      // rendering + controls (e.g. smart_wallets_table → hl_smart_oi).
+      : (isDualViewKind(instance.kind) && instance.viewMode === 'chart')
+      ? (DUAL_VIEW_KINDS[instance.kind]!.chartKind as ChartInstanceT['kind'])
       : instance.kind
   );
 
@@ -574,6 +589,9 @@
    *  endpoint); exchange flow always. */
   function isDynamicChunkKind(): boolean {
     if (instance.kind === 'hl_smart_oi') return true;
+    // Dual-view chart mode (smart_wallets_table → OI of found wallets) backfills
+    // on pan like hl_smart_oi; the table view is single-shot (not chunked).
+    if (isDualViewKind(instance.kind) && instance.viewMode === 'chart') return true;
     if (instance.kind === 'oi') return (instance.exchange ?? 'binance') === 'hl';
     if (instance.kind === 'exchange_flow') return true;
     return false;
@@ -671,27 +689,43 @@
   // the table header.
   function swSnapshotIso(): string {
     if (instance.swSnapshot) return instance.swSnapshot;
+    return swTodayIso();
+  }
+  function swTodayIso(): string {
     const n = new Date();
     return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()))
       .toISOString().slice(0, 10);
   }
 
+  // The smart_wallets_table cache/load key for the TABLE view (the found-wallet
+  // set). Every selector busts it: metric+order change the ranking,
+  // lookback/token/snapshot change the window, and the min-/max- guards change
+  // the candidate set. No interval — single-shot rollup. Chart mode reuses this
+  // (its wallet set is the table's) and appends its own OI params; see loadKey.
+  function swTableKey(): string {
+    return [
+      'smart_wallets_table', instance.swMetric ?? 'sharpe', instance.swLookback ?? 7,
+      instance.swToken ?? '__all__', swSnapshotIso(),
+      instance.swMinDays ?? 3, instance.swMinVolume ?? 100000,
+      instance.swMinRealized ?? 0, instance.swMinOi ?? 0,
+      instance.swMinAvgTradeSize ?? 0, instance.swMinTakerPct ?? 0,
+      instance.swMaxFeePct ?? '', instance.swMaxFundingPct ?? '',
+      instance.swMinAccountDuration ?? 0, instance.swMinTokens ?? 0,
+      instance.swMinWinRate ?? 0,
+      instance.swMinTradesPerDay ?? 0, instance.swMaxTradesPerDay ?? ''
+    ].join('|');
+  }
+
   function loadKey(): string {
     if (instance.kind === 'smart_wallets_table') {
-      // Every selector busts the cache: metric+order change the ranking,
-      // lookback/token/snapshot change the window, and the min-days/min-volume
-      // guards change the candidate set. No interval (single-shot rollup).
-      return [
-        'smart_wallets_table', instance.swMetric ?? 'sharpe', instance.swLookback ?? 7,
-        instance.swToken ?? '__all__', swSnapshotIso(),
-        instance.swMinDays ?? 3, instance.swMinVolume ?? 100000,
-        instance.swMinRealized ?? 0, instance.swMinOi ?? 0,
-        instance.swMinAvgTradeSize ?? 0, instance.swMinTakerPct ?? 0,
-        instance.swMaxFeePct ?? '', instance.swMaxFundingPct ?? '',
-        instance.swMinAccountDuration ?? 0, instance.swMinTokens ?? 0,
-        instance.swMinWinRate ?? 0,
-        instance.swMinTradesPerDay ?? 0, instance.swMaxTradesPerDay ?? ''
-      ].join('|');
+      // Chart mode plots the OI of the SAME found wallets, so its key extends
+      // the table key (any table-setting change rebuilds the wallet set) with
+      // the chart's own OI-fetch params (token + interval). The differing tag
+      // makes a Table⇄Chart toggle re-run the load effect into the other slot.
+      if (instance.viewMode === 'chart') {
+        return `${swTableKey()}|chart|${instance.token}|${instance.interval}`;
+      }
+      return swTableKey();
     }
     if (instance.kind === 'token_leaderboard') {
       // Single global snapshot — the endpoint computes everything relative to
@@ -865,7 +899,7 @@
     // Remount fast-path: if we previously loaded the exact same key for this
     // chart id (e.g. the user just drag-reordered and svelte-dnd-action
     // recreated the component), restore from cache and skip the fetch.
-    const cached = loadCache.get(instance.id);
+    const cached = loadCache.get(cacheId());
     if (cached && cached.key === key) {
       data = cached.data;
       overlayData = cached.overlayData ?? {};
@@ -1104,7 +1138,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const morphoEvent = MORPHO_KIND_TO_EVENT[effectiveKind];
@@ -1116,7 +1150,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
       }
@@ -1173,7 +1207,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const sparkEvent = SPARK_KIND_TO_EVENT[effectiveKind];
@@ -1185,7 +1219,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
       }
@@ -1268,7 +1302,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const gmxEvent = GMX_V2_KIND_TO_EVENT[effectiveKind];
@@ -1289,7 +1323,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
       }
@@ -1317,7 +1351,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Hyperliquid top vaults: leaderboard with sort selector. Switching
@@ -1336,7 +1370,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Hyperliquid top vault LPs.
@@ -1353,7 +1387,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Hyperliquid vault detail: top-N vaults + each vault's recent
@@ -1372,7 +1406,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Hyperliquid bridge flows: directional view of HL's Arbitrum
@@ -1394,7 +1428,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Hyperliquid unrealized PnL: its own state-aware endpoint that
@@ -1420,7 +1454,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // HL Realized PnL with a per-side selector — switch from the
@@ -1448,7 +1482,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       if (isHlKind(instance.kind) && instance.kind !== 'hl_top_traders') {
@@ -1481,7 +1515,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
       }
@@ -1492,34 +1526,21 @@
       // the leaderboard kinds). since/until are ignored (the window is derived
       // from lookback + snapshot server-side).
       if (instance.kind === 'smart_wallets_table') {
-        const qs = new URLSearchParams({
-          lookback: String(instance.swLookback ?? 7),
-          metric: instance.swMetric ?? 'sharpe',
-          snapshot: swSnapshotIso(),
-          limit: '100',
-          min_days: String(Math.max(1, instance.swMinDays ?? 3)),
-          min_volume: String(Math.max(0, instance.swMinVolume ?? 100000)),
-          min_realized: String(instance.swMinRealized ?? 0),
-          min_oi: String(Math.max(0, instance.swMinOi ?? 0)),
-          min_avg_trade_size: String(Math.max(0, instance.swMinAvgTradeSize ?? 0)),
-          min_taker_pct: String(Math.max(0, instance.swMinTakerPct ?? 0)),
-          min_account_duration: String(Math.max(0, instance.swMinAccountDuration ?? 0)),
-          min_tokens: String(Math.max(0, instance.swMinTokens ?? 0)),
-          min_win_rate: String(Math.max(0, instance.swMinWinRate ?? 0)),
-          min_trades_per_day: String(Math.max(0, instance.swMinTradesPerDay ?? 0))
-        });
-        if (instance.swMaxTradesPerDay != null) qs.set('max_trades_per_day', String(instance.swMaxTradesPerDay));
-        if (instance.swMaxFeePct != null) qs.set('max_fee_pct', String(instance.swMaxFeePct));
-        if (instance.swMaxFundingPct != null) qs.set('max_funding_pct', String(instance.swMaxFundingPct));
-        if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
-        const res = await queuedFetch(`/api/hyperliquid/smart_wallet_metrics?${qs}`, { signal });
-        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
-        const body = await res.json();
-        data = [{ wallets: body.wallets ?? [] } as unknown as AnyDatum];
+        if (instance.viewMode === 'chart') {
+          // Chart view: OI aggregated over EVERY found wallet (computed
+          // server-side from the same filters — the address list never crosses
+          // the wire, so it scales to thousands of wallets). Independent of the
+          // table fetch; each view caches its own slot.
+          data = await fetchSmartWalletOiWindow(sinceIso, untilIso, signal);
+        } else {
+          // Table view: the ranked top-N rows + the FULL found count (`total`).
+          const body = await fetchSmartWalletMetrics(signal);
+          data = [{ wallets: body.wallets, total: body.total } as unknown as AnyDatum];
+        }
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Token Leaderboard: one JSON fetch returns a per-token snapshot row set
@@ -1535,7 +1556,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Hyperliquid top-traders: leaderboard endpoint returns ranked rows
@@ -1558,7 +1579,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Hyperliquid top-positions: one fetch returns top-10 wallets AND
@@ -1575,7 +1596,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Top-wallets leaderboard kinds (aave_v*_top_wallets). One JSON fetch
@@ -1619,7 +1640,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // AAVE V4 chart kinds — ETH-only, 5 events (no flashloan). Same
@@ -1676,7 +1697,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const v4Event = AAVE_V4_KIND_TO_EVENT[effectiveKind];
@@ -1688,7 +1709,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
       }
@@ -1745,7 +1766,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const v2Event = AAVE_V2_KIND_TO_EVENT[effectiveKind];
@@ -1757,7 +1778,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
       }
@@ -1826,7 +1847,7 @@
         until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // AAVE chart kinds all hit the same /api/aave/aggregate endpoint with
@@ -1895,7 +1916,7 @@
           until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const lidoEvent = LIDO_KIND_TO_EVENT[effectiveKind];
@@ -1911,7 +1932,7 @@
         until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Uniswap V4 chart kinds. Pool keyed by (chain, sym0, sym1, fee,
@@ -1924,7 +1945,7 @@
           data = []; since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const buildV4Qs = (event: string) => {
@@ -1980,7 +2001,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const eventForKind = UNISWAP_V4_KIND_TO_EVENT[effectiveKind];
@@ -1992,7 +2013,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Aerodrome BASIC pools (Solidly v1, BASE only). Pool keyed by
@@ -2004,7 +2025,7 @@
           data = []; since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const buildAeroBasicQs = (event: string) => {
@@ -2071,7 +2092,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const eventForKind = AERO_BASIC_KIND_TO_EVENT[effectiveKind];
@@ -2083,7 +2104,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Aerodrome (concentrated pools, BASE only).
@@ -2093,7 +2114,7 @@
           data = []; since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const buildAeroQs = (event: string) => {
@@ -2160,7 +2181,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const eventForKind = AERO_CL_KIND_TO_EVENT[effectiveKind];
@@ -2172,7 +2193,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Uniswap V2 chart kinds — same fetch shape as V3 minus the fee_tier
@@ -2185,7 +2206,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const buildUniV2Qs = (event: string) => {
@@ -2251,7 +2272,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const eventForKind = UNISWAP_V2_KIND_TO_EVENT[effectiveKind];
@@ -2265,7 +2286,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       // Uniswap chart kinds. The single-event ones hit /api/uniswap/aggregate
@@ -2283,7 +2304,7 @@
           until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         const buildUniQs = (event: string) => {
@@ -2359,7 +2380,7 @@
           until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         // Single-event path (including uniswap_v3_net_swap_flow, which uses the
@@ -2394,7 +2415,7 @@
         until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       const aaveEvent = AAVE_V3_KIND_TO_EVENT[effectiveKind];
@@ -2425,7 +2446,7 @@
         until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
-        loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
       switch (instance.kind) {
@@ -2478,7 +2499,7 @@
           until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView, overlayData });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView, overlayData });
           return;
         }
         case 'oi':
@@ -2492,7 +2513,7 @@
             since = sinceIso; until = untilIso;
             loadedKey = loadKey();
             localView = defaultView(sinceIso, untilIso);
-            loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+            loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
             return;
           } else {
             url = `/api/open_interest?${new URLSearchParams(baseQS)}`;
@@ -2514,14 +2535,14 @@
             since = sinceIso; until = untilIso;
             loadedKey = loadKey();
             localView = defaultView(sinceIso, untilIso);
-            loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+            loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
             return;
           }
           data = await fetchSmartOiWindow(wire, sinceIso, untilIso, signal);
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         case 'fr': {
@@ -2584,7 +2605,7 @@
           localView = defaultView(sinceIso, untilIso);
           since = sinceIso;
           until = untilIso;
-          loadCache.set(instance.id, {
+          loadCache.set(cacheId(), {
             key: loadedKey,
             data,
             since,
@@ -2601,7 +2622,7 @@
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
           localView = defaultView(sinceIso, untilIso);
-          loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
       }
@@ -2613,7 +2634,7 @@
       until = untilIso;
       loadedKey = loadKey();
       localView = defaultView(sinceIso, untilIso);
-      loadCache.set(instance.id, {
+      loadCache.set(cacheId(), {
         key: loadedKey,
         data,
         since,
@@ -2658,6 +2679,73 @@
     qs.set('filter', JSON.stringify(wire));
     const res = await queuedFetch(`/api/hyperliquid/smart_oi?${qs}`, { signal });
     if (!res.ok) throw new Error(`hl_smart_oi ${res.status}`);
+    const b = await res.json();
+    const rows = (b.series ?? []) as Array<Record<string, number>>;
+    return rows.map((r) => ({
+      ...r,
+      open_interest: r.total_oi ?? 0,
+      open_interest_value: r.total_oi_value ?? 0
+    })) as unknown as AnyDatum[];
+  }
+
+  /** smart_wallets_table: the selection filter params shared by the Table
+   *  fetch (smart_wallet_metrics) and the Chart fetch (smart_wallet_oi). These
+   *  define WHICH wallets qualify; `token` here is the table's scope (swToken),
+   *  not the chart's OI token. */
+  function swSelectionParams(): URLSearchParams {
+    const qs = new URLSearchParams({
+      lookback: String(instance.swLookback ?? 7),
+      metric: instance.swMetric ?? 'sharpe',
+      snapshot: swSnapshotIso(),
+      min_days: String(Math.max(1, instance.swMinDays ?? 3)),
+      min_volume: String(Math.max(0, instance.swMinVolume ?? 100000)),
+      min_realized: String(instance.swMinRealized ?? 0),
+      min_oi: String(Math.max(0, instance.swMinOi ?? 0)),
+      min_avg_trade_size: String(Math.max(0, instance.swMinAvgTradeSize ?? 0)),
+      min_taker_pct: String(Math.max(0, instance.swMinTakerPct ?? 0)),
+      min_account_duration: String(Math.max(0, instance.swMinAccountDuration ?? 0)),
+      min_tokens: String(Math.max(0, instance.swMinTokens ?? 0)),
+      min_win_rate: String(Math.max(0, instance.swMinWinRate ?? 0)),
+      min_trades_per_day: String(Math.max(0, instance.swMinTradesPerDay ?? 0))
+    });
+    if (instance.swMaxTradesPerDay != null) qs.set('max_trades_per_day', String(instance.swMaxTradesPerDay));
+    if (instance.swMaxFeePct != null) qs.set('max_fee_pct', String(instance.swMaxFeePct));
+    if (instance.swMaxFundingPct != null) qs.set('max_funding_pct', String(instance.swMaxFundingPct));
+    if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
+    return qs;
+  }
+
+  /** smart_wallets_table (Table view): fetch the ranked top-N rows + `total`
+   *  (the FULL count of wallets passing the filters, which may far exceed the
+   *  returned rows). */
+  async function fetchSmartWalletMetrics(
+    signal?: AbortSignal
+  ): Promise<{ wallets: Array<{ wallet: string }>; total: number }> {
+    const qs = swSelectionParams();
+    qs.set('limit', '100');
+    const res = await queuedFetch(`/api/hyperliquid/smart_wallet_metrics?${qs}`, { signal });
+    if (!res.ok) throw new Error(`smart_wallets_table ${res.status}`);
+    const body = await res.json();
+    return { wallets: (body.wallets ?? []) as Array<{ wallet: string }>, total: body.total ?? 0 };
+  }
+
+  /** smart_wallets_table (Chart view): fetch the aggregate OI of ALL found
+   *  wallets for the chart token. The wallet set is resolved server-side from
+   *  the same selection filters, so an arbitrarily large set never crosses the
+   *  wire. Mapped into the same datum shape as fetchSmartOiWindow. */
+  async function fetchSmartWalletOiWindow(
+    sinceIso: string,
+    untilIso: string,
+    signal?: AbortSignal
+  ): Promise<AnyDatum[]> {
+    const qs = swSelectionParams();
+    qs.set('oi_token', instance.token);
+    qs.set('interval', instance.interval);
+    qs.set('since', sinceIso);
+    qs.set('until', untilIso);
+    qs.set('limit', '200000');
+    const res = await queuedFetch(`/api/hyperliquid/smart_wallet_oi?${qs}`, { signal });
+    if (!res.ok) throw new Error(`smart_wallet_oi ${res.status}`);
     const b = await res.json();
     const rows = (b.series ?? []) as Array<Record<string, number>>;
     return rows.map((r) => ({
@@ -2796,6 +2884,11 @@
       if (wire === null || wire === 'broken') return null;
       return (s, u, sig) => fetchSmartOiWindow(wire, s, u, sig);
     }
+    if (isDualViewKind(instance.kind) && instance.viewMode === 'chart') {
+      // OI of the found-wallet set, resolved server-side from the selection
+      // filters each window — no client-side wallet list needed.
+      return (s, u, sig) => fetchSmartWalletOiWindow(s, u, sig);
+    }
     if (instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl') {
       return (s, u, sig) => fetchHlOiWindow(s, u, sig);
     }
@@ -2858,7 +2951,7 @@
       merged.sort((a, b) => (a as { time: number }).time - (b as { time: number }).time);
       data = merged as AnyDatum[];
       since = newSinceIso;
-      loadCache.set(instance.id, { key: loadedKey, data, since, until, localView });
+      loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
     } catch (e) {
       if (signal.aborted) return;
       // Swallow — backfill is best-effort; the chart keeps its current data.
@@ -2893,7 +2986,7 @@
    *  in-flight fetch via currentLoad so a stuck request can be replaced. */
   async function reload() {
     loadedKey = '';
-    loadCache.delete(instance.id);
+    loadCache.delete(cacheId());
     await load(true);
   }
 
@@ -2983,7 +3076,7 @@
       if (!ma.enabled) continue;
       const color = MA_COLORS[idx] ?? '#fbbf24';
       const tag = `${ma.type.toUpperCase()}(${ma.length})`;
-      switch (instance.kind) {
+      switch (effectiveKind) {
         case 'book_depth':
           // book_depth MAs (share modes only) are handled by the dedicated
           // per-band stacked-MA path (bdShareMaData) — each band's share is
@@ -3011,7 +3104,7 @@
           // The wallet-count overlay line is added separately in oiLinesD
           // on a secondary axis and is intentionally excluded from MA
           // tracking.
-          const hlMode = (instance.kind === 'hl_smart_oi'
+          const hlMode = (effectiveKind === 'hl_smart_oi'
                           || (instance.exchange ?? 'binance') === 'hl')
             ? (instance.oiHlDisplay ?? 'total') : null;
           const useTok = (instance.oiUnit ?? 'usd') === 'token';
@@ -3909,7 +4002,7 @@
     // hl_smart_oi is HL-only by construction (no exchange field on the
     // instance), so treat it as `ex === 'hl'` for every mode branch below
     // — it renders one OI series for the (possibly combined) wallet set.
-    const ex = instance.kind === 'hl_smart_oi'
+    const ex = effectiveKind === 'hl_smart_oi'
       ? 'hl'
       : (instance.exchange ?? 'binance');
     const mode = instance.oiHlDisplay ?? 'total';
@@ -3958,7 +4051,7 @@
     // Smart-money OI: optional "wallets passing filter" line on the
     // secondary (right-side) axis — the count of wallets in the (combined)
     // set each day. Short-dashed blue so it reads as supplementary context.
-    if (instance.kind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)) {
+    if (effectiveKind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)) {
       base.push({
         key: 'wallet_count', label: 'Wallets', color: '#3b82f6',
         axis: 'secondary',
@@ -4459,7 +4552,10 @@
   // meaningless for them — the settings panel hides that whole block.
   let isTableviewKind = $derived(
     instance.kind === 'token_leaderboard'
-    || instance.kind === 'smart_wallets_table'
+    // Dual-view chart mode renders a real LineChart, so the chart-only settings
+    // (Point / Week lines / MA / zoom-sync) DO apply there — only the table view
+    // counts as a tableview kind.
+    || (instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart')
     || instance.kind === 'hl_top_traders'
     || instance.kind === 'hl_top_positions'
     || instance.kind === 'hl_top_vaults'
@@ -4781,7 +4877,7 @@
     // Pick the right per-kind primary-lines array. Falls through to an empty
     // range when no primary lines exist (overlay will render flat-centered).
     let primaryLines: typeof aaveLinesD = [];
-    if (instance.kind === 'oi' || instance.kind === 'hl_smart_oi') primaryLines = oiLinesD;
+    if (effectiveKind === 'oi' || effectiveKind === 'hl_smart_oi') primaryLines = oiLinesD;
     else if (instance.kind === 'fr') primaryLines = frLinesD;
     else if (instance.kind === 'book_depth') primaryLines = bdLinesD;
     else if (instance.kind === 'tt') primaryLines = ttLinesD;
@@ -4873,7 +4969,7 @@
   // the rendered colours depend on the long/short/total/ratio/pct/net
   // selector. Returns a small hex list — empty is fine.
   let hostPrimaryColors = $derived.by((): string[] => {
-    const k = instance.kind;
+    const k = effectiveKind;
     if (k === 'oi' || k === 'hl_smart_oi') {
       const ex = k === 'hl_smart_oi' ? 'hl' : (instance.exchange ?? 'binance');
       const mode = instance.oiHlDisplay ?? 'total';
@@ -4988,6 +5084,34 @@
         instance.width === 1 ? 'flex-wrap' : ''
       ].join(' ')}
     >
+      {#if isDualViewKind(instance.kind)}
+        <!-- Dual-view ("hyper") widget: toggle the native table vs the linked
+             chart (same widget, two views over the same data). Persisted on the
+             instance; each view's data is cached so toggling doesn't refetch. -->
+        <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
+          <button
+            type="button"
+            onclick={() => (instance.viewMode = 'table')}
+            class={'px-2 py-1 text-xs ' + ((instance.viewMode ?? 'table') !== 'chart'
+              ? 'bg-zinc-800 text-zinc-100'
+              : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="Table view"
+          >Table</button>
+          <button
+            type="button"
+            onclick={() => {
+              // Ensure the chart has a token + interval before switching in.
+              if (!instance.token) instance.token = instance.swToken || 'BTC';
+              if (!instance.interval) instance.interval = '1h';
+              instance.viewMode = 'chart';
+            }}
+            class={'px-2 py-1 text-xs border-l border-zinc-700 ' + ((instance.viewMode ?? 'table') === 'chart'
+              ? 'bg-zinc-800 text-zinc-100'
+              : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title="Chart view — OI of the found wallets"
+          >Chart</button>
+        </div>
+      {/if}
       {#if isLidoKind(instance.kind)}
         <!-- Lido kinds: chain dropdown. L1 kinds are ETH-pinned (disabled).
              L2 kinds list the chains DeFiStream has actually delivered for
@@ -5801,11 +5925,12 @@
              dimension (Binance-sourced, all tokens). Sorting lives in the table
              header, so the toolbar just carries a static source chip. -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">Binance · all tokens</span>
-      {:else if instance.kind === 'smart_wallets_table'}
-        <!-- Smart Wallets finder: HL-only. Every control (metric / lookback /
-             token selectors + the snapshot slider) lives inside the table's own
-             header; the min-days/min-volume guards live in the gear panel. The
-             toolbar just carries a static source chip. -->
+      {:else if instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart'}
+        <!-- Smart Wallets finder (TABLE view): HL-only. Every control (metric /
+             lookback / token selectors + the snapshot slider) lives inside the
+             table's own header; the min-days/min-volume guards live in the gear
+             panel. The toolbar just carries a static source chip. (Chart view
+             falls through to the generic OI controls below.) -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL · smart wallets</span>
       {:else}
         {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'volume' || instance.kind === 'pc' || instance.kind === 'ls'}
@@ -5871,7 +5996,7 @@
             {/each}
           </select>
         {/if}
-        {#if (instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl') || instance.kind === 'hl_smart_oi'}
+        {#if (instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl') || effectiveKind === 'hl_smart_oi'}
           <!-- HL-only display selector. position_history carries per-wallet
                sides so we can split OI into long/short or show all three on
                one chart. Same selector for hl_smart_oi which is HL-only by
@@ -5911,7 +6036,7 @@
             <option value="asks_bids_share">Asks + Bids share</option>
           </select>
         {/if}
-        {#if (instance.kind === 'oi' || instance.kind === 'hl_smart_oi') && !((instance.kind === 'hl_smart_oi' || (instance.exchange ?? 'binance') === 'hl') && ((instance.oiHlDisplay ?? 'total') === 'long_to_short' || (instance.oiHlDisplay ?? 'total') === 'net_pct'))}
+        {#if (instance.kind === 'oi' || effectiveKind === 'hl_smart_oi') && !((effectiveKind === 'hl_smart_oi' || (instance.exchange ?? 'binance') === 'hl') && ((instance.oiHlDisplay ?? 'total') === 'long_to_short' || (instance.oiHlDisplay ?? 'total') === 'net_pct'))}
           <!-- USD vs token-amount unit selector for OI. Hidden in the Long/Short
                ratio mode where the unit cancels out. -->
           <select
@@ -5947,7 +6072,7 @@
           {/each}
         </select>
       {/if}
-      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'smart_wallets_table'}
+      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
         <select
           bind:value={instance.interval}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -6035,6 +6160,17 @@
         title="Add overlay series"
         class="text-zinc-400 hover:text-zinc-100 leading-none cursor-pointer flex items-center"
       ><PlusCircle size={14} strokeWidth={1.75} /></button>
+    </div>
+  {/if}
+
+  {#if isDualViewKind(instance.kind) && instance.viewMode === 'chart'}
+    <!-- Snapshot picker for chart mode — the SAME control the table uses
+         (shared SnapshotSlider, same range/grain/OK-gating), so the chosen day,
+         the filtered wallet set, and the resulting OI are identical whether
+         picked here or in the table. Snapshot only changes WHICH wallets
+         qualify, never the OI window. -->
+    <div class="flex items-center px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/30">
+      <SnapshotSlider snapshot={swSnapshotIso()} onChangeSnapshot={(iso) => (instance.swSnapshot = iso)} />
     </div>
   {/if}
 
@@ -6251,11 +6387,14 @@
         >Apply</button>
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
-      {#if instance.kind === 'hl_smart_oi'}
+      {#if effectiveKind === 'hl_smart_oi'}
+        {#if instance.kind === 'hl_smart_oi'}
         <!-- Saved-filter picker: selecting several AND-combines them into one
              effective wallet set (per-day intersection) and the chart shows a
              single OI series for it. Filters are created / edited on the
-             Filters page; editing one re-fetches this chart automatically. -->
+             Filters page; editing one re-fetches this chart automatically.
+             (Dual-view chart mode gets its wallet set from the table's found
+             rows, so the picker is hidden there.) -->
         <div class="basis-full flex flex-col gap-1.5 rounded-md border border-zinc-700 bg-zinc-900/40 p-2.5 text-xs">
           <div class="flex items-center gap-2">
             <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Filters</span>
@@ -6290,6 +6429,7 @@
             </div>
           {/if}
         </div>
+        {/if}
         <label
           class="flex items-center gap-1.5 text-zinc-300 cursor-pointer"
           title="Overlay a secondary-axis line showing how many wallets pass the criteria each day — spot over-filtering before it surprises you."
@@ -6830,18 +6970,19 @@
         formatY={fmtRatio}
         formatTooltip={(v) => v.toPrecision(5)}
       />
-    {:else if instance.kind === 'oi' || instance.kind === 'hl_smart_oi'}
+    {:else if effectiveKind === 'oi' || effectiveKind === 'hl_smart_oi'}
       <!-- HL Long/Short ratio is unitless (1.03, not $1.03). Otherwise USD
-           or token amount based on the oiUnit selector. hl_smart_oi reuses
-           the same rendering — its payload shape matches /oi_split. -->
-      {@const oiHlMode = (instance.kind === 'hl_smart_oi'
+           or token amount based on the oiUnit selector. hl_smart_oi (incl.
+           smart_wallets_table chart mode) reuses the same rendering — its
+           payload shape matches /oi_split. -->
+      {@const oiHlMode = (effectiveKind === 'hl_smart_oi'
                           || (instance.exchange ?? 'binance') === 'hl')
                           ? (instance.oiHlDisplay ?? 'total') : null}
       {@const oiIsRatio = oiHlMode === 'long_to_short'}
       {@const oiIsPct = oiHlMode === 'net_pct'}
       {@const oiIsNet = oiHlMode === 'net'}
       {@const oiUseToken = (instance.oiUnit ?? 'usd') === 'token' && !oiIsRatio && !oiIsPct}
-      {@const showWalletCount = instance.kind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)}
+      {@const showWalletCount = effectiveKind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)}
       <LineChart
         data={data as OpenInterestRow[]}
         lines={oiLinesM}
@@ -7098,6 +7239,7 @@
     {:else if instance.kind === 'smart_wallets_table'}
       <SmartWalletMetricsTable
         rows={data.length > 0 ? ((data[0] as unknown as {wallets?: import('$lib/components/SmartWalletMetricsTable.svelte').SmartWalletRow[]}).wallets ?? []) : []}
+        total={data.length > 0 ? ((data[0] as unknown as {total?: number}).total ?? 0) : 0}
         {tokens}
         metric={(instance.swMetric ?? 'sharpe') as SmartWalletMetric}
         lookback={(instance.swLookback ?? 7) as SmartWalletLookback}

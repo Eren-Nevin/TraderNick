@@ -730,6 +730,19 @@ export function isLeaderboardKind(kind: ChartKind): boolean {
   return LEADERBOARD_KIND_CONFIG[kind] !== undefined;
 }
 
+/** Dual-view ("hyper") widgets: a single widget that can render EITHER its
+ *  native table OR a chart over the same underlying data, toggled via
+ *  instance.viewMode. Each entry maps a table kind → the chart kind whose
+ *  rendering + controls it borrows in 'chart' mode. The one seam to extend
+ *  when adding future table/chart dual widgets. */
+export const DUAL_VIEW_KINDS: Partial<Record<ChartKind, { chartKind: ChartKind }>> = {
+  smart_wallets_table: { chartKind: 'hl_smart_oi' }
+};
+
+export function isDualViewKind(kind: ChartKind): boolean {
+  return DUAL_VIEW_KINDS[kind] !== undefined;
+}
+
 /** AAVE chart kinds collected for convenience (loop over them on the
  *  lending page + share helpers). Order matters — used as the default
  *  layout order on the Lending page. */
@@ -1799,6 +1812,10 @@ export type ChartInstance = {
   /** smart_wallets_table only: maximum trades per active day. null = no
    *  ceiling. */
   swMaxTradesPerDay?: number | null;
+  /** Dual-view widgets only (see DUAL_VIEW_KINDS): which sub-view is active.
+   *  'table' renders the kind's normal table; 'chart' renders the mapped chart
+   *  kind over the same widget's data. Persisted per widget; default 'table'. */
+  viewMode?: 'table' | 'chart';
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */

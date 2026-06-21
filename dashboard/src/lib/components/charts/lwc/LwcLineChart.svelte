@@ -275,16 +275,24 @@
     const extentChanged = first !== lastAppliedFirst || last !== lastAppliedLast;
     if (!extentChanged && lastEmittedFrom === target[0] && lastEmittedTo === target[1]) return;
     suppressViewEmit = true;
-    if (target[1] > last || target[0] < first) {
-      chart.timeScale().setVisibleLogicalRange({
-        from: timeToLogical(target[0], data),
-        to: timeToLogical(target[1], data)
-      });
-    } else {
-      chart.timeScale().setVisibleRange({
-        from: target[0] as UTCTimestamp,
-        to: target[1] as UTCTimestamp
-      });
+    // Applying a range can throw "Value is null" if the chart's time scale is
+    // momentarily empty — e.g. when this LineChart is freshly mounted by a
+    // dual-view Table→Chart swap and the range effect races the first setData.
+    // It self-heals on the next data/extent tick, so contain the transient.
+    try {
+      if (target[1] > last || target[0] < first) {
+        chart.timeScale().setVisibleLogicalRange({
+          from: timeToLogical(target[0], data),
+          to: timeToLogical(target[1], data)
+        });
+      } else {
+        chart.timeScale().setVisibleRange({
+          from: target[0] as UTCTimestamp,
+          to: target[1] as UTCTimestamp
+        });
+      }
+    } catch {
+      /* transient empty time scale — re-applied on the next tick */
     }
     lastEmittedFrom = target[0];
     lastEmittedTo = target[1];

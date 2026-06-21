@@ -1138,6 +1138,20 @@
           typeof r.swMinTradesPerDay === 'number' && r.swMinTradesPerDay >= 0 ? r.swMinTradesPerDay : 0;
         inst.swMaxTradesPerDay =
           typeof r.swMaxTradesPerDay === 'number' ? r.swMaxTradesPerDay : null;
+        // Dual-view: 'table' (default) or 'chart' (linked smart-OI of the found
+        // wallets). Chart mode needs a token + interval + OI display/unit, which
+        // the base smart_wallets_table instance otherwise lacks — default them
+        // so the chart works the moment the user toggles in.
+        inst.viewMode = r.viewMode === 'chart' ? 'chart' : 'table';
+        inst.token =
+          typeof r.token === 'string' && r.token.length > 0 ? r.token : (inst.swToken || 'BTC');
+        inst.interval =
+          typeof r.interval === 'string' && r.interval.length > 0 ? (r.interval as Interval) : '1h';
+        inst.oiHlDisplay =
+          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net'] as const)
+            .includes(r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>)
+            ? (r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>) : 'total';
+        inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
       }
       // Compound overlays — preserved across reloads. Each entry is validated
       // through sanitizeOverlay() so a corrupt save can't strand the chart.

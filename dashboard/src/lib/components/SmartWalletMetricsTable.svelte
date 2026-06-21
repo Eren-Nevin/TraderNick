@@ -18,8 +18,7 @@
   } from '$lib/components/charts/config';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import WalletAddress from '$lib/components/WalletAddress.svelte';
-  import { DAY_SLIDER_MAX_BACK, isoToBack, backToIso } from '$lib/daySlider';
-  import { untrack } from 'svelte';
+  import SnapshotSlider from '$lib/components/SnapshotSlider.svelte';
 
   export type SmartWalletRow = {
     wallet: string;
@@ -36,6 +35,7 @@
 
   let {
     rows = [],
+    total = 0,
     tokens = [],
     metric,
     lookback,
@@ -49,6 +49,7 @@
     error = null
   }: {
     rows: SmartWalletRow[];
+    total?: number;
     tokens: string[];
     metric: SmartWalletMetric;
     lookback: SmartWalletLookback;
@@ -110,26 +111,17 @@
     });
   });
 
-  // ── Snapshot day slider (oldest left → newest right). Local sliderPos is the
-  // source of truth (bind:value) so dragging isn't fought by a re-asserted
-  // one-way value; we push changes up via onChangeSnapshot and re-sync from the
-  // `snapshot` prop only when it diverges externally (untrack guards the loop). ──
-  const MAX_BACK = DAY_SLIDER_MAX_BACK;
-  let sliderPos = $state(MAX_BACK); // synced from `snapshot` by the effect below
-  $effect(() => {
-    const want = MAX_BACK - isoToBack(snapshot);
-    if (untrack(() => sliderPos) !== want) sliderPos = want;
-  });
-  function commitPos() {
-    onChangeSnapshot(backToIso(MAX_BACK - sliderPos));
-  }
+  // Snapshot picker lives in the shared <SnapshotSlider> so the table and the
+  // dual-view chart toolbar use the exact same control (identical range/grain/
+  // applied day). Snapshot only changes the filtered wallet SET.
 </script>
 
 <div class="h-full flex flex-col text-xs" use:stopDragEvents>
   <!-- Selectors row -->
   <div class="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
     <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-700 text-zinc-400"
-      >Smart Wallets{#if !loading} ({rows.length}){/if}</span
+      title={!loading && total > rows.length ? `${total.toLocaleString()} wallets found; showing top ${rows.length}` : undefined}
+      >Smart Wallets{#if !loading} ({total.toLocaleString()}){/if}</span
     >
     <span class="text-zinc-500">Metric:</span>
     <select
@@ -175,25 +167,8 @@
   </div>
 
   <!-- Snapshot slider row (just below the header selectors) -->
-  <div class="flex items-center gap-3 px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/30">
-    <span class="text-zinc-500 whitespace-nowrap">Snapshot:</span>
-    <span class="font-mono text-zinc-200 whitespace-nowrap">{snapshot}</span>
-    <input
-      type="range"
-      min="0"
-      max={MAX_BACK}
-      step="1"
-      bind:value={sliderPos}
-      oninput={commitPos}
-      class="flex-1 accent-blue-500 cursor-pointer"
-      title="Drag to change the snapshot day (1-day grain)"
-    />
-    <button
-      type="button"
-      onclick={() => { sliderPos = MAX_BACK; commitPos(); }}
-      class="text-[10px] text-zinc-500 hover:text-zinc-200 underline decoration-dotted whitespace-nowrap"
-      title="Jump to the most recent day"
-    >Today</button>
+  <div class="flex items-center px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/30">
+    <SnapshotSlider {snapshot} {onChangeSnapshot} />
   </div>
 
   <div class="flex-1 overflow-auto scrollbar-none">

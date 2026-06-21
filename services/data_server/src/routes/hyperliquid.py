@@ -11,6 +11,7 @@ already-pre-aggregated trader performance from hl_trade_history for the
 table-chart kind on the dashboard.
 """
 from __future__ import annotations
+import json
 import logging
 import time
 from datetime import datetime, timedelta, timezone
@@ -443,64 +444,38 @@ async def leaderboard(request):
     })
 
 
-@bp.get("/hyperliquid/smart_wallet_metrics")
-@throttled("heavy")
-async def smart_wallet_metrics(request):
-    """Experimental smart-wallet finder table.
+def _build_smart_wallet_selection(request):
+    """Parse the smart-wallet finder's filter params and build the shared
+    wallet-SELECTION SQL: the CTE chain that computes each wallet's window
+    metrics, plus the FROM/JOIN/WHERE that keeps only wallets passing every
+    min_*/max_* guard.
 
-    For a single fixed window (one `lookback` ending at a `snapshot` day) it
-    ranks wallets by the selected `metric` and returns, per wallet, the core
-    columns plus the metric column:
+    Returns a dict with `cte_block` (CTE definitions to follow `WITH`),
+    `from_where_block` (FROM…JOIN…WHERE), `oi_token_select`, `order_col`,
+    `params`, and `echo` (the parsed values, for the response). Raises
+    ValueError(msg) on a bad param so the caller can 400.
 
-      volume, realized_pnl, unrealized_pnl, oi_token, oi_usd, <metric>
-
-    All figures are Hyperliquid-only. Scope is GLOBAL (all tokens) when `token`
-    is absent/`__all__`, else restricted to that token. Global reads the fast
-    per-(day,wallet) rollups (hl_trade_history_wallet_daily / Table A,
-    hl_position_history_oi_wallet_daily / Table B); token scope reads the
-    source tables.
-
-    metric=sharpe is an ANNUALIZED (×√365), non-capital-normalized Sharpe:
-    mean(daily_total_pnl) / stddevPop(daily_total_pnl) × √365 over ALL days in
-    the window (including idle, non-trade days — an idle day's daily_total is its
-    mark-to-market unrealized change), where
-    daily_total_pnl[d] = Δrealized[d] + Δunrealized[d]. Counting all days avoids
-    flattering wallets that look great on their few trade days but bleed on the
-    days in between. `min_days` is still a minimum on ACTIVE (trade) days. Minus
-    the /OI normalization vs the smart-money Sharpe.
-
-    A wallet only enters the ranking if it has >= min_days active days AND >=
-    min_volume window volume (the noise guard — both configurable). Top `limit`
-    by the metric; the client re-sorts the returned set on any column.
-
-    Query params:
-      token     — token symbol; absent or '__all__' → global (all tokens)
-      lookback  — window length in days (1|7|30|90; default 7)
-      snapshot  — ISO date/datetime ending the window (default: start of today)
-      metric    — ranking metric; only 'sharpe' for now (default 'sharpe')
-      order_by  — sharpe|volume|realized|unrealized|oi_usd (default = metric)
-      limit     — top-N cap (default 100, max 500)
-      min_days  — min active days in window (noise guard; default 3)
-      min_volume— min window volume USD (noise guard; default 0)
-      min_realized— min window realized PnL USD (default 0 → profitable only)
-      min_oi    — min open interest USD as of the snapshot (default 0)
+    Reused by /smart_wallet_metrics (ranked table, top-N) and /smart_wallet_oi
+    (OI aggregated over EVERY passing wallet — possibly far more than the table
+    shows). Keeping selection in one place guarantees the chart plots exactly
+    the set the table counts.
     """
     token = request.args.get("token")
     if token in ("", "__all__", "__global__", "all"):
         token = None
     lookback = int(request.args.get("lookback", "7"))
     if lookback not in (1, 7, 30, 90):
-        return response.json({"error": "lookback must be 1|7|30|90"}, status=400)
+        raise ValueError("lookback must be 1|7|30|90")
     metric = request.args.get("metric", "sharpe")
     if metric not in ("sharpe",):
-        return response.json({"error": "unsupported metric"}, status=400)
+        raise ValueError("unsupported metric")
     order_by = request.args.get("order_by", metric)
     ORDER_COLS = {
         "sharpe": "metric", "volume": "volume", "realized": "realized_pnl",
         "unrealized": "unrealized_pnl", "oi_usd": "oi_usd",
     }
     if order_by not in ORDER_COLS:
-        return response.json({"error": "bad order_by"}, status=400)
+        raise ValueError("bad order_by")
     limit = min(int(request.args.get("limit", "100")), 500)
     min_days = max(int(request.args.get("min_days", "3")), 1)
     try:
@@ -560,7 +535,7 @@ async def smart_wallet_metrics(request):
         try:
             e_dt = _parse_iso(snap_arg).replace(tzinfo=None)
         except Exception:  # noqa: BLE001
-            return response.json({"error": "invalid snapshot"}, status=400)
+            raise ValueError("invalid snapshot")
         e_dt = e_dt.replace(hour=0, minute=0, second=0, microsecond=0)
     else:
         e_dt = datetime.now(timezone.utc).replace(
@@ -578,17 +553,12 @@ async def smart_wallet_metrics(request):
         "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
         "min_trades_per_day": min_trades_per_day,
     }
-    # Account age: first recorded trade day per wallet, over ALL history (the
-    # rollup only goes back to its TTL horizon, so this is "first seen by us").
     first_seen = """
         first_seen AS (
             SELECT wallet, min(day) AS first_day
             FROM tradernick.hl_trade_history_wallet_daily
             GROUP BY wallet
         )"""
-    # Execution-quality CTEs (same for both scopes; token-scoped variant adds the
-    # token filter). taker = taker fill volume / total fill volume; funding =
-    # net funding PnL (positive = received). Window = (start_day, end_day].
     tok_pred = "AND token = {token:String}" if token else ""
     taker_agg = f"""
         taker_agg AS (
@@ -609,7 +579,6 @@ async def smart_wallet_metrics(request):
         )"""
 
     if token is None:
-        # ── GLOBAL: fast per-(day,wallet) rollups (HIP3 already excluded in A/B).
         win_cte = """
         ta_e AS (
             SELECT wallet, sumMerge(volume_state) AS volume, sumMerge(pnl_state) AS realized,
@@ -674,9 +643,8 @@ async def smart_wallet_metrics(request):
             WHERE day = (SELECT max(day) FROM tradernick.hl_position_history_oi_wallet_daily WHERE day <= {end_day:Date})
             GROUP BY wallet
         )"""
-        oi_token_select = "NULL AS oi_token"  # token-unit OI is meaningless across tokens
+        oi_token_select = "NULL AS oi_token"
     else:
-        # ── TOKEN-scoped: read the source tables, restricted to one token.
         params["token"] = token
         win_cte = """
         win AS (
@@ -748,8 +716,7 @@ async def smart_wallet_metrics(request):
         )"""
         oi_token_select = "coalesce(oi.oi_token, 0) AS oi_token"
 
-    sql = f"""
-        WITH
+    cte_block = f"""
         {win_cte},
         {real_daily},
         real_delta AS (
@@ -768,10 +735,6 @@ async def smart_wallet_metrics(request):
                          ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
         ),
         daily_series AS (
-            -- ALL days in the window (not just trade days): an idle day still
-            -- has a daily_total = its mark-to-market unrealized change, so a
-            -- wallet bleeding on days it doesn't trade is reflected honestly.
-            -- d_tc is kept to count ACTIVE days for the min_days noise guard.
             SELECT rd.d AS d, rd.wallet AS wallet,
                 rd.d_real + coalesce(ed.d_un, 0) AS daily_total,
                 rd.d_tc AS d_tc
@@ -780,7 +743,6 @@ async def smart_wallet_metrics(request):
             WHERE rd.d > {{start_day:Date}}
         ),
         sharpe_agg AS (
-            -- Sharpe over ALL days; n_days = ACTIVE (trade) days for the guard.
             SELECT wallet,
                 countIf(d_tc > 0)      AS n_days,
                 avg(daily_total)       AS mean_pnl,
@@ -795,13 +757,106 @@ async def smart_wallet_metrics(request):
         {oi_now},
         {taker_agg},
         {funding_agg},
-        {first_seen}
+        {first_seen}"""
+
+    from_where_block = """
+        FROM win w
+        LEFT JOIN sharpe_agg sa ON sa.wallet = w.wallet
+        LEFT JOIN unreal_now u  ON u.wallet = w.wallet
+        LEFT JOIN oi_now oi     ON oi.wallet = w.wallet
+        LEFT JOIN taker_agg tk  ON tk.wallet = w.wallet
+        LEFT JOIN funding_agg fn ON fn.wallet = w.wallet
+        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet
+        WHERE w.volume >= {min_volume:Float64}
+          AND w.realized >= {min_realized:Float64}
+          AND coalesce(oi.oi_usd, 0) >= {min_oi:Float64}
+          AND coalesce(sa.n_days, 0) >= {min_days:UInt32}
+          AND coalesce(w.volume / nullIf(w.trades, 0), 0) >= {min_avg_trade_size:Float64}
+          AND coalesce(100 * tk.taker_vol / nullIf(tk.total_vol, 0), 0) >= {min_taker_pct:Float64}
+          AND (w.realized <= 0 OR 100 * w.fees / w.realized <= {max_fee_pct:Float64})
+          AND (w.realized <= 0 OR 100 * coalesce(fn.funding, 0) / w.realized <= {max_funding_pct:Float64})
+          AND coalesce(tk.n_tokens, 0) >= {min_tokens:UInt32}
+          AND coalesce(dateDiff('day', fseen.first_day, {end_day:Date}), 0) >= {min_account_duration:UInt32}
+          AND coalesce(sa.win_rate, 0) >= {min_win_rate:Float64}
+          AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) <= {max_trades_per_day:Float64}
+          AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) >= {min_trades_per_day:Float64}"""
+
+    echo = {
+        "metric": metric, "order_by": order_by, "token": token,
+        "lookback": lookback, "snapshot": end_day.isoformat(),
+        "limit": limit, "min_days": min_days, "min_volume": min_volume,
+        "min_realized": min_realized, "min_oi": min_oi,
+        "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
+        "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
+        "min_account_duration": min_account_duration, "min_tokens": min_tokens,
+        "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
+        "min_trades_per_day": min_trades_per_day,
+    }
+    return {
+        "cte_block": cte_block, "from_where_block": from_where_block,
+        "oi_token_select": oi_token_select, "order_col": ORDER_COLS[order_by],
+        "params": params, "echo": echo,
+    }
+
+
+@bp.get("/hyperliquid/smart_wallet_metrics")
+@throttled("heavy")
+async def smart_wallet_metrics(request):
+    """Experimental smart-wallet finder table.
+
+    For a single fixed window (one `lookback` ending at a `snapshot` day) it
+    ranks wallets by the selected `metric` and returns, per wallet, the core
+    columns plus the metric column:
+
+      volume, realized_pnl, unrealized_pnl, oi_token, oi_usd, <metric>
+
+    All figures are Hyperliquid-only. Scope is GLOBAL (all tokens) when `token`
+    is absent/`__all__`, else restricted to that token. Global reads the fast
+    per-(day,wallet) rollups (hl_trade_history_wallet_daily / Table A,
+    hl_position_history_oi_wallet_daily / Table B); token scope reads the
+    source tables.
+
+    metric=sharpe is an ANNUALIZED (×√365), non-capital-normalized Sharpe:
+    mean(daily_total_pnl) / stddevPop(daily_total_pnl) × √365 over ALL days in
+    the window (including idle, non-trade days — an idle day's daily_total is its
+    mark-to-market unrealized change), where
+    daily_total_pnl[d] = Δrealized[d] + Δunrealized[d]. Counting all days avoids
+    flattering wallets that look great on their few trade days but bleed on the
+    days in between. `min_days` is still a minimum on ACTIVE (trade) days. Minus
+    the /OI normalization vs the smart-money Sharpe.
+
+    A wallet only enters the ranking if it has >= min_days active days AND >=
+    min_volume window volume (the noise guard — both configurable). Top `limit`
+    by the metric; the client re-sorts the returned set on any column.
+
+    Query params:
+      token     — token symbol; absent or '__all__' → global (all tokens)
+      lookback  — window length in days (1|7|30|90; default 7)
+      snapshot  — ISO date/datetime ending the window (default: start of today)
+      metric    — ranking metric; only 'sharpe' for now (default 'sharpe')
+      order_by  — sharpe|volume|realized|unrealized|oi_usd (default = metric)
+      limit     — top-N cap (default 100, max 500)
+      min_days  — min active days in window (noise guard; default 3)
+      min_volume— min window volume USD (noise guard; default 0)
+      min_realized— min window realized PnL USD (default 0 → profitable only)
+      min_oi    — min open interest USD as of the snapshot (default 0)
+    """
+    try:
+        sel = _build_smart_wallet_selection(request)
+    except ValueError as e:
+        return response.json({"error": str(e)}, status=400)
+
+    # `count() OVER ()` rides the filtered (pre-LIMIT) set, so total_found is the
+    # FULL number of wallets passing every guard even though we only return the
+    # top `limit` rows. The table shows the top-N but reports this total.
+    sql = f"""
+        WITH {sel['cte_block']}
         SELECT
             w.wallet AS wallet,
             w.volume AS volume,
             w.realized AS realized_pnl,
             coalesce(u.unrealized, 0) AS unrealized_pnl,
-            {oi_token_select},
+            {sel['oi_token_select']},
             coalesce(oi.oi_usd, 0) AS oi_usd,
             coalesce(sa.sharpe, 0) AS metric,
             coalesce(sa.n_days, 0) AS n_days,
@@ -813,32 +868,14 @@ async def smart_wallet_metrics(request):
             dateDiff('day', fseen.first_day, {{end_day:Date}}) AS account_age_days,
             coalesce(sa.win_rate, 0) AS win_rate,
             w.trades / nullIf(sa.n_days, 0) AS trades_per_day,
-            dictGet('tradernick.wallet_labels', 'categories', lower(w.wallet)) AS categories
-        FROM win w
-        LEFT JOIN sharpe_agg sa ON sa.wallet = w.wallet
-        LEFT JOIN unreal_now u  ON u.wallet = w.wallet
-        LEFT JOIN oi_now oi     ON oi.wallet = w.wallet
-        LEFT JOIN taker_agg tk  ON tk.wallet = w.wallet
-        LEFT JOIN funding_agg fn ON fn.wallet = w.wallet
-        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet
-        WHERE w.volume >= {{min_volume:Float64}}
-          AND w.realized >= {{min_realized:Float64}}
-          AND coalesce(oi.oi_usd, 0) >= {{min_oi:Float64}}
-          AND coalesce(sa.n_days, 0) >= {{min_days:UInt32}}
-          AND coalesce(w.volume / nullIf(w.trades, 0), 0) >= {{min_avg_trade_size:Float64}}
-          AND coalesce(100 * tk.taker_vol / nullIf(tk.total_vol, 0), 0) >= {{min_taker_pct:Float64}}
-          AND (w.realized <= 0 OR 100 * w.fees / w.realized <= {{max_fee_pct:Float64}})
-          AND (w.realized <= 0 OR 100 * coalesce(fn.funding, 0) / w.realized <= {{max_funding_pct:Float64}})
-          AND coalesce(tk.n_tokens, 0) >= {{min_tokens:UInt32}}
-          AND coalesce(dateDiff('day', fseen.first_day, {{end_day:Date}}), 0) >= {{min_account_duration:UInt32}}
-          AND coalesce(sa.win_rate, 0) >= {{min_win_rate:Float64}}
-          AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) <= {{max_trades_per_day:Float64}}
-          AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) >= {{min_trades_per_day:Float64}}
-        ORDER BY {ORDER_COLS[order_by]} DESC
+            dictGet('tradernick.wallet_labels', 'categories', lower(w.wallet)) AS categories,
+            count() OVER () AS total_found
+        {sel['from_where_block']}
+        ORDER BY {sel['order_col']} DESC
         LIMIT {{limit:UInt32}}
     """
     ch = await client()
-    rows = await ch.query(sql, parameters=params)
+    rows = await ch.query(sql, parameters=sel["params"])
     wallets = [
         {
             "wallet": r[0],
@@ -861,16 +898,10 @@ async def smart_wallet_metrics(request):
         }
         for r in rows.result_rows
     ]
+    total = int(rows.result_rows[0][17]) if rows.result_rows else 0
     return response.json({
-        "metric": metric, "order_by": order_by, "token": token,
-        "lookback": lookback, "snapshot": end_day.isoformat(),
-        "limit": limit, "min_days": min_days, "min_volume": min_volume,
-        "min_realized": min_realized, "min_oi": min_oi,
-        "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
-        "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
-        "min_account_duration": min_account_duration, "min_tokens": min_tokens,
-        "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
-        "min_trades_per_day": min_trades_per_day,
+        **sel["echo"],
+        "total": total,
         "wallets": wallets,
     })
 
@@ -999,6 +1030,121 @@ async def smart_oi(request):
         "token": token,
         "interval": interval,
         "selector": selector.summary(),
+        "series": series,
+    })
+
+
+@bp.get("/hyperliquid/smart_wallet_oi")
+@throttled("heavy")
+async def smart_wallet_oi(request):
+    """Per-bucket HL OI aggregated over EVERY wallet the smart-wallet finder
+    selects — not just the table's top-N. Reuses the exact selection from
+    /smart_wallet_metrics (same query params) as a `passing` CTE, then sums OI
+    for `oi_token` across [since, until) for wallets in that set. This is how the
+    finder's Chart view plots the OI of all found wallets (possibly thousands)
+    without ever shipping the address list to the client.
+
+    Selection params (define the wallet set; identical to /smart_wallet_metrics):
+      token (scope; absent = global), lookback, snapshot, and all min_*/max_*.
+    OI params:
+      oi_token — the token whose OI to plot (required; the table scope `token`
+                 only filters WHICH wallets qualify, not which OI to sum).
+      interval, since, until, limit — same as /smart_oi.
+    Returns the /oi_split-shaped series + wallet_count.
+    """
+    oi_token = request.args.get("oi_token")
+    interval = request.args.get("interval", "1h")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    oi_limit = int(request.args.get("limit", "200000"))
+    if not oi_token:
+        return response.json({"error": "missing oi_token"}, status=400)
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    try:
+        sel = _build_smart_wallet_selection(request)
+    except ValueError as e:
+        return response.json({"error": str(e)}, status=400)
+
+    seconds = INTERVAL_SECONDS[interval]
+    oi_since_dt = _parse_iso(since)
+    oi_until_dt = _parse_iso(until)
+    # Same MV cascade as /smart_oi.
+    if seconds >= 3600 and seconds % 3600 == 0:
+        oi_source = "tradernick.hl_position_history_1h"
+        oi_time_col = "bucket"
+        oi_amount_expr = "argMaxMerge(amount_state)"
+        oi_size_expr   = "argMaxMerge(size_state)"
+    elif seconds >= 900 and seconds % 900 == 0:
+        oi_source = "tradernick.hl_position_history_15m"
+        oi_time_col = "bucket"
+        oi_amount_expr = "argMaxMerge(amount_state)"
+        oi_size_expr   = "argMaxMerge(size_state)"
+    else:
+        oi_source = "tradernick.hl_position_history"
+        oi_time_col = "time"
+        oi_amount_expr = "argMax(amount, time)"
+        oi_size_expr   = "argMax(size,   time)"
+
+    params = dict(sel["params"])
+    params.update({
+        "seconds": seconds, "oi_token": oi_token,
+        "oi_since": oi_since_dt, "oi_until": oi_until_dt, "oi_limit": oi_limit,
+    })
+
+    sql = f"""
+        WITH {sel['cte_block']},
+        passing AS (
+            SELECT w.wallet AS wallet
+            {sel['from_where_block']}
+        )
+        SELECT
+            toUnixTimestamp(bucket)                AS bucket,
+            sumIf(latest_amount, side='long')      AS long_oi,
+            sumIf(latest_amount, side='short')     AS short_oi,
+            sum(latest_amount)                     AS total_oi,
+            sumIf(latest_size,   side='long')      AS long_oi_value,
+            sumIf(latest_size,   side='short')     AS short_oi_value,
+            sum(latest_size)                       AS total_oi_value,
+            toUInt32(uniqExact(wallet))            AS wallet_count
+        FROM (
+            SELECT
+                toStartOfInterval({oi_time_col}, INTERVAL {{seconds:UInt32}} SECOND) AS bucket,
+                wallet, side,
+                {oi_amount_expr} AS latest_amount,
+                {oi_size_expr}   AS latest_size
+            FROM {oi_source}
+            WHERE token = {{oi_token:String}}
+              AND wallet IN (SELECT wallet FROM passing)
+              AND {oi_time_col} >= {{oi_since:DateTime}}
+              AND {oi_time_col} <  {{oi_until:DateTime}}
+            GROUP BY bucket, wallet, side
+        ) p
+        GROUP BY bucket
+        ORDER BY bucket
+        LIMIT {{oi_limit:UInt32}}
+    """
+
+    ch = await client()
+    rows = await ch.query(sql, parameters=params)
+    series = [
+        {
+            "time": int(r[0]),
+            "long_oi": float(r[1]),
+            "short_oi": float(r[2]),
+            "total_oi": float(r[3]),
+            "long_oi_value": float(r[4]),
+            "short_oi_value": float(r[5]),
+            "total_oi_value": float(r[6]),
+            "wallet_count": int(r[7]),
+        }
+        for r in rows.result_rows
+    ]
+    return response.json({
+        "token": oi_token,
+        "interval": interval,
         "series": series,
     })
 
