@@ -1152,6 +1152,7 @@
             .includes(r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>)
             ? (r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>) : 'total';
         inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
+        inst.swShowClose = r.swShowClose === true;
       }
       // Compound overlays — preserved across reloads. Each entry is validated
       // through sanitizeOverlay() so a corrupt save can't strand the chart.

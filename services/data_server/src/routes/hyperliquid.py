@@ -11,6 +11,8 @@ already-pre-aggregated trader performance from hl_trade_history for the
 table-chart kind on the dashboard.
 """
 from __future__ import annotations
+import asyncio
+import hashlib
 import json
 import logging
 import time
@@ -799,6 +801,88 @@ def _build_smart_wallet_selection(request):
     }
 
 
+# ── Passing-wallet-set cache (ClickHouse table) ──────────────────────────
+# The smart-wallet SELECTION (the CTE chain + min_*/max_* WHERE) is the slow
+# (~5s) half of both /smart_wallet_metrics and /smart_wallet_oi. The resulting
+# wallet SET is identical for the same filters, so we cache it in a CH table:
+# the table view's fetch warms it (in the background), and the chart view
+# (smart_wallet_oi) reads it via a sub-SELECT — no recompute, and no shipping a
+# thousands-long IN-list over the wire (which blows ClickHouse's HTTP field
+# cap). Keyed by the set-defining filters only (NOT metric/order_by/limit). A
+# short freshness window lets today's still-ingesting day refresh; a 1-day TTL
+# trims abandoned keys.
+_SET_CACHE_TABLE = "tradernick.smart_wallet_set_cache"
+_SET_CACHE_TTL = 300.0
+# Set-defining filters (order/metric/limit excluded — they don't change WHICH
+# wallets qualify, only the ranking/size of the returned table page).
+_PASSING_KEY_FIELDS = (
+    "token", "lookback", "snapshot", "min_days", "min_volume", "min_realized",
+    "min_oi", "min_avg_trade_size", "min_taker_pct", "max_fee_pct",
+    "max_funding_pct", "min_account_duration", "min_tokens", "min_win_rate",
+    "min_trades_per_day", "max_trades_per_day",
+)
+# In-process hint of when we last ensured a key was fresh, to skip the freshness
+# round-trip on hot keys. The CH table is the source of truth.
+_set_ensured: dict[str, float] = {}
+
+
+def _passing_key(sel: dict) -> str:
+    e = sel["echo"]
+    blob = json.dumps({k: e[k] for k in _PASSING_KEY_FIELDS}, sort_keys=True, default=str)
+    return hashlib.md5(blob.encode()).hexdigest()
+
+
+async def _ensure_set_table(ch) -> None:
+    await ch.command(
+        f"CREATE TABLE IF NOT EXISTS {_SET_CACHE_TABLE} (\n"
+        "    sel_key     String,\n"
+        "    wallet      String,\n"
+        "    computed_at DateTime DEFAULT now()\n"
+        ") ENGINE = ReplacingMergeTree(computed_at)\n"
+        "ORDER BY (sel_key, wallet)\n"
+        "TTL computed_at + INTERVAL 1 DAY"
+    )
+
+
+async def _resolve_passing(ch, sel: dict) -> str:
+    """Ensure the selection's full wallet set is cached in CH and return its
+    `sel_key`. The OI query then filters via `wallet IN (SELECT … WHERE sel_key)`.
+    Computing the set IS the ~5s selection; a fresh cache hit is instant."""
+    key = _passing_key(sel)
+    now = time.time()
+    if (last := _set_ensured.get(key)) and now - last < _SET_CACHE_TTL:
+        return key
+    await _ensure_set_table(ch)
+    r = await ch.query(
+        f"SELECT toUnixTimestamp(max(computed_at)) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
+        parameters={"k": key},
+    )
+    mx = r.result_rows[0][0] if (r and r.result_rows) else 0
+    if mx and now - float(mx) < _SET_CACHE_TTL:
+        _set_ensured[key] = now
+        return key
+    # Recompute: materialise the current passing set as a new (timestamped) batch.
+    p = dict(sel["params"])
+    p["sk"] = key
+    await ch.command(
+        f"INSERT INTO {_SET_CACHE_TABLE} (sel_key, wallet, computed_at)\n"
+        f"WITH {sel['cte_block']}\n"
+        f"SELECT {{sk:String}} AS sel_key, w.wallet AS wallet, now() AS computed_at\n"
+        f"{sel['from_where_block']}",
+        parameters=p,
+    )
+    _set_ensured[key] = now
+    return key
+
+
+async def _warm_passing(ch, sel: dict) -> None:
+    """Background cache warm — never raises into the request path."""
+    try:
+        await _resolve_passing(ch, sel)
+    except Exception:  # noqa: BLE001
+        logging.exception("passing-set warm failed")
+
+
 @bp.get("/hyperliquid/smart_wallet_metrics")
 @throttled("heavy")
 async def smart_wallet_metrics(request):
@@ -899,6 +983,10 @@ async def smart_wallet_metrics(request):
         for r in rows.result_rows
     ]
     total = int(rows.result_rows[0][17]) if rows.result_rows else 0
+    # Warm the passing-set cache in the background so the chart view (which uses
+    # the SAME selection) reuses it instead of recomputing. Fire-and-forget; if
+    # the chart loads before this finishes it just computes (and caches) itself.
+    asyncio.create_task(_warm_passing(ch, sel))
     return response.json({
         **sel["echo"],
         "total": total,
@@ -1088,23 +1176,20 @@ async def smart_wallet_oi(request):
         oi_amount_expr = "argMax(amount, time)"
         oi_size_expr   = "argMax(size,   time)"
 
-    params = dict(sel["params"])
-    params.update({
+    ch = await client()
+    # Resolve the selected wallet set into the shared CH cache (warmed by the
+    # table view) or compute it once. The OI query then filters via a sub-SELECT
+    # against the cache — no selection CTE and no giant IN-list over the wire —
+    # so a cache hit makes the chart / token-switching / panning fast.
+    sel_key = await _resolve_passing(ch, sel)
+
+    params = {
         "seconds": seconds, "oi_token": oi_token,
         "oi_since": oi_since_dt, "oi_until": oi_until_dt, "oi_limit": oi_limit,
-    })
+        "sel_key": sel_key,
+    }
 
-    # Restrict OI to the selected wallets via `wallet IN (passing)` so the set
-    # is pushed into the OI scan (the fast path). We intentionally DON'T compute
-    # |passing| here — that would re-evaluate the expensive selection. The found
-    # count is taken from the table view's /smart_wallet_metrics fetch (always
-    # loaded first) and shown by the client.
     sql = f"""
-        WITH {sel['cte_block']},
-        passing AS (
-            SELECT w.wallet AS wallet
-            {sel['from_where_block']}
-        )
         SELECT
             toUnixTimestamp(bucket)                AS bucket,
             sumIf(latest_amount, side='long')      AS long_oi,
@@ -1122,7 +1207,11 @@ async def smart_wallet_oi(request):
                 {oi_size_expr}   AS latest_size
             FROM {oi_source}
             WHERE token = {{oi_token:String}}
-              AND wallet IN (SELECT wallet FROM passing)
+              AND wallet IN (
+                  SELECT wallet FROM {_SET_CACHE_TABLE}
+                  WHERE sel_key = {{sel_key:String}}
+                    AND computed_at = (SELECT max(computed_at) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{sel_key:String}})
+              )
               AND {oi_time_col} >= {{oi_since:DateTime}}
               AND {oi_time_col} <  {{oi_until:DateTime}}
             GROUP BY bucket, wallet, side
@@ -1132,7 +1221,6 @@ async def smart_wallet_oi(request):
         LIMIT {{oi_limit:UInt32}}
     """
 
-    ch = await client()
     rows = await ch.query(sql, parameters=params)
     series = [
         {

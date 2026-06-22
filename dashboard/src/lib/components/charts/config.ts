@@ -1816,6 +1816,9 @@ export type ChartInstance = {
    *  'table' renders the kind's normal table; 'chart' renders the mapped chart
    *  kind over the same widget's data. Persisted per widget; default 'table'. */
   viewMode?: 'table' | 'chart';
+  /** smart_wallets_table chart mode: overlay the token's HL close price as a
+   *  secondary-axis line (from hl_ohlcv). Default false. */
+  swShowClose?: boolean;
   /** If set, this chart was inserted from a template. The filter is treated as
    *  locked (no Apply/Clear UI), and the panel title uses this name instead of
    *  the generic kind label. Token / chain / interval / MAs remain editable. */

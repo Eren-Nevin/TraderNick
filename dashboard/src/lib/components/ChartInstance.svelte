@@ -633,6 +633,11 @@
   // shows a stale count if the filters change before the table reloads.
   let swFoundTotal = $state(0);
   let swFoundTotalKey = $state('');
+  // Which dual-view view the current `data` holds ('table' = wallet rows,
+  // 'chart' = OI series). The two shapes are incompatible, so on a view switch
+  // we must drop `data` before the new load — otherwise the chart branch would
+  // render table rows (no valid points → a black chart) for the whole load.
+  let dualDataView = $state<'table' | 'chart' | ''>('');
 
   // ---- effective view + hoverTime ----
   // A chart follows the shared zoom/pan only when global sync is on AND it
@@ -671,6 +676,19 @@
         }))
       : []
   );
+
+  // Dual-view chart: mark where the lookback window ENDS (the snapshot day).
+  // Data to its right is post-selection; panning left reveals the in-sample
+  // lookback period. Amber + label so it reads as an annotation. Appended to
+  // the week lines; for non-dual / table mode this is just weekVRefLines.
+  let chartVRefLines = $derived.by(() => {
+    if (!(isDualViewKind(instance.kind) && instance.viewMode === 'chart')) return weekVRefLines;
+    const t = Math.floor(Date.parse(swSnapshotIso() + 'T00:00:00Z') / 1000);
+    return [
+      ...weekVRefLines,
+      { time: t, color: '#fbbf24', width: 1, dash: '4,3', label: 'Lookback end' }
+    ];
+  });
 
   // ---- loader: dispatch on kind ----
 
@@ -729,7 +747,7 @@
       // the chart's own OI-fetch params (token + interval). The differing tag
       // makes a Table⇄Chart toggle re-run the load effect into the other slot.
       if (instance.viewMode === 'chart') {
-        return `${swTableKey()}|chart|${instance.token}|${instance.interval}`;
+        return `${swTableKey()}|chart|${instance.token}|${instance.interval}|c:${instance.swShowClose ? 1 : 0}`;
       }
       return swTableKey();
     }
@@ -913,6 +931,8 @@
       until = cached.until;
       localView = cached.localView;
       loadedKey = key;
+      // Cached data already matches the active view's shape.
+      if (isDualViewKind(instance.kind)) dualDataView = instance.viewMode ?? 'table';
       // Recover the found count when restoring the table slot from cache.
       if (instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart') {
         const t = (cached.data[0] as unknown as { total?: number })?.total;
@@ -1036,6 +1056,13 @@
     const signal = controller.signal;
     error = null;
     loading = true;
+    // Dual-view: the table and chart data shapes differ, so a view switch must
+    // drop the old data (else the chart renders table rows as a black canvas
+    // for the whole load). A same-view reload (e.g. token change) keeps its data
+    // so the old line stays up while the new one loads.
+    if (isDualViewKind(instance.kind) && dualDataView !== (instance.viewMode ?? 'table')) {
+      data = [];
+    }
     try {
       // Transfer + AAVE / HL / DEX / etc. event kinds use a fixed window
       // regardless of interval (they're sparse compared to OHLCV); other
@@ -1567,6 +1594,7 @@
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = defaultView(sinceIso, untilIso);
+        dualDataView = instance.viewMode ?? 'table';
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -2765,6 +2793,9 @@
     untilIso: string,
     signal?: AbortSignal
   ): Promise<AnyDatum[]> {
+    // No token → nothing to plot (the endpoint requires oi_token). Return empty
+    // so the chart shows the "Select a token" note instead of erroring/spinning.
+    if (!instance.token) return [] as unknown as AnyDatum[];
     const qs = swSelectionParams();
     qs.set('oi_token', instance.token);
     qs.set('interval', instance.interval);
@@ -2775,11 +2806,51 @@
     if (!res.ok) throw new Error(`smart_wallet_oi ${res.status}`);
     const b = await res.json();
     const rows = (b.series ?? []) as Array<Record<string, number>>;
-    return rows.map((r) => ({
+    const mapped = rows.map((r) => ({
       ...r,
       open_interest: r.total_oi ?? 0,
       open_interest_value: r.total_oi_value ?? 0
-    })) as unknown as AnyDatum[];
+    })) as Array<Record<string, number>>;
+    // Optional HL close-price overlay: merge the token's close (same interval)
+    // into each bucket by time, so oiLinesD can plot it as a secondary-axis
+    // line. Fetched per-window so it backfills alongside the OI on pan.
+    if (instance.swShowClose && mapped.length) {
+      const closeByTime = await fetchHlCloseMap(sinceIso, untilIso, signal);
+      for (const d of mapped) {
+        const c = closeByTime.get(d.time);
+        if (c !== undefined) d.close = c;
+      }
+    }
+    return mapped as unknown as AnyDatum[];
+  }
+
+  /** HL OHLCV close per bucket (time → close) for the chart token over a
+   *  window, keyed by unix-second bucket time to merge into the OI series. */
+  async function fetchHlCloseMap(
+    sinceIso: string,
+    untilIso: string,
+    signal?: AbortSignal
+  ): Promise<Map<number, number>> {
+    const out = new Map<number, number>();
+    try {
+      const qs = new URLSearchParams({
+        token: instance.token,
+        interval: instance.interval,
+        since: sinceIso,
+        until: untilIso,
+        limit: '200000',
+        exchange: 'hl'
+      });
+      const res = await queuedFetch(`/api/ohlcv?${qs}`, { signal });
+      if (!res.ok) return out;
+      const b = await res.json();
+      for (const c of (b.candles ?? []) as Array<Record<string, number>>) {
+        if (typeof c.time === 'number' && typeof c.close === 'number') out.set(c.time, c.close);
+      }
+    } catch {
+      /* close overlay is best-effort — OI still renders without it */
+    }
+    return out;
   }
 
   /** Fetch one HL open-interest window (oi_split) and map the rows. Keeps
@@ -3988,8 +4059,9 @@
   );
 
   let oiHlPrimary = $derived.by(() => {
-    // hl_smart_oi is HL-only with no exchange field — treat it as HL.
-    if (instance.kind !== 'hl_smart_oi'
+    // hl_smart_oi (incl. dual-view chart mode) is HL-only with no exchange
+    // field — treat it as HL. effectiveKind so the dual chart resolves too.
+    if (effectiveKind !== 'hl_smart_oi'
         && (instance.exchange ?? 'binance') !== 'hl') return null;
     const mode = instance.oiHlDisplay ?? 'total';
     const unitLabel = oiIsToken ? ` (${instance.token ?? ''})` : ' (USD)';
@@ -4084,6 +4156,16 @@
         axis: 'secondary',
         dash: '3,3',
         compute: (d: Record<string, number>) => d.wallet_count ?? 0,
+      });
+    }
+    // Optional HL close-price overlay (smart-wallets chart mode), on the
+    // secondary axis since price and OI are different magnitudes. `close` is
+    // merged into the data by fetchSmartWalletOiWindow.
+    if (effectiveKind === 'hl_smart_oi' && (instance.swShowClose ?? false)) {
+      base.push({
+        key: 'close', label: `${instance.token ?? ''} close`, color: '#e5e7eb',
+        axis: 'secondary',
+        compute: (d: Record<string, number>) => (d.close ?? NaN),
       });
     }
     return base;
@@ -5118,7 +5200,12 @@
         <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
           <button
             type="button"
-            onclick={() => (instance.viewMode = 'table')}
+            onclick={() => {
+              // Drop the chart-shaped data synchronously so the table branch
+              // never renders OI rows (and vice-versa) during the switch.
+              if ((instance.viewMode ?? 'table') === 'chart') data = [];
+              instance.viewMode = 'table';
+            }}
             class={'px-2 py-1 text-xs ' + ((instance.viewMode ?? 'table') !== 'chart'
               ? 'bg-zinc-800 text-zinc-100'
               : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
@@ -5130,6 +5217,10 @@
               // Ensure the chart has a token + interval before switching in.
               if (!instance.token) instance.token = instance.swToken || 'BTC';
               if (!instance.interval) instance.interval = '1h';
+              // Drop the table-shaped data synchronously: the OI LineChart must
+              // never receive wallet rows (no `time` field → lightweight-charts
+              // setData throws on undefined time → black chart).
+              if ((instance.viewMode ?? 'table') !== 'chart') data = [];
               instance.viewMode = 'chart';
             }}
             class={'px-2 py-1 text-xs border-l border-zinc-700 ' + ((instance.viewMode ?? 'table') === 'chart'
@@ -6195,8 +6286,10 @@
   {#if settingsOpen}
     <div class="absolute inset-0 z-20 bg-zinc-950/95 overflow-y-auto">
     <div class="px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/30 flex items-center gap-3 flex-wrap text-xs">
-      {#if instance.kind === 'smart_wallets_table'}
-        <!-- Noise guards for the smart-wallet finder. A raw mean/std ranking is
+      {#if instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart'}
+        <!-- Noise guards for the smart-wallet finder (TABLE view only — they
+             define the wallet SET; chart mode shows only chart-appearance
+             settings below). A raw mean/std ranking is
              dominated by wallets with one or two lucky days, so we require a
              minimum number of active (trade) days AND a minimum window volume
              before a wallet enters the ranking. Both refetch on commit. -->
@@ -6453,6 +6546,17 @@
           <input type="checkbox" bind:checked={instance.smartShowWalletCount} class="accent-zinc-400" />
           Show wallet count
         </label>
+        {#if isDualViewKind(instance.kind)}
+          <!-- Overlay the token's HL close price (secondary axis) so OI can be
+               read against price moves. From hl_ohlcv at the chart interval. -->
+          <label
+            class="flex items-center gap-1.5 text-zinc-300 cursor-pointer"
+            title="Overlay the token's HL close price on the secondary axis"
+          >
+            <input type="checkbox" bind:checked={instance.swShowClose} class="accent-zinc-400" />
+            Show close price
+          </label>
+        {/if}
         <!-- Same instance.oiUnit field as the toolbar dropdown — duplicated
              here so the display-unit choice sits with the other smart-OI
              chart controls. Hidden in long_to_short / net_pct where the
@@ -6999,6 +7103,7 @@
       {@const oiIsNet = oiHlMode === 'net'}
       {@const oiUseToken = (instance.oiUnit ?? 'usd') === 'token' && !oiIsRatio && !oiIsPct}
       {@const showWalletCount = effectiveKind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)}
+      {@const showClose = effectiveKind === 'hl_smart_oi' && (instance.swShowClose ?? false)}
       <LineChart
         data={data as OpenInterestRow[]}
         lines={oiLinesM}
@@ -7008,7 +7113,7 @@
         onView={handleView}
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
-        vRefLines={weekVRefLines}
+        vRefLines={chartVRefLines}
         refLines={(oiIsNet || oiIsPct) ? ZERO_REF : []}
         formatY={oiIsRatio ? fmtRatio
                  : oiIsPct ? ((v: number) => `${(v >= 0 ? '+' : '')}${(v * 100).toFixed(1)}%`)
@@ -7016,8 +7121,10 @@
         formatTooltip={oiIsRatio ? fmtRatio
                  : oiIsPct ? ((v: number) => `${(v >= 0 ? '+' : '')}${(v * 100).toFixed(2)}%`)
                  : (oiUseToken ? fmtAmountTooltip : fmtUsdTooltip)}
-        formatY2={showWalletCount ? ((v: number) => Math.round(v).toString()) : undefined}
-        formatTooltip2={showWalletCount ? ((v: number) => `${Math.round(v)} wallets`) : undefined}
+        formatY2={showClose ? fmtUsdAxis
+                 : showWalletCount ? ((v: number) => Math.round(v).toString()) : undefined}
+        formatTooltip2={showClose ? fmtUsdTooltip
+                 : showWalletCount ? ((v: number) => `${Math.round(v)} wallets`) : undefined}
         onClick={showWalletCount ? ((t: number) => openSmartWalletsDialog(t)) : undefined}
       />
     {:else if instance.kind === 'volume'}
@@ -7442,8 +7549,26 @@
          the selection key so it hides instead of showing a stale value if the
          filters change before the table reloads. Top-left so it doesn't collide
          with the loading badge (top-right) or backfill pill (bottom-left). -->
-    <div class="pointer-events-none absolute top-1 left-1 z-10 rounded border border-zinc-700 bg-zinc-900/90 px-2 py-0.5 text-[10px] text-zinc-300 shadow">
+    <div class="pointer-events-none absolute top-1 left-1 z-10 rounded border border-zinc-700 bg-zinc-900/90 px-2 py-1 text-sm font-semibold text-zinc-200 shadow">
       {swFoundTotal.toLocaleString()} wallets
+    </div>
+  {/if}
+
+  {#if isDualViewKind(instance.kind) && instance.viewMode === 'chart' && !loading && data.length === 0}
+    <!-- No chart yet — say why instead of leaving a black (empty) canvas:
+         either no token is picked, or the found wallets hold no OI for the
+         chosen token/window. -->
+    <div class="pointer-events-none absolute inset-0 z-10 flex items-center justify-center p-4 text-center">
+      <div class="rounded-lg border border-zinc-700 bg-zinc-900/90 px-4 py-3 text-sm text-zinc-300 shadow-lg">
+        {#if !instance.token}
+          Select a token to plot the found wallets' open interest.
+        {:else}
+          No <span class="font-semibold text-zinc-100">{instance.token}</span> open interest for the
+          {swFoundTotal > 0 ? swFoundTotal.toLocaleString() + ' found wallets' : 'found wallets'}
+          over this window.<br />
+          <span class="text-zinc-500">Try another token, a wider lookback, or a different snapshot.</span>
+        {/if}
+      </div>
     </div>
   {/if}
 

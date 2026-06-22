@@ -128,7 +128,7 @@
 <div class="h-full flex flex-col text-xs" use:stopDragEvents>
   <!-- Selectors row -->
   <div class="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
-    <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-zinc-900 border border-zinc-700 text-zinc-400"
+    <span class="text-sm font-semibold uppercase tracking-wide px-2 py-1 rounded bg-zinc-900 border border-zinc-700 text-zinc-200"
       title={!loading && total > rows.length ? `${total.toLocaleString()} wallets found; showing top ${rows.length}` : undefined}
       >Smart Wallets{#if !loading} ({total.toLocaleString()}){/if}</span
     >
@@ -221,7 +221,7 @@
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
               <td class="px-3 py-1 text-zinc-500">{idx + 1}</td>
               <td class="px-3 py-1">
-                <WalletAddress address={r.wallet} auxKind="wallet" />
+                <WalletAddress address={r.wallet} auxKind="wallet" {snapshot} />
                 {#if r.categories && r.categories.length > 0}
                   <span class="ml-1 inline-block text-[9px] uppercase tracking-wide px-1 py-0 rounded bg-zinc-900 border border-zinc-700 text-zinc-400"
                         title={r.categories.join(', ')}>{r.categories[0]}</span>

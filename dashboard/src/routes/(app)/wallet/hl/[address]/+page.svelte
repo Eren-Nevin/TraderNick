@@ -43,7 +43,13 @@
   // ── State ──────────────────────────────────────────────────────────
   // Slider position is the source of truth (bind:value) so the drag never
   // fights a re-asserted one-way value. 0 = oldest (left), MAX = today (right).
-  let sliderPos = $state(DAY_SLIDER_MAX_BACK);
+  // Seeded from ?snapshot=YYYY-MM-DD (via the load) so a link can open the page
+  // already on a past as-of day; invalid/absent → today. Mirrors posForIso.
+  const _posForIsoInit = (iso?: string | null) =>
+    iso
+      ? Math.max(0, Math.min(DAY_SLIDER_MAX_BACK, DAY_SLIDER_MAX_BACK - isoToBack(iso)))
+      : DAY_SLIDER_MAX_BACK;
+  let sliderPos = $state(_posForIsoInit(data.initialSnapshot));
   // Range mode: a second knob. The two knobs are unconstrained; the range is
   // derived as [min, max] so neither needs clamping (avoids drag-fighting).
   // The MORE RECENT knob (max) drives the as-of stats/positions, exactly as in
@@ -650,6 +656,13 @@
     rangeMode = !rangeMode;
   }
 
+  // Snap back to the live (current) day from any past snapshot — saves the user
+  // dragging the slider to land exactly on today. Exits range mode.
+  function goLive() {
+    rangeMode = false;
+    sliderPos = MAX_BACK;
+  }
+
   // Chart picking → snapshot/range state. unix (UTC-midnight bar) → day index.
   const isoFromUnix = (unix: number) => new Date(unix * 1000).toISOString().slice(0, 10);
   const posForIso = (iso: string) => Math.max(0, Math.min(MAX_BACK, MAX_BACK - isoToBack(iso)));
@@ -727,8 +740,20 @@
           <span class="inline-block w-3 h-3 rounded-full border-2 border-zinc-600 border-t-blue-400 animate-spin" title="Loading positions…"></span>
         {/if}
       </div>
-      <div class="font-mono text-xl text-zinc-100 tabular-nums">
-        {snapshotIso}{#if live}<span class="text-emerald-400 text-sm ml-1">· live</span>{/if}
+      <div class="font-mono text-xl text-zinc-100 tabular-nums flex items-center justify-end gap-2">
+        {snapshotIso}
+        {#if live}
+          <span class="text-emerald-400 text-sm">· live</span>
+        {:else}
+          <!-- Jump straight back to today/live without dragging the slider to
+               the exact current day. Exits range mode too. -->
+          <button
+            type="button"
+            onclick={goLive}
+            class="text-[11px] font-sans px-2 py-0.5 rounded border border-emerald-700/60 bg-emerald-700/20 text-emerald-300 hover:bg-emerald-700/40 whitespace-nowrap"
+            title="Switch to the live (current) snapshot"
+          >Go live</button>
+        {/if}
       </div>
     </div>
   </div>

@@ -15,15 +15,19 @@
   let {
     address,
     auxKind = 'arkham',
+    snapshot = null,
     class: extraClass = ''
   }: {
     address: string;
     auxKind?: 'wallet' | 'arkham';
+    // For auxKind 'wallet': pre-select this as-of day (YYYY-MM-DD) on the wallet
+    // page opened by middle-click. Ignored for 'arkham'.
+    snapshot?: string | null;
     class?: string;
   } = $props();
 
   let copied = $state(false);
-  const aux = $derived(auxKind === 'wallet' ? onAuxClickWalletHl(address) : onAuxClickArkham(address));
+  const aux = $derived(auxKind === 'wallet' ? onAuxClickWalletHl(address, snapshot) : onAuxClickArkham(address));
   const pins = $derived(walletPinsStore.groupsForWallet(address));
 
   async function copyAddr() {
