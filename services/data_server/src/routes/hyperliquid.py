@@ -545,6 +545,13 @@ def _build_smart_wallet_selection(request):
     end_day = e_dt.date()
     start_day = end_day - timedelta(days=lookback)
 
+    # In TOKEN scope every wallet's distinct-token count is trivially 1 (we only
+    # look at that token), so a min_tokens >= 2 guard — perfectly sensible
+    # globally ("wallets that trade several tokens") — would wrongly exclude
+    # EVERY wallet. The criterion is meaningless per-token, so ignore it here.
+    if token is not None:
+        min_tokens = 0
+
     params: dict = {
         "until": e_dt, "end_day": end_day, "start_day": start_day,
         "min_days": min_days, "min_volume": min_volume,

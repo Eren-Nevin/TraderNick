@@ -66,6 +66,12 @@
   const metricDef = $derived(smartWalletMetricDef(metric));
   const isGlobal = $derived(token === null || token === '');
 
+  // OI display unit (token scope only — global oi_token is null). Pure display
+  // toggle; both oi_usd and oi_token are already in each row.
+  let oiUnit = $state<'usd' | 'token'>('usd');
+  // Which OI value the column shows/sorts by, given scope + unit.
+  const oiCol = $derived(!isGlobal && oiUnit === 'token' ? 'oi_token' : 'oi_usd');
+
   // The lookback window is ANCHORED to the chosen end date: [end − lookback,
   // end]. The slider sets the end (`snapshot`); we surface the resolved start
   // here so the window is explicit (e.g. end 06-01, 30d ⇒ starts 05-02).
@@ -170,6 +176,20 @@
       {/each}
     </select>
 
+    {#if !isGlobal}
+      <!-- OI display unit — token amount vs USD. Pure frontend (both values are
+           already loaded). Only in token scope; global OI is USD-only. -->
+      <span class="text-zinc-500 ml-1">OI:</span>
+      <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
+        <button type="button" onclick={() => (oiUnit = 'usd')}
+          class={'px-2 py-0.5 text-[11px] ' + (oiUnit === 'usd' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+          title="Show open interest in USD">$</button>
+        <button type="button" onclick={() => (oiUnit = 'token')}
+          class={'px-2 py-0.5 text-[11px] border-l border-zinc-700 ' + (oiUnit === 'token' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+          title="Show open interest in token amount">{token}</button>
+      </div>
+    {/if}
+
     <span class="text-[10px] text-zinc-600 ml-auto">
       {#if loading}loading…{:else}Click a column to re-sort{/if}
     </span>
@@ -204,9 +224,9 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort('n_tokens')} title="Distinct tokens traded over the window">Tokens{sortArrow('n_tokens')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
-                onclick={() => onSort(isGlobal ? 'oi_usd' : 'oi_token')}
-                title={isGlobal ? 'Open interest (USD) as of the snapshot' : 'Open interest (token units) as of the snapshot'}
-            >OI{isGlobal ? ' ($)' : ` (${token})`}{sortArrow(isGlobal ? 'oi_usd' : 'oi_token')}</th>
+                onclick={() => onSort(oiCol)}
+                title={oiCol === 'oi_token' ? 'Open interest (token units) as of the snapshot' : 'Open interest (USD) as of the snapshot'}
+            >OI{oiCol === 'oi_token' ? ` (${token})` : ' ($)'}{sortArrow(oiCol)}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort('realized_pnl')} title="Realized PnL over the window (USD)">Realized{sortArrow('realized_pnl')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
@@ -231,7 +251,13 @@
               <td class="px-3 py-1 text-right font-mono text-zinc-300">{fmtUsd(r.volume)}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-400">{r.n_tokens}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-300">
-                {#if isGlobal}{fmtUsd(r.oi_usd)}{:else}<div>{fmtToken(r.oi_token)}</div><div class="text-[10px] text-zinc-500">{fmtUsd(r.oi_usd)}</div>{/if}
+                {#if isGlobal}
+                  {fmtUsd(r.oi_usd)}
+                {:else if oiCol === 'oi_token'}
+                  <div>{fmtToken(r.oi_token)}</div><div class="text-[10px] text-zinc-500">{fmtUsd(r.oi_usd)}</div>
+                {:else}
+                  <div>{fmtUsd(r.oi_usd)}</div><div class="text-[10px] text-zinc-500">{fmtToken(r.oi_token)}</div>
+                {/if}
               </td>
               <td class="px-3 py-1 text-right font-mono"
                   class:text-emerald-400={r.realized_pnl > 0}

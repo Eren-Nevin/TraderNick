@@ -721,22 +721,53 @@
       .toISOString().slice(0, 10);
   }
 
+  // ── Deferred smart-wallet FILTERS ─────────────────────────────────────
+  // The gear inputs edit instance.sw* live (so they persist), but the table's
+  // load key + fetch read these COMMITTED values instead — so tweaking guards
+  // doesn't fire a reload per change. The user applies them with the refresh
+  // button (which commits + reloads). Metric / lookback / token / snapshot stay
+  // immediate (they're header selectors, not gear "settings").
+  const SW_FILTER_FIELDS = [
+    'swMinDays', 'swMinVolume', 'swMinRealized', 'swMinOi', 'swMinAvgTradeSize',
+    'swMinTakerPct', 'swMaxFeePct', 'swMaxFundingPct', 'swMinAccountDuration',
+    'swMinTokens', 'swMinWinRate', 'swMinTradesPerDay', 'swMaxTradesPerDay',
+  ] as const;
+  type SwFilterField = (typeof SW_FILTER_FIELDS)[number];
+  function swFilterSnap(): Record<SwFilterField, number | null | undefined> {
+    const o = {} as Record<SwFilterField, number | null | undefined>;
+    for (const k of SW_FILTER_FIELDS) o[k] = instance[k] as number | null | undefined;
+    return o;
+  }
+  let committedFilters = $state(swFilterSnap());
+  function swF(field: SwFilterField, dflt: number): number {
+    return (committedFilters[field] ?? dflt) as number;
+  }
+  function commitSwFilters() {
+    committedFilters = swFilterSnap();
+  }
+  let swFiltersDirty = $derived(
+    instance.kind === 'smart_wallets_table' &&
+      SW_FILTER_FIELDS.some((k) => (committedFilters[k] ?? null) !== (instance[k] ?? null))
+  );
+
   // The smart_wallets_table cache/load key for the TABLE view (the found-wallet
   // set). Every selector busts it: metric+order change the ranking,
   // lookback/token/snapshot change the window, and the min-/max- guards change
-  // the candidate set. No interval — single-shot rollup. Chart mode reuses this
-  // (its wallet set is the table's) and appends its own OI params; see loadKey.
+  // the candidate set. The guards come from the COMMITTED snapshot so editing
+  // them doesn't reload until refresh. No interval — single-shot rollup. Chart
+  // mode reuses this (its wallet set is the table's) and appends its own OI
+  // params; see loadKey.
   function swTableKey(): string {
     return [
       'smart_wallets_table', instance.swMetric ?? 'sharpe', instance.swLookback ?? 7,
       instance.swToken ?? '__all__', swSnapshotIso(),
-      instance.swMinDays ?? 3, instance.swMinVolume ?? 100000,
-      instance.swMinRealized ?? 0, instance.swMinOi ?? 0,
-      instance.swMinAvgTradeSize ?? 0, instance.swMinTakerPct ?? 0,
-      instance.swMaxFeePct ?? '', instance.swMaxFundingPct ?? '',
-      instance.swMinAccountDuration ?? 0, instance.swMinTokens ?? 0,
-      instance.swMinWinRate ?? 0,
-      instance.swMinTradesPerDay ?? 0, instance.swMaxTradesPerDay ?? ''
+      swF('swMinDays', 3), swF('swMinVolume', 100000),
+      swF('swMinRealized', 0), swF('swMinOi', 0),
+      swF('swMinAvgTradeSize', 0), swF('swMinTakerPct', 0),
+      committedFilters.swMaxFeePct ?? '', committedFilters.swMaxFundingPct ?? '',
+      swF('swMinAccountDuration', 0), swF('swMinTokens', 0),
+      swF('swMinWinRate', 0),
+      swF('swMinTradesPerDay', 0), committedFilters.swMaxTradesPerDay ?? ''
     ].join('|');
   }
 
@@ -2752,20 +2783,22 @@
       lookback: String(instance.swLookback ?? 7),
       metric: instance.swMetric ?? 'sharpe',
       snapshot: swSnapshotIso(),
-      min_days: String(Math.max(1, instance.swMinDays ?? 3)),
-      min_volume: String(Math.max(0, instance.swMinVolume ?? 100000)),
-      min_realized: String(instance.swMinRealized ?? 0),
-      min_oi: String(Math.max(0, instance.swMinOi ?? 0)),
-      min_avg_trade_size: String(Math.max(0, instance.swMinAvgTradeSize ?? 0)),
-      min_taker_pct: String(Math.max(0, instance.swMinTakerPct ?? 0)),
-      min_account_duration: String(Math.max(0, instance.swMinAccountDuration ?? 0)),
-      min_tokens: String(Math.max(0, instance.swMinTokens ?? 0)),
-      min_win_rate: String(Math.max(0, instance.swMinWinRate ?? 0)),
-      min_trades_per_day: String(Math.max(0, instance.swMinTradesPerDay ?? 0))
+      // Guards come from the COMMITTED snapshot (applied on refresh), not the
+      // live gear inputs — so the table doesn't reload while the user edits.
+      min_days: String(Math.max(1, swF('swMinDays', 3))),
+      min_volume: String(Math.max(0, swF('swMinVolume', 100000))),
+      min_realized: String(swF('swMinRealized', 0)),
+      min_oi: String(Math.max(0, swF('swMinOi', 0))),
+      min_avg_trade_size: String(Math.max(0, swF('swMinAvgTradeSize', 0))),
+      min_taker_pct: String(Math.max(0, swF('swMinTakerPct', 0))),
+      min_account_duration: String(Math.max(0, swF('swMinAccountDuration', 0))),
+      min_tokens: String(Math.max(0, swF('swMinTokens', 0))),
+      min_win_rate: String(Math.max(0, swF('swMinWinRate', 0))),
+      min_trades_per_day: String(Math.max(0, swF('swMinTradesPerDay', 0)))
     });
-    if (instance.swMaxTradesPerDay != null) qs.set('max_trades_per_day', String(instance.swMaxTradesPerDay));
-    if (instance.swMaxFeePct != null) qs.set('max_fee_pct', String(instance.swMaxFeePct));
-    if (instance.swMaxFundingPct != null) qs.set('max_funding_pct', String(instance.swMaxFundingPct));
+    if (committedFilters.swMaxTradesPerDay != null) qs.set('max_trades_per_day', String(committedFilters.swMaxTradesPerDay));
+    if (committedFilters.swMaxFeePct != null) qs.set('max_fee_pct', String(committedFilters.swMaxFeePct));
+    if (committedFilters.swMaxFundingPct != null) qs.set('max_funding_pct', String(committedFilters.swMaxFundingPct));
     if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
     return qs;
   }
@@ -3083,6 +3116,9 @@
    *  header refresh button. Allowed mid-load: load() will abort the prior
    *  in-flight fetch via currentLoad so a stuck request can be replaced. */
   async function reload() {
+    // Apply any pending smart-wallet filter edits (the gear inputs defer their
+    // reload until here) before refetching.
+    if (instance.kind === 'smart_wallets_table') commitSwFilters();
     loadedKey = '';
     loadCache.delete(cacheId());
     await load(true);
@@ -6203,9 +6239,10 @@
       <button
         type="button"
         onclick={reload}
-        title={loading ? 'Loading — click to cancel and retry' : 'Refresh'}
-        class="w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center
-               {loading ? 'animate-spin' : ''}"
+        title={swFiltersDirty ? 'Apply changed filters & refresh' : (loading ? 'Loading — click to cancel and retry' : 'Refresh')}
+        class={'w-7 h-7 rounded-md text-sm leading-none flex items-center justify-center ' + (loading ? 'animate-spin ' : '') + (swFiltersDirty
+          ? 'text-amber-300 border border-amber-500 bg-amber-600/20 hover:bg-amber-600/40'
+          : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent')}
         aria-label="Refresh chart"
       >↻</button>
       <button
@@ -6375,15 +6412,19 @@
           title="Minimum days since the wallet's first recorded trade"
           class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
         />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min tokens</span>
-        <input
-          type="number" min="0" step="1"
-          value={instance.swMinTokens ?? 0}
-          onchange={(e) => (instance.swMinTokens = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))}
-          title="Minimum number of distinct tokens traded in the window (tight vs wide scope)"
-          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
+        {#if !instance.swToken}
+          <!-- Min tokens is meaningless in token scope (every wallet's count is
+               1 there), so it's hidden when a token is selected. -->
+          <span class="w-px h-4 bg-zinc-800"></span>
+          <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min tokens</span>
+          <input
+            type="number" min="0" step="1"
+            value={instance.swMinTokens ?? 0}
+            onchange={(e) => (instance.swMinTokens = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))}
+            title="Minimum number of distinct tokens traded in the window (tight vs wide scope)"
+            class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          />
+        {/if}
         <span class="w-px h-4 bg-zinc-800"></span>
         <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min win rate %</span>
         <input
