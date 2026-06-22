@@ -626,6 +626,13 @@
   let localView = $state<View>(null);
   let localHoverTime = $state<number | null>(null);
   let error = $state<string | null>(null);
+  // smart_wallets_table: the FULL count of wallets passing the filters, captured
+  // from the table view's fetch (always loaded first) so the chart view can
+  // display the same number without re-running the costly selection. Tagged with
+  // the selection key it was computed for, so the chart badge hides rather than
+  // shows a stale count if the filters change before the table reloads.
+  let swFoundTotal = $state(0);
+  let swFoundTotalKey = $state('');
 
   // ---- effective view + hoverTime ----
   // A chart follows the shared zoom/pan only when global sync is on AND it
@@ -906,6 +913,11 @@
       until = cached.until;
       localView = cached.localView;
       loadedKey = key;
+      // Recover the found count when restoring the table slot from cache.
+      if (instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart') {
+        const t = (cached.data[0] as unknown as { total?: number })?.total;
+        if (typeof t === 'number') { swFoundTotal = t; swFoundTotalKey = swTableKey(); }
+      }
       return;
     }
     void load();
@@ -1067,7 +1079,18 @@
         const untilU = unixSec(untilIso);
         const fullFloorU = unixSec(sinceIso);
         dynFloor = fullFloorU;
-        const chunkU = Math.max(fullFloorU, untilU - DYN_CHUNK_DAYS * 86_400);
+        let chunkU = Math.max(fullFloorU, untilU - DYN_CHUNK_DAYS * 86_400);
+        // Dual-view chart: anchor the FIRST fetch to the lookback window's END
+        // (the snapshot) → now, so the post-selection period shows immediately;
+        // older history (incl. the in-sample lookback) backfills on pan/zoom
+        // down to dynFloor. If the snapshot is ~now there's no forward period,
+        // so fall back to showing the lookback window through now.
+        if (isDualViewKind(instance.kind) && instance.viewMode === 'chart') {
+          const snapU = Math.floor(Date.parse(swSnapshotIso() + 'T00:00:00Z') / 1000);
+          const lookbackSec = (instance.swLookback ?? 7) * 86_400;
+          const startU = snapU < untilU - 86_400 ? snapU : untilU - lookbackSec;
+          chunkU = Math.max(fullFloorU, Math.min(startU, untilU - 3_600));
+        }
         sinceIso = new Date(chunkU * 1000).toISOString();
       } else {
         dynFloor = null;
@@ -1535,6 +1558,11 @@
           // Table view: the ranked top-N rows + the FULL found count (`total`).
           const body = await fetchSmartWalletMetrics(signal);
           data = [{ wallets: body.wallets, total: body.total } as unknown as AnyDatum];
+          // Remember the found count on the widget so the chart view can show it
+          // too without re-running the (expensive) selection — the table always
+          // loads first.
+          swFoundTotal = body.total ?? 0;
+          swFoundTotalKey = swTableKey();
         }
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
@@ -7407,6 +7435,17 @@
         formatTooltip={valueTooltipFn}
       />
     {/if}
+
+  {#if isDualViewKind(instance.kind) && instance.viewMode === 'chart' && swFoundTotal > 0 && swFoundTotalKey === swTableKey()}
+    <!-- Found-wallet count for the chart view: the size of the selected set the
+         OI is aggregated over (carried from the table view's fetch). Tagged with
+         the selection key so it hides instead of showing a stale value if the
+         filters change before the table reloads. Top-left so it doesn't collide
+         with the loading badge (top-right) or backfill pill (bottom-left). -->
+    <div class="pointer-events-none absolute top-1 left-1 z-10 rounded border border-zinc-700 bg-zinc-900/90 px-2 py-0.5 text-[10px] text-zinc-300 shadow">
+      {swFoundTotal.toLocaleString()} wallets
+    </div>
+  {/if}
 
   {#if loadingMore}
     <!-- hl_smart_oi backfill indicator. Sits bottom-left (the FAB owns

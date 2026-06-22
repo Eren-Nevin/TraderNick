@@ -1094,6 +1094,11 @@ async def smart_wallet_oi(request):
         "oi_since": oi_since_dt, "oi_until": oi_until_dt, "oi_limit": oi_limit,
     })
 
+    # Restrict OI to the selected wallets via `wallet IN (passing)` so the set
+    # is pushed into the OI scan (the fast path). We intentionally DON'T compute
+    # |passing| here — that would re-evaluate the expensive selection. The found
+    # count is taken from the table view's /smart_wallet_metrics fetch (always
+    # loaded first) and shown by the client.
     sql = f"""
         WITH {sel['cte_block']},
         passing AS (
