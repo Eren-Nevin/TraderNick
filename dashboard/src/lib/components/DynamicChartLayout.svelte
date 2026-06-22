@@ -754,6 +754,12 @@
     return fresh;
   }
 
+  // Normalize a persisted exchange for the binance-spot-capable kinds
+  // (ohlcv / volume / bs / sz): keep 'hl' and 'binance_spot', else 'binance'.
+  function spotCapableExchange(e: unknown): 'binance' | 'hl' | 'binance_spot' {
+    return e === 'hl' ? 'hl' : e === 'binance_spot' ? 'binance_spot' : 'binance';
+  }
+
   function sanitize(arr: unknown): ChartInstanceT[] | null {
     if (!Array.isArray(arr)) return null;
     const out: ChartInstanceT[] = [];
@@ -800,15 +806,21 @@
         inst.over = typeof r.over === 'number' ? r.over : 100000;
         inst.underInput = typeof r.underInput === 'string' ? r.underInput : String(inst.under);
         inst.overInput = typeof r.overInput === 'string' ? r.overInput : String(inst.over);
-        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
+        inst.exchange = spotCapableExchange(r.exchange);
       }
       if (inst.kind === 'bs') {
-        // bs reads /trade_volume with exchange = binance | hl, same shape both ways.
-        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
+        // bs reads /trade_volume with exchange = binance | binance_spot | hl, same shape.
+        inst.exchange = spotCapableExchange(r.exchange);
+      }
+      if (inst.kind === 'volume') {
+        // Volume reads /ohlcv (same as the ohlcv chart). Supports the Binance
+        // Spot dataset too.
+        inst.exchange = spotCapableExchange(r.exchange);
+        inst.volumeUnit = r.volumeUnit === 'usd' ? 'usd' : 'token';
       }
       if (inst.kind === 'ohlcv') {
         inst.pin = r.pin === true;
-        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
+        inst.exchange = spotCapableExchange(r.exchange);
         inst.volumeUnit = r.volumeUnit === 'usd' ? 'usd' : 'token';
       }
       if (inst.kind === 'fr') {

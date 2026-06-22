@@ -12,8 +12,9 @@ bp = Blueprint("trade_volume")
 # SQL works for either source. Selector lets the bs/sz charts mirror the
 # ohlcv pattern of one chart kind per exchange.
 _TRADES_TABLE = {
-    "binance": "tradernick.binance_raw_trades",
-    "hl":      "tradernick.hl_trades",
+    "binance":      "tradernick.binance_raw_trades",
+    "hl":           "tradernick.hl_trades",
+    "binance_spot": "tradernick.binance_raw_spot_trades",
 }
 
 

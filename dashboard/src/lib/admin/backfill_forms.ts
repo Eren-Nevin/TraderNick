@@ -283,6 +283,25 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
     ]
   },
   {
+    type: 'binance_spot_ohlcv',
+    label: 'Binance spot OHLCV',
+    description: 'Binance SPOT market (separate dataset from perp). Defaults to ' +
+      'the live INGEST_TOKENS roster; spot-less tokens just return no rows. ' +
+      'Spot upstream currently lags — recent days may be empty.',
+    fields: [
+      { name: 'tokens', label: 'Token batches', kind: 'token-batches' }
+    ]
+  },
+  {
+    type: 'binance_spot_raw_trades',
+    label: 'Binance spot raw trades',
+    description: 'Binance SPOT market (separate dataset from perp). Defaults to ' +
+      'the live INGEST_TOKENS roster. Spot upstream currently lags.',
+    fields: [
+      { name: 'tokens', label: 'Token batches', kind: 'token-batches' }
+    ]
+  },
+  {
     type: 'binance_open_interest',
     label: 'Binance open interest',
     description: 'Defaults to the live INGEST_TOKENS roster.',

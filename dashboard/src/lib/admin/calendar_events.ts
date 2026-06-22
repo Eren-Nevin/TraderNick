@@ -34,13 +34,15 @@ const EVENTS: CalendarEvent[] = [
   { event_key: 'hyperliquid.transfers',        label: 'HL Transfers',           provider: 'Hyperliquid' },
   { event_key: 'hyperliquid.vaults',           label: 'HL Vaults',              provider: 'Hyperliquid' },
 
-  // Binance — 6 feeds
+  // Binance — perp/futures + spot feeds
   { event_key: 'binance.ohlcv',             label: 'Binance OHLCV 1m',          provider: 'Binance' },
   { event_key: 'binance.open_interest',     label: 'Binance Open Interest',     provider: 'Binance' },
   { event_key: 'binance.long_short_ratios', label: 'Binance Long/Short Ratios', provider: 'Binance' },
   { event_key: 'binance.funding_rate',      label: 'Binance Funding Rate',      provider: 'Binance' },
   { event_key: 'binance.book_depth',        label: 'Binance Book Depth',        provider: 'Binance' },
   { event_key: 'binance.raw_trades',        label: 'Binance Raw Trades',        provider: 'Binance' },
+  { event_key: 'binance.spot_ohlcv',        label: 'Binance Spot OHLCV 1m',     provider: 'Binance' },
+  { event_key: 'binance.spot_raw_trades',   label: 'Binance Spot Raw Trades',   provider: 'Binance' },
 
   // Transfers — 5 sub-feeds
   { event_key: 'transfers.btc',         label: 'BTC Transfers',         provider: 'Transfers' },

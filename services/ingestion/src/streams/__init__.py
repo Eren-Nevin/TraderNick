@@ -41,6 +41,7 @@ def _hl(ev: str) -> StreamSpec:
 # default; the others hard-code their own (see groups/*.py).
 _BINANCE_CADENCE = {
     "ohlcv": 300, "raw_trades": 300,
+    "spot_ohlcv": 300, "spot_raw_trades": 300,
     "open_interest": 300, "long_short_ratios": 300,
     "funding_rate": 1800,
     "book_depth": 300,
@@ -83,9 +84,11 @@ STREAMS: list[StreamSpec] = [
     _hl("transfers"),
     _hl("vaults"),
 
-    # Binance — 5 streams.
+    # Binance — perp/futures + spot streams.
     _binance("ohlcv"),
     _binance("raw_trades"),
+    _binance("spot_ohlcv"),
+    _binance("spot_raw_trades"),
     _binance("open_interest"),
     _binance("long_short_ratios"),
     _binance("funding_rate"),

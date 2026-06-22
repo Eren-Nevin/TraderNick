@@ -428,7 +428,8 @@
     // decides which field to persist based on whether the selection
     // matches a known group name.
     formChain = o.chainGroup ?? o.chain ?? '';
-    formExchange = o.exchange ?? 'binance';
+    // Overlays don't support the binance_spot dataset — fold it to binance.
+    formExchange = o.exchange === 'hl' ? 'hl' : 'binance';
     formExchangeFlowExchange = o.exchangeFlowExchange ?? 'binance';
     formValueMode = o.valueMode ?? 'usd';
     formGmxMarket = o.gmxMarket ?? '';

@@ -102,6 +102,17 @@ GAP_SPECS: dict[str, list[GapTableSpec]] = {
             threshold_ratio=0.2,
             min_baseline_rows=10_000,
         ),
+        # Binance SPOT — same shapes as perp. Upstream spot data currently
+        # lags, so recent days may read as gaps until it catches up.
+        GapTableSpec("tradernick.binance_spot_ohlcv_1m",    expected_per_day=_PER_DAY_1m,         threshold_ratio=0.7,
+                     notes="spot upstream lags; recent days may flag until caught up"),
+        GapTableSpec(
+            "tradernick.binance_raw_spot_trades",
+            mode=GapMode.EVENT_DRIVEN,
+            threshold_ratio=0.2,
+            min_baseline_rows=10_000,
+            notes="spot upstream lags; recent days may flag until caught up",
+        ),
     ],
 
     # ------------------------- Hyperliquid --------------------------
@@ -615,6 +626,11 @@ CALENDAR_EVENTS.update({
                                                 threshold_ratio=0.5,
                                                 expected_per_day=_PER_DAY_BOOK_DEPTH),
     "binance.raw_trades":         _event_driven("binance.raw_trades",       "binance", "Binance Raw Trades",        "tradernick.binance_raw_trades",
+                                                min_per_hour=10_000),
+    # Binance SPOT — separate dataset, same shapes as perp. Spot upstream data
+    # currently lags, so these can read as inactive until it catches up.
+    "binance.spot_ohlcv":         _reg_cadence("binance.spot_ohlcv",        "binance", "Binance Spot OHLCV 1m",     "tradernick.binance_spot_ohlcv_1m",    expected_per_day=_PER_DAY_1m),
+    "binance.spot_raw_trades":    _event_driven("binance.spot_raw_trades",  "binance", "Binance Spot Raw Trades",   "tradernick.binance_raw_spot_trades",
                                                 min_per_hour=10_000),
 })
 

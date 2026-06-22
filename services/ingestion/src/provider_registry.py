@@ -55,6 +55,8 @@ JOB_TYPE_TO_PROVIDER: dict[str, str] = {
 
     "backfill_binance_ohlcv":           "binance",
     "backfill_binance_raw_trades":      "binance",
+    "backfill_binance_spot_ohlcv":      "binance",
+    "backfill_binance_spot_raw_trades": "binance",
     "backfill_binance_open_interest":   "binance",
     "backfill_binance_long_short_ratios":"binance",
     "backfill_binance_funding_rate":    "binance",

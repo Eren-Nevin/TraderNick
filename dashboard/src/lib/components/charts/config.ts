@@ -1568,7 +1568,7 @@ export type ChartInstance = {
   /** ohlcv only: which exchange's candle table to read. Defaults to
    *  'binance'. 'hl' routes to tradernick.hl_ohlcv_1m so the same chart
    *  kind serves both data sources. */
-  exchange?: 'binance' | 'hl';
+  exchange?: 'binance' | 'hl' | 'binance_spot';
   /** ohlcv only: how the volume sub-pane is denominated. 'token' (default)
    *  plots raw asset units; 'usd' plots sum(per-1m volume × per-1m close),
    *  which is comparable across assets and matches what most traders mean
@@ -1879,7 +1879,7 @@ export type ChartOverlay = {
    *  with `chain` — when set, overlay-fetch sends `chain_group=` instead of
    *  `chain=` so the server expands the bundle. */
   chainGroup?: string;
-  exchange?: 'binance' | 'hl';
+  exchange?: 'binance' | 'hl' | 'binance_spot';
   frDisplay?: 'rate8h' | 'apr';
   valueMode?: 'usd' | 'amount';
   under?: number;
@@ -2221,7 +2221,7 @@ export function sanitizeOverlay(raw: unknown): ChartOverlay | null {
   if (typeof r.tokenDenominator === 'string' && r.tokenDenominator.length > 0) o.tokenDenominator = r.tokenDenominator;
   if (typeof r.chain === 'string') o.chain = r.chain;
   if (typeof r.chainGroup === 'string' && r.chainGroup.length > 0) o.chainGroup = r.chainGroup;
-  if (r.exchange === 'binance' || r.exchange === 'hl') o.exchange = r.exchange;
+  if (r.exchange === 'binance' || r.exchange === 'hl' || r.exchange === 'binance_spot') o.exchange = r.exchange;
   if (r.frDisplay === 'rate8h' || r.frDisplay === 'apr') o.frDisplay = r.frDisplay;
   if (r.valueMode === 'usd' || r.valueMode === 'amount') o.valueMode = r.valueMode;
   if (typeof r.under === 'number') o.under = r.under;

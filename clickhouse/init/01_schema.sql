@@ -34,6 +34,43 @@ PARTITION BY toYYYYMM(time)
 ORDER BY (token, time, id)
 TTL toDateTime(time) + INTERVAL 270 DAY;
 
+-- Binance SPOT datasets — a fully separate dataset from perp/futures (above),
+-- fetched with the DeFiStream SDK's `.market("spot")`. Schema is identical to
+-- the perp tables; only the source market differs.
+CREATE TABLE IF NOT EXISTS tradernick.binance_spot_ohlcv_1m
+(
+    token                LowCardinality(String),
+    time                 DateTime           CODEC(DoubleDelta, ZSTD(3)),
+    open                 Float64            CODEC(Gorilla, ZSTD(3)),
+    close                Float64            CODEC(Gorilla, ZSTD(3)),
+    high                 Float64            CODEC(Gorilla, ZSTD(3)),
+    low                  Float64            CODEC(Gorilla, ZSTD(3)),
+    volume               Float64            CODEC(Gorilla, ZSTD(3)),
+    buyer_taker_volume   Float64            CODEC(Gorilla, ZSTD(3)),
+    seller_taker_volume  Float64            CODEC(Gorilla, ZSTD(3)),
+    trade_count          UInt32             CODEC(T64, ZSTD(3)),
+    ingested_at          DateTime           DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (token, time)
+TTL time + INTERVAL 270 DAY;
+
+CREATE TABLE IF NOT EXISTS tradernick.binance_raw_spot_trades
+(
+    token        LowCardinality(String),
+    time         DateTime64(3)  CODEC(DoubleDelta, ZSTD(3)),
+    amount       Float64        CODEC(Gorilla, ZSTD(3)),
+    price        Float64        CODEC(Gorilla, ZSTD(3)),
+    buy          Bool           CODEC(ZSTD(3)),
+    id           UInt64         CODEC(DoubleDelta, ZSTD(3)),
+    ingested_at  DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
+)
+ENGINE = ReplacingMergeTree(ingested_at)
+PARTITION BY toYYYYMM(time)
+ORDER BY (token, time, id)
+TTL toDateTime(time) + INTERVAL 270 DAY;
+
 CREATE TABLE IF NOT EXISTS tradernick.transfers
 (
     kind         LowCardinality(String),

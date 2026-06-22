@@ -28,6 +28,8 @@ from jobs.manager import (
     JOB_TYPE_BACKFILL_OHLCV,
     JOB_TYPE_BACKFILL_OPEN_INTEREST,
     JOB_TYPE_BACKFILL_RAW_TRADES,
+    JOB_TYPE_BACKFILL_SPOT_OHLCV,
+    JOB_TYPE_BACKFILL_SPOT_RAW_TRADES,
     JOB_TYPE_BACKFILL_AAVE_EVENTS,
     JOB_TYPE_BACKFILL_UNISWAP_EVENTS,
     JOB_TYPE_BACKFILL_LIDO_EVENTS,
@@ -458,6 +460,16 @@ async def backfill_ohlcv(request):
 @app.post("/jobs/backfill/binance_raw_trades")
 async def backfill_raw_trades(request):
     return await _create_backfill(request, JOB_TYPE_BACKFILL_RAW_TRADES)
+
+
+@app.post("/jobs/backfill/binance_spot_ohlcv")
+async def backfill_spot_ohlcv(request):
+    return await _create_backfill(request, JOB_TYPE_BACKFILL_SPOT_OHLCV)
+
+
+@app.post("/jobs/backfill/binance_spot_raw_trades")
+async def backfill_spot_raw_trades(request):
+    return await _create_backfill(request, JOB_TYPE_BACKFILL_SPOT_RAW_TRADES)
 
 
 @app.post("/jobs/backfill/binance_open_interest")

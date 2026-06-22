@@ -13,6 +13,8 @@ log = logging.getLogger("jobs")
 
 JOB_TYPE_BACKFILL_OHLCV = "backfill_binance_ohlcv"
 JOB_TYPE_BACKFILL_RAW_TRADES = "backfill_binance_raw_trades"
+JOB_TYPE_BACKFILL_SPOT_OHLCV = "backfill_binance_spot_ohlcv"
+JOB_TYPE_BACKFILL_SPOT_RAW_TRADES = "backfill_binance_spot_raw_trades"
 JOB_TYPE_BACKFILL_OPEN_INTEREST = "backfill_binance_open_interest"
 JOB_TYPE_BACKFILL_LONG_SHORT_RATIOS = "backfill_binance_long_short_ratios"
 JOB_TYPE_BACKFILL_FUNDING_RATE = "backfill_binance_funding_rate"
@@ -47,6 +49,8 @@ JOB_TYPE_BACKFILL_DATA_PROCESSOR = "backfill_data_processor"
 JOB_MODULES = {
     JOB_TYPE_BACKFILL_OHLCV: "jobs.backfill_binance_ohlcv",
     JOB_TYPE_BACKFILL_RAW_TRADES: "jobs.backfill_binance_raw_trades",
+    JOB_TYPE_BACKFILL_SPOT_OHLCV: "jobs.backfill_binance_spot_ohlcv",
+    JOB_TYPE_BACKFILL_SPOT_RAW_TRADES: "jobs.backfill_binance_spot_raw_trades",
     JOB_TYPE_BACKFILL_OPEN_INTEREST: "jobs.backfill_binance_open_interest",
     JOB_TYPE_BACKFILL_LONG_SHORT_RATIOS: "jobs.backfill_binance_long_short_ratios",
     JOB_TYPE_BACKFILL_FUNDING_RATE: "jobs.backfill_binance_funding_rate",

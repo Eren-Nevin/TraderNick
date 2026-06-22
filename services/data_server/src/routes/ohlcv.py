@@ -25,8 +25,9 @@ def _parse_iso(s: str) -> datetime:
 # hl_ohlcv_1m on the binance shape) so the same aggregation SQL works
 # for both — we just swap the table name.
 _OHLCV_TABLE = {
-    "binance": "tradernick.binance_ohlcv_1m",
-    "hl":      "tradernick.hl_ohlcv_1m",
+    "binance":      "tradernick.binance_ohlcv_1m",
+    "hl":           "tradernick.hl_ohlcv_1m",
+    "binance_spot": "tradernick.binance_spot_ohlcv_1m",
 }
 
 

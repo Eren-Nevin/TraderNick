@@ -37,6 +37,8 @@ export const FORM_TYPE_TO_PROVIDER: Record<string, Provider> = {
 
   binance_ohlcv: 'Binance',
   binance_raw_trades: 'Binance',
+  binance_spot_ohlcv: 'Binance',
+  binance_spot_raw_trades: 'Binance',
   binance_open_interest: 'Binance',
   binance_long_short_ratios: 'Binance',
   binance_funding_rate: 'Binance',

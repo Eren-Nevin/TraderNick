@@ -6095,11 +6095,16 @@
                tt (top-trader L/S) stays Binance-only — see derivatives.py. -->
           <select
             value={instance.exchange ?? 'binance'}
-            onchange={(e) => (instance.exchange = e.currentTarget.value as 'binance' | 'hl')}
+            onchange={(e) => (instance.exchange = e.currentTarget.value as 'binance' | 'hl' | 'binance_spot')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
           >
             <option value="binance">Binance</option>
             <option value="hl">Hyperliquid</option>
+            {#if instance.kind === 'ohlcv' || instance.kind === 'volume' || instance.kind === 'bs' || instance.kind === 'sz'}
+              <!-- Binance spot dataset (separate from perp). Only the candle /
+                   trade-flow kinds have spot tables. -->
+              <option value="binance_spot">Binance Spot</option>
+            {/if}
           </select>
         {/if}
         {#if instance.kind === 'ls' || instance.kind === 'tt'}
