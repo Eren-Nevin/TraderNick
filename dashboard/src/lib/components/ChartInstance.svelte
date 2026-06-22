@@ -7416,7 +7416,14 @@
         snapshot={swSnapshotIso()}
         onChangeMetric={(m) => (instance.swMetric = m)}
         onChangeLookback={(l) => (instance.swLookback = l)}
-        onChangeToken={(t) => (instance.swToken = t)}
+        onChangeToken={(t) => {
+          instance.swToken = t;
+          // Keep the chart's OI token in lockstep with the table's selection
+          // scope: when a specific token is picked (not ALL), the chart should
+          // plot that same token. ALL (t === null) leaves the chart token as-is
+          // since the OI chart needs one concrete token to plot.
+          if (t) instance.token = t;
+        }}
         onChangeSnapshot={(iso) => (instance.swSnapshot = iso)}
         loading={loading}
         error={error}
