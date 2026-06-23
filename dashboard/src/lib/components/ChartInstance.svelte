@@ -731,6 +731,7 @@
     'swMinDays', 'swMinVolume', 'swMinRealized', 'swMinOi', 'swMinAvgTradeSize',
     'swMinTakerPct', 'swMaxFeePct', 'swMaxFundingPct', 'swMinAccountDuration',
     'swMinTokens', 'swMinWinRate', 'swMinTradesPerDay', 'swMaxTradesPerDay',
+    'swMinAvgOiShare', 'swMaxAvgOiShare', 'swMinVolumeShare', 'swMaxVolumeShare',
   ] as const;
   type SwFilterField = (typeof SW_FILTER_FIELDS)[number];
   function swFilterSnap(): Record<SwFilterField, number | null | undefined> {
@@ -767,7 +768,9 @@
       committedFilters.swMaxFeePct ?? '', committedFilters.swMaxFundingPct ?? '',
       swF('swMinAccountDuration', 0), swF('swMinTokens', 0),
       swF('swMinWinRate', 0),
-      swF('swMinTradesPerDay', 0), committedFilters.swMaxTradesPerDay ?? ''
+      swF('swMinTradesPerDay', 0), committedFilters.swMaxTradesPerDay ?? '',
+      swF('swMinAvgOiShare', 0), committedFilters.swMaxAvgOiShare ?? '',
+      swF('swMinVolumeShare', 0), committedFilters.swMaxVolumeShare ?? ''
     ].join('|');
   }
 
@@ -2794,11 +2797,15 @@
       min_account_duration: String(Math.max(0, swF('swMinAccountDuration', 0))),
       min_tokens: String(Math.max(0, swF('swMinTokens', 0))),
       min_win_rate: String(Math.max(0, swF('swMinWinRate', 0))),
-      min_trades_per_day: String(Math.max(0, swF('swMinTradesPerDay', 0)))
+      min_trades_per_day: String(Math.max(0, swF('swMinTradesPerDay', 0))),
+      min_avg_oi_share: String(Math.max(0, swF('swMinAvgOiShare', 0))),
+      min_volume_share: String(Math.max(0, swF('swMinVolumeShare', 0)))
     });
     if (committedFilters.swMaxTradesPerDay != null) qs.set('max_trades_per_day', String(committedFilters.swMaxTradesPerDay));
     if (committedFilters.swMaxFeePct != null) qs.set('max_fee_pct', String(committedFilters.swMaxFeePct));
     if (committedFilters.swMaxFundingPct != null) qs.set('max_funding_pct', String(committedFilters.swMaxFundingPct));
+    if (committedFilters.swMaxAvgOiShare != null) qs.set('max_avg_oi_share', String(committedFilters.swMaxAvgOiShare));
+    if (committedFilters.swMaxVolumeShare != null) qs.set('max_volume_share', String(committedFilters.swMaxVolumeShare));
     if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
     return qs;
   }
@@ -6329,136 +6336,226 @@
     <div class="absolute inset-0 z-20 bg-zinc-950/95 overflow-y-auto">
     <div class="px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/30 flex items-center gap-3 flex-wrap text-xs">
       {#if instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart'}
-        <!-- Noise guards for the smart-wallet finder (TABLE view only — they
-             define the wallet SET; chart mode shows only chart-appearance
-             settings below). A raw mean/std ranking is
-             dominated by wallets with one or two lucky days, so we require a
-             minimum number of active (trade) days AND a minimum window volume
-             before a wallet enters the ranking. Both refetch on commit. -->
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min active days</span>
-        <input
-          type="number" min="1" max="90" step="1"
-          value={instance.swMinDays ?? 3}
-          onchange={(e) => (instance.swMinDays = Math.max(1, parseInt(e.currentTarget.value, 10) || 1))}
-          title="Minimum active (trade) days in the window for a wallet to be ranked"
-          class="w-16 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min volume ($)</span>
-        <input
-          type="number" min="0" step="10000"
-          value={instance.swMinVolume ?? 100000}
-          onchange={(e) => (instance.swMinVolume = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
-          title="Minimum window volume (USD) for a wallet to be ranked"
-          class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min realized ($)</span>
-        <input
-          type="number" step="1000"
-          value={instance.swMinRealized ?? 0}
-          onchange={(e) => (instance.swMinRealized = parseFloat(e.currentTarget.value) || 0)}
-          title="Minimum window realized PnL (USD) for a wallet to be ranked. 0 = profitable only; set negative to include losers."
-          class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min OI ($)</span>
-        <input
-          type="number" min="0" step="10000"
-          value={instance.swMinOi ?? 0}
-          onchange={(e) => (instance.swMinOi = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
-          title="Minimum open interest (USD), as of the snapshot, for a wallet to be ranked"
-          class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min avg trade ($)</span>
-        <input
-          type="number" min="0" step="50"
-          value={instance.swMinAvgTradeSize ?? 0}
-          onchange={(e) => (instance.swMinAvgTradeSize = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
-          title="Minimum average trade size (volume ÷ trades, USD)"
-          class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min taker %</span>
-        <input
-          type="number" min="0" max="100" step="5"
-          value={instance.swMinTakerPct ?? 0}
-          onchange={(e) => (instance.swMinTakerPct = Math.min(100, Math.max(0, parseFloat(e.currentTarget.value) || 0)))}
-          title="Minimum taker fill percentage (taker volume ÷ total fill volume)"
-          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Max fee/PnL %</span>
-        <input
-          type="number" step="5"
-          value={instance.swMaxFeePct ?? ''}
-          placeholder="∞"
-          onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxFeePct = Number.isFinite(v) ? v : null; }}
-          title="Maximum fees as a % of realized PnL (blank = no limit). Only applies to profitable wallets."
-          class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Max funding/PnL %</span>
-        <input
-          type="number" step="5"
-          value={instance.swMaxFundingPct ?? ''}
-          placeholder="∞"
-          onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxFundingPct = Number.isFinite(v) ? v : null; }}
-          title="Maximum funding PnL as a % of realized PnL (blank = no limit). Filters out carry-dominated wallets."
-          class="w-24 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min account age (d)</span>
-        <input
-          type="number" min="0" step="1"
-          value={instance.swMinAccountDuration ?? 0}
-          onchange={(e) => (instance.swMinAccountDuration = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))}
-          title="Minimum days since the wallet's first recorded trade"
-          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        {#if !instance.swToken}
-          <!-- Min tokens is meaningless in token scope (every wallet's count is
-               1 there), so it's hidden when a token is selected. -->
-          <span class="w-px h-4 bg-zinc-800"></span>
-          <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min tokens</span>
-          <input
-            type="number" min="0" step="1"
-            value={instance.swMinTokens ?? 0}
-            onchange={(e) => (instance.swMinTokens = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))}
-            title="Minimum number of distinct tokens traded in the window (tight vs wide scope)"
-            class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          />
-        {/if}
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min win rate %</span>
-        <input
-          type="number" min="0" max="100" step="5"
-          value={instance.swMinWinRate ?? 0}
-          onchange={(e) => (instance.swMinWinRate = Math.min(100, Math.max(0, parseFloat(e.currentTarget.value) || 0)))}
-          title="Minimum win rate — % of active trade days with positive total PnL"
-          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Min trades/day</span>
-        <input
-          type="number" min="0" step="1"
-          value={instance.swMinTradesPerDay ?? 0}
-          onchange={(e) => (instance.swMinTradesPerDay = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
-          title="Minimum trades per active day (window trades ÷ active days)"
-          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
-        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Max trades/day</span>
-        <input
-          type="number" min="0" step="1"
-          value={instance.swMaxTradesPerDay ?? ''}
-          placeholder="∞"
-          onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxTradesPerDay = Number.isFinite(v) ? v : null; }}
-          title="Maximum trades per active day (blank = no limit). Low caps find discretionary, non-HFT wallets."
-          class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        />
-        <span class="w-px h-4 bg-zinc-800"></span>
+        <!-- Smart-wallet finder filters (TABLE view only — they define the
+             wallet SET; chart mode shows only chart-appearance settings below).
+             Grouped into labelled sections so each guard is easy to find. A raw
+             mean/std ranking is dominated by wallets with one or two lucky days,
+             so the Activity/Size guards require a minimum participation before a
+             wallet enters the ranking. All commit together on refresh. -->
+        {@const swCell = 'w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}
+        {@const swLabel = 'text-zinc-500 text-[10px] uppercase tracking-wide leading-tight'}
+        {@const swGroup = 'border border-zinc-800 rounded-md px-3 pt-1 pb-2 min-w-[170px]'}
+        {@const swLegend = 'text-zinc-400 text-[10px] font-semibold uppercase tracking-widest px-1'}
+        {@const swGrid = 'grid grid-cols-2 gap-x-3 gap-y-2'}
+        <div class="w-full flex flex-wrap gap-3 items-start">
+
+          <fieldset class={swGroup}>
+            <legend class={swLegend}>Activity</legend>
+            <div class={swGrid}>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min active days</span>
+                <input
+                  type="number" min="1" max="90" step="1"
+                  value={instance.swMinDays ?? 3}
+                  onchange={(e) => (instance.swMinDays = Math.max(1, parseInt(e.currentTarget.value, 10) || 1))}
+                  title="Minimum active (trade) days in the window for a wallet to be ranked"
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min account age (d)</span>
+                <input
+                  type="number" min="0" step="1"
+                  value={instance.swMinAccountDuration ?? 0}
+                  onchange={(e) => (instance.swMinAccountDuration = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))}
+                  title="Minimum days since the wallet's first recorded trade"
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min trades/day</span>
+                <input
+                  type="number" min="0" step="1"
+                  value={instance.swMinTradesPerDay ?? 0}
+                  onchange={(e) => (instance.swMinTradesPerDay = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+                  title="Minimum trades per active day (window trades ÷ active days)"
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Max trades/day</span>
+                <input
+                  type="number" min="0" step="1"
+                  value={instance.swMaxTradesPerDay ?? ''}
+                  placeholder="∞"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxTradesPerDay = Number.isFinite(v) ? v : null; }}
+                  title="Maximum trades per active day (blank = no limit). Low caps find discretionary, non-HFT wallets."
+                  class={swCell}
+                />
+              </label>
+              {#if !instance.swToken}
+                <!-- Min tokens is meaningless in token scope (every wallet's
+                     count is 1 there), so it's hidden when a token is selected. -->
+                <label class="flex flex-col gap-1">
+                  <span class={swLabel}>Min tokens</span>
+                  <input
+                    type="number" min="0" step="1"
+                    value={instance.swMinTokens ?? 0}
+                    onchange={(e) => (instance.swMinTokens = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))}
+                    title="Minimum number of distinct tokens traded in the window (tight vs wide scope)"
+                    class={swCell}
+                  />
+                </label>
+              {/if}
+            </div>
+          </fieldset>
+
+          <fieldset class={swGroup}>
+            <legend class={swLegend}>Size ($)</legend>
+            <div class={swGrid}>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min volume ($)</span>
+                <input
+                  type="number" min="0" step="10000"
+                  value={instance.swMinVolume ?? 100000}
+                  onchange={(e) => (instance.swMinVolume = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+                  title="Minimum window volume (USD) for a wallet to be ranked"
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min avg trade ($)</span>
+                <input
+                  type="number" min="0" step="50"
+                  value={instance.swMinAvgTradeSize ?? 0}
+                  onchange={(e) => (instance.swMinAvgTradeSize = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+                  title="Minimum average trade size (volume ÷ trades, USD)"
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min OI ($)</span>
+                <input
+                  type="number" min="0" step="10000"
+                  value={instance.swMinOi ?? 0}
+                  onchange={(e) => (instance.swMinOi = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+                  title="Minimum open interest (USD), as of the snapshot, for a wallet to be ranked"
+                  class={swCell}
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class={swGroup}>
+            <legend class={swLegend}>Performance</legend>
+            <div class={swGrid}>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min realized ($)</span>
+                <input
+                  type="number" step="1000"
+                  value={instance.swMinRealized ?? 0}
+                  onchange={(e) => (instance.swMinRealized = parseFloat(e.currentTarget.value) || 0)}
+                  title="Minimum window realized PnL (USD) for a wallet to be ranked. 0 = profitable only; set negative to include losers."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min win rate %</span>
+                <input
+                  type="number" min="0" max="100" step="5"
+                  value={instance.swMinWinRate ?? 0}
+                  onchange={(e) => (instance.swMinWinRate = Math.min(100, Math.max(0, parseFloat(e.currentTarget.value) || 0)))}
+                  title="Minimum win rate — % of active trade days with positive total PnL"
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min taker %</span>
+                <input
+                  type="number" min="0" max="100" step="5"
+                  value={instance.swMinTakerPct ?? 0}
+                  onchange={(e) => (instance.swMinTakerPct = Math.min(100, Math.max(0, parseFloat(e.currentTarget.value) || 0)))}
+                  title="Minimum taker fill percentage (taker volume ÷ total fill volume)"
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Max fee/PnL %</span>
+                <input
+                  type="number" step="5"
+                  value={instance.swMaxFeePct ?? ''}
+                  placeholder="∞"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxFeePct = Number.isFinite(v) ? v : null; }}
+                  title="Maximum fees as a % of realized PnL (blank = no limit). Only applies to profitable wallets."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Max funding/PnL %</span>
+                <input
+                  type="number" step="5"
+                  value={instance.swMaxFundingPct ?? ''}
+                  placeholder="∞"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxFundingPct = Number.isFinite(v) ? v : null; }}
+                  title="Maximum funding PnL as a % of realized PnL (blank = no limit). Filters out carry-dominated wallets."
+                  class={swCell}
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class={swGroup}>
+            <!-- Market-share guards, in 0.01% units: 30 ⇒ 0.30% share. OI share
+                 uses the wallet's window-AVERAGE OI; volume share its window
+                 volume. Denominators are scoped to the selected token, or global. -->
+            <legend class={swLegend} title="Units of 0.01% — 30 means 0.30% of the market">Market share <span class="text-zinc-600 normal-case tracking-normal font-normal">· 30 = 0.30%</span></legend>
+            <div class={swGrid}>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min OI share</span>
+                <input
+                  type="number" min="0" step="1"
+                  value={instance.swMinAvgOiShare ?? 0}
+                  onchange={(e) => (instance.swMinAvgOiShare = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+                  title="Minimum average OI as a share of total OI, in 0.01% units (30 = 0.30%). Avg over the lookback window."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Max OI share</span>
+                <input
+                  type="number" min="0" step="1"
+                  value={instance.swMaxAvgOiShare ?? ''}
+                  placeholder="∞"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxAvgOiShare = Number.isFinite(v) ? v : null; }}
+                  title="Maximum average OI share, in 0.01% units (blank = no limit). Excludes whales that dominate the book."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min vol share</span>
+                <input
+                  type="number" min="0" step="1"
+                  value={instance.swMinVolumeShare ?? 0}
+                  onchange={(e) => (instance.swMinVolumeShare = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+                  title="Minimum window volume as a share of total volume, in 0.01% units (30 = 0.30%)."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Max vol share</span>
+                <input
+                  type="number" min="0" step="1"
+                  value={instance.swMaxVolumeShare ?? ''}
+                  placeholder="∞"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxVolumeShare = Number.isFinite(v) ? v : null; }}
+                  title="Maximum window volume share, in 0.01% units (blank = no limit)."
+                  class={swCell}
+                />
+              </label>
+            </div>
+          </fieldset>
+
+        </div>
       {/if}
       {#if instance.kind === 'ohlcv'}
         <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer">

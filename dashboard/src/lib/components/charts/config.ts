@@ -1812,6 +1812,16 @@ export type ChartInstance = {
   /** smart_wallets_table only: maximum trades per active day. null = no
    *  ceiling. */
   swMaxTradesPerDay?: number | null;
+  /** smart_wallets_table only: market-share guards, in 0.01% units (a
+   *  "permyriad" — 30 ⇒ 0.30% share). avg-OI share = the wallet's
+   *  window-average OI as a fraction of the market's average total OI; volume
+   *  share = window volume as a fraction of total window volume. Denominators
+   *  are scoped to the selected token, or global. min_* default 0 (no floor);
+   *  max_* null = no ceiling. */
+  swMinAvgOiShare?: number;
+  swMaxAvgOiShare?: number | null;
+  swMinVolumeShare?: number;
+  swMaxVolumeShare?: number | null;
   /** Dual-view widgets only (see DUAL_VIEW_KINDS): which sub-view is active.
    *  'table' renders the kind's normal table; 'chart' renders the mapped chart
    *  kind over the same widget's data. Persisted per widget; default 'table'. */

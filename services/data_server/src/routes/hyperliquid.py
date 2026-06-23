@@ -531,6 +531,28 @@ def _build_smart_wallet_selection(request):
         min_trades_per_day = float(request.args.get("min_trades_per_day", "0"))
     except ValueError:
         min_trades_per_day = 0.0
+    # Market-share guards. Units are 0.01% (a "permyriad": 30 ⇒ 0.30% share),
+    # so a share fraction f maps to 10000·f. OI share = the wallet's
+    # window-AVERAGE OI as a fraction of the market's average total OI; volume
+    # share = the wallet's window volume as a fraction of total window volume.
+    # Both denominators are the full (pre-filter) totals over the same scope
+    # (that token, or global). min_* default 0 (no floor), max_* NO_MAX.
+    try:
+        min_avg_oi_share = float(request.args.get("min_avg_oi_share", "0"))
+    except ValueError:
+        min_avg_oi_share = 0.0
+    try:
+        max_avg_oi_share = float(request.args.get("max_avg_oi_share", str(NO_MAX)))
+    except ValueError:
+        max_avg_oi_share = NO_MAX
+    try:
+        min_volume_share = float(request.args.get("min_volume_share", "0"))
+    except ValueError:
+        min_volume_share = 0.0
+    try:
+        max_volume_share = float(request.args.get("max_volume_share", str(NO_MAX)))
+    except ValueError:
+        max_volume_share = NO_MAX
 
     snap_arg = request.args.get("snapshot")
     if snap_arg:
@@ -561,6 +583,8 @@ def _build_smart_wallet_selection(request):
         "min_account_duration": min_account_duration, "min_tokens": min_tokens,
         "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
         "min_trades_per_day": min_trades_per_day,
+        "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
+        "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
     }
     first_seen = """
         first_seen AS (
@@ -725,6 +749,40 @@ def _build_smart_wallet_selection(request):
         )"""
         oi_token_select = "coalesce(oi.oi_token, 0) AS oi_token"
 
+    # avg-OI-share is the only share guard that needs an extra (potentially
+    # heavy) window scan, so build its CTE only when the guard is active.
+    # Global reads the per-(day,wallet) rollup (sum of OI·buckets over the
+    # window); token scope sums abs(size_usd) across the window's hourly
+    # buckets for that token. The denominator (sum over ALL wallets) cancels
+    # each wallet's identical bucket-count divisor, so Σwallet / Σall is exactly
+    # avg(wallet OI) / avg(total OI).
+    oi_share_active = (min_avg_oi_share > 0) or (max_avg_oi_share < NO_MAX)
+    if token is None:
+        oi_window_cte = """
+        oi_window AS (
+            SELECT wallet, sumMerge(s_total_oi_usd_state) AS oi_sum
+            FROM tradernick.hl_position_history_oi_wallet_daily
+            WHERE day > {start_day:Date} AND day <= {end_day:Date}
+            GROUP BY wallet
+        )"""
+    else:
+        oi_window_cte = """
+        oi_window AS (
+            SELECT wallet, sum(bkt_oi) AS oi_sum
+            FROM (
+                SELECT wallet, bucket, sum(abs(sz)) AS bkt_oi
+                FROM (
+                    SELECT wallet, bucket, side, argMaxMerge(size_state) AS sz
+                    FROM tradernick.hl_position_history_1h
+                    WHERE token = {token:String}
+                      AND bucket > {start_day:Date} AND bucket <= {until:DateTime}
+                    GROUP BY wallet, bucket, side
+                )
+                GROUP BY wallet, bucket
+            )
+            GROUP BY wallet
+        )"""
+
     cte_block = f"""
         {win_cte},
         {real_daily},
@@ -767,6 +825,19 @@ def _build_smart_wallet_selection(request):
         {taker_agg},
         {funding_agg},
         {first_seen}"""
+    if oi_share_active:
+        cte_block += f",\n{oi_window_cte}"
+
+    # Share guards: volume-share is cheap (sum over the existing `win` CTE) so
+    # it's always present (a no-op at the 0/NO_MAX defaults); OI-share joins the
+    # conditionally-built oi_window. coalesce(…, 0) keeps a 0-share fallback when
+    # a denominator is 0, so the defaults never exclude a wallet.
+    oi_share_join = (
+        "\n        LEFT JOIN oi_window ow ON ow.wallet = w.wallet"
+        if oi_share_active else "")
+    oi_share_guard = """
+          AND coalesce(10000 * ow.oi_sum / nullIf((SELECT sum(oi_sum) FROM oi_window), 0), 0) >= {min_avg_oi_share:Float64}
+          AND coalesce(10000 * ow.oi_sum / nullIf((SELECT sum(oi_sum) FROM oi_window), 0), 0) <= {max_avg_oi_share:Float64}""" if oi_share_active else ""
 
     from_where_block = """
         FROM win w
@@ -775,7 +846,7 @@ def _build_smart_wallet_selection(request):
         LEFT JOIN oi_now oi     ON oi.wallet = w.wallet
         LEFT JOIN taker_agg tk  ON tk.wallet = w.wallet
         LEFT JOIN funding_agg fn ON fn.wallet = w.wallet
-        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet
+        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet""" + oi_share_join + """
         WHERE w.volume >= {min_volume:Float64}
           AND w.realized >= {min_realized:Float64}
           AND coalesce(oi.oi_usd, 0) >= {min_oi:Float64}
@@ -788,7 +859,9 @@ def _build_smart_wallet_selection(request):
           AND coalesce(dateDiff('day', fseen.first_day, {end_day:Date}), 0) >= {min_account_duration:UInt32}
           AND coalesce(sa.win_rate, 0) >= {min_win_rate:Float64}
           AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) <= {max_trades_per_day:Float64}
-          AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) >= {min_trades_per_day:Float64}"""
+          AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) >= {min_trades_per_day:Float64}
+          AND coalesce(10000 * w.volume / nullIf((SELECT sum(volume) FROM win), 0), 0) >= {min_volume_share:Float64}
+          AND coalesce(10000 * w.volume / nullIf((SELECT sum(volume) FROM win), 0), 0) <= {max_volume_share:Float64}""" + oi_share_guard
 
     echo = {
         "metric": metric, "order_by": order_by, "token": token,
@@ -800,6 +873,8 @@ def _build_smart_wallet_selection(request):
         "min_account_duration": min_account_duration, "min_tokens": min_tokens,
         "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
         "min_trades_per_day": min_trades_per_day,
+        "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
+        "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
     }
     return {
         "cte_block": cte_block, "from_where_block": from_where_block,
@@ -827,6 +902,7 @@ _PASSING_KEY_FIELDS = (
     "min_oi", "min_avg_trade_size", "min_taker_pct", "max_fee_pct",
     "max_funding_pct", "min_account_duration", "min_tokens", "min_win_rate",
     "min_trades_per_day", "max_trades_per_day",
+    "min_avg_oi_share", "max_avg_oi_share", "min_volume_share", "max_volume_share",
 )
 # In-process hint of when we last ensured a key was fresh, to skip the freshness
 # round-trip on hot keys. The CH table is the source of truth.
