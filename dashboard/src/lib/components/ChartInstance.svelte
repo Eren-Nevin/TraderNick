@@ -750,6 +750,24 @@
     instance.kind === 'smart_wallets_table' &&
       SW_FILTER_FIELDS.some((k) => (committedFilters[k] ?? null) !== (instance[k] ?? null))
   );
+  // Refresh-only gating for smart_wallets_table: the finder NEVER auto-fetches
+  // (not on mount, not on token / lookback / metric / snapshot / filter change).
+  // It runs ONLY when the user clicks refresh (reload), which arms a single load
+  // via the $effect. `swArmed` = a refresh has run; `swArmedSelectionKey` = the
+  // selection key that was loaded — a later view toggle keeps the same selection
+  // key so it may still load the other view, but any selection change is blocked
+  // until the next explicit refresh. `swForceFreshNext` carries the cache-bust
+  // through to the effect's single load.
+  let swArmed = $state(false);
+  let swArmedSelectionKey = $state('');
+  let swForceFreshNext = $state(false);
+  // True when the displayed finder data is stale vs the current inputs (never
+  // run, selection changed, or gear filters edited) — drives the refresh
+  // button's "needs refresh" highlight.
+  let swNeedsRefresh = $derived(
+    instance.kind === 'smart_wallets_table' &&
+      (!swArmed || swFiltersDirty || swTableKey() !== swArmedSelectionKey)
+  );
 
   // The smart_wallets_table cache/load key for the TABLE view (the found-wallet
   // set). Every selector busts it: metric+order change the ranking,
@@ -972,6 +990,21 @@
         const t = (cached.data[0] as unknown as { total?: number })?.total;
         if (typeof t === 'number') { swFoundTotal = t; swFoundTotalKey = swTableKey(); }
       }
+      // A cache hit means this selection has valid data — treat it as armed so
+      // a subsequent view toggle (after a drag-reorder remount) can still load.
+      if (instance.kind === 'smart_wallets_table') {
+        swArmed = true; swArmedSelectionKey = swTableKey();
+      }
+      return;
+    }
+    // Refresh-only finder: skip auto-fetch unless an explicit refresh armed it
+    // and the SELECTION key is unchanged (a view toggle keeps that key, so the
+    // other view may still load; a token/lookback/filter change does not).
+    if (instance.kind === 'smart_wallets_table') {
+      if (!swArmed || swTableKey() !== swArmedSelectionKey) return;
+      const ff = swForceFreshNext;
+      swForceFreshNext = false;
+      void load(ff);
       return;
     }
     void load();
@@ -3123,9 +3156,20 @@
    *  header refresh button. Allowed mid-load: load() will abort the prior
    *  in-flight fetch via currentLoad so a stuck request can be replaced. */
   async function reload() {
-    // Apply any pending smart-wallet filter edits (the gear inputs defer their
-    // reload until here) before refetching.
-    if (instance.kind === 'smart_wallets_table') commitSwFilters();
+    // smart_wallets_table is refresh-only: commit pending gear-filter edits,
+    // ARM a single fetch, then let the $effect run it (routing through the
+    // effect keeps it the sole loader, so there's no double-load race). Capture
+    // the armed selection key AFTER committing so it matches what the effect
+    // compares against. swForceFreshNext carries the cache-bust into that load.
+    if (instance.kind === 'smart_wallets_table') {
+      commitSwFilters();
+      swArmed = true;
+      swArmedSelectionKey = swTableKey();
+      swForceFreshNext = true;
+      loadCache.delete(cacheId());
+      loadedKey = '';
+      return;
+    }
     loadedKey = '';
     loadCache.delete(cacheId());
     await load(true);
@@ -6251,8 +6295,8 @@
       <button
         type="button"
         onclick={reload}
-        title={swFiltersDirty ? 'Apply changed filters & refresh' : (loading ? 'Loading — click to cancel and retry' : 'Refresh')}
-        class={'w-7 h-7 rounded-md text-sm leading-none flex items-center justify-center ' + (loading ? 'animate-spin ' : '') + (swFiltersDirty
+        title={swNeedsRefresh ? (swArmed ? 'Inputs changed — click to run the finder' : 'Click to run the finder') : (loading ? 'Loading — click to cancel and retry' : 'Refresh')}
+        class={'w-7 h-7 rounded-md text-sm leading-none flex items-center justify-center ' + (loading ? 'animate-spin ' : '') + (swNeedsRefresh
           ? 'text-amber-300 border border-amber-500 bg-amber-600/20 hover:bg-amber-600/40'
           : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent')}
         aria-label="Refresh chart"
@@ -7184,7 +7228,12 @@
         </svg>
         Loading {chartKindGroup(effectiveKind) ? `${chartKindGroup(effectiveKind)} ${chartKindShortLabel(effectiveKind)}` : kindLabel}…
       </div>
-    {:else if data.length === 0}
+    {:else if data.length === 0 && !(instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart')}
+      <!-- smart_wallets_table (table view) is excluded here so it ALWAYS renders
+           its own component even with no rows yet — the finder is refresh-only,
+           and the user needs its metric / lookback / token / snapshot chrome to
+           configure a run before clicking refresh. Its component shows the
+           "click ↻ to run" hint in the body. -->
       <div class="p-4 text-sm text-zinc-400">
         {#if instance.kind === 'hl_smart_oi' && !smartHasValidFilter}
           {#if (instance.filterIds ?? []).length === 0}
@@ -7524,6 +7573,7 @@
         onChangeSnapshot={(iso) => (instance.swSnapshot = iso)}
         loading={loading}
         error={error}
+        notRun={!swArmed}
       />
     {:else if instance.kind === 'token_leaderboard'}
       <TokenLeaderboardTable

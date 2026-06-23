@@ -1493,8 +1493,8 @@ export type TransferFilters = {
 // /api/hyperliquid/smart_wallet_metrics. Designed to grow: add a metric here +
 // a backend branch and the toolbar/table pick it up.
 export type SmartWalletMetric = 'sharpe';
-export type SmartWalletLookback = 1 | 7 | 30 | 90;
-export const SMART_WALLET_LOOKBACKS: ReadonlyArray<SmartWalletLookback> = [1, 7, 30, 90];
+export type SmartWalletLookback = 1 | 7 | 30 | 90 | 150;
+export const SMART_WALLET_LOOKBACKS: ReadonlyArray<SmartWalletLookback> = [1, 7, 30, 90, 150];
 
 export type SmartWalletMetricDef = {
   key: SmartWalletMetric;

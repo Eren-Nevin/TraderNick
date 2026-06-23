@@ -446,7 +446,7 @@ async def leaderboard(request):
     })
 
 
-def _build_smart_wallet_selection(request):
+def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
     """Parse the smart-wallet finder's filter params and build the shared
     wallet-SELECTION SQL: the CTE chain that computes each wallet's window
     metrics, plus the FROM/JOIN/WHERE that keeps only wallets passing every
@@ -466,8 +466,8 @@ def _build_smart_wallet_selection(request):
     if token in ("", "__all__", "__global__", "all"):
         token = None
     lookback = int(request.args.get("lookback", "7"))
-    if lookback not in (1, 7, 30, 90):
-        raise ValueError("lookback must be 1|7|30|90")
+    if lookback not in (1, 7, 30, 90, 150):
+        raise ValueError("lookback must be 1|7|30|90|150")
     metric = request.args.get("metric", "sharpe")
     if metric not in ("sharpe",):
         raise ValueError("unsupported metric")
@@ -585,6 +585,7 @@ def _build_smart_wallet_selection(request):
         "min_trades_per_day": min_trades_per_day,
         "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
         "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
+        "lookback": lookback,
     }
     first_seen = """
         first_seen AS (
@@ -749,14 +750,22 @@ def _build_smart_wallet_selection(request):
         )"""
         oi_token_select = "coalesce(oi.oi_token, 0) AS oi_token"
 
-    # avg-OI-share is the only share guard that needs an extra (potentially
-    # heavy) window scan, so build its CTE only when the guard is active.
-    # Global reads the per-(day,wallet) rollup (sum of OI·buckets over the
-    # window); token scope sums abs(size_usd) across the window's hourly
-    # buckets for that token. The denominator (sum over ALL wallets) cancels
-    # each wallet's identical bucket-count divisor, so Σwallet / Σall is exactly
-    # avg(wallet OI) / avg(total OI).
+    # avg-OI over the window needs an extra (potentially heavy) scan, so build
+    # its CTE only when something needs it: the avg-OI-share guard, OR the
+    # caller asking for the avg_oi column (include_avg_oi). Global reads the
+    # per-(day,wallet) rollup (sum of OI·buckets over the window); token scope
+    # sums abs(size_usd) across the window's hourly buckets for that token. The
+    # share denominator (sum over ALL wallets) cancels each wallet's identical
+    # bucket-count divisor, so Σwallet / Σall is exactly avg(wallet OI) /
+    # avg(total OI); the displayed avg_oi is the time-average oi_sum/(days·24).
+    # Global oi_window reads the per-day rollup (cheap), so the avg_oi column
+    # can always build it. Token oi_window is a full-window hourly scan of one
+    # token (seconds → tens of seconds on a busy token), so we DON'T build it
+    # just for the column — only when the OI-share guard is active (the user has
+    # opted into that cost). Hence token-scope avg_oi shows only when filtering
+    # on OI share; otherwise it's NULL (the column renders "—").
     oi_share_active = (min_avg_oi_share > 0) or (max_avg_oi_share < NO_MAX)
+    build_oi_window = oi_share_active or (include_avg_oi and token is None)
     if token is None:
         oi_window_cte = """
         oi_window AS (
@@ -825,19 +834,28 @@ def _build_smart_wallet_selection(request):
         {taker_agg},
         {funding_agg},
         {first_seen}"""
-    if oi_share_active:
+    if build_oi_window:
         cte_block += f",\n{oi_window_cte}"
+    # Share denominators as SCALAR CTEs (WITH (…) AS x): ClickHouse evaluates
+    # these once, whereas a `(SELECT … FROM win)` referenced inline in the WHERE
+    # re-inlines (re-runs) the whole table CTE on every reference. vol_total is
+    # always defined (volume-share guards are always present); oi_total only when
+    # oi_window exists.
+    cte_block += "\n        , (SELECT sum(volume) FROM win) AS vol_total"
+    if build_oi_window:
+        cte_block += "\n        , (SELECT sum(oi_sum) FROM oi_window) AS oi_total"
 
     # Share guards: volume-share is cheap (sum over the existing `win` CTE) so
     # it's always present (a no-op at the 0/NO_MAX defaults); OI-share joins the
     # conditionally-built oi_window. coalesce(…, 0) keeps a 0-share fallback when
-    # a denominator is 0, so the defaults never exclude a wallet.
+    # a denominator is 0, so the defaults never exclude a wallet. The join is
+    # added whenever oi_window exists (guards OR the avg_oi column need it).
     oi_share_join = (
         "\n        LEFT JOIN oi_window ow ON ow.wallet = w.wallet"
-        if oi_share_active else "")
+        if build_oi_window else "")
     oi_share_guard = """
-          AND coalesce(10000 * ow.oi_sum / nullIf((SELECT sum(oi_sum) FROM oi_window), 0), 0) >= {min_avg_oi_share:Float64}
-          AND coalesce(10000 * ow.oi_sum / nullIf((SELECT sum(oi_sum) FROM oi_window), 0), 0) <= {max_avg_oi_share:Float64}""" if oi_share_active else ""
+          AND coalesce(10000 * ow.oi_sum / nullIf(oi_total, 0), 0) >= {min_avg_oi_share:Float64}
+          AND coalesce(10000 * ow.oi_sum / nullIf(oi_total, 0), 0) <= {max_avg_oi_share:Float64}""" if oi_share_active else ""
 
     from_where_block = """
         FROM win w
@@ -860,8 +878,8 @@ def _build_smart_wallet_selection(request):
           AND coalesce(sa.win_rate, 0) >= {min_win_rate:Float64}
           AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) <= {max_trades_per_day:Float64}
           AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) >= {min_trades_per_day:Float64}
-          AND coalesce(10000 * w.volume / nullIf((SELECT sum(volume) FROM win), 0), 0) >= {min_volume_share:Float64}
-          AND coalesce(10000 * w.volume / nullIf((SELECT sum(volume) FROM win), 0), 0) <= {max_volume_share:Float64}""" + oi_share_guard
+          AND coalesce(10000 * w.volume / nullIf(vol_total, 0), 0) >= {min_volume_share:Float64}
+          AND coalesce(10000 * w.volume / nullIf(vol_total, 0), 0) <= {max_volume_share:Float64}""" + oi_share_guard
 
     echo = {
         "metric": metric, "order_by": order_by, "token": token,
@@ -876,9 +894,16 @@ def _build_smart_wallet_selection(request):
         "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
         "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
     }
+    # Window time-average OI (USD) for the avg_oi column: Σ OI·buckets over the
+    # window ÷ the window's hourly buckets (days × 24). NULL when oi_window
+    # wasn't built (e.g. the OI-chart path doesn't request the column).
+    avg_oi_select = (
+        "coalesce(ow.oi_sum, 0) / nullIf(toFloat64({lookback:UInt32}) * 24, 0) AS avg_oi"
+        if build_oi_window else "NULL AS avg_oi")
     return {
         "cte_block": cte_block, "from_where_block": from_where_block,
-        "oi_token_select": oi_token_select, "order_col": ORDER_COLS[order_by],
+        "oi_token_select": oi_token_select, "avg_oi_select": avg_oi_select,
+        "order_col": ORDER_COLS[order_by],
         "params": params, "echo": echo,
     }
 
@@ -998,7 +1023,7 @@ async def smart_wallet_metrics(request):
 
     Query params:
       token     — token symbol; absent or '__all__' → global (all tokens)
-      lookback  — window length in days (1|7|30|90; default 7)
+      lookback  — window length in days (1|7|30|90|150; default 7)
       snapshot  — ISO date/datetime ending the window (default: start of today)
       metric    — ranking metric; only 'sharpe' for now (default 'sharpe')
       order_by  — sharpe|volume|realized|unrealized|oi_usd (default = metric)
@@ -1009,7 +1034,7 @@ async def smart_wallet_metrics(request):
       min_oi    — min open interest USD as of the snapshot (default 0)
     """
     try:
-        sel = _build_smart_wallet_selection(request)
+        sel = _build_smart_wallet_selection(request, include_avg_oi=True)
     except ValueError as e:
         return response.json({"error": str(e)}, status=400)
 
@@ -1036,6 +1061,7 @@ async def smart_wallet_metrics(request):
             coalesce(sa.win_rate, 0) AS win_rate,
             w.trades / nullIf(sa.n_days, 0) AS trades_per_day,
             dictGet('tradernick.wallet_labels', 'categories', lower(w.wallet)) AS categories,
+            {sel['avg_oi_select']},
             count() OVER () AS total_found
         {sel['from_where_block']}
         ORDER BY {sel['order_col']} DESC
@@ -1062,10 +1088,11 @@ async def smart_wallet_metrics(request):
             "win_rate": (float(r[14]) if r[14] is not None else None),
             "trades_per_day": (float(r[15]) if r[15] is not None else None),
             "categories": list(r[16]) if r[16] else [],
+            "avg_oi": (float(r[17]) if r[17] is not None else None),
         }
         for r in rows.result_rows
     ]
-    total = int(rows.result_rows[0][17]) if rows.result_rows else 0
+    total = int(rows.result_rows[0][18]) if rows.result_rows else 0
     # Warm the passing-set cache in the background so the chart view (which uses
     # the SAME selection) reuses it instead of recomputing. Fire-and-forget; if
     # the chart loads before this finishes it just computes (and caches) itself.

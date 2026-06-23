@@ -27,6 +27,7 @@
     unrealized_pnl: number;
     oi_token: number | null;
     oi_usd: number;
+    avg_oi: number | null;
     metric: number;
     n_days: number;
     n_tokens: number;
@@ -46,7 +47,8 @@
     onChangeToken,
     onChangeSnapshot,
     loading = false,
-    error = null
+    error = null,
+    notRun = false
   }: {
     rows: SmartWalletRow[];
     total?: number;
@@ -61,6 +63,10 @@
     onChangeSnapshot: (iso: string) => void;
     loading?: boolean;
     error?: string | null;
+    /** True when the finder hasn't been run yet for the current widget (the
+     *  finder is refresh-only). Shows a "click refresh" hint instead of the
+     *  "no wallets pass" message. */
+    notRun?: boolean;
   } = $props();
 
   const metricDef = $derived(smartWalletMetricDef(metric));
@@ -209,6 +215,10 @@
   <div class="flex-1 overflow-auto scrollbar-none">
     {#if error}
       <div class="h-full flex items-center justify-center text-rose-400 text-center px-4">{error}</div>
+    {:else if !loading && notRun && rows.length === 0}
+      <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4">
+        Set your metric, lookback, token and filters, then click&nbsp;<span class="text-amber-300">↻</span>&nbsp;to run the finder.
+      </div>
     {:else if !loading && rows.length === 0}
       <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4">
         No wallets pass the filters for this window.<br />Lower the min-days / min-volume / min-realized / min-OI guards in settings.
@@ -227,6 +237,9 @@
                 onclick={() => onSort(oiCol)}
                 title={oiCol === 'oi_token' ? 'Open interest (token units) as of the snapshot' : 'Open interest (USD) as of the snapshot'}
             >OI{oiCol === 'oi_token' ? ` (${token})` : ' ($)'}{sortArrow(oiCol)}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
+                onclick={() => onSort('avg_oi')}
+                title="Average open interest (USD) over the lookback window — time-averaged (idle hours count as 0). Global scope only; in token scope it shows only when an OI-share filter is active.">Avg OI{sortArrow('avg_oi')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort('realized_pnl')} title="Realized PnL over the window (USD)">Realized{sortArrow('realized_pnl')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
@@ -258,6 +271,9 @@
                 {:else}
                   <div>{fmtUsd(r.oi_usd)}</div><div class="text-[10px] text-zinc-500">{fmtToken(r.oi_token)}</div>
                 {/if}
+              </td>
+              <td class="px-3 py-1 text-right font-mono text-zinc-300">
+                {r.avg_oi == null ? '—' : fmtUsd(r.avg_oi)}
               </td>
               <td class="px-3 py-1 text-right font-mono"
                   class:text-emerald-400={r.realized_pnl > 0}

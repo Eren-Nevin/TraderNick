@@ -226,6 +226,14 @@
       entry.series.setData(points);
     }
 
+    // Show the LEFT price scale's axis labels only when a series actually uses
+    // the secondary (left) axis. Lightweight-charts hides the left scale by
+    // default, so without this a secondary line (e.g. the close-price overlay
+    // in smart-OI chart mode) plots against an invisible axis with no readable
+    // scale. Toggling per-render keeps it hidden when nothing needs it.
+    const hasSecondary = lines.some((l) => (l.axis ?? 'primary') === 'secondary');
+    chart.priceScale('left').applyOptions({ visible: hasSecondary });
+
     // vRefs primitive is attached to the first primary series (it just needs
     // some series to live on; the renderer reads the chart's time scale).
     if (vRefPrimitive) {
