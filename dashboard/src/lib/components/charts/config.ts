@@ -336,10 +336,16 @@ export function sizeSeries(under: number, over: number) {
 // line-rendered Volume-by-Size chart. Same fields the stacked bars used, just
 // plotted as independent lines instead of a stack.
 export function sizeLineSeries(under: number, over: number) {
+  // Each bucket's share of the bucket total at that point, in % — shown
+  // alongside the $ value in the hover legend (display-only, never plotted).
+  const pctOf = (key: 'small_usd' | 'mid_usd' | 'large_usd') => (d: VolumeBucket) => {
+    const total = (d.small_usd ?? 0) + (d.mid_usd ?? 0) + (d.large_usd ?? 0);
+    return total ? ((d[key] ?? 0) / total) * 100 : NaN;
+  };
   return [
-    { key: 'small_usd', label: `< $${under}`,        color: '#3f3f46', compute: (d: VolumeBucket) => d.small_usd },
-    { key: 'mid_usd',   label: `$${under}–$${over}`, color: '#3b82f6', compute: (d: VolumeBucket) => d.mid_usd },
-    { key: 'large_usd', label: `> $${over}`,         color: '#a855f7', compute: (d: VolumeBucket) => d.large_usd }
+    { key: 'small_usd', label: `< $${under}`,        color: '#3f3f46', compute: (d: VolumeBucket) => d.small_usd, pct: pctOf('small_usd') },
+    { key: 'mid_usd',   label: `$${under}–$${over}`, color: '#3b82f6', compute: (d: VolumeBucket) => d.mid_usd,   pct: pctOf('mid_usd') },
+    { key: 'large_usd', label: `> $${over}`,         color: '#a855f7', compute: (d: VolumeBucket) => d.large_usd, pct: pctOf('large_usd') }
   ];
 }
 

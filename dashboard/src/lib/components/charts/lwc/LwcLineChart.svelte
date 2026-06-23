@@ -28,6 +28,10 @@
     axis?: 'primary' | 'secondary';
     rawValue?: (d: Datum, i: number, data: Datum[]) => number;
     rawFormat?: (v: number) => string;
+    /** Optional secondary value shown in parentheses after the main value in
+     *  the hover legend (e.g. a bucket's share of the total, as a %). Display-
+     *  only — never plotted. */
+    pct?: (d: Datum, i: number, data: Datum[]) => number;
   };
   type RefLine = { value: number; label?: string; color?: string };
   type VRefLine = { time: number; color?: string; dash?: string };
@@ -363,10 +367,14 @@
             : ln.axis === 'secondary'
               ? (formatTooltip2 ?? formatTooltip)
               : formatTooltip}
+        {@const pct = ln.pct ? ln.pct(hoverDatum, hoverIdx ?? 0, data) : null}
         <div class="flex items-center gap-2">
           <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
           <span class="text-zinc-400 w-28">{ln.label}</span>
           <span class="w-20 text-right">{fmt(v)}</span>
+          {#if pct !== null && Number.isFinite(pct)}
+            <span class="w-12 text-right text-zinc-500">{pct.toFixed(1)}%</span>
+          {/if}
         </div>
       {/each}
     </div>
