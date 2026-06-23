@@ -43,6 +43,8 @@
     fmtUsdAxis,
     fmtUsdTooltip,
     fmtUsdCompact,
+    fmtPriceAxis,
+    fmtPriceTooltip,
     fmtRatio,
     lookbackWindow,
     maArray,
@@ -708,16 +710,17 @@
   }
 
   // smart_wallets_table: resolved snapshot ISO date — instance.swSnapshot when
-  // set, else the start of the current UTC day. The slider writes back into
+  // set, else the default for a freshly-created widget: the FIRST day of the
+  // current UTC month (e.g. 2026-06-01 in June). The slider writes back into
   // instance.swSnapshot; this is the single source of truth for the fetch +
   // the table header.
   function swSnapshotIso(): string {
     if (instance.swSnapshot) return instance.swSnapshot;
-    return swTodayIso();
+    return swDefaultSnapshotIso();
   }
-  function swTodayIso(): string {
+  function swDefaultSnapshotIso(): string {
     const n = new Date();
-    return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()))
+    return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), 1))
       .toISOString().slice(0, 10);
   }
 
@@ -6144,19 +6147,37 @@
                hl_trades, pc → *_ohlcv_1m close, ls → binance_long_short_ratios /
                (hl_position_history + hl_fills). Same render path either way.
                tt (top-trader L/S) stays Binance-only — see derivatives.py. -->
+          <!-- Venue selector. 'binance_spot' is the internal exchange value for
+               the Binance spot dataset, but it's surfaced via the separate
+               MARKET selector below (perp/spot) rather than as a third venue —
+               so here Binance covers both perp and spot and we map accordingly.
+               Picking HL drops spot (HL has no spot market); picking Binance
+               defaults to perp and unlocks the market selector. -->
           <select
-            value={instance.exchange ?? 'binance'}
-            onchange={(e) => (instance.exchange = e.currentTarget.value as 'binance' | 'hl' | 'binance_spot')}
+            value={(instance.exchange ?? 'binance') === 'hl' ? 'hl' : 'binance'}
+            onchange={(e) => (instance.exchange = e.currentTarget.value === 'hl' ? 'hl' : 'binance')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
           >
             <option value="binance">Binance</option>
             <option value="hl">Hyperliquid</option>
-            {#if instance.kind === 'ohlcv' || instance.kind === 'volume' || instance.kind === 'bs' || instance.kind === 'sz'}
-              <!-- Binance spot dataset (separate from perp). Only the candle /
-                   trade-flow kinds have spot tables. -->
-              <option value="binance_spot">Binance Spot</option>
-            {/if}
           </select>
+          {#if instance.kind === 'ohlcv' || instance.kind === 'volume' || instance.kind === 'bs' || instance.kind === 'sz'}
+            <!-- Market selector — only the candle / trade-flow kinds have spot
+                 tables. Spot is unlocked only for Binance; HL is perp-only, so
+                 the selector is disabled (and pinned to Perp) for HL. Maps to
+                 the internal exchange value: Binance+Spot → 'binance_spot'. -->
+            {@const isHlVenue = (instance.exchange ?? 'binance') === 'hl'}
+            <select
+              value={instance.exchange === 'binance_spot' ? 'spot' : 'perp'}
+              disabled={isHlVenue}
+              onchange={(e) => (instance.exchange = e.currentTarget.value === 'spot' ? 'binance_spot' : 'binance')}
+              title={isHlVenue ? 'Spot is only available for Binance' : 'Perp (futures) or Spot market'}
+              class={'bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 focus:outline-none focus:border-zinc-500 ' + (isHlVenue ? 'opacity-50 cursor-not-allowed text-zinc-500' : 'text-zinc-100 hover:border-zinc-600')}
+            >
+              <option value="perp">Perp</option>
+              <option value="spot">Spot</option>
+            </select>
+          {/if}
         {/if}
         {#if instance.kind === 'ls' || instance.kind === 'tt'}
           <!-- Series selector for the L/S ratio charts. 'All' shows every line
@@ -7313,9 +7334,9 @@
         formatTooltip={oiIsRatio ? fmtRatio
                  : oiIsPct ? ((v: number) => `${(v >= 0 ? '+' : '')}${(v * 100).toFixed(2)}%`)
                  : (oiUseToken ? fmtAmountTooltip : fmtUsdTooltip)}
-        formatY2={showClose ? fmtUsdAxis
+        formatY2={showClose ? fmtPriceAxis
                  : showWalletCount ? ((v: number) => Math.round(v).toString()) : undefined}
-        formatTooltip2={showClose ? fmtUsdTooltip
+        formatTooltip2={showClose ? fmtPriceTooltip
                  : showWalletCount ? ((v: number) => `${Math.round(v)} wallets`) : undefined}
         onClick={showWalletCount ? ((t: number) => openSmartWalletsDialog(t)) : undefined}
       />

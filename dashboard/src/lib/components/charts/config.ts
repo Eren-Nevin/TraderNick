@@ -111,6 +111,28 @@ export function fmtUsdTooltip(v: number) {
   return `${sign}$${abs.toFixed(2)}`;
 }
 
+// Price formatters — for PRICE axes/tooltips (e.g. the close-price overlay),
+// where fmtUsdAxis is too coarse: its K branch rounds to whole thousands, so
+// every value in $1K–$2K renders as "$1K"/"$2K". These keep ~4 significant
+// figures across the full price range (BTC ~$73K → sub-cent alts), so adjacent
+// gridlines stay distinct.
+const _priceAxisFmt = new Intl.NumberFormat('en-US', {
+  notation: 'compact',
+  maximumSignificantDigits: 4,
+});
+export function fmtPriceAxis(v: number) {
+  if (!isFinite(v)) return '—';
+  return `${v < 0 ? '-' : ''}$${_priceAxisFmt.format(Math.abs(v))}`;
+}
+export function fmtPriceTooltip(v: number) {
+  if (!isFinite(v)) return '—';
+  const abs = Math.abs(v);
+  const sign = v < 0 ? '-' : '';
+  if (abs >= 1) return `${sign}$${abs.toLocaleString('en-US', { maximumFractionDigits: 2 })}`;
+  if (abs === 0) return '$0';
+  return `${sign}$${abs.toPrecision(4)}`;
+}
+
 // Compact USD formatter capped at 3 significant figures — gives readable
 // scaling for high-magnitude numbers (e.g. $42.3M, $2.55B, $942K) without
 // the trailing-decimal noise of fmtUsdTooltip. Used by the OHLCV chart's
