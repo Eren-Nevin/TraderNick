@@ -734,6 +734,7 @@
     'swMinDays', 'swMinVolume', 'swMinRealized', 'swMinOi', 'swMinAvgTradeSize',
     'swMinTakerPct', 'swMaxFeePct', 'swMaxFundingPct', 'swMinAccountDuration',
     'swMinTokens', 'swMinWinRate', 'swMinTradesPerDay', 'swMaxTradesPerDay',
+    'swMinAnnualizedSharpe',
     'swMinAvgOiShare', 'swMaxAvgOiShare', 'swMinVolumeShare', 'swMaxVolumeShare',
   ] as const;
   type SwFilterField = (typeof SW_FILTER_FIELDS)[number];
@@ -790,6 +791,7 @@
       swF('swMinAccountDuration', 0), swF('swMinTokens', 0),
       swF('swMinWinRate', 0),
       swF('swMinTradesPerDay', 0), committedFilters.swMaxTradesPerDay ?? '',
+      committedFilters.swMinAnnualizedSharpe ?? '',
       swF('swMinAvgOiShare', 0), committedFilters.swMaxAvgOiShare ?? '',
       swF('swMinVolumeShare', 0), committedFilters.swMaxVolumeShare ?? ''
     ].join('|');
@@ -2875,6 +2877,7 @@
       min_volume_share: String(Math.max(0, swF('swMinVolumeShare', 0)))
     });
     if (committedFilters.swMaxTradesPerDay != null) qs.set('max_trades_per_day', String(committedFilters.swMaxTradesPerDay));
+    if (committedFilters.swMinAnnualizedSharpe != null) qs.set('min_annualized_sharpe', String(committedFilters.swMinAnnualizedSharpe));
     if (committedFilters.swMaxFeePct != null) qs.set('max_fee_pct', String(committedFilters.swMaxFeePct));
     if (committedFilters.swMaxFundingPct != null) qs.set('max_funding_pct', String(committedFilters.swMaxFundingPct));
     if (committedFilters.swMaxAvgOiShare != null) qs.set('max_avg_oi_share', String(committedFilters.swMaxAvgOiShare));
@@ -6632,6 +6635,17 @@
                   placeholder="∞"
                   onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxFundingPct = Number.isFinite(v) ? v : null; }}
                   title="Maximum funding PnL as a % of realized PnL (blank = no limit). Filters out carry-dominated wallets."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min Sharpe</span>
+                <input
+                  type="number" step="0.5"
+                  value={instance.swMinAnnualizedSharpe ?? ''}
+                  placeholder="−∞"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMinAnnualizedSharpe = Number.isFinite(v) ? v : null; }}
+                  title="Minimum annualized Sharpe (×√365, OI-un-normalized — the table's ranking metric). Blank = no floor; Sharpe can be negative."
                   class={swCell}
                 />
               </label>

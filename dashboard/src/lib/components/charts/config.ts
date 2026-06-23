@@ -1847,6 +1847,10 @@ export type ChartInstance = {
   /** smart_wallets_table only: maximum trades per active day. null = no
    *  ceiling. */
   swMaxTradesPerDay?: number | null;
+  /** smart_wallets_table only: minimum annualized Sharpe (the same ×√365,
+   *  OI-un-normalized Sharpe the table ranks by). null = no floor (Sharpe can
+   *  be negative, so there's no sensible numeric default floor). */
+  swMinAnnualizedSharpe?: number | null;
   /** smart_wallets_table only: market-share guards, in 0.01% units (a
    *  "permyriad" — 30 ⇒ 0.30% share). avg-OI share = the wallet's
    *  window-average OI as a fraction of the market's average total OI; volume

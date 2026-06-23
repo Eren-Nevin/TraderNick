@@ -531,6 +531,14 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
         min_trades_per_day = float(request.args.get("min_trades_per_day", "0"))
     except ValueError:
         min_trades_per_day = 0.0
+    # Min annualized Sharpe — same ANNUALIZED (×√365), OI-un-normalized Sharpe
+    # the table ranks by. Sharpe can be negative, so the no-floor default is a
+    # large NEGATIVE sentinel (the frontend only sends this when the user sets
+    # it).
+    try:
+        min_annualized_sharpe = float(request.args.get("min_annualized_sharpe", str(-NO_MAX)))
+    except ValueError:
+        min_annualized_sharpe = -NO_MAX
     # Market-share guards. Units are 0.01% (a "permyriad": 30 ⇒ 0.30% share),
     # so a share fraction f maps to 10000·f. OI share = the wallet's
     # window-AVERAGE OI as a fraction of the market's average total OI; volume
@@ -583,6 +591,7 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
         "min_account_duration": min_account_duration, "min_tokens": min_tokens,
         "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
         "min_trades_per_day": min_trades_per_day,
+        "min_annualized_sharpe": min_annualized_sharpe,
         "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
         "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
         "lookback": lookback,
@@ -878,6 +887,7 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
           AND coalesce(sa.win_rate, 0) >= {min_win_rate:Float64}
           AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) <= {max_trades_per_day:Float64}
           AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) >= {min_trades_per_day:Float64}
+          AND coalesce(sa.sharpe, 0) >= {min_annualized_sharpe:Float64}
           AND coalesce(10000 * w.volume / nullIf(vol_total, 0), 0) >= {min_volume_share:Float64}
           AND coalesce(10000 * w.volume / nullIf(vol_total, 0), 0) <= {max_volume_share:Float64}""" + oi_share_guard
 
@@ -891,6 +901,7 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
         "min_account_duration": min_account_duration, "min_tokens": min_tokens,
         "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
         "min_trades_per_day": min_trades_per_day,
+        "min_annualized_sharpe": min_annualized_sharpe,
         "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
         "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
     }
@@ -926,7 +937,7 @@ _PASSING_KEY_FIELDS = (
     "token", "lookback", "snapshot", "min_days", "min_volume", "min_realized",
     "min_oi", "min_avg_trade_size", "min_taker_pct", "max_fee_pct",
     "max_funding_pct", "min_account_duration", "min_tokens", "min_win_rate",
-    "min_trades_per_day", "max_trades_per_day",
+    "min_trades_per_day", "max_trades_per_day", "min_annualized_sharpe",
     "min_avg_oi_share", "max_avg_oi_share", "min_volume_share", "max_volume_share",
 )
 # In-process hint of when we last ensured a key was fresh, to skip the freshness
