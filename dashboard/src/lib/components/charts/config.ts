@@ -381,6 +381,7 @@ export type ChartKind =
   | 'sz'
   | 'tt'
   | 'ls'
+  | 'ps'
   | 'token_leaderboard'
   | 'smart_wallets_table'
   | 'transfer'
@@ -513,6 +514,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   sz: 'Volume by Size',
   tt: 'Top Traders L/S',
   ls: 'Long/Short',
+  ps: 'Perp vs Spot',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets',
   transfer: 'Token Flow',
@@ -1276,7 +1278,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // them once under Exchange rather than duplicating under Perp.
   if (kind === 'ohlcv' || kind === 'price' || kind === 'price_ratio' || kind === 'pc' || kind === 'oi' || kind === 'vol_oi' || kind === 'volume' || kind === 'fr'
       || kind === 'book_depth'
-      || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls'
+      || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls' || kind === 'ps'
       || kind === 'token_leaderboard') {
     return 'Exchange';
   }
@@ -1697,6 +1699,11 @@ export type ChartInstance = {
    *  balanced), 'both' (bars + the ratio line on a secondary axis), or 'pct'
    *  (two lines: % Buyer and % Seller of total taker volume). */
   bsDisplay?: 'stacked' | 'ratio' | 'both' | 'pct';
+  /** ps (Perp vs Spot, Binance only) only: which series to show — 'all'
+   *  (default, basis bars + volume-ratio line), 'basis' (just the perp−spot
+   *  close basis, in pp, as bars), or 'volume' (just the spot/perp volume
+   *  ratio %, as a line). Display-only; both series come from the same fetch. */
+  psSeries?: 'all' | 'basis' | 'volume';
   /** hl_smart_oi only: ids of the saved wallet filters this chart draws —
    *  one OI series group per filter. Filters live in the filters store
    *  (localStorage) and are inline-expanded into the `filter=` param at
@@ -2452,6 +2459,11 @@ export function newChartInstance(
   }
   if (kind === 'ls') {
     base.exchange = 'binance';
+  }
+  if (kind === 'ps') {
+    // Perp vs Spot is inherently Binance (perp + spot OHLCV); no exchange
+    // selector. Default to showing both series.
+    base.psSeries = 'all';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

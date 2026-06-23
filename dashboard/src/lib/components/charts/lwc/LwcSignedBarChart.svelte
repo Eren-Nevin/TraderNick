@@ -49,6 +49,7 @@
     posColor = '#22c55e',
     negColor = '#ef4444',
     formatY = (v: number) => v.toFixed(2),
+    formatY2,
     formatTooltip = (v: number) => v.toFixed(4),
     valueLabel = 'Value'
   }: {
@@ -67,6 +68,11 @@
     posColor?: string;
     negColor?: string;
     formatY?: (v: number) => string;
+    /** Optional formatter for the SECONDARY (left) price scale — used when a
+     *  line has axis: 'secondary'. Lines on the secondary axis get their own
+     *  independent (non-symmetric) autoscale, so an unrelated overlay (e.g. a
+     *  volume-ratio %) reads cleanly alongside the symmetric signed bars. */
+    formatY2?: (v: number) => string;
     formatTooltip?: (v: number) => string;
     // Legacy prop — no analog in Lightweight (histogram bar width follows
     // the time-scale's barSpacing). Accepted and ignored for prop parity.
@@ -218,17 +224,23 @@
       }
     }
     for (const ln of lines) {
+      const secondary = ln.axis === 'secondary';
       let s = lineSeries.get(ln.key);
       if (!s) {
         s = chart.addLineSeries({
           color: ln.color,
           lineWidth: 1,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
-          priceScaleId: 'right',
+          // Secondary lines ride the LEFT scale with their OWN independent
+          // autoscale (the symmetric ±range is only right for the signed bars).
+          priceScaleId: secondary ? 'left' : 'right',
+          priceFormat: secondary && formatY2
+            ? { type: 'custom', formatter: formatY2, minMove: 0.00000001 }
+            : undefined,
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
-          autoscaleInfoProvider: () => symmetricProvider()
+          autoscaleInfoProvider: secondary ? undefined : (() => symmetricProvider())
         });
         lineSeries.set(ln.key, s);
       } else {
@@ -244,6 +256,11 @@
       }
       s.setData(points);
     }
+
+    // Show the LEFT price scale only when a line uses the secondary axis
+    // (lightweight-charts hides it by default), mirroring LwcLineChart.
+    const hasSecondary = lines.some((l) => l.axis === 'secondary');
+    chart.priceScale('left').applyOptions({ visible: hasSecondary });
   });
 
   $effect(() => {
@@ -325,7 +342,9 @@
           <div class="flex items-center gap-2">
             <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
             <span class="text-zinc-400 w-20">{ln.label}</span>
-            <span class="w-24 text-right">{formatTooltip(v)}</span>
+            <!-- Secondary-axis lines carry a different unit than the bars (e.g.
+                 a % ratio alongside pp basis), so format them with formatY2. -->
+            <span class="w-24 text-right">{(ln.axis === 'secondary' && formatY2) ? formatY2(v) : formatTooltip(v)}</span>
           </div>
         {/each}
       {/if}

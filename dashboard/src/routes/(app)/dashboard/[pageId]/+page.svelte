@@ -15,7 +15,7 @@
   // groups by high-level category (Exchange / Flows / Lending / DeX /
   // Perp / Staking) via DynamicChartLayout's categorizedMenu mode.
   const AVAILABLE_KINDS: ChartKind[] = [
-    'ohlcv', 'pc', 'oi', 'volume', 'fr', 'book_depth', 'bs', 'sz', 'tt', 'ls',
+    'ohlcv', 'pc', 'oi', 'volume', 'fr', 'book_depth', 'bs', 'sz', 'tt', 'ls', 'ps',
     'token_leaderboard',
     'transfer', 'exchange_flow',
     'aave_v3', 'aave_v2', 'aave_v4', 'morpho', 'spark',

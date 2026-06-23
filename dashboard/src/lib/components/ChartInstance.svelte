@@ -2627,6 +2627,43 @@
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView, overlayData });
           return;
         }
+        case 'ps': {
+          // Perp vs Spot (Binance): fetch perp + spot OHLCV in parallel and
+          // merge per bucket into { basis_pp, vol_ratio_pct }.
+          //   basis_pp      = (perp_close − spot_close) / spot_close × 10000  (pp)
+          //   vol_ratio_pct = spot_volume_usd / perp_volume_usd × 100        (%)
+          // Both legs are required per bucket; spot books are sparser, so a
+          // bucket without a spot candle is dropped.
+          const perpQs = new URLSearchParams({ ...baseQS, exchange: 'binance' });
+          const spotQs = new URLSearchParams({ ...baseQS, exchange: 'binance_spot' });
+          if (forceFresh) { perpQs.set('fresh', '1'); spotQs.set('fresh', '1'); }
+          const [perpRes, spotRes] = await Promise.all([
+            queuedFetch(`/api/ohlcv?${perpQs}`, { signal }),
+            queuedFetch(`/api/ohlcv?${spotQs}`, { signal })
+          ]);
+          if (!perpRes.ok) throw new Error(`ps perp ${perpRes.status}`);
+          if (!spotRes.ok) throw new Error(`ps spot ${spotRes.status}`);
+          const perpBody = await perpRes.json();
+          const spotBody = await spotRes.json();
+          const spotByTime = new Map<number, Candle>();
+          for (const c of ((spotBody.candles ?? []) as Candle[])) spotByTime.set(c.time, c);
+          const merged: AnyDatum[] = [];
+          for (const p of ((perpBody.candles ?? []) as Candle[])) {
+            const s = spotByTime.get(p.time);
+            if (!s) continue;
+            const basis_pp = s.close ? ((p.close - s.close) / s.close) * 10000 : NaN;
+            const pv = p.volume_usd ?? 0;
+            const vol_ratio_pct = pv ? ((s.volume_usd ?? 0) / pv) * 100 : NaN;
+            merged.push({ time: p.time, basis_pp, vol_ratio_pct } as unknown as AnyDatum);
+          }
+          data = merged;
+          since = sinceIso;
+          until = untilIso;
+          loadedKey = loadKey();
+          localView = defaultView(sinceIso, untilIso);
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
+          return;
+        }
         case 'oi':
           // HL OI rides on /hyperliquid/oi_split which carries long/short/
           // total in one payload; the long/short/total/all selector picks
@@ -5230,6 +5267,21 @@
         (instance.volumeUnit ?? 'usd') === 'token' ? (d.volume ?? 0) : (d.volume_usd ?? 0)
     }
   ]);
+  // ps (Perp vs Spot): the spot/perp volume-ratio line. Two variants — on the
+  // SECONDARY (left) axis when shown alongside the basis bars ('all'), or on the
+  // primary axis when it's the only series ('volume').
+  // Concretely-typed view of the merged ps rows so the bar/line components
+  // accept it without the loose `Record<string,number>[]` → Datum cast.
+  let psData = $derived(
+    data as unknown as Array<{ time: number; basis_pp: number; vol_ratio_pct: number }>
+  );
+  const psVolCompute = (d: { time: number; vol_ratio_pct?: number }) => d.vol_ratio_pct ?? NaN;
+  let psVolLineSecondary = $derived([
+    { key: 'vol_ratio_pct', label: 'Spot/Perp Vol %', color: '#06b6d4', axis: 'secondary' as const, compute: psVolCompute }
+  ]);
+  let psVolLinePrimary = $derived([
+    { key: 'vol_ratio_pct', label: 'Spot/Perp Vol %', color: '#06b6d4', compute: psVolCompute }
+  ]);
   let hlUnrealizedLinesM = $derived(overlayLinesD.length === 0 ? hlUnrealizedLinesD : [...hlUnrealizedLinesD, ...overlayLinesD]);
   let hlPnlSplitLinesM   = $derived(overlayLinesD.length === 0 ? hlPnlSplitLinesD : [...hlPnlSplitLinesD, ...overlayLinesD]);
   let hlVaultFlowLinesM  = $derived(overlayLinesD.length === 0 ? hlVaultFlowLinesD : [...hlVaultFlowLinesD, ...overlayLinesD]);
@@ -6161,11 +6213,13 @@
             <option value="binance">Binance</option>
             <option value="hl">Hyperliquid</option>
           </select>
-          {#if instance.kind === 'ohlcv' || instance.kind === 'volume' || instance.kind === 'bs' || instance.kind === 'sz'}
-            <!-- Market selector — only the candle / trade-flow kinds have spot
-                 tables. Spot is unlocked only for Binance; HL is perp-only, so
-                 the selector is disabled (and pinned to Perp) for HL. Maps to
-                 the internal exchange value: Binance+Spot → 'binance_spot'. -->
+          {#if instance.kind === 'ohlcv' || instance.kind === 'volume' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'pc'}
+            <!-- Market selector — only the candle / trade-flow / relative-price
+                 kinds have spot tables. Spot is unlocked only for Binance; HL is
+                 perp-only, so the selector is disabled (and pinned to Perp) for
+                 HL. Maps to the internal exchange value: Binance+Spot →
+                 'binance_spot'. (bs/sz read raw spot trades; ohlcv/volume/pc
+                 read spot OHLCV.) -->
             {@const isHlVenue = (instance.exchange ?? 'binance') === 'hl'}
             <select
               value={instance.exchange === 'binance_spot' ? 'spot' : 'perp'}
@@ -6209,6 +6263,21 @@
             <option value="ratio">Buyer / Seller</option>
             <option value="both">Both</option>
             <option value="pct">% Buyer / Seller</option>
+          </select>
+        {/if}
+        {#if instance.kind === 'ps'}
+          <!-- Perp vs Spot series: 'All' shows the basis bars + the volume-ratio
+               line (on a secondary axis); 'Basis' isolates the perp−spot close
+               basis bars (pp); 'Volume %' isolates the spot/perp volume ratio. -->
+          <select
+            value={instance.psSeries ?? 'all'}
+            onchange={(e) => (instance.psSeries = e.currentTarget.value as 'all' | 'basis' | 'volume')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Which series to display"
+          >
+            <option value="all">All</option>
+            <option value="basis">Basis (pp)</option>
+            <option value="volume">Volume %</option>
           </select>
         {/if}
         {#if instance.kind === 'sz'}
@@ -7375,6 +7444,44 @@
         formatTooltip={(v) => `${v.toFixed(2)} ${frIsApr ? '%' : 'bps/8h'}`}
         minBarWidthPx={3}
       />
+    {:else if instance.kind === 'ps'}
+      <!-- Perp vs Spot (Binance). 'volume' shows just the spot/perp volume-ratio
+           line; 'basis' / 'all' show the perp−spot close basis as signed bars
+           (pp), with the volume-ratio line on a secondary axis when 'all'. -->
+      {@const psMode = instance.psSeries ?? 'all'}
+      {#if psMode === 'volume'}
+        <LineChart
+          data={psData}
+          lines={psVolLinePrimary}
+          height={chartCanvasHeight}
+          {xExtent}
+          view={effectiveView}
+          onView={handleView}
+          hoverTime={effectiveHoverTime}
+          onHover={handleHover}
+          vRefLines={weekVRefLines}
+          formatY={(v) => `${v.toFixed(0)}%`}
+          formatTooltip={(v) => `${v.toFixed(1)}%`}
+        />
+      {:else}
+        <SignedBarChart
+          data={psData}
+          valueKey="basis_pp"
+          lines={psMode === 'all' ? psVolLineSecondary : []}
+          showBars={true}
+          valueLabel="Basis"
+          height={chartCanvasHeight}
+          {xExtent}
+          view={effectiveView}
+          onView={handleView}
+          hoverTime={effectiveHoverTime}
+          onHover={handleHover}
+          vRefLines={weekVRefLines}
+          formatY={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}pp`}
+          formatY2={(v) => `${v.toFixed(0)}%`}
+          formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(3)} pp`}
+        />
+      {/if}
     {:else if instance.kind === 'book_depth' && (instance.bookDepthMode ?? 'totals') === 'totals'}
       <LineChart
         data={data as Record<string, number>[]}
