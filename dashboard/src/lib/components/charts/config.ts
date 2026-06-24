@@ -265,6 +265,21 @@ export const BUYER_SELLER_PCT_LINES = [
   }
 ];
 
+// Taker buyer/seller IMBALANCE line: % Buyer − % Seller = (buyer − seller) /
+// (buyer + seller) × 100. Range [−100, +100]; >0 = net taker buying, <0 = net
+// selling, 0 = balanced.
+export const BUYER_SELLER_IMBALANCE_LINES = [
+  {
+    key: 'bs_imbalance',
+    label: 'Imbalance (Buyer − Seller %)',
+    color: '#fbbf24',
+    compute: (d: { time: number; buyer_taker_usd?: number; seller_taker_usd?: number }) => {
+      const t = (d.buyer_taker_usd ?? 0) + (d.seller_taker_usd ?? 0);
+      return t > 0 ? (((d.buyer_taker_usd ?? 0) - (d.seller_taker_usd ?? 0)) / t) * 100 : 0;
+    }
+  }
+];
+
 // Taker buyer/seller RATIO line. >1 = more taker buying, <1 = more selling,
 // 1 = balanced. scale:'ratio' puts it on the secondary (left) axis when shown
 // alongside the stacked $ bars ('both' mode); on its own it's a plain line.
@@ -1756,7 +1771,7 @@ export type ChartInstance = {
    *  buyer+seller $ stacked bars), 'ratio' (a single Buyer/Seller line, ~1 =
    *  balanced), 'both' (bars + the ratio line on a secondary axis), or 'pct'
    *  (two lines: % Buyer and % Seller of total taker volume). */
-  bsDisplay?: 'stacked' | 'ratio' | 'both' | 'pct';
+  bsDisplay?: 'stacked' | 'ratio' | 'both' | 'pct' | 'imbalance';
   /** ps (Perp vs Spot, Binance only) only: which series to show — 'all'
    *  (default, basis bars + volume-ratio line), 'basis' (just the perp−spot
    *  close basis, in pp, as bars), or 'volume' (just the spot/perp volume

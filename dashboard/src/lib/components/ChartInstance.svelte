@@ -28,6 +28,7 @@
   import {
     BUYER_SELLER_LINES,
     BUYER_SELLER_PCT_LINES,
+    BUYER_SELLER_IMBALANCE_LINES,
     BUYER_SELLER_RATIO_LINES,
     BUYER_SELLER_SERIES,
     buyerSellerSeries,
@@ -3527,6 +3528,14 @@
               key: `cum_bs_ratio_${idx}`, label: `Buyer/Seller ${tag}`, color,
               dash: SUB_DASH[0], compute: (_d: { time: number }, i: number) => ratioMA[i]
             });
+          } else if (mode === 'imbalance') {
+            const imbMA = maArray(
+              arr.map((b, i) => (tot[i] > 0 ? ((b.buyer_taker_usd - b.seller_taker_usd) / tot[i]) * 100 : 0)),
+              ma.length, ma.type);
+            out.push({
+              key: `cum_bs_imbalance_${idx}`, label: `Imbalance ${tag}`, color,
+              dash: SUB_DASH[0], compute: (_d: { time: number }, i: number) => imbMA[i]
+            });
           } else if (mode === 'pct') {
             const buyerPctMA = maArray(
               arr.map((b, i) => (tot[i] > 0 ? (b.buyer_taker_usd / tot[i]) * 100 : 0)), ma.length, ma.type);
@@ -4267,6 +4276,12 @@
   let bsPctLinesD = $derived([
     ...(instance.showPoint ? BUYER_SELLER_PCT_LINES : []),
     ...(cumulativeLines as typeof BUYER_SELLER_PCT_LINES)
+  ]);
+  // Imbalance-mode line set (LineChart): the single Buyer−Seller % line
+  // (Point-gated) + its MA.
+  let bsImbalanceLinesD = $derived([
+    ...(instance.showPoint ? BUYER_SELLER_IMBALANCE_LINES : []),
+    ...(cumulativeLines as typeof BUYER_SELLER_IMBALANCE_LINES)
   ]);
 
   // sz (Volume by Size) renders as LINES — three absolute-USD bucket lines
@@ -5257,7 +5272,7 @@
     else if (instance.kind === 'book_depth') primaryLines = bdLinesD;
     else if (instance.kind === 'tt') primaryLines = ttLinesD;
     else if (instance.kind === 'ls') primaryLines = lsLinesD;
-    else if (instance.kind === 'bs') primaryLines = bsMode === 'ratio' ? bsRatioLinesD : bsMode === 'pct' ? bsPctLinesD : bsLines;
+    else if (instance.kind === 'bs') primaryLines = bsMode === 'ratio' ? bsRatioLinesD : bsMode === 'pct' ? bsPctLinesD : bsMode === 'imbalance' ? bsImbalanceLinesD : bsLines;
     else if (instance.kind === 'sz') primaryLines = (instance.szMode === 'taker_split' ? szTakerSplitLinesD : szLinesD);
     else if (instance.kind === 'transfer') primaryLines = transferLinesD;
     else if (instance.kind === 'exchange_flow') primaryLines = exchangeFlowLinesD;
@@ -5386,6 +5401,7 @@
   let bsLinesM           = $derived(overlayLinesD.length === 0 ? bsLines : [...bsLines, ...overlayLinesD]);
   let bsRatioLinesM      = $derived(overlayLinesD.length === 0 ? bsRatioLinesD : [...bsRatioLinesD, ...overlayLinesD]);
   let bsPctLinesM        = $derived(overlayLinesD.length === 0 ? bsPctLinesD : [...bsPctLinesD, ...overlayLinesD]);
+  let bsImbalanceLinesM  = $derived(overlayLinesD.length === 0 ? bsImbalanceLinesD : [...bsImbalanceLinesD, ...overlayLinesD]);
   let szLinesM           = $derived(overlayLinesD.length === 0 ? szLinesD : [...szLinesD, ...overlayLinesD]);
   let szTakerSplitLinesM = $derived(overlayLinesD.length === 0 ? szTakerSplitLinesD : [...szTakerSplitLinesD, ...overlayLinesD]);
   let ttLinesM           = $derived(overlayLinesD.length === 0 ? ttLinesD : [...ttLinesD, ...overlayLinesD]);
@@ -6424,7 +6440,7 @@
                buyer/seller % shares as two lines. -->
           <select
             value={instance.bsDisplay ?? 'stacked'}
-            onchange={(e) => (instance.bsDisplay = e.currentTarget.value as 'stacked' | 'ratio' | 'both' | 'pct')}
+            onchange={(e) => (instance.bsDisplay = e.currentTarget.value as 'stacked' | 'ratio' | 'both' | 'pct' | 'imbalance')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="How to display taker buyer vs seller"
           >
@@ -6432,6 +6448,7 @@
             <option value="ratio">Buyer / Seller</option>
             <option value="both">Both</option>
             <option value="pct">% Buyer / Seller</option>
+            <option value="imbalance">Imbalance (Buyer − Seller %)</option>
           </select>
           {#if (instance.bsDisplay ?? 'stacked') === 'stacked' || instance.bsDisplay === 'both'}
             <!-- Taker-volume denomination — USD notional vs token amount. Only
@@ -7844,6 +7861,23 @@
         vRefLines={weekVRefLines}
         formatY={(v) => `${v.toFixed(0)}%`}
         formatTooltip={(v) => `${v.toFixed(1)}%`}
+      />
+    {:else if instance.kind === 'bs' && bsMode === 'imbalance'}
+      <!-- Taker imbalance: % Buyer − % Seller, one line in [−100, +100];
+           0 = balanced (dashed ref). MA overlays via bsImbalanceLinesM. -->
+      <LineChart
+        data={data as VolumeBucket[]}
+        lines={bsImbalanceLinesM}
+        refLines={[{ value: 0, color: '#52525b' }]}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(0)}%`}
+        formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`}
       />
     {:else if instance.kind === 'bs' && bsMode === 'ratio'}
       <!-- Taker Buyer/Seller ratio only: a single line, 1 = balanced. -->
