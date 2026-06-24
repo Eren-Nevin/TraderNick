@@ -593,9 +593,17 @@
   // ≤ DEFAULT_VIEW_DAYS (14) so defaultView() fits the view to exactly this
   // loaded range (no unloaded gap on the left). Older history backfills on pan.
   const DYN_SW_FIRST_DAYS = 3;
+  // Dynamic chart: initial visible window (days). Smaller than DYN_SW_FIRST_DAYS
+  // so the loaded 3-day window has headroom to the LEFT of the view — otherwise
+  // the view's left edge sits on the loaded floor and the prefetch below fires
+  // immediately (the reported "needs more than one fetch").
+  const DYN_SW_VIEW_DAYS = 1;
   // Start backfilling once the view's left edge comes within this many days of
   // the loaded floor, so data is already there by the time the user reaches it.
-  const DYN_PREFETCH_DAYS = 12;
+  // Dynamic uses a tiny buffer (its loaded window is only a few days), so the
+  // initial small viewport leaves headroom and doesn't trigger an immediate
+  // backfill; other chunked kinds keep the generous 12-day prefetch.
+  const DYN_PREFETCH_DAYS = instance.kind === 'smart_wallets_dynamic' ? 1 : 12;
 
   /** True when this instance should load in chunks. hl_smart_oi always;
    *  open interest only on Hyperliquid (Binance OI is a fast dedicated
@@ -1702,7 +1710,16 @@
         }
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        // Dynamic chart: pin the initial viewport to a SMALL recent window
+        // (DYN_SW_VIEW_DAYS) WITHIN the loaded 3-day window, leaving loaded
+        // headroom to the left so the auto-prefetch doesn't fire on first paint
+        // (which made it take >1 fetch). Other sw cases keep defaultView.
+        if (instance.kind === 'smart_wallets_dynamic' && instance.viewMode === 'chart') {
+          const untilU = unixSec(untilIso);
+          localView = [untilU - DYN_SW_VIEW_DAYS * 86_400, untilU];
+        } else {
+          localView = defaultView(sinceIso, untilIso);
+        }
         dualDataView = instance.viewMode ?? 'table';
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;

@@ -2715,10 +2715,13 @@ export function newChartInstance(
     base.swLookback = 7;
     base.swToken = null;          // global (all tokens) by default
     base.swSnapshot = undefined;  // resolved to start-of-today at fetch time
+    // Default criteria: only these four are active; everything else is at its
+    // neutral no-op (volume floor removed → 0).
     base.swMinDays = 3;
-    base.swMinVolume = 100000;
-    base.swMinRealized = 0;
-    base.swMinOi = 0;
+    base.swMinWinRate = 50;
+    base.swMinAnnualizedSharpe = 2;
+    base.swMinAvgOiShare = 0.1;   // 0.01% units (30 = 0.30%) → 0.1 = 0.001%
+    base.swMinVolume = 0;
   }
   if (kind === 'smart_wallets_dynamic') {
     // Dynamic smart-wallet finder: same criteria as Fixed, but the lookback
@@ -2733,10 +2736,12 @@ export function newChartInstance(
     base.swMetric = 'sharpe';
     base.swLookback = 7;          // from SMART_WALLET_DYNAMIC_LOOKBACKS
     base.swToken = null;          // global (all tokens) by default
+    // Default criteria: only these four are active (volume floor removed → 0).
     base.swMinDays = 3;
-    base.swMinVolume = 100000;
-    base.swMinRealized = 0;
-    base.swMinOi = 0;
+    base.swMinWinRate = 50;
+    base.swMinAnnualizedSharpe = 2;
+    base.swMinAvgOiShare = 0.1;   // 0.01% units (30 = 0.30%) → 0.1 = 0.001%
+    base.swMinVolume = 0;
     base.smartShowWalletCount = true; // per-day qualifying-wallet count overlay
   }
   return base;
