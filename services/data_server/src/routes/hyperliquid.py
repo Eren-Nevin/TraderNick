@@ -1598,7 +1598,18 @@ async def _resolve_rolling_passing(ch, sel: dict) -> str:
     as a new timestamped batch)."""
     key = _rolling_key(sel)
     now = time.time()
-    if (last := _rolling_ensured.get(key)) and now - last < _ROLLING_SET_CACHE_TTL:
+    # The rolling per-(day,wallet) set for a fixed day-range is deterministic.
+    # A range ending BEFORE today is immutable, so reuse its cached rows for
+    # their whole lifetime (the table's 1-day TTL) — a token change / pan must
+    # never trigger the ~30s recompute. A range that INCLUDES today can still
+    # shift as today's day keeps ingesting, so it refreshes on a 30-min window
+    # (was a flat 5 min, which made any reload after 5 min pay the full
+    # recompute — the reported "token change is slow").
+    until_day = sel["echo"].get("until")
+    today_iso = datetime.now(timezone.utc).date().isoformat()
+    includes_today = (not until_day) or (str(until_day) >= today_iso)
+    fresh_window = 1800.0 if includes_today else 86400.0
+    if (last := _rolling_ensured.get(key)) and now - last < fresh_window:
         return key
     await _ensure_rolling_set_table(ch)
     r = await ch.query(
@@ -1606,7 +1617,7 @@ async def _resolve_rolling_passing(ch, sel: dict) -> str:
         parameters={"k": key},
     )
     mx = r.result_rows[0][0] if (r and r.result_rows) else 0
-    if mx and now - float(mx) < _ROLLING_SET_CACHE_TTL:
+    if mx and now - float(mx) < fresh_window:
         _rolling_ensured[key] = now
         return key
     p = dict(sel["params"])

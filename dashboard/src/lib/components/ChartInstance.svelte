@@ -582,7 +582,17 @@
   // backfill on pan (each its own request, on a separate slot), and the
   // smart_wallets_cache makes re-pans cheap. The cheaper kinds (HL OI, exchange
   // flow) keep 60.
-  const DYN_CHUNK_DAYS = instance.kind === 'hl_smart_oi' ? 30 : 60;
+  // smart_wallets_dynamic is the heaviest per-day cost (each plotted day reruns
+  // the rolling selection over its trailing lookback), so it uses small chunks.
+  const DYN_CHUNK_DAYS = instance.kind === 'hl_smart_oi'
+    ? 30
+    : instance.kind === 'smart_wallets_dynamic'
+      ? 14
+      : 60;
+  // Dynamic FIRST fetch window (days). Kept tiny so the initial paint is cheap;
+  // ≤ DEFAULT_VIEW_DAYS (14) so defaultView() fits the view to exactly this
+  // loaded range (no unloaded gap on the left). Older history backfills on pan.
+  const DYN_SW_FIRST_DAYS = 3;
   // Start backfilling once the view's left edge comes within this many days of
   // the loaded floor, so data is already there by the time the user reaches it.
   const DYN_PREFETCH_DAYS = 12;
@@ -821,7 +831,11 @@
       // own OI-fetch params (token + interval). The differing tag makes a
       // Table⇄Chart toggle re-run the load effect into the other slot.
       if (instance.viewMode === 'chart') {
-        return `${swTableKey()}|chart|${instance.token}|${instance.interval}|c:${instance.swShowClose ? 1 : 0}`;
+        // swShowClose is NOT in the key: close is ALWAYS fetched + merged into
+        // the data (cheap OHLCV call), so toggling the overlay is a pure
+        // client-side line show/hide — no refetch (important for the expensive
+        // dynamic rolling fetch, and it keeps the refresh-only contract).
+        return `${swTableKey()}|chart|${instance.token}|${instance.interval}`;
       }
       return swTableKey();
     }
@@ -1201,7 +1215,11 @@
         // older history (incl. the in-sample lookback) backfills on pan/zoom
         // down to dynFloor. If the snapshot is ~now there's no forward period,
         // so fall back to showing the lookback window through now.
-        if (isDualViewKind(instance.kind) && instance.viewMode === 'chart') {
+        if (instance.kind === 'smart_wallets_dynamic') {
+          // Dynamic: tiny first window (DYN_SW_FIRST_DAYS) → cheap first paint;
+          // the view fits exactly this range. Pan backfills older history.
+          chunkU = Math.max(fullFloorU, untilU - DYN_SW_FIRST_DAYS * 86_400);
+        } else if (isDualViewKind(instance.kind) && instance.viewMode === 'chart') {
           const snapU = Math.floor(Date.parse(swSnapshotIso() + 'T00:00:00Z') / 1000);
           const lookbackSec = (instance.swLookback ?? 7) * 86_400;
           const startU = snapU < untilU - 86_400 ? snapU : untilU - lookbackSec;
@@ -2949,7 +2967,7 @@
     // Optional HL close-price overlay: merge the token's close (same interval)
     // into each bucket by time, so oiLinesD can plot it as a secondary-axis
     // line. Fetched per-window so it backfills alongside the OI on pan.
-    if (instance.swShowClose && mapped.length) {
+    if (mapped.length) {
       const closeByTime = await fetchHlCloseMap(sinceIso, untilIso, signal);
       for (const d of mapped) {
         const c = closeByTime.get(d.time);
@@ -2985,7 +3003,7 @@
       open_interest: r.total_oi ?? 0,
       open_interest_value: r.total_oi_value ?? 0
     })) as Array<Record<string, number>>;
-    if (instance.swShowClose && mapped.length) {
+    if (mapped.length) {
       const closeByTime = await fetchHlCloseMap(sinceIso, untilIso, signal);
       for (const d of mapped) {
         const c = closeByTime.get(d.time);
