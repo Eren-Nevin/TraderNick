@@ -48,7 +48,9 @@
     onChangeSnapshot,
     loading = false,
     error = null,
-    notRun = false
+    notRun = false,
+    lookbacks = SMART_WALLET_LOOKBACKS,
+    dynamic = false
   }: {
     rows: SmartWalletRow[];
     total?: number;
@@ -67,6 +69,11 @@
      *  finder is refresh-only). Shows a "click refresh" hint instead of the
      *  "no wallets pass" message. */
     notRun?: boolean;
+    /** Which lookback options to offer (Fixed: 1/7/30/90/150; Dynamic: 1/3/7/14/30). */
+    lookbacks?: ReadonlyArray<SmartWalletLookback>;
+    /** Dynamic widget: the set ROLLS per day, so there's no snapshot slider —
+     *  this table view shows the LATEST day's set. Swaps the slider for a note. */
+    dynamic?: boolean;
   } = $props();
 
   const metricDef = $derived(smartWalletMetricDef(metric));
@@ -158,14 +165,14 @@
 
     <span class="text-zinc-500 ml-1">Lookback:</span>
     <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
-      {#each SMART_WALLET_LOOKBACKS as l, i (l)}
+      {#each lookbacks as l, i (l)}
         <button
           type="button"
           onclick={() => onChangeLookback(l)}
           class={'px-2 py-0.5 text-[11px] ' + (i > 0 ? 'border-l border-zinc-700 ' : '') + (lookback === l
             ? 'bg-zinc-800 text-zinc-100'
             : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
-          title={`${l}-day window`}
+          title={dynamic ? `${l}-day rolling window` : `${l}-day window`}
         >{l}d</button>
       {/each}
     </div>
@@ -201,16 +208,24 @@
     </span>
   </div>
 
-  <!-- Lookback end-date slider: sets the day the lookback window ENDS on; the
-       window is [end − lookback, end]. The resolved start is shown as a hint. -->
-  <div class="flex items-center px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/30">
-    <SnapshotSlider
-      {snapshot}
-      {onChangeSnapshot}
-      label="End date"
-      hint={lookbackStartIso ? `← ${lookbackStartIso} (${lookback}d window)` : ''}
-    />
-  </div>
+  {#if dynamic}
+    <!-- Dynamic: no snapshot slider (the set rolls per day). This table view
+         shows the LATEST day's set; the chart view plots the full rolling series. -->
+    <div class="flex items-center px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/30 text-[10px] text-zinc-500">
+      Latest day of the {lookback}d rolling window (snapshot {snapshot}). Switch to the chart view for the full per-day series.
+    </div>
+  {:else}
+    <!-- Lookback end-date slider: sets the day the lookback window ENDS on; the
+         window is [end − lookback, end]. The resolved start is shown as a hint. -->
+    <div class="flex items-center px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/30">
+      <SnapshotSlider
+        {snapshot}
+        {onChangeSnapshot}
+        label="End date"
+        hint={lookbackStartIso ? `← ${lookbackStartIso} (${lookback}d window)` : ''}
+      />
+    </div>
+  {/if}
 
   <div class="flex-1 overflow-auto scrollbar-none">
     {#if error}

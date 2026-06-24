@@ -466,8 +466,8 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
     if token in ("", "__all__", "__global__", "all"):
         token = None
     lookback = int(request.args.get("lookback", "7"))
-    if lookback not in (1, 7, 30, 90, 150):
-        raise ValueError("lookback must be 1|7|30|90|150")
+    if lookback not in (1, 3, 7, 14, 30, 90, 150):
+        raise ValueError("lookback must be 1|3|7|14|30|90|150")
     metric = request.args.get("metric", "sharpe")
     if metric not in ("sharpe",):
         raise ValueError("unsupported metric")
@@ -1002,6 +1002,626 @@ async def _warm_passing(ch, sel: dict) -> None:
         logging.exception("passing-set warm failed")
 
 
+# ── ROLLING smart-wallet selection ───────────────────────────────────────
+# The Fixed builder computes ONE passing set for the single window
+# [snapshot-lookback, snapshot]. The Rolling builder computes, for EVERY day D
+# in [since, until], the set passing the SAME criteria over the trailing window
+# [D-lookback, D]. The qualifying set differs per day.
+#
+# Correctness oracle: at D = the Fixed snapshot, the Rolling set MUST equal the
+# Fixed set for the same lookback/criteria. We achieve this by mirroring every
+# Fixed metric/guard, just windowed per-day:
+#   - volume/realized/trades/fees trailing  = cum[D] - lagInFrame(cum, lookback, 0)
+#     over the DENSE per-(day,wallet) Table A series (one row/day from inception,
+#     so lag-by-lookback is exactly the value `lookback` calendar days back).
+#   - Sharpe (annualized ×√365)             = mean/sd over the per-day daily_total
+#     deltas in a ROWS-frame of `lookback` rows ending at D (= days D-lookback+1..D,
+#     matching Fixed's `rd.d > start_day` window).
+#   - taker%/funding/oi-share/volume-share trailing sums use a RANGE-frame on Date
+#     (counts by calendar value, so it spans [D-lookback+1, D] even though the
+#     fills/funding/eod tables are NOT dense), mirroring Fixed's
+#     `day > start_day AND day <= end_day`.
+#   - min_oi ("OI as of D")                 = day-D last OI from Table B.
+#   - n_tokens / oi-share are GATED (only built when their guard is active) since
+#     they are expensive, exactly like the Fixed builder.
+
+_ROLLING_LOOKBACKS = (1, 3, 7, 14, 30)
+
+
+def _build_rolling_selection(request):
+    """Parse the SAME smart-wallet filter params as `_build_smart_wallet_selection`
+    and build the CTE chain that emits a per-(day, wallet) PASSING relation over
+    [since, until] — each day selecting wallets passing every guard over its own
+    trailing [D-lookback, D] window.
+
+    Returns a dict with `cte_block`, `passing_select` (the final SELECT body that
+    materialises (day, wallet) rows), `params`, and `echo`. Raises ValueError on a
+    bad param. Mirrors the Fixed builder's f-string-vs-CH-placeholder discipline:
+    the `lookback` integer is substituted as a LITERAL into window frames /
+    lagInFrame offsets (CH won't take a param there); everything else is a
+    {name:Type} placeholder bound via `parameters=`.
+    """
+    token = request.args.get("token")
+    if token in ("", "__all__", "__global__", "all"):
+        token = None
+    lookback = int(request.args.get("lookback", "7"))
+    if lookback not in _ROLLING_LOOKBACKS:
+        raise ValueError("lookback must be 1|3|7|14|30")
+
+    NO_MAX = 1e12
+    min_days = max(int(request.args.get("min_days", "3")), 1)
+
+    def _f(name, default):
+        try:
+            return float(request.args.get(name, str(default)))
+        except (TypeError, ValueError):
+            return float(default)
+
+    def _i(name, default):
+        try:
+            return int(request.args.get(name, str(default)))
+        except (TypeError, ValueError):
+            return int(default)
+
+    min_volume = _f("min_volume", 0)
+    min_realized = _f("min_realized", 0)
+    min_oi = _f("min_oi", 0)
+    min_avg_trade_size = _f("min_avg_trade_size", 0)
+    min_taker_pct = _f("min_taker_pct", 0)
+    max_fee_pct = _f("max_fee_pct", NO_MAX)
+    max_funding_pct = _f("max_funding_pct", NO_MAX)
+    min_account_duration = _i("min_account_duration", 0)
+    min_tokens = _i("min_tokens", 0)
+    min_win_rate = _f("min_win_rate", 0)
+    max_trades_per_day = _f("max_trades_per_day", NO_MAX)
+    min_trades_per_day = _f("min_trades_per_day", 0)
+    min_annualized_sharpe = _f("min_annualized_sharpe", -NO_MAX)
+    min_avg_oi_share = _f("min_avg_oi_share", 0)
+    max_avg_oi_share = _f("max_avg_oi_share", NO_MAX)
+    min_volume_share = _f("min_volume_share", 0)
+    max_volume_share = _f("max_volume_share", NO_MAX)
+
+    # Token scope makes n_tokens trivially 1 → ignore min_tokens (same as Fixed).
+    if token is not None:
+        min_tokens = 0
+
+    since_arg = request.args.get("since")
+    until_arg = request.args.get("until")
+    if not since_arg or not until_arg:
+        raise ValueError("missing since/until")
+    # Parse the calendar date directly from the ISO string (date prefix) so the
+    # day is timezone-independent — a date-only input like "2026-06-22" must map
+    # to that exact day regardless of server/local TZ (a naive astimezone shift
+    # would roll it back a day on a UTC+ host).
+    try:
+        since_day = datetime.fromisoformat(
+            since_arg.replace("Z", "").split("T")[0].split(" ")[0]).date()
+        until_day = datetime.fromisoformat(
+            until_arg.replace("Z", "").split("T")[0].split(" ")[0]).date()
+    except Exception:  # noqa: BLE001
+        raise ValueError("invalid since/until")
+    if until_day < since_day:
+        raise ValueError("until before since")
+    # Fetch from since-lookback so each day's trailing window is fully covered.
+    fetch_start = since_day - timedelta(days=lookback + 1)
+    # eod deltas need one extra preceding day (mirror Fixed's start_day - 2).
+    eod_start = since_day - timedelta(days=lookback + 2)
+
+    oi_share_active = (min_avg_oi_share > 0) or (max_avg_oi_share < NO_MAX)
+    tokens_active = min_tokens > 0
+
+    params: dict = {
+        "since_day": since_day, "until_day": until_day,
+        "fetch_start": fetch_start, "eod_start": eod_start,
+        "min_days": min_days, "min_volume": min_volume,
+        "min_realized": min_realized, "min_oi": min_oi,
+        "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
+        "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
+        "min_account_duration": min_account_duration, "min_tokens": min_tokens,
+        "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
+        "min_trades_per_day": min_trades_per_day,
+        "min_annualized_sharpe": min_annualized_sharpe,
+        "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
+        "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
+        "lookback": lookback,
+    }
+    if token is not None:
+        params["token"] = token
+
+    # Literal integers for window-frame / lagInFrame offsets (CH rejects params
+    # there). `lb` = lookback (lagInFrame back-offset, dense Table A); `lbm1` =
+    # lookback-1 (ROWS/RANGE trailing-frame width = `lookback` calendar days).
+    lb = str(lookback)
+    lbm1 = str(lookback - 1)
+    tok_pred = "AND token = {token:String}" if token is not None else ""
+
+    # ── Trailing volume/realized/trades/fees (dense Table A; global) ──
+    if token is None:
+        daily_cum = """
+        daily_cum AS (
+            SELECT day AS d, wallet,
+                sumMerge(volume_state)      AS cum_vol,
+                sumMerge(pnl_state)         AS cum_pnl,
+                sumMerge(trade_count_state) AS cum_tc,
+                sumMerge(fees_state)        AS cum_fees
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE day >= {fetch_start:Date} AND day <= {until_day:Date}
+            GROUP BY day, wallet
+        )"""
+    else:
+        # Token scope: per-(day,wallet) cumulative argMax snapshots from the
+        # source table. NOT guaranteed dense per wallet, so we can't use a
+        # lagInFrame(lookback) row-offset; instead diff cum[D] against the last
+        # snapshot <= D-lookback via a RANGE-excluding self-window. Simpler &
+        # correct: take cum[D] minus cum as-of (D-lookback) using a second
+        # series joined on day. We build a DENSE day spine per wallet via the
+        # cumulative argMax carried forward (groupArray would be heavy); instead
+        # reuse the same lag-by-calendar trick the fills path uses below.
+        daily_cum = """
+        daily_cum AS (
+            SELECT d, wallet,
+                max(cum_vol)  AS cum_vol,
+                max(cum_pnl)  AS cum_pnl,
+                max(cum_tc)   AS cum_tc,
+                max(cum_fees) AS cum_fees
+            FROM (
+                SELECT toDate(time) AS d, wallet,
+                    argMax(volume, time)      AS cum_vol,
+                    argMax(pnl, time)         AS cum_pnl,
+                    argMax(trade_count, time) AS cum_tc,
+                    argMax(fees, time)        AS cum_fees
+                FROM tradernick.hl_trade_history FINAL
+                WHERE token = {token:String}
+                  AND toDate(time) >= {fetch_start:Date} AND toDate(time) <= {until_day:Date}
+                GROUP BY d, wallet
+            )
+            GROUP BY d, wallet
+        )"""
+
+    # For global the series is dense → lagInFrame by `lb` rows == `lb` days back.
+    # For token it may be sparse → use a RANGE self-join to read cum as-of
+    # (D - lookback). We unify by computing, per (d, wallet), the "base"
+    # cumulative = the latest cum on a day <= d-lookback.
+    if token is None:
+        win_cte = (
+            "        win AS (\n"
+            "            SELECT d, wallet,\n"
+            "                cum_vol  - lagInFrame(cum_vol,  " + lb + ", 0) OVER w AS volume,\n"
+            "                cum_pnl  - lagInFrame(cum_pnl,  " + lb + ", 0) OVER w AS realized,\n"
+            "                cum_tc   - lagInFrame(cum_tc,   " + lb + ", 0) OVER w AS trades,\n"
+            "                cum_fees - lagInFrame(cum_fees, " + lb + ", 0) OVER w AS fees\n"
+            "            FROM daily_cum\n"
+            "            WINDOW w AS (PARTITION BY wallet ORDER BY d ASC\n"
+            "                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)\n"
+            "        )")
+    else:
+        # base_cum[d] = the as-of cumulative snapshot on the latest day <=
+        # d-lookback. The token series is SPARSE per wallet (only days it traded
+        # that token), so we anchor a RANGE frame at d that ends `lookback` days
+        # BEFORE d (rows with d' <= d-lookback) and take the LATEST such row's
+        # value. anyLast(cum) OVER (… ORDER BY d ASC) == the value on the most
+        # recent in-frame day — the true as-of snapshot. (max() would be WRONG
+        # for realized pnl, which is NOT monotonic — losses pull it down.) A
+        # wallet with no row that far back → base NULL → coalesce 0 → trailing =
+        # cum[d] (all its activity is inside the window).
+        win_cte = (
+            "        win AS (\n"
+            "            SELECT d, wallet,\n"
+            "                cum_vol  - coalesce(base_vol, 0)  AS volume,\n"
+            "                cum_pnl  - coalesce(base_pnl, 0)  AS realized,\n"
+            "                cum_tc   - coalesce(base_tc, 0)   AS trades,\n"
+            "                cum_fees - coalesce(base_fees, 0) AS fees\n"
+            "            FROM (\n"
+            "                SELECT d, wallet, cum_vol, cum_pnl, cum_tc, cum_fees,\n"
+            "                    anyLast(cum_vol)  OVER b AS base_vol,\n"
+            "                    anyLast(cum_pnl)  OVER b AS base_pnl,\n"
+            "                    anyLast(cum_tc)   OVER b AS base_tc,\n"
+            "                    anyLast(cum_fees) OVER b AS base_fees\n"
+            "                FROM daily_cum\n"
+            "                WINDOW b AS (PARTITION BY wallet ORDER BY d ASC\n"
+            "                             RANGE BETWEEN UNBOUNDED PRECEDING AND " + lb + " PRECEDING)\n"
+            "            )\n"
+            "        )")
+
+    # Sharpe: per-day daily_total deltas, windowed over the trailing `lookback`
+    # rows (= calendar days, dense for global; token uses the same dense Table A
+    # realized deltas via real_daily). Mirror Fixed's real_delta/eod_delta.
+    if token is None:
+        real_daily = """
+        real_daily AS (
+            SELECT day AS d, wallet,
+                sumMerge(pnl_state)         AS cum_pnl,
+                sumMerge(trade_count_state) AS cum_tc
+            FROM tradernick.hl_trade_history_wallet_daily
+            WHERE day >= {fetch_start:Date} AND day <= {until_day:Date}
+            GROUP BY day, wallet
+        )"""
+        eod_daily = """
+        eod_daily AS (
+            SELECT day AS d, wallet, sum(eod) AS un
+            FROM (
+                SELECT day, wallet, token, side, argMaxMerge(pnl_state) AS eod
+                FROM tradernick.hl_position_history_eod_wallet
+                WHERE day >= {eod_start:Date} AND day <= {until_day:Date}""" + HIP3_EXCLUDE + """
+                GROUP BY day, wallet, token, side
+            )
+            GROUP BY day, wallet
+        )"""
+    else:
+        real_daily = """
+        real_daily AS (
+            SELECT toDate(time) AS d, wallet,
+                argMax(pnl, time)         AS cum_pnl,
+                argMax(trade_count, time) AS cum_tc
+            FROM tradernick.hl_trade_history FINAL
+            WHERE token = {token:String}
+              AND toDate(time) >= {fetch_start:Date} AND toDate(time) <= {until_day:Date}
+            GROUP BY d, wallet
+        )"""
+        eod_daily = """
+        eod_daily AS (
+            SELECT day AS d, wallet, sum(eod) AS un
+            FROM (
+                SELECT day, wallet, side, argMaxMerge(pnl_state) AS eod
+                FROM tradernick.hl_position_history_eod_wallet
+                WHERE token = {token:String}
+                  AND day >= {eod_start:Date} AND day <= {until_day:Date}
+                GROUP BY day, wallet, side
+            )
+            GROUP BY day, wallet
+        )"""
+
+    # min_oi ("OI as of day D"): day-D last total OI USD per (day, wallet).
+    if token is None:
+        oi_now = """
+        oi_now AS (
+            SELECT day AS d, wallet,
+                argMaxIfMerge(last_total_oi_usd_state)   AS oi_usd
+            FROM tradernick.hl_position_history_oi_wallet_daily
+            WHERE day >= {since_day:Date} AND day <= {until_day:Date}
+            GROUP BY day, wallet
+        )"""
+    else:
+        # Token scope: last hourly OI of that token on day D (size_usd summed
+        # over sides). Hourly scan limited to [since, until].
+        oi_now = """
+        oi_now AS (
+            SELECT d, wallet, sum(abs(sz_last)) AS oi_usd
+            FROM (
+                SELECT toDate(bucket) AS d, wallet, side,
+                    argMax(sz, bucket) AS sz_last
+                FROM (
+                    SELECT bucket, wallet, side, argMaxMerge(size_state) AS sz
+                    FROM tradernick.hl_position_history_1h
+                    WHERE token = {token:String}
+                      AND bucket >= {since_day:Date} AND bucket < {until_day:Date} + 1
+                    GROUP BY bucket, wallet, side
+                )
+                GROUP BY d, wallet, side
+            )
+            GROUP BY d, wallet
+        )"""
+
+    # The fills / funding / OI rollups are SPARSE per wallet (only days with
+    # activity). A RANGE-window anchored on those rows would emit NO row for a
+    # candidate day D on which the wallet had no fill/funding/OI entry — even
+    # though its trailing window [D-lookback+1, D] still legitimately covers
+    # earlier active days. That breaks the join in passing_select (NULL → a
+    # wrongly-zeroed metric). So every trailing sum is anchored on the DENSE
+    # candidate-day spine (the wallet's Table A days, which exist for every day),
+    # via a range self-join: for each candidate (D, wallet) sum the metric rows
+    # whose day ∈ (D-lookback, D]. This exactly mirrors the Fixed builder, which
+    # sums `day > start_day AND day <= end_day` irrespective of per-day presence.
+    #
+    # `spine` = candidate (d, wallet) pairs over the admitted range. Trailing
+    # sums only need to be defined for these, so we restrict the spine to
+    # [since, until].
+    spine = (
+        "        spine AS (\n"
+        "            SELECT d, wallet FROM win\n"
+        "            WHERE d >= {since_day:Date} AND d <= {until_day:Date}\n"
+        "        )")
+
+    taker_daily = (
+        "        taker_daily AS (\n"
+        "            SELECT wallet, day AS d,\n"
+        "                sumMerge(taker_buy_vol_usd_state) + sumMerge(taker_sell_vol_usd_state) AS d_taker,\n"
+        "                sumMerge(vol_usd_state) AS d_total\n"
+        "            FROM tradernick.hl_fills_vol_daily\n"
+        "            WHERE day >= {fetch_start:Date} AND day <= {until_day:Date} " + tok_pred + "\n"
+        "            GROUP BY wallet, day\n"
+        "        ),\n"
+        "        taker_agg AS (\n"
+        "            SELECT s.wallet AS wallet, s.d AS d,\n"
+        "                sum(t.d_taker) AS taker_vol,\n"
+        "                sum(t.d_total) AS total_vol\n"
+        "            FROM spine s\n"
+        "            INNER JOIN taker_daily t ON t.wallet = s.wallet\n"
+        "            WHERE t.d > s.d - " + lb + " AND t.d <= s.d\n"
+        "            GROUP BY s.wallet, s.d\n"
+        "        )")
+
+    funding_daily = (
+        "        funding_daily AS (\n"
+        "            SELECT wallet, day AS d, sumMerge(funding_pnl_state) AS d_funding\n"
+        "            FROM tradernick.hl_funding_daily\n"
+        "            WHERE day >= {fetch_start:Date} AND day <= {until_day:Date} " + tok_pred + "\n"
+        "            GROUP BY wallet, day\n"
+        "        ),\n"
+        "        funding_agg AS (\n"
+        "            SELECT s.wallet AS wallet, s.d AS d, sum(f.d_funding) AS funding\n"
+        "            FROM spine s\n"
+        "            INNER JOIN funding_daily f ON f.wallet = s.wallet\n"
+        "            WHERE f.d > s.d - " + lb + " AND f.d <= s.d\n"
+        "            GROUP BY s.wallet, s.d\n"
+        "        )")
+
+    first_seen = """
+        first_seen AS (
+            SELECT wallet, min(day) AS first_day
+            FROM tradernick.hl_trade_history_wallet_daily
+            GROUP BY wallet
+        )"""
+
+    # ── assemble the CTE chain ──
+    cte_parts = [
+        daily_cum, win_cte, real_daily,
+        """        real_delta AS (
+            SELECT d, wallet,
+                cum_pnl - lagInFrame(cum_pnl, 1, 0) OVER w AS d_real,
+                cum_tc  - lagInFrame(cum_tc,  1, 0) OVER w AS d_tc
+            FROM real_daily
+            WINDOW w AS (PARTITION BY wallet ORDER BY d ASC
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+        )""",
+        eod_daily,
+        """        eod_delta AS (
+            SELECT d, wallet, un - lagInFrame(un, 1, 0) OVER w AS d_un
+            FROM eod_daily
+            WINDOW w AS (PARTITION BY wallet ORDER BY d ASC
+                         ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING)
+        )""",
+        """        daily_series AS (
+            SELECT rd.d AS d, rd.wallet AS wallet,
+                rd.d_real + coalesce(ed.d_un, 0) AS daily_total,
+                rd.d_tc AS d_tc
+            FROM real_delta rd
+            LEFT JOIN eod_delta ed ON ed.wallet = rd.wallet AND ed.d = rd.d
+        )""",
+        # Rolling Sharpe over the trailing window ending at D. We frame by
+        # CALENDAR day (RANGE on Date), not physical rows, so it spans exactly
+        # [D-lookback+1, D] even when the daily_series is sparse (token scope —
+        # only active trade days have rows). For the dense global series RANGE
+        # and ROWS coincide. This matches Fixed, which aggregates every in-window
+        # day that has a row (`rd.d > start_day AND rd.d <= end_day`).
+        # daily_total/d_tc deltas at the FIRST fetched row are inflated by the
+        # lag-0 default, but that row (d <= fetch_start) is `lookback` days before
+        # since_day, so it never falls inside an admitted day's frame.
+        "        sharpe_agg AS (\n"
+        "            SELECT d, wallet,\n"
+        "                countIf(d_tc > 0) OVER f AS n_days,\n"
+        "                if(countIf(d_tc > 0) OVER f >= {min_days:UInt32}\n"
+        "                     AND stddevPop(daily_total) OVER f > 0,\n"
+        "                   avg(daily_total) OVER f / stddevPop(daily_total) OVER f * sqrt(365),\n"
+        "                   0) AS sharpe,\n"
+        "                100 * countIf(d_tc > 0 AND daily_total > 0) OVER f\n"
+        "                    / nullIf(countIf(d_tc > 0) OVER f, 0) AS win_rate\n"
+        "            FROM daily_series\n"
+        "            WINDOW f AS (PARTITION BY wallet ORDER BY d ASC\n"
+        "                         RANGE BETWEEN " + lbm1 + " PRECEDING AND CURRENT ROW)\n"
+        "        )",
+        oi_now,
+        spine,
+        taker_daily,
+        funding_daily,
+        first_seen,
+    ]
+
+    # Gated OI-share window (per-(day,wallet) trailing OI sum + per-day total).
+    # Same dense-spine self-join as taker/funding so a candidate day with no OI
+    # row that day still sees its earlier in-window OI.
+    if oi_share_active:
+        if token is None:
+            cte_parts.append(
+                "        oi_window AS (\n"
+                "            SELECT wallet, day AS d, sumMerge(s_total_oi_usd_state) AS d_oi\n"
+                "            FROM tradernick.hl_position_history_oi_wallet_daily\n"
+                "            WHERE day >= {fetch_start:Date} AND day <= {until_day:Date}\n"
+                "            GROUP BY wallet, day\n"
+                "        ),\n"
+                "        oi_roll AS (\n"
+                "            SELECT s.wallet AS wallet, s.d AS d, sum(o.d_oi) AS oi_sum\n"
+                "            FROM spine s\n"
+                "            INNER JOIN oi_window o ON o.wallet = s.wallet\n"
+                "            WHERE o.d > s.d - " + lb + " AND o.d <= s.d\n"
+                "            GROUP BY s.wallet, s.d\n"
+                "        )")
+        else:
+            cte_parts.append(
+                "        oi_window AS (\n"
+                "            SELECT wallet, toDate(bucket) AS d, sum(abs(sz)) AS d_oi\n"
+                "            FROM (\n"
+                "                SELECT wallet, bucket, side, argMaxMerge(size_state) AS sz\n"
+                "                FROM tradernick.hl_position_history_1h\n"
+                "                WHERE token = {token:String}\n"
+                "                  AND bucket >= {fetch_start:Date} AND bucket < {until_day:Date} + 1\n"
+                "                GROUP BY wallet, bucket, side\n"
+                "            )\n"
+                "            GROUP BY wallet, d\n"
+                "        ),\n"
+                "        oi_roll AS (\n"
+                "            SELECT s.wallet AS wallet, s.d AS d, sum(o.d_oi) AS oi_sum\n"
+                "            FROM spine s\n"
+                "            INNER JOIN oi_window o ON o.wallet = s.wallet\n"
+                "            WHERE o.d > s.d - " + lb + " AND o.d <= s.d\n"
+                "            GROUP BY s.wallet, s.d\n"
+                "        )")
+        # Per-day market OI total (denominator) across ALL wallets.
+        cte_parts.append(
+            "        oi_total AS (\n"
+            "            SELECT d, sum(oi_sum) AS tot FROM oi_roll GROUP BY d\n"
+            "        )")
+
+    # n_tokens (distinct tokens over the trailing window) — gated (only when
+    # min_tokens > 0). There is no rolling uniqExact window fn, so we range
+    # self-join the per-day token set against the DENSE candidate spine: for each
+    # candidate (D, wallet) count distinct tokens whose fill day ∈ (D-lookback, D].
+    # Anchoring on `spine` (not tok_daily) is essential — a candidate day on
+    # which the wallet has no fill still has earlier in-window tokens, mirroring
+    # the Fixed builder's `uniqExact(token)` over `(start_day, end_day]`.
+    if tokens_active:
+        cte_parts.append(
+            "        tok_daily AS (\n"
+            "            SELECT DISTINCT wallet, day AS d, token\n"
+            "            FROM tradernick.hl_fills_vol_daily\n"
+            "            WHERE day >= {fetch_start:Date} AND day <= {until_day:Date}\n"
+            "        ),\n"
+            "        ntok AS (\n"
+            "            SELECT s.wallet AS wallet, s.d AS d, uniqExact(b.token) AS n_tokens\n"
+            "            FROM spine s\n"
+            "            INNER JOIN tok_daily b ON b.wallet = s.wallet\n"
+            "            WHERE b.d > s.d - " + lb + " AND b.d <= s.d\n"
+            "            GROUP BY s.wallet, s.d\n"
+            "        )")
+
+    # Per-day volume total (denominator for volume-share) across ALL wallets.
+    cte_parts.append(
+        "        vol_total AS (\n"
+        "            SELECT d, sum(volume) AS tot FROM win\n"
+        "            WHERE d >= {since_day:Date} AND d <= {until_day:Date}\n"
+        "            GROUP BY d\n"
+        "        )")
+
+    cte_block = ",\n".join(cte_parts)
+
+    # ── FROM / JOIN / WHERE: keep (d, wallet) passing every guard, only for
+    # admitted days [since, until]. Mirrors the Fixed from_where_block 1:1, with
+    # every join also keyed on `d` (the per-day dimension).
+    oi_share_join = (
+        "\n        LEFT JOIN oi_roll ow  ON ow.wallet = w.wallet AND ow.d = w.d"
+        "\n        LEFT JOIN oi_total ot ON ot.d = w.d" if oi_share_active else "")
+    ntok_join = (
+        "\n        LEFT JOIN ntok nt ON nt.wallet = w.wallet AND nt.d = w.d"
+        if tokens_active else "")
+    ntok_expr = "coalesce(nt.n_tokens, 0)" if tokens_active else "1"
+    oi_share_guard = (
+        "\n          AND coalesce(10000 * ow.oi_sum / nullIf(ot.tot, 0), 0) >= {min_avg_oi_share:Float64}"
+        "\n          AND coalesce(10000 * ow.oi_sum / nullIf(ot.tot, 0), 0) <= {max_avg_oi_share:Float64}"
+        if oi_share_active else "")
+
+    passing_select = (
+        "        SELECT w.d AS day, w.wallet AS wallet\n"
+        "        FROM win w\n"
+        "        LEFT JOIN sharpe_agg sa ON sa.wallet = w.wallet AND sa.d = w.d\n"
+        "        LEFT JOIN oi_now oi     ON oi.wallet = w.wallet AND oi.d = w.d\n"
+        "        LEFT JOIN taker_agg tk  ON tk.wallet = w.wallet AND tk.d = w.d\n"
+        "        LEFT JOIN funding_agg fn ON fn.wallet = w.wallet AND fn.d = w.d\n"
+        "        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet\n"
+        "        LEFT JOIN vol_total vt ON vt.d = w.d" + oi_share_join + ntok_join + "\n"
+        "        WHERE w.d >= {since_day:Date} AND w.d <= {until_day:Date}\n"
+        "          AND w.volume >= {min_volume:Float64}\n"
+        "          AND w.realized >= {min_realized:Float64}\n"
+        "          AND coalesce(oi.oi_usd, 0) >= {min_oi:Float64}\n"
+        "          AND coalesce(sa.n_days, 0) >= {min_days:UInt32}\n"
+        "          AND coalesce(w.volume / nullIf(w.trades, 0), 0) >= {min_avg_trade_size:Float64}\n"
+        "          AND coalesce(100 * tk.taker_vol / nullIf(tk.total_vol, 0), 0) >= {min_taker_pct:Float64}\n"
+        "          AND (w.realized <= 0 OR 100 * w.fees / w.realized <= {max_fee_pct:Float64})\n"
+        "          AND (w.realized <= 0 OR 100 * coalesce(fn.funding, 0) / w.realized <= {max_funding_pct:Float64})\n"
+        "          AND " + ntok_expr + " >= {min_tokens:UInt32}\n"
+        "          AND coalesce(dateDiff('day', fseen.first_day, w.d), 0) >= {min_account_duration:UInt32}\n"
+        "          AND coalesce(sa.win_rate, 0) >= {min_win_rate:Float64}\n"
+        "          AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) <= {max_trades_per_day:Float64}\n"
+        "          AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) >= {min_trades_per_day:Float64}\n"
+        "          AND coalesce(sa.sharpe, 0) >= {min_annualized_sharpe:Float64}\n"
+        "          AND coalesce(10000 * w.volume / nullIf(vt.tot, 0), 0) >= {min_volume_share:Float64}\n"
+        "          AND coalesce(10000 * w.volume / nullIf(vt.tot, 0), 0) <= {max_volume_share:Float64}"
+        + oi_share_guard)
+
+    echo = {
+        "token": token, "lookback": lookback,
+        "since": since_day.isoformat(), "until": until_day.isoformat(),
+        "min_days": min_days, "min_volume": min_volume,
+        "min_realized": min_realized, "min_oi": min_oi,
+        "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
+        "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
+        "min_account_duration": min_account_duration, "min_tokens": min_tokens,
+        "min_win_rate": min_win_rate, "max_trades_per_day": max_trades_per_day,
+        "min_trades_per_day": min_trades_per_day,
+        "min_annualized_sharpe": min_annualized_sharpe,
+        "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
+        "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
+    }
+    return {
+        "cte_block": cte_block, "passing_select": passing_select,
+        "params": params, "echo": echo,
+    }
+
+
+# ── Rolling passing-set cache (per (day, wallet)) ────────────────────────
+_ROLLING_SET_CACHE_TABLE = "tradernick.smart_wallet_rolling_set_cache"
+_ROLLING_SET_CACHE_TTL = 300.0
+# Set-defining fields: same criteria as Fixed PLUS the rolling range bounds.
+_ROLLING_KEY_FIELDS = (
+    "token", "lookback", "since", "until", "min_days", "min_volume",
+    "min_realized", "min_oi", "min_avg_trade_size", "min_taker_pct",
+    "max_fee_pct", "max_funding_pct", "min_account_duration", "min_tokens",
+    "min_win_rate", "min_trades_per_day", "max_trades_per_day",
+    "min_annualized_sharpe", "min_avg_oi_share", "max_avg_oi_share",
+    "min_volume_share", "max_volume_share",
+)
+_rolling_ensured: dict[str, float] = {}
+
+
+def _rolling_key(sel: dict) -> str:
+    e = sel["echo"]
+    blob = json.dumps({k: e[k] for k in _ROLLING_KEY_FIELDS}, sort_keys=True, default=str)
+    return hashlib.md5(blob.encode()).hexdigest()
+
+
+async def _ensure_rolling_set_table(ch) -> None:
+    await ch.command(
+        f"CREATE TABLE IF NOT EXISTS {_ROLLING_SET_CACHE_TABLE} (\n"
+        "    sel_key     String,\n"
+        "    day         Date,\n"
+        "    wallet      String,\n"
+        "    computed_at DateTime DEFAULT now()\n"
+        ") ENGINE = ReplacingMergeTree(computed_at)\n"
+        "ORDER BY (sel_key, day, wallet)\n"
+        "TTL computed_at + INTERVAL 1 DAY"
+    )
+
+
+async def _resolve_rolling_passing(ch, sel: dict) -> str:
+    """Ensure the rolling per-(day, wallet) passing set is cached in CH and
+    return its `sel_key`. The OI route reads it via a sub-SELECT joined on
+    toDate(bucket) = day. Mirrors `_resolve_passing` (freshness + TTL + recompute
+    as a new timestamped batch)."""
+    key = _rolling_key(sel)
+    now = time.time()
+    if (last := _rolling_ensured.get(key)) and now - last < _ROLLING_SET_CACHE_TTL:
+        return key
+    await _ensure_rolling_set_table(ch)
+    r = await ch.query(
+        f"SELECT toUnixTimestamp(max(computed_at)) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
+        parameters={"k": key},
+    )
+    mx = r.result_rows[0][0] if (r and r.result_rows) else 0
+    if mx and now - float(mx) < _ROLLING_SET_CACHE_TTL:
+        _rolling_ensured[key] = now
+        return key
+    p = dict(sel["params"])
+    p["sk"] = key
+    await ch.command(
+        f"INSERT INTO {_ROLLING_SET_CACHE_TABLE} (sel_key, day, wallet, computed_at)\n"
+        f"WITH {sel['cte_block']}\n"
+        f"SELECT {{sk:String}} AS sel_key, day, wallet, now() AS computed_at\n"
+        f"FROM (\n{sel['passing_select']}\n)",
+        parameters=p,
+    )
+    _rolling_ensured[key] = now
+    return key
+
+
 @bp.get("/hyperliquid/smart_wallet_metrics")
 @throttled("heavy")
 async def smart_wallet_metrics(request):
@@ -1360,6 +1980,148 @@ async def smart_wallet_oi(request):
         "token": oi_token,
         "interval": interval,
         "series": series,
+    })
+
+
+@bp.get("/hyperliquid/smart_wallet_oi_rolling")
+@throttled("heavy")
+async def smart_wallet_oi_rolling(request):
+    """Per-bucket HL OI aggregated over the ROLLING smart-wallet set — the
+    set qualifying for EACH day, not one fixed window.
+
+    For every day D in [since, until], `_build_rolling_selection` selects the
+    wallets passing every min_*/max_* guard over their trailing [D-lookback, D]
+    window (the qualifying set differs per day). This endpoint then sums OI for
+    `oi_token` per hourly bucket over the wallets passing AS OF that bucket's DAY
+    (join the per-day passing set on toDate(bucket) = day). Same MV cascade /
+    response shape as /smart_oi + /smart_wallet_oi, PLUS each bucket carries
+    `wallet_count` = the number of qualifying wallets for that bucket's day.
+
+    Selection params (define the per-day wallet set; same names as
+    /smart_wallet_metrics, minus `snapshot`):
+      token (scope; absent = global), lookback (1|3|7|14|30), since, until, and
+      all min_*/max_*.
+    OI params:
+      oi_token — token whose OI to plot (default = `token`, else BTC).
+      interval, since, until, limit — same as /smart_wallet_oi.
+    Returns {"buckets":[{time,long_oi,short_oi,total_oi,long_oi_value,
+      short_oi_value,total_oi_value,wallet_count}, …], …echo}.
+    """
+    interval = request.args.get("interval", "1h")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    oi_limit = int(request.args.get("limit", "200000"))
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    try:
+        sel = _build_rolling_selection(request)
+    except ValueError as e:
+        return response.json({"error": str(e)}, status=400)
+
+    # oi_token defaults to the selection scope token, else BTC.
+    oi_token = request.args.get("oi_token") or sel["echo"]["token"] or "BTC"
+
+    seconds = INTERVAL_SECONDS[interval]
+    oi_since_dt = _parse_iso(since)
+    oi_until_dt = _parse_iso(until)
+    # Same MV cascade as /smart_wallet_oi.
+    if seconds >= 3600 and seconds % 3600 == 0:
+        oi_source = "tradernick.hl_position_history_1h"
+        oi_time_col = "bucket"
+        oi_amount_expr = "argMaxMerge(amount_state)"
+        oi_size_expr   = "argMaxMerge(size_state)"
+    elif seconds >= 900 and seconds % 900 == 0:
+        oi_source = "tradernick.hl_position_history_15m"
+        oi_time_col = "bucket"
+        oi_amount_expr = "argMaxMerge(amount_state)"
+        oi_size_expr   = "argMaxMerge(size_state)"
+    else:
+        oi_source = "tradernick.hl_position_history"
+        oi_time_col = "time"
+        oi_amount_expr = "argMax(amount, time)"
+        oi_size_expr   = "argMax(size,   time)"
+
+    ch = await client()
+    # Resolve (compute-or-cache) the rolling per-(day,wallet) passing set.
+    sel_key = await _resolve_rolling_passing(ch, sel)
+
+    params = {
+        "seconds": seconds, "oi_token": oi_token,
+        "oi_since": oi_since_dt, "oi_until": oi_until_dt, "oi_limit": oi_limit,
+        "sel_key": sel_key,
+    }
+
+    # Per-bucket OI over wallets passing AS OF that bucket's day. A first stage
+    # collapses (bucket, wallet, side) to the latest amount/size, carrying the
+    # bucket's day; we INNER JOIN the per-day passing set on (day, wallet) and
+    # the per-day distinct count so each surviving row carries day_cnt. After the
+    # bucket GROUP BY, any(day_cnt) = the number of qualifying wallets that day
+    # (constant within a day). NOTE wallet_count counts ALL qualifying wallets
+    # for the day, including any holding no oi_token position that bucket.
+    sql = (
+        "WITH pset AS (\n"
+        "    SELECT day, wallet FROM " + _ROLLING_SET_CACHE_TABLE + "\n"
+        "    WHERE sel_key = {sel_key:String}\n"
+        "      AND computed_at = (SELECT max(computed_at) FROM " + _ROLLING_SET_CACHE_TABLE + " WHERE sel_key = {sel_key:String})\n"
+        "),\n"
+        "day_counts AS (\n"
+        "    SELECT day, toUInt32(uniqExact(wallet)) AS cnt FROM pset GROUP BY day\n"
+        ")\n"
+        "SELECT\n"
+        "    toUnixTimestamp(bucket)            AS bucket,\n"
+        "    sumIf(latest_amount, side='long')  AS long_oi,\n"
+        "    sumIf(latest_amount, side='short') AS short_oi,\n"
+        "    sum(latest_amount)                 AS total_oi,\n"
+        "    sumIf(latest_size,   side='long')  AS long_oi_value,\n"
+        "    sumIf(latest_size,   side='short') AS short_oi_value,\n"
+        "    sum(latest_size)                   AS total_oi_value,\n"
+        "    toUInt32(any(day_cnt))             AS wallet_count\n"
+        "FROM (\n"
+        "    SELECT p.bucket AS bucket, p.side AS side,\n"
+        "        p.latest_amount AS latest_amount, p.latest_size AS latest_size,\n"
+        "        dc.cnt AS day_cnt\n"
+        "    FROM (\n"
+        "        SELECT\n"
+        "            toStartOfInterval(" + oi_time_col + ", INTERVAL {seconds:UInt32} SECOND) AS bucket,\n"
+        "            toDate(" + oi_time_col + ") AS day,\n"
+        "            wallet, side,\n"
+        "            " + oi_amount_expr + " AS latest_amount,\n"
+        "            " + oi_size_expr + "   AS latest_size\n"
+        "        FROM " + oi_source + "\n"
+        "        WHERE token = {oi_token:String}\n"
+        "          AND " + oi_time_col + " >= {oi_since:DateTime}\n"
+        "          AND " + oi_time_col + " <  {oi_until:DateTime}\n"
+        "        GROUP BY bucket, day, wallet, side\n"
+        "    ) p\n"
+        "    INNER JOIN pset s ON s.day = p.day AND s.wallet = p.wallet\n"
+        "    INNER JOIN day_counts dc ON dc.day = p.day\n"
+        ")\n"
+        "GROUP BY bucket\n"
+        "ORDER BY bucket\n"
+        "LIMIT {oi_limit:UInt32}\n"
+    )
+
+    rows = await ch.query(sql, parameters=params)
+    buckets = [
+        {
+            "time": int(r[0]),
+            "long_oi": float(r[1]),
+            "short_oi": float(r[2]),
+            "total_oi": float(r[3]),
+            "long_oi_value": float(r[4]),
+            "short_oi_value": float(r[5]),
+            "total_oi_value": float(r[6]),
+            "wallet_count": int(r[7]),
+        }
+        for r in rows.result_rows
+    ]
+    return response.json({
+        **sel["echo"],
+        "oi_token": oi_token,
+        "interval": interval,
+        "buckets": buckets,
     })
 
 

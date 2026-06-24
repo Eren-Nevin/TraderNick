@@ -111,6 +111,8 @@
     LEADERBOARD_KIND_CONFIG,
     isDualViewKind,
     DUAL_VIEW_KINDS,
+    SMART_WALLET_LOOKBACKS,
+    SMART_WALLET_DYNAMIC_LOOKBACKS,
     type LeaderboardMetric,
     type SmartWalletMetric,
     type SmartWalletLookback,
@@ -683,8 +685,12 @@
   // Data to its right is post-selection; panning left reveals the in-sample
   // lookback period. Amber + label so it reads as an annotation. Appended to
   // the week lines; for non-dual / table mode this is just weekVRefLines.
+  // Dynamic has NO fixed snapshot (the lookback rolls per bucket), so the
+  // "Lookback end" marker is meaningless there — omit it (the rolling lookback
+  // is surfaced as a text chip in the chart toolbar instead).
   let chartVRefLines = $derived.by(() => {
     if (!(isDualViewKind(instance.kind) && instance.viewMode === 'chart')) return weekVRefLines;
+    if (instance.kind === 'smart_wallets_dynamic') return weekVRefLines;
     const t = Math.floor(Date.parse(swSnapshotIso() + 'T00:00:00Z') / 1000);
     return [
       ...weekVRefLines,
@@ -716,6 +722,10 @@
   // the table header.
   function swSnapshotIso(): string {
     if (instance.swSnapshot) return instance.swSnapshot;
+    // Dynamic has no snapshot slider — its table view shows the LATEST day, and
+    // its rolling chart ignores snapshot entirely (the proxy strips it). So the
+    // default is today; Fixed defaults to the first of the current month.
+    if (instance.kind === 'smart_wallets_dynamic') return swTodayIso();
     return swDefaultSnapshotIso();
   }
   function swDefaultSnapshotIso(): string {
@@ -723,6 +733,13 @@
     return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), 1))
       .toISOString().slice(0, 10);
   }
+  function swTodayIso(): string {
+    const n = new Date();
+    return new Date(Date.UTC(n.getUTCFullYear(), n.getUTCMonth(), n.getUTCDate()))
+      .toISOString().slice(0, 10);
+  }
+  // Both smart-wallet widgets share criteria, gear panel, and refresh-gating.
+  const isSwKind = (k: string) => k === 'smart_wallets_table' || k === 'smart_wallets_dynamic';
 
   // ── Deferred smart-wallet FILTERS ─────────────────────────────────────
   // The gear inputs edit instance.sw* live (so they persist), but the table's
@@ -751,7 +768,7 @@
     committedFilters = swFilterSnap();
   }
   let swFiltersDirty = $derived(
-    instance.kind === 'smart_wallets_table' &&
+    isSwKind(instance.kind) &&
       SW_FILTER_FIELDS.some((k) => (committedFilters[k] ?? null) !== (instance[k] ?? null))
   );
   // Refresh-only gating for smart_wallets_table: the finder NEVER auto-fetches
@@ -769,7 +786,7 @@
   // run, selection changed, or gear filters edited) — drives the refresh
   // button's "needs refresh" highlight.
   let swNeedsRefresh = $derived(
-    instance.kind === 'smart_wallets_table' &&
+    isSwKind(instance.kind) &&
       (!swArmed || swFiltersDirty || swTableKey() !== swArmedSelectionKey)
   );
 
@@ -782,7 +799,7 @@
   // params; see loadKey.
   function swTableKey(): string {
     return [
-      'smart_wallets_table', instance.swMetric ?? 'sharpe', instance.swLookback ?? 7,
+      instance.kind, instance.swMetric ?? 'sharpe', instance.swLookback ?? 7,
       instance.swToken ?? '__all__', swSnapshotIso(),
       swF('swMinDays', 3), swF('swMinVolume', 100000),
       swF('swMinRealized', 0), swF('swMinOi', 0),
@@ -798,11 +815,11 @@
   }
 
   function loadKey(): string {
-    if (instance.kind === 'smart_wallets_table') {
-      // Chart mode plots the OI of the SAME found wallets, so its key extends
-      // the table key (any table-setting change rebuilds the wallet set) with
-      // the chart's own OI-fetch params (token + interval). The differing tag
-      // makes a Table⇄Chart toggle re-run the load effect into the other slot.
+    if (isSwKind(instance.kind)) {
+      // Chart mode plots the OI of the found wallets (Fixed: one set; Dynamic:
+      // per-day rolling set), so its key extends the table key with the chart's
+      // own OI-fetch params (token + interval). The differing tag makes a
+      // Table⇄Chart toggle re-run the load effect into the other slot.
       if (instance.viewMode === 'chart') {
         return `${swTableKey()}|chart|${instance.token}|${instance.interval}|c:${instance.swShowClose ? 1 : 0}`;
       }
@@ -991,13 +1008,13 @@
       // Cached data already matches the active view's shape.
       if (isDualViewKind(instance.kind)) dualDataView = instance.viewMode ?? 'table';
       // Recover the found count when restoring the table slot from cache.
-      if (instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart') {
+      if (isSwKind(instance.kind) && instance.viewMode !== 'chart') {
         const t = (cached.data[0] as unknown as { total?: number })?.total;
         if (typeof t === 'number') { swFoundTotal = t; swFoundTotalKey = swTableKey(); }
       }
       // A cache hit means this selection has valid data — treat it as armed so
       // a subsequent view toggle (after a drag-reorder remount) can still load.
-      if (instance.kind === 'smart_wallets_table') {
+      if (isSwKind(instance.kind)) {
         swArmed = true; swArmedSelectionKey = swTableKey();
       }
       return;
@@ -1005,7 +1022,7 @@
     // Refresh-only finder: skip auto-fetch unless an explicit refresh armed it
     // and the SELECTION key is unchanged (a view toggle keeps that key, so the
     // other view may still load; a token/lookback/filter change does not).
-    if (instance.kind === 'smart_wallets_table') {
+    if (isSwKind(instance.kind)) {
       if (!swArmed || swTableKey() !== swArmedSelectionKey) return;
       const ff = swForceFreshNext;
       swForceFreshNext = false;
@@ -1646,13 +1663,15 @@
       // client-side. Carried as a single AnyDatum payload (same shape trick as
       // the leaderboard kinds). since/until are ignored (the window is derived
       // from lookback + snapshot server-side).
-      if (instance.kind === 'smart_wallets_table') {
+      if (isSwKind(instance.kind)) {
         if (instance.viewMode === 'chart') {
           // Chart view: OI aggregated over EVERY found wallet (computed
           // server-side from the same filters — the address list never crosses
           // the wire, so it scales to thousands of wallets). Independent of the
           // table fetch; each view caches its own slot.
-          data = await fetchSmartWalletOiWindow(sinceIso, untilIso, signal);
+          data = instance.kind === 'smart_wallets_dynamic'
+            ? await fetchSmartWalletOiRollingWindow(sinceIso, untilIso, signal)
+            : await fetchSmartWalletOiWindow(sinceIso, untilIso, signal);
         } else {
           // Table view: the ranked top-N rows + the FULL found count (`total`).
           const body = await fetchSmartWalletMetrics(signal);
@@ -2940,6 +2959,42 @@
     return mapped as unknown as AnyDatum[];
   }
 
+  /** smart_wallets_dynamic (Chart view): aggregate OI of the PER-DAY ROLLING
+   *  wallet set for the chart token, plus the per-day qualifying-wallet count
+   *  (carried on each bucket as `wallet_count`, plotted by the smartShowWalletCount
+   *  overlay). The set is recomputed server-side per day over the trailing
+   *  lookback — no snapshot. Same datum shape as fetchSmartWalletOiWindow. */
+  async function fetchSmartWalletOiRollingWindow(
+    sinceIso: string,
+    untilIso: string,
+    signal?: AbortSignal
+  ): Promise<AnyDatum[]> {
+    if (!instance.token) return [] as unknown as AnyDatum[];
+    const qs = swSelectionParams(); // snapshot is ignored by the rolling proxy
+    qs.set('oi_token', instance.token);
+    qs.set('interval', instance.interval);
+    qs.set('since', sinceIso);
+    qs.set('until', untilIso);
+    qs.set('limit', '200000');
+    const res = await queuedFetch(`/api/hyperliquid/smart_wallet_oi_rolling?${qs}`, { signal });
+    if (!res.ok) throw new Error(`smart_wallet_oi_rolling ${res.status}`);
+    const b = await res.json();
+    const rows = (b.buckets ?? []) as Array<Record<string, number>>;
+    const mapped = rows.map((r) => ({
+      ...r,
+      open_interest: r.total_oi ?? 0,
+      open_interest_value: r.total_oi_value ?? 0
+    })) as Array<Record<string, number>>;
+    if (instance.swShowClose && mapped.length) {
+      const closeByTime = await fetchHlCloseMap(sinceIso, untilIso, signal);
+      for (const d of mapped) {
+        const c = closeByTime.get(d.time);
+        if (c !== undefined) d.close = c;
+      }
+    }
+    return mapped as unknown as AnyDatum[];
+  }
+
   /** HL OHLCV close per bucket (time → close) for the chart token over a
    *  window, keyed by unix-second bucket time to merge into the OI series. */
   async function fetchHlCloseMap(
@@ -3101,7 +3156,9 @@
     if (isDualViewKind(instance.kind) && instance.viewMode === 'chart') {
       // OI of the found-wallet set, resolved server-side from the selection
       // filters each window — no client-side wallet list needed.
-      return (s, u, sig) => fetchSmartWalletOiWindow(s, u, sig);
+      return instance.kind === 'smart_wallets_dynamic'
+        ? (s, u, sig) => fetchSmartWalletOiRollingWindow(s, u, sig)
+        : (s, u, sig) => fetchSmartWalletOiWindow(s, u, sig);
     }
     if (instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl') {
       return (s, u, sig) => fetchHlOiWindow(s, u, sig);
@@ -3204,7 +3261,7 @@
     // effect keeps it the sole loader, so there's no double-load race). Capture
     // the armed selection key AFTER committing so it matches what the effect
     // compares against. swForceFreshNext carries the cache-bust into that load.
-    if (instance.kind === 'smart_wallets_table') {
+    if (isSwKind(instance.kind)) {
       commitSwFilters();
       swArmed = true;
       swArmedSelectionKey = swTableKey();
@@ -4286,6 +4343,11 @@
         axis: 'secondary',
         dash: '3,3',
         compute: (d: Record<string, number>) => d.wallet_count ?? 0,
+        // Wallets is a plain count — force its own legend formatter so it never
+        // inherits the secondary axis's USD/price formatter (e.g. when the
+        // close-price overlay is also on). rawValue == compute (legend-only).
+        rawValue: (d: Record<string, number>) => d.wallet_count ?? 0,
+        rawFormat: (v: number) => Math.round(v).toLocaleString(),
       });
     }
     // Optional HL close-price overlay (smart-wallets chart mode), on the
@@ -4794,7 +4856,7 @@
     // Dual-view chart mode renders a real LineChart, so the chart-only settings
     // (Point / Week lines / MA / zoom-sync) DO apply there — only the table view
     // counts as a tableview kind.
-    || (instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart')
+    || (isSwKind(instance.kind) && instance.viewMode !== 'chart')
     || instance.kind === 'hl_top_traders'
     || instance.kind === 'hl_top_positions'
     || instance.kind === 'hl_top_vaults'
@@ -6188,14 +6250,22 @@
              dimension (Binance-sourced, all tokens). Sorting lives in the table
              header, so the toolbar just carries a static source chip. -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">Binance · all tokens</span>
-      {:else if instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart'}
+      {:else if isSwKind(instance.kind) && instance.viewMode !== 'chart'}
         <!-- Smart Wallets finder (TABLE view): HL-only. Every control (metric /
              lookback / token selectors + the snapshot slider) lives inside the
              table's own header; the min-days/min-volume guards live in the gear
              panel. The toolbar just carries a static source chip. (Chart view
              falls through to the generic OI controls below.) -->
-        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL · smart wallets</span>
+        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL · smart wallets{instance.kind === 'smart_wallets_dynamic' ? ' · dynamic' : ''}</span>
       {:else}
+        {#if instance.kind === 'smart_wallets_dynamic'}
+          <!-- Dynamic chart: the set is re-selected per bucket over a ROLLING
+               trailing window, so there's no fixed snapshot/end. Surface the
+               rolling lookback as a text chip (changed via the table view's
+               lookback selector). -->
+          <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL · smart wallets · dynamic</span>
+          <span class="text-zinc-400 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700" title="Each point selects wallets over a rolling trailing window of this length (set in the table view).">Rolling {instance.swLookback ?? 7}d lookback</span>
+        {/if}
         {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'volume' || instance.kind === 'pc' || instance.kind === 'ls'}
           <!-- Exchange selector picks the data source. ohlcv → *_ohlcv_1m,
                fr → binance_funding_rate / hl_funding, bs/sz → *_raw_trades /
@@ -6472,13 +6542,12 @@
   {#if settingsOpen}
     <div class="absolute inset-0 z-20 bg-zinc-950/95 overflow-y-auto">
     <div class="px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/30 flex items-center gap-3 flex-wrap text-xs">
-      {#if instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart'}
-        <!-- Smart-wallet finder filters (TABLE view only — they define the
-             wallet SET; chart mode shows only chart-appearance settings below).
-             Grouped into labelled sections so each guard is easy to find. A raw
-             mean/std ranking is dominated by wallets with one or two lucky days,
-             so the Activity/Size guards require a minimum participation before a
-             wallet enters the ranking. All commit together on refresh. -->
+      {#if isSwKind(instance.kind) && (instance.kind === 'smart_wallets_dynamic' || instance.viewMode !== 'chart')}
+        <!-- Smart-wallet finder filters. For Fixed they show in TABLE view only
+             (chart mode shows chart-appearance settings); for Dynamic they
+             ALWAYS show (the criteria define the per-day rolling set the chart
+             plots). Grouped into labelled sections so each guard is easy to
+             find. All commit together on refresh. -->
         {@const swCell = 'w-full bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}
         {@const swLabel = 'text-zinc-500 text-[10px] uppercase tracking-wide leading-tight'}
         {@const swGroup = 'border border-zinc-800 rounded-md px-3 pt-1 pb-2 min-w-[170px]'}
@@ -7324,7 +7393,7 @@
     {#if error}
       <div class="p-3 text-xs text-red-300 bg-red-950/30">{error}</div>
     {/if}
-    {#if data.length === 0 && loading}
+    {#if data.length === 0 && loading && !(isSwKind(instance.kind) && instance.viewMode !== 'chart')}
       <div class="p-4 text-sm text-zinc-400 flex items-center gap-2">
         <svg class="animate-spin h-4 w-4 text-zinc-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-opacity="0.25"/>
@@ -7332,7 +7401,7 @@
         </svg>
         Loading {chartKindGroup(effectiveKind) ? `${chartKindGroup(effectiveKind)} ${chartKindShortLabel(effectiveKind)}` : kindLabel}…
       </div>
-    {:else if data.length === 0 && !(instance.kind === 'smart_wallets_table' && instance.viewMode !== 'chart')}
+    {:else if data.length === 0 && !(isSwKind(instance.kind) && instance.viewMode !== 'chart')}
       <!-- smart_wallets_table (table view) is excluded here so it ALWAYS renders
            its own component even with no rows yet — the finder is refresh-only,
            and the user needs its metric / lookback / token / snapshot chrome to
@@ -7693,15 +7762,17 @@
         formatY2={instance.showSum ? (exchangeFlowUseUsd ? fmtUsdAxis : fmtAmountAxis) : undefined}
         formatTooltip2={instance.showSum ? (exchangeFlowUseUsd ? fmtUsdTooltip : fmtAmountTooltip) : undefined}
       />
-    {:else if instance.kind === 'smart_wallets_table'}
+    {:else if isSwKind(instance.kind)}
       <SmartWalletMetricsTable
         rows={data.length > 0 ? ((data[0] as unknown as {wallets?: import('$lib/components/SmartWalletMetricsTable.svelte').SmartWalletRow[]}).wallets ?? []) : []}
         total={data.length > 0 ? ((data[0] as unknown as {total?: number}).total ?? 0) : 0}
         {tokens}
         metric={(instance.swMetric ?? 'sharpe') as SmartWalletMetric}
         lookback={(instance.swLookback ?? 7) as SmartWalletLookback}
+        lookbacks={instance.kind === 'smart_wallets_dynamic' ? SMART_WALLET_DYNAMIC_LOOKBACKS : SMART_WALLET_LOOKBACKS}
         token={instance.swToken ?? null}
         snapshot={swSnapshotIso()}
+        dynamic={instance.kind === 'smart_wallets_dynamic'}
         onChangeMetric={(m) => (instance.swMetric = m)}
         onChangeLookback={(l) => (instance.swLookback = l)}
         onChangeToken={(t) => {

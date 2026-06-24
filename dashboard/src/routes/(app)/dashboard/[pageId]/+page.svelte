@@ -26,7 +26,7 @@
     'hl_pnl', 'hl_unrealized_pnl', 'hl_smart_oi', 'hl_transfers', 'hl_vault_net',
     'hl_top_vaults', 'hl_top_vault_lps', 'hl_vault_detail',
     'hl_top_traders', 'hl_top_positions',
-    'smart_wallets_table',
+    'smart_wallets_table', 'smart_wallets_dynamic',
     'lido'
   ];
 

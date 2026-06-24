@@ -390,6 +390,7 @@ export type ChartKind =
   | 'ps'
   | 'token_leaderboard'
   | 'smart_wallets_table'
+  | 'smart_wallets_dynamic'
   | 'transfer'
   | 'exchange_flow'
   | 'pc'
@@ -522,7 +523,8 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ls: 'Long/Short',
   ps: 'Perp vs Spot',
   token_leaderboard: 'Token Leaderboard',
-  smart_wallets_table: 'Smart Wallets',
+  smart_wallets_table: 'Smart Wallets (Fixed)',
+  smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
   transfer: 'Token Flow',
   exchange_flow: 'Exchange Flow',
   pc: 'Relative Price',
@@ -766,7 +768,8 @@ export function isLeaderboardKind(kind: ChartKind): boolean {
  *  rendering + controls it borrows in 'chart' mode. The one seam to extend
  *  when adding future table/chart dual widgets. */
 export const DUAL_VIEW_KINDS: Partial<Record<ChartKind, { chartKind: ChartKind }>> = {
-  smart_wallets_table: { chartKind: 'hl_smart_oi' }
+  smart_wallets_table: { chartKind: 'hl_smart_oi' },
+  smart_wallets_dynamic: { chartKind: 'hl_smart_oi' }
 };
 
 export function isDualViewKind(kind: ChartKind): boolean {
@@ -1308,7 +1311,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Perp — GMX V2 + Hyperliquid family. smart_wallets_table is an HL-only
   // experimental tableview (no hl_ prefix so it stays out of the many
   // isHlKind() chart-control branches) — categorise it here explicitly.
-  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table') return 'Perp';
+  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic') return 'Perp';
   // Staking — Lido (and future Stader/Frax).
   if (kind === 'lido') return 'Staking';
   return null;
@@ -1523,8 +1526,12 @@ export type TransferFilters = {
 // /api/hyperliquid/smart_wallet_metrics. Designed to grow: add a metric here +
 // a backend branch and the toolbar/table pick it up.
 export type SmartWalletMetric = 'sharpe';
-export type SmartWalletLookback = 1 | 7 | 30 | 90 | 150;
+// Union of the Fixed (1/7/30/90/150) and Dynamic (1/3/7/14/30) lookback sets;
+// each widget renders its own array below. swLookback is typed against this.
+export type SmartWalletLookback = 1 | 3 | 7 | 14 | 30 | 90 | 150;
 export const SMART_WALLET_LOOKBACKS: ReadonlyArray<SmartWalletLookback> = [1, 7, 30, 90, 150];
+// Dynamic widget rolls the lookback per day, so it's capped at 30d (heavier).
+export const SMART_WALLET_DYNAMIC_LOOKBACKS: ReadonlyArray<SmartWalletLookback> = [1, 3, 7, 14, 30];
 
 export type SmartWalletMetricDef = {
   key: SmartWalletMetric;
@@ -2712,6 +2719,25 @@ export function newChartInstance(
     base.swMinVolume = 100000;
     base.swMinRealized = 0;
     base.swMinOi = 0;
+  }
+  if (kind === 'smart_wallets_dynamic') {
+    // Dynamic smart-wallet finder: same criteria as Fixed, but the lookback
+    // ROLLS per day (no snapshot). Chart-primary (rolling-set OI + per-day
+    // count); the table view shows the latest day's set. Shares all the sw*
+    // criteria fields.
+    base.width = 3;
+    base.height = 3;
+    base.exchange = 'hl';
+    base.viewMode = 'chart';
+    base.interval = '1h';
+    base.swMetric = 'sharpe';
+    base.swLookback = 7;          // from SMART_WALLET_DYNAMIC_LOOKBACKS
+    base.swToken = null;          // global (all tokens) by default
+    base.swMinDays = 3;
+    base.swMinVolume = 100000;
+    base.swMinRealized = 0;
+    base.swMinOi = 0;
+    base.smartShowWalletCount = true; // per-day qualifying-wallet count overlay
   }
   return base;
 }
