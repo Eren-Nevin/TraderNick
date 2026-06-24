@@ -37,6 +37,13 @@ async def trade_volume(request):
         over = float(request.args.get("over", "100000"))
     except ValueError:
         return response.json({"error": "under/over must be numbers"}, status=400)
+    # Optional taker-side filter for the SIZE buckets (sz chart): all (default) /
+    # buy / sell. Only narrows small/mid/large; the buyer/seller split (bs chart)
+    # always covers both sides.
+    side = request.args.get("side", "all")
+    if side not in ("all", "buy", "sell"):
+        return response.json({"error": "side must be all|buy|sell"}, status=400)
+    side_pred = "" if side == "all" else (" AND buy" if side == "buy" else " AND NOT buy")
 
     if not token:
         return response.json({"error": "missing token"}, status=400)
@@ -59,16 +66,18 @@ async def trade_volume(request):
             toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND))           AS bucket,
             sumIf(amount * price, buy)                                                              AS buyer_taker_usd,
             sumIf(amount * price, NOT buy)                                                          AS seller_taker_usd,
-            sumIf(amount * price, amount * price <  {{under:Float64}})                              AS small_usd,
+            sumIf(amount * price, amount * price <  {{under:Float64}}{side_pred})                   AS small_usd,
             sumIf(amount * price, amount * price >= {{under:Float64}}
-                                  AND amount * price <= {{over:Float64}})                          AS mid_usd,
-            sumIf(amount * price, amount * price >  {{over:Float64}})                               AS large_usd,
-            countIf(amount * price <  {{under:Float64}})                                            AS small_count,
+                                  AND amount * price <= {{over:Float64}}{side_pred})                AS mid_usd,
+            sumIf(amount * price, amount * price >  {{over:Float64}}{side_pred})                    AS large_usd,
+            countIf(amount * price <  {{under:Float64}}{side_pred})                                 AS small_count,
             countIf(amount * price >= {{under:Float64}}
-                    AND amount * price <= {{over:Float64}})                                         AS mid_count,
-            countIf(amount * price >  {{over:Float64}})                                             AS large_count,
+                    AND amount * price <= {{over:Float64}}{side_pred})                              AS mid_count,
+            countIf(amount * price >  {{over:Float64}}{side_pred})                                  AS large_count,
             countIf(buy)                                                                            AS buyer_count,
-            countIf(NOT buy)                                                                        AS seller_count
+            countIf(NOT buy)                                                                        AS seller_count,
+            sumIf(amount, buy)                                                                       AS buyer_taker_token,
+            sumIf(amount, NOT buy)                                                                   AS seller_taker_token
         FROM {table} FINAL
         WHERE token = {{token:String}}
           AND time >= {{since:DateTime64(3)}}
@@ -101,6 +110,8 @@ async def trade_volume(request):
             "large_count": int(r[8]),
             "buyer_count": int(r[9]),
             "seller_count": int(r[10]),
+            "buyer_taker_token": float(r[11]),
+            "seller_taker_token": float(r[12]),
         }
         for r in rows.result_rows
     ]

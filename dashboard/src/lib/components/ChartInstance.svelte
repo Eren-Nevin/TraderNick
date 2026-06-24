@@ -30,6 +30,7 @@
     BUYER_SELLER_PCT_LINES,
     BUYER_SELLER_RATIO_LINES,
     BUYER_SELLER_SERIES,
+    buyerSellerSeries,
     CHART_KIND_LABELS,
     LS_LINES,
     MA_COLORS,
@@ -805,7 +806,10 @@
   // button's "needs refresh" highlight.
   let swNeedsRefresh = $derived(
     isSwKind(instance.kind) &&
-      (!swArmed || swFiltersDirty || swTableKey() !== swArmedSelectionKey)
+      (!swArmed || swFiltersDirty || swTableKey() !== swArmedSelectionKey
+        // Dynamic never auto-loads, so the loaded view can also be stale vs the
+        // current oi_token / interval — flag those too (loadKey includes them).
+        || (instance.kind === 'smart_wallets_dynamic' && loadedKey !== '' && loadKey() !== loadedKey))
   );
 
   // The smart_wallets_table cache/load key for the TABLE view (the found-wallet
@@ -855,7 +859,7 @@
     }
     if (instance.kind === 'sz') {
       const ex = instance.exchange ?? 'binance';
-      return `${instance.kind}|${instance.token}|${ex}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}`;
+      return `${instance.kind}|${instance.token}|${ex}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}|${instance.szSide ?? 'all'}`;
     }
     if (instance.kind === 'transfer') {
       // Key encodes whether each axis is singleton or group so cache busts
@@ -1046,6 +1050,12 @@
     // other view may still load; a token/lookback/filter change does not).
     if (isSwKind(instance.kind)) {
       if (!swArmed || swTableKey() !== swArmedSelectionKey) return;
+      // Dynamic: NEVER auto-fetch on a view toggle or oi_token/interval change —
+      // only an explicit refresh (which sets swForceFreshNext) loads. Cached
+      // data for the new key is already restored above; otherwise the view
+      // stays as-is until the user picks a token and clicks refresh. (Fixed
+      // still auto-loads view toggles, which are cheap.)
+      if (instance.kind === 'smart_wallets_dynamic' && !swForceFreshNext) return;
       const ff = swForceFreshNext;
       swForceFreshNext = false;
       void load(ff);
@@ -2810,7 +2820,8 @@
             ...baseQS,
             exchange: instance.exchange ?? 'binance',
             under: String(instance.under ?? 10000),
-            over: String(instance.over ?? 100000)
+            over: String(instance.over ?? 100000),
+            side: instance.szSide ?? 'all'
           })}`;
           pickArr = (b) => (b.buckets ?? []) as AnyDatum[];
           break;
@@ -4213,9 +4224,12 @@
   // bs display mode: 'stacked' (bars), 'ratio' (Buyer/Seller line), 'both'
   // (bars + ratio line on a secondary axis), or 'pct' (two %-share lines).
   let bsMode = $derived(instance.bsDisplay ?? 'stacked');
+  // bs taker-volume denomination — USD (default) or token amount. Reuses the
+  // shared volumeUnit field; display-only (both values ride each bucket).
+  let bsUnit = $derived<'usd' | 'token'>((instance.volumeUnit ?? 'usd') === 'token' ? 'token' : 'usd');
   // Bars only in stacked/both modes (ratio + pct are pure line charts).
   let bsBars = $derived(
-    ((bsMode === 'stacked' || bsMode === 'both') && instance.showPoint) ? BUYER_SELLER_SERIES : []
+    ((bsMode === 'stacked' || bsMode === 'both') && instance.showPoint) ? buyerSellerSeries(bsUnit) : []
   );
   // StackedBarChart overlay lines: the ratio line (secondary axis) in 'both'
   // mode, plus the MA / %-buyer overlays when an MA is enabled.
@@ -6372,6 +6386,21 @@
             <option value="both">Both</option>
             <option value="pct">% Buyer / Seller</option>
           </select>
+          {#if (instance.bsDisplay ?? 'stacked') === 'stacked' || instance.bsDisplay === 'both'}
+            <!-- Taker-volume denomination — USD notional vs token amount. Only
+                 meaningful for the bar modes (ratio / % are unit-independent).
+                 Reuses volumeUnit; both values are in each bucket so it's a
+                 pure display toggle. -->
+            <select
+              value={instance.volumeUnit ?? 'usd'}
+              onchange={(e) => (instance.volumeUnit = e.currentTarget.value as 'usd' | 'token')}
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+              title="Show taker volume in USD notional or token amount"
+            >
+              <option value="usd">USD</option>
+              <option value="token">{instance.token ?? 'Token'}</option>
+            </select>
+          {/if}
         {/if}
         {#if instance.kind === 'ps'}
           <!-- Perp vs Spot series: 'All' shows the basis bars + the volume-ratio
@@ -6402,6 +6431,18 @@
             {#each sizeLineSeries(instance.under ?? 10000, instance.over ?? 100000) as s (s.key)}
               <option value={s.key}>{s.label}</option>
             {/each}
+          </select>
+          <!-- Taker-side filter: restrict the size buckets to buyer-taker or
+               seller-taker trades (or all). Changes the data → refetches. -->
+          <select
+            value={instance.szSide ?? 'all'}
+            onchange={(e) => (instance.szSide = e.currentTarget.value as 'all' | 'buy' | 'sell')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Restrict size buckets to buyer-taker, seller-taker, or all trades"
+          >
+            <option value="all">All trades</option>
+            <option value="buy">Buyer taker</option>
+            <option value="sell">Seller taker</option>
           </select>
         {/if}
         {#if (instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl') || effectiveKind === 'hl_smart_oi'}
@@ -7711,6 +7752,7 @@
         data={data as VolumeBucket[]}
         series={bsBars}
         lines={bsLinesM}
+        valueFormat={bsUnit === 'token' ? 'token' : 'usd'}
         bars
         height={chartCanvasHeight}
         {xExtent}

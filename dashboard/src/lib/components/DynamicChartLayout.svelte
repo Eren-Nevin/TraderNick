@@ -281,6 +281,21 @@
     }
     closeCtx();
   }
+  // Duplicate the right-clicked chart in place: deep-clone its config, give it
+  // a fresh id (so it's a distinct widget with its own data/cache slot), and
+  // insert it right after the original.
+  function copyChart() {
+    const id = ctxMenu.chartId;
+    const idx = instances.findIndex((i) => i.id === id);
+    if (idx < 0 || instances.length >= MAX_CHARTS) { closeCtx(); return; }
+    const clone = structuredClone($state.snapshot(instances[idx])) as ChartInstanceT;
+    clone.id =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    instances = [...instances.slice(0, idx + 1), clone, ...instances.slice(idx + 1)];
+    closeCtx();
+  }
   function onWindowKey(e: KeyboardEvent) {
     if (e.key === 'Escape' && ctxMenu.open) closeCtx();
   }
@@ -1386,6 +1401,15 @@
     tabindex="-1"
     oncontextmenu={(e) => e.preventDefault()}
   >
+    <button
+      type="button"
+      class="w-full text-left px-3 py-1.5 hover:bg-zinc-800 text-zinc-200 disabled:opacity-40 disabled:cursor-not-allowed"
+      role="menuitem"
+      onmouseenter={() => (ctxSubOpen = false)}
+      onclick={copyChart}
+      disabled={instances.length >= MAX_CHARTS}
+      title={instances.length >= MAX_CHARTS ? `Page is full (max ${MAX_CHARTS} charts)` : 'Duplicate this chart on this page'}
+    >Duplicate</button>
     <div
       class="relative flex items-center justify-between gap-3 px-3 py-1.5 cursor-default hover:bg-zinc-800"
       role="menuitem"

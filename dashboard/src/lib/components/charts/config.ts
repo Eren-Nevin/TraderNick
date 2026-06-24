@@ -217,6 +217,18 @@ export const BUYER_SELLER_SERIES = [
   { key: 'seller_taker_usd', label: 'Seller', color: '#ef4444' }
 ];
 
+// Unit-aware taker buyer/seller stacked-bar series. USD reads *_taker_usd;
+// token reads *_taker_token (both come in each /trade_volume bucket, so the
+// toggle is display-only — no refetch).
+export function buyerSellerSeries(unit: 'usd' | 'token') {
+  return unit === 'token'
+    ? [
+        { key: 'buyer_taker_token', label: 'Buyer', color: '#22c55e' },
+        { key: 'seller_taker_token', label: 'Seller', color: '#ef4444' }
+      ]
+    : BUYER_SELLER_SERIES;
+}
+
 export const BUYER_SELLER_LINES = [
   {
     key: 'buyer_pct',
@@ -1600,6 +1612,9 @@ export type ChartInstance = {
   over?: number;
   underInput?: string;
   overInput?: string;
+  /** sz only: taker-side filter for the size buckets — 'all' (default, both
+   *  sides), 'buy' (buyer-taker trades only), or 'sell' (seller-taker only). */
+  szSide?: 'all' | 'buy' | 'sell';
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2450,6 +2465,7 @@ export function newChartInstance(
     base.underInput = '10000';
     base.overInput = '100000';
     base.exchange = 'binance';
+    base.szSide = 'all';
   }
   if (kind === 'bs') {
     base.exchange = 'binance';
@@ -2742,7 +2758,8 @@ export function newChartInstance(
     base.swMinAnnualizedSharpe = 2;
     base.swMinAvgOiShare = 0.1;   // 0.01% units (30 = 0.30%) → 0.1 = 0.001%
     base.swMinVolume = 0;
-    base.smartShowWalletCount = true; // per-day qualifying-wallet count overlay
+    base.swShowClose = true;          // overlay the token's close price by default
+    base.smartShowWalletCount = false; // per-day wallet-count overlay off by default
   }
   return base;
 }

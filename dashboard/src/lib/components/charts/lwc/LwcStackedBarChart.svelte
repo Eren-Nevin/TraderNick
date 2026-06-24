@@ -45,7 +45,7 @@
     onView,
     hoverTime = null,
     onHover,
-    valueFormat = 'usd' as 'usd' | 'pct',
+    valueFormat = 'usd' as 'usd' | 'pct' | 'token',
     pctMax = 100,
     bars = false
   }: {
@@ -66,9 +66,10 @@
     bars?: boolean;
     /** How the stacked series values are denominated. 'usd' (default) formats
      *  the axis/tooltip as dollars and shows a separate %-of-total column.
-     *  'pct' means the values ARE percentages (e.g. a 100%-stack), so the axis
+     *  'token' formats as a plain K/M/B amount (no $). 'pct' means the values
+     *  ARE percentages (e.g. a 100%-stack), so the axis
      *  shows % and the tooltip drops the redundant dollar column. */
-    valueFormat?: 'usd' | 'pct';
+    valueFormat?: 'usd' | 'pct' | 'token';
     /** pct-mode only: the fixed top of the pinned axis. 100 for a single
      *  100%-stack; 200 for two stacks combined (e.g. asks-on-bids). */
     pctMax?: number;
@@ -118,11 +119,22 @@
     return `$${v.toFixed(0)}`;
   }
 
+  function fmtAmt(v: number): string {
+    const abs = Math.abs(v);
+    if (abs >= 1e9) return `${(v / 1e9).toFixed(2)}B`;
+    if (abs >= 1e6) return `${(v / 1e6).toFixed(2)}M`;
+    if (abs >= 1e3) return `${(v / 1e3).toFixed(1)}K`;
+    return `${v.toFixed(2)}`;
+  }
   function fmtPct(v: number): string {
     return `${v.toFixed(0)}%`;
   }
   function fmtRatio(v: number): string {
     return v.toFixed(2);
+  }
+  // Stacked-value formatter for the active denomination.
+  function fmtVal(v: number): string {
+    return valueFormat === 'pct' ? fmtPct(v) : valueFormat === 'token' ? fmtAmt(v) : fmtUsd(v);
   }
 
   onMount(() => {
@@ -208,7 +220,7 @@
         priceScaleId: 'right',
         priceFormat: {
           type: 'custom' as const,
-          formatter: valueFormat === 'pct' ? fmtPct : fmtUsd,
+          formatter: fmtVal,
           minMove: 0.01
         },
         // Pin the axis FLOOR to 0 so band thicknesses are honest proportions.
@@ -288,7 +300,7 @@
               ? { type: 'custom', formatter: fmtPct, minMove: 0.01 }
               : ln.scale === 'ratio'
                 ? { type: 'custom', formatter: fmtRatio, minMove: 0.01 }
-                : { type: 'custom', formatter: fmtUsd, minMove: 0.01 },
+                : { type: 'custom', formatter: fmtVal, minMove: 0.01 },
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false
@@ -390,7 +402,7 @@
             {#if valueFormat === 'pct'}
               <span class="w-20 text-right">{v.toFixed(1)}%</span>
             {:else}
-              <span class="w-20 text-right">{fmtUsd(v)}</span>
+              <span class="w-20 text-right">{fmtVal(v)}</span>
               <span class="w-14 text-right text-zinc-500">{pct.toFixed(1)}%</span>
             {/if}
           </div>
@@ -401,7 +413,7 @@
           {#if valueFormat === 'pct'}
             <span class="w-20 text-right">{hoverTotal.toFixed(1)}%</span>
           {:else}
-            <span class="w-20 text-right">{fmtUsd(hoverTotal)}</span>
+            <span class="w-20 text-right">{fmtVal(hoverTotal)}</span>
             <span class="w-14 text-right text-zinc-500">100.0%</span>
           {/if}
         </div>

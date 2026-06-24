@@ -37,6 +37,8 @@ export type VolumeBucket = {
   large_count: number;
   buyer_count: number;
   seller_count: number;
+  buyer_taker_token: number;
+  seller_taker_token: number;
 };
 
 export type TradeVolumeResponse = {
