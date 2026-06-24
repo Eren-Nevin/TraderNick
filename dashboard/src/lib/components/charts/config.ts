@@ -361,6 +361,21 @@ export function sizeLineSeries(under: number, over: number) {
   ];
 }
 
+// sz "Buyer vs Seller (taker)" mode: two lines ($ notional) — buyer-taker and
+// seller-taker — for the chosen bracket. `bracket` is the seriesFilter value
+// ('all' or a sizeLineSeries key); 'all' uses the whole-book taker totals.
+export function takerSplitLines(bracket: string | undefined, under: number, over: number) {
+  const span =
+    bracket === 'small_usd' ? { lbl: `< $${under}`, b: 'small_buyer_usd', s: 'small_seller_usd' } as const
+    : bracket === 'mid_usd' ? { lbl: `$${under}–$${over}`, b: 'mid_buyer_usd', s: 'mid_seller_usd' } as const
+    : bracket === 'large_usd' ? { lbl: `> $${over}`, b: 'large_buyer_usd', s: 'large_seller_usd' } as const
+    : { lbl: 'all sizes', b: 'buyer_taker_usd', s: 'seller_taker_usd' } as const;
+  return [
+    { key: 'tk_buyer',  label: `Buyer taker (${span.lbl})`,  color: '#22c55e', compute: (d: VolumeBucket) => (d[span.b] ?? 0) as number },
+    { key: 'tk_seller', label: `Seller taker (${span.lbl})`, color: '#ef4444', compute: (d: VolumeBucket) => (d[span.s] ?? 0) as number }
+  ];
+}
+
 export function sizeLines(under: number, over: number) {
   return [
     {
@@ -1615,6 +1630,10 @@ export type ChartInstance = {
   /** sz only: taker-side filter for the size buckets — 'all' (default, both
    *  sides), 'buy' (buyer-taker trades only), or 'sell' (seller-taker only). */
   szSide?: 'all' | 'buy' | 'sell';
+  /** sz only: display mode. 'total' (default) plots the small/mid/large bucket
+   *  totals; 'taker_split' plots the CHOSEN bracket split into buyer-taker vs
+   *  seller-taker, so the two can be compared. */
+  szMode?: 'total' | 'taker_split';
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to

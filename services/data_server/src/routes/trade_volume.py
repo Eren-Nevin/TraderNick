@@ -77,7 +77,17 @@ async def trade_volume(request):
             countIf(buy)                                                                            AS buyer_count,
             countIf(NOT buy)                                                                        AS seller_count,
             sumIf(amount, buy)                                                                       AS buyer_taker_token,
-            sumIf(amount, NOT buy)                                                                   AS seller_taker_token
+            sumIf(amount, NOT buy)                                                                   AS seller_taker_token,
+            -- Per-bracket taker-side split ($ notional), for the sz "Buyer vs
+            -- Seller (taker)" mode. Always both sides (independent of side_pred).
+            sumIf(amount * price, amount * price <  {{under:Float64}} AND buy)                        AS small_buyer_usd,
+            sumIf(amount * price, amount * price <  {{under:Float64}} AND NOT buy)                    AS small_seller_usd,
+            sumIf(amount * price, amount * price >= {{under:Float64}}
+                                  AND amount * price <= {{over:Float64}} AND buy)                     AS mid_buyer_usd,
+            sumIf(amount * price, amount * price >= {{under:Float64}}
+                                  AND amount * price <= {{over:Float64}} AND NOT buy)                 AS mid_seller_usd,
+            sumIf(amount * price, amount * price >  {{over:Float64}} AND buy)                         AS large_buyer_usd,
+            sumIf(amount * price, amount * price >  {{over:Float64}} AND NOT buy)                     AS large_seller_usd
         FROM {table} FINAL
         WHERE token = {{token:String}}
           AND time >= {{since:DateTime64(3)}}
@@ -112,6 +122,12 @@ async def trade_volume(request):
             "seller_count": int(r[10]),
             "buyer_taker_token": float(r[11]),
             "seller_taker_token": float(r[12]),
+            "small_buyer_usd": float(r[13]),
+            "small_seller_usd": float(r[14]),
+            "mid_buyer_usd": float(r[15]),
+            "mid_seller_usd": float(r[16]),
+            "large_buyer_usd": float(r[17]),
+            "large_seller_usd": float(r[18]),
         }
         for r in rows.result_rows
     ]

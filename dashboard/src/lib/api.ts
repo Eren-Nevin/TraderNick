@@ -39,6 +39,12 @@ export type VolumeBucket = {
   seller_count: number;
   buyer_taker_token: number;
   seller_taker_token: number;
+  small_buyer_usd: number;
+  small_seller_usd: number;
+  mid_buyer_usd: number;
+  mid_seller_usd: number;
+  large_buyer_usd: number;
+  large_seller_usd: number;
 };
 
 export type TradeVolumeResponse = {

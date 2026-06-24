@@ -50,6 +50,7 @@
     lookbackWindow,
     maArray,
     sizeLineSeries,
+    takerSplitLines,
     unixSec,
     weekBoundariesSec,
     AAVE_V3_CHART_KINDS,
@@ -4261,6 +4262,14 @@
       : []),
     ...pickMA(cumulativeLines, instance.seriesFilter)
   ]);
+  // sz "Buyer vs Seller (taker)" mode: two lines (buyer-taker, seller-taker) for
+  // the chosen bracket. Display-only (the split fields are always in the
+  // response). Point-gated like the bucket lines.
+  let szTakerSplitLinesD = $derived(
+    instance.showPoint
+      ? takerSplitLines(instance.seriesFilter, instance.under ?? 10000, instance.over ?? 100000)
+      : []
+  );
   // OI lines: Binance is always the single total line. HL switches by
   // the oiHlDisplay selector — 'total' matches Binance shape exactly,
   // 'long'/'short' shows just that side, 'long_short' shows two, and
@@ -5233,7 +5242,7 @@
     else if (instance.kind === 'tt') primaryLines = ttLinesD;
     else if (instance.kind === 'ls') primaryLines = lsLinesD;
     else if (instance.kind === 'bs') primaryLines = bsMode === 'ratio' ? bsRatioLinesD : bsMode === 'pct' ? bsPctLinesD : bsLines;
-    else if (instance.kind === 'sz') primaryLines = szLinesD;
+    else if (instance.kind === 'sz') primaryLines = (instance.szMode === 'taker_split' ? szTakerSplitLinesD : szLinesD);
     else if (instance.kind === 'transfer') primaryLines = transferLinesD;
     else if (instance.kind === 'exchange_flow') primaryLines = exchangeFlowLinesD;
     else if (instance.kind === 'hl_unrealized_pnl') primaryLines = hlUnrealizedLinesD;
@@ -5362,6 +5371,7 @@
   let bsRatioLinesM      = $derived(overlayLinesD.length === 0 ? bsRatioLinesD : [...bsRatioLinesD, ...overlayLinesD]);
   let bsPctLinesM        = $derived(overlayLinesD.length === 0 ? bsPctLinesD : [...bsPctLinesD, ...overlayLinesD]);
   let szLinesM           = $derived(overlayLinesD.length === 0 ? szLinesD : [...szLinesD, ...overlayLinesD]);
+  let szTakerSplitLinesM = $derived(overlayLinesD.length === 0 ? szTakerSplitLinesD : [...szTakerSplitLinesD, ...overlayLinesD]);
   let ttLinesM           = $derived(overlayLinesD.length === 0 ? ttLinesD : [...ttLinesD, ...overlayLinesD]);
   let lsLinesM           = $derived(overlayLinesD.length === 0 ? lsLinesD : [...lsLinesD, ...overlayLinesD]);
   let transferLinesM     = $derived(overlayLinesD.length === 0 ? transferLinesD : [...transferLinesD, ...overlayLinesD]);
@@ -6418,9 +6428,21 @@
           </select>
         {/if}
         {#if instance.kind === 'sz'}
+          <!-- Mode: bucket totals vs the chosen bracket split into buyer-taker
+               vs seller-taker. Display-only (the split fields ride each bucket). -->
+          <select
+            value={instance.szMode ?? 'total'}
+            onchange={(e) => (instance.szMode = e.currentTarget.value as 'total' | 'taker_split')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Show bucket totals, or split the chosen bracket into buyer-taker vs seller-taker"
+          >
+            <option value="total">Size totals</option>
+            <option value="taker_split">Buyer vs Seller (taker)</option>
+          </select>
           <!-- Volume-by-Size series selector: 'All' shows every bucket line;
                picking one isolates that bucket (and its MA). Options come from
-               the same bucket catalogue so labels track the $ thresholds. -->
+               the same bucket catalogue so labels track the $ thresholds. In
+               taker-split mode it picks WHICH bracket to split. -->
           <select
             value={instance.seriesFilter ?? 'all'}
             onchange={(e) => (instance.seriesFilter = e.currentTarget.value)}
@@ -6432,18 +6454,21 @@
               <option value={s.key}>{s.label}</option>
             {/each}
           </select>
-          <!-- Taker-side filter: restrict the size buckets to buyer-taker or
-               seller-taker trades (or all). Changes the data → refetches. -->
-          <select
-            value={instance.szSide ?? 'all'}
-            onchange={(e) => (instance.szSide = e.currentTarget.value as 'all' | 'buy' | 'sell')}
-            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-            title="Restrict size buckets to buyer-taker, seller-taker, or all trades"
-          >
-            <option value="all">All trades</option>
-            <option value="buy">Buyer taker</option>
-            <option value="sell">Seller taker</option>
-          </select>
+          {#if (instance.szMode ?? 'total') === 'total'}
+            <!-- Taker-side filter (totals mode only): restrict the size buckets to
+                 buyer-taker or seller-taker trades (or all). Changes the data →
+                 refetches. (The split mode shows both sides already.) -->
+            <select
+              value={instance.szSide ?? 'all'}
+              onchange={(e) => (instance.szSide = e.currentTarget.value as 'all' | 'buy' | 'sell')}
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+              title="Restrict size buckets to buyer-taker, seller-taker, or all trades"
+            >
+              <option value="all">All trades</option>
+              <option value="buy">Buyer taker</option>
+              <option value="sell">Seller taker</option>
+            </select>
+          {/if}
         {/if}
         {#if (instance.kind === 'oi' && (instance.exchange ?? 'binance') === 'hl') || effectiveKind === 'hl_smart_oi'}
           <!-- HL-only display selector. position_history carries per-wallet
@@ -7763,11 +7788,12 @@
         vRefLines={weekVRefLines}
       />
     {:else if instance.kind === 'sz'}
-      <!-- Volume by Size as independent lines (small / mid / large $), not a
-           stack — so each bucket's absolute USD reads directly off its own line. -->
+      <!-- Volume by Size. 'total': independent bucket lines (small / mid / large
+           $). 'taker_split': the chosen bracket split into buyer-taker vs
+           seller-taker $ for comparison. -->
       <LineChart
         data={data as VolumeBucket[]}
-        lines={szLinesM}
+        lines={instance.szMode === 'taker_split' ? szTakerSplitLinesM : szLinesM}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
