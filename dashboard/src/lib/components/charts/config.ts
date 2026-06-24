@@ -415,6 +415,7 @@ export type ChartKind =
   | 'tt'
   | 'ls'
   | 'ps'
+  | 'realized_price'
   | 'token_leaderboard'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
@@ -549,6 +550,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   tt: 'Top Traders L/S',
   ls: 'Long/Short',
   ps: 'Perp vs Spot',
+  realized_price: 'Realized Price',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1315,6 +1317,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   if (kind === 'ohlcv' || kind === 'price' || kind === 'price_ratio' || kind === 'pc' || kind === 'oi' || kind === 'vol_oi' || kind === 'volume' || kind === 'fr'
       || kind === 'book_depth'
       || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls' || kind === 'ps'
+      || kind === 'realized_price'
       || kind === 'token_leaderboard') {
     return 'Exchange';
   }
@@ -1634,6 +1637,14 @@ export type ChartInstance = {
    *  totals; 'taker_split' plots the CHOSEN bracket split into buyer-taker vs
    *  seller-taker, so the two can be compared. */
   szMode?: 'total' | 'taker_split';
+  /** realized_price only: 'price' (default) plots realized + current price;
+   *  'diff' plots realized price + the % difference of current vs realized;
+   *  'diff_only' plots just the % difference. */
+  rpMode?: 'price' | 'diff' | 'diff_only';
+  /** realized_price only: lookback for the VWAP — 'all' (default, from the
+   *  first record) or a trailing window of N days. Affects the calculation, so
+   *  it's in the load key. */
+  rpLookback?: 'all' | '1' | '7' | '14' | '30' | '90';
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2516,6 +2527,14 @@ export function newChartInstance(
     // Perp vs Spot is inherently Binance (perp + spot OHLCV); no exchange
     // selector. Default to showing both series.
     base.psSeries = 'all';
+  }
+  if (kind === 'realized_price') {
+    // Cumulative VWAP ("realized" / average entry price) of Binance SPOT, from
+    // the first record. Spot-only (no exchange selector); default to showing
+    // realized + current price.
+    base.exchange = 'binance_spot';
+    base.rpMode = 'price';
+    base.rpLookback = 'all';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

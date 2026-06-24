@@ -862,6 +862,11 @@
       const ex = instance.exchange ?? 'binance';
       return `${instance.kind}|${instance.token}|${ex}|${instance.interval}|${instance.under ?? 0}|${instance.over ?? 0}|${instance.szSide ?? 'all'}`;
     }
+    if (instance.kind === 'realized_price') {
+      // rpLookback changes the VWAP calculation → in the key; rpMode is
+      // display-only (both fields ride each row), so it's NOT.
+      return `${instance.kind}|${instance.token}|${instance.interval}|lb:${instance.rpLookback ?? 'all'}`;
+    }
     if (instance.kind === 'transfer') {
       // Key encodes whether each axis is singleton or group so cache busts
       // when the user toggles between e.g. ETH-USDC and EVM-USDC.
@@ -2653,6 +2658,16 @@
           ohlcvQs.set('exchange', instance.exchange ?? 'binance');
           url = `/api/ohlcv?${ohlcvQs}`;
           pickArr = (b) => (b.candles ?? []) as AnyDatum[];
+          break;
+        }
+        case 'realized_price': {
+          // Cumulative VWAP (realized/avg-entry price) of Binance spot from
+          // inception + the bucket's current price. Spot-only.
+          const rpQs = new URLSearchParams(baseQS);
+          rpQs.set('exchange', 'binance_spot');
+          rpQs.set('lookback', instance.rpLookback ?? 'all');
+          url = `/api/realized_price?${rpQs}`;
+          pickArr = (b) => (b.series ?? []) as AnyDatum[];
           break;
         }
         case 'pc': {
@@ -5392,6 +5407,27 @@
         (instance.volumeUnit ?? 'usd') === 'token' ? (d.volume ?? 0) : (d.volume_usd ?? 0)
     }
   ]);
+  // realized_price modes (display-only — both fields ride each row):
+  //  'price'     = realized + current price (both USD, primary axis)
+  //  'diff'      = realized price (primary) + % of current vs realized (secondary)
+  //  'diff_only' = just the % difference, alone, on the primary axis
+  let rpLinesD = $derived.by(() => {
+    type RPRow = { time: number; realized_price?: number; current_price?: number };
+    const realized = { key: 'realized_price', label: 'Realized price', color: '#fbbf24',
+      compute: (d: RPRow) => d.realized_price ?? NaN };
+    const pct = (d: RPRow) => {
+      const r = d.realized_price ?? 0;
+      return r ? (((d.current_price ?? 0) - r) / r) * 100 : NaN;
+    };
+    if (instance.rpMode === 'diff_only') {
+      return [{ key: 'pct_diff', label: '% vs realized', color: '#06b6d4', compute: pct }];
+    }
+    if (instance.rpMode === 'diff') {
+      return [realized, { key: 'pct_diff', label: '% vs realized', color: '#06b6d4', axis: 'secondary' as const, compute: pct }];
+    }
+    return [realized, { key: 'current_price', label: 'Current price', color: '#06b6d4',
+      compute: (d: RPRow) => d.current_price ?? NaN }];
+  });
   // ps (Perp vs Spot): the spot/perp volume-ratio line. Two variants — on the
   // SECONDARY (left) axis when shown alongside the basis bars ('all'), or on the
   // primary axis when it's the only series ('volume').
@@ -6426,6 +6462,35 @@
             <option value="all">All</option>
             <option value="basis">Basis (pp)</option>
             <option value="volume">Volume %</option>
+          </select>
+        {/if}
+        {#if instance.kind === 'realized_price'}
+          <!-- Realized Price view: realized + current price, or realized + the
+               % difference of current vs realized. Display-only (no refetch). -->
+          <select
+            value={instance.rpMode ?? 'price'}
+            onchange={(e) => (instance.rpMode = e.currentTarget.value as 'price' | 'diff' | 'diff_only')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Show realized + current price, realized + the % difference, or just the % difference"
+          >
+            <option value="price">Realized + Price</option>
+            <option value="diff">Realized + % Diff</option>
+            <option value="diff_only">% Diff only</option>
+          </select>
+          <!-- Lookback for the VWAP: from the first record, or a trailing window.
+               Changes the calculation → refetches. -->
+          <select
+            value={instance.rpLookback ?? 'all'}
+            onchange={(e) => (instance.rpLookback = e.currentTarget.value as 'all' | '1' | '7' | '14' | '30' | '90')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Lookback window for the realized-price VWAP"
+          >
+            <option value="all">All (from start)</option>
+            <option value="1">1d</option>
+            <option value="7">7d</option>
+            <option value="14">14d</option>
+            <option value="30">30d</option>
+            <option value="90">90d</option>
           </select>
         {/if}
         {#if instance.kind === 'sz'}
@@ -7612,6 +7677,29 @@
         vRefLines={weekVRefLines}
         formatY={volUseToken ? fmtAmountAxis : fmtUsdAxis}
         formatTooltip={volUseToken ? fmtAmountTooltip : fmtUsdTooltip}
+      />
+    {:else if instance.kind === 'realized_price'}
+      <!-- Realized (cumulative-VWAP / avg-entry) price of Binance spot. 'price'
+           mode: realized + current price on the USD axis. 'diff' mode: realized
+           price (USD) + the % of current vs realized on a secondary axis. -->
+      {@const rpDiffOnly = instance.rpMode === 'diff_only'}
+      <LineChart
+        data={data as unknown as Array<{ time: number; realized_price?: number; current_price?: number }>}
+        lines={rpLinesD}
+        refLines={instance.rpMode === 'diff'
+          ? [{ value: 0, axis: 'secondary', color: '#52525b', label: '0%' }]
+          : rpDiffOnly ? [{ value: 0, color: '#52525b', label: '0%' }] : []}
+        height={chartCanvasHeight}
+        {xExtent}
+        view={effectiveView}
+        onView={handleView}
+        hoverTime={effectiveHoverTime}
+        onHover={handleHover}
+        vRefLines={weekVRefLines}
+        formatY={rpDiffOnly ? ((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`) : fmtPriceAxis}
+        formatTooltip={rpDiffOnly ? ((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`) : fmtPriceTooltip}
+        formatY2={instance.rpMode === 'diff' ? ((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`) : undefined}
+        formatTooltip2={instance.rpMode === 'diff' ? ((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`) : undefined}
       />
     {:else if instance.kind === 'fr'}
       <SignedBarChart

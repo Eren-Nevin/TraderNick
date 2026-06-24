@@ -33,7 +33,7 @@
      *  only — never plotted. */
     pct?: (d: Datum, i: number, data: Datum[]) => number;
   };
-  type RefLine = { value: number; label?: string; color?: string };
+  type RefLine = { value: number; label?: string; color?: string; axis?: 'primary' | 'secondary' };
   type VRefLine = { time: number; color?: string; dash?: string };
 
   let {
@@ -251,14 +251,19 @@
   // Horizontal reference lines — recreated against the first primary series.
   $effect(() => {
     let primaryEntry: LineEntry | null = null;
+    let secondaryEntry: LineEntry | null = null;
     for (const entry of lineSeries.values()) {
       for (const pl of entry.priceLines) entry.series.removePriceLine(pl);
       entry.priceLines = [];
       if (primaryEntry === null && entry.axis === 'primary') primaryEntry = entry;
+      if (secondaryEntry === null && entry.axis === 'secondary') secondaryEntry = entry;
     }
-    if (!primaryEntry) return;
     for (const r of refLines) {
-      const pl = primaryEntry.series.createPriceLine({
+      // A price line lives on its host series' scale, so a secondary-axis ref
+      // (e.g. the 0% line for a % series) must be drawn on a secondary series.
+      const host = r.axis === 'secondary' ? secondaryEntry : primaryEntry;
+      if (!host) continue;
+      const pl = host.series.createPriceLine({
         price: r.value,
         color: r.color ?? '#71717a',
         lineStyle: LineStyle.Dashed,
@@ -266,7 +271,7 @@
         axisLabelVisible: true,
         title: r.label ?? ''
       });
-      primaryEntry.priceLines.push(pl);
+      host.priceLines.push(pl);
     }
   });
 

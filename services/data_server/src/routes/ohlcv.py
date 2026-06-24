@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from sanic import Blueprint, response
 
@@ -198,3 +198,105 @@ async def ohlcv(request):
         for r in rows.result_rows
     ]
     return response.json({"token": token, "exchange": exchange, "interval": interval, "candles": candles})
+
+
+@bp.get("/realized_price")
+async def realized_price(request):
+    """Cumulative volume-weighted average traded price (the market's "realized"
+    / average entry price) per bucket, built from the 1-minute OHLCV as a fast
+    approximation of the per-trade VWAP: Σ(close·volume) / Σ(volume), accumulated
+    from the FIRST record we have (not just the requested window) — so each
+    bucket's value reflects all history up to and including it.
+
+    Returns one row per bucket in [since, until]:
+      realized_price — cumulative Σ(close·volume)/Σ(volume) through this bucket
+      current_price  — the bucket's last close (spot price then)
+    The client renders realized + current, or realized + their % difference.
+    Defaults to Binance spot; any _OHLCV_TABLE exchange works.
+    """
+    token = request.args.get("token")
+    exchange = request.args.get("exchange", "binance_spot")
+    interval = request.args.get("interval", "1h")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    limit = int(request.args.get("limit", "200000"))
+
+    if not token:
+        return response.json({"error": "missing token"}, status=400)
+    if exchange not in _OHLCV_TABLE:
+        return response.json({"error": f"exchange must be one of {list(_OHLCV_TABLE)}"}, status=400)
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+
+    # Lookback for the VWAP: 'all' (default, from inception) or a trailing window
+    # of N days. A windowed lookback uses a RANGE frame (seconds offset, a SQL
+    # literal since CH rejects params in frame bounds) and only needs data from
+    # (since − lookback) onward; 'all' uses an unbounded prefix sum from
+    # inception.
+    lookback = request.args.get("lookback", "all")
+    if lookback not in ("all", "1", "7", "14", "30", "90"):
+        return response.json({"error": "lookback must be all|1|7|14|30|90"}, status=400)
+
+    seconds = INTERVAL_SECONDS[interval]
+    since_dt = _parse_iso(since)
+    until_dt = _parse_iso(until)
+    table = _OHLCV_TABLE[exchange]
+
+    if lookback == "all":
+        frame = "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+        lower_bound = ""
+    else:
+        frame = f"RANGE BETWEEN {int(lookback) * 86400} PRECEDING AND CURRENT ROW"
+        lower_bound = " AND time >= {fetch_start:DateTime}"
+
+    params = {
+        "seconds": seconds, "token": token,
+        "since": since_dt, "until": until_dt, "limit": limit,
+    }
+    if lookback != "all":
+        params["fetch_start"] = since_dt - timedelta(days=int(lookback))
+
+    ch = await client()
+    # per_bucket: Σ(close·volume) + Σ(volume) per bucket. running: prefix/rolling
+    # sums ordered by bucket TIMESTAMP (numeric, required for the RANGE frame).
+    # The outer WHERE clips to the display window AFTER the sums are formed.
+    rows = await ch.query(
+        f"""
+        SELECT
+            ts                                            AS time,
+            win_pv / nullIf(win_v, 0)                     AS realized_price,
+            last_close                                    AS current_price
+        FROM (
+            SELECT
+                ts, last_close,
+                sum(pv) OVER (ORDER BY ts {frame}) AS win_pv,
+                sum(v)  OVER (ORDER BY ts {frame}) AS win_v
+            FROM (
+                SELECT
+                    toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS ts,
+                    sum(close * volume)  AS pv,
+                    sum(volume)          AS v,
+                    argMax(close, time)  AS last_close
+                FROM {table} FINAL
+                WHERE token = {{token:String}} AND time < {{until:DateTime}}{lower_bound}
+                GROUP BY ts
+            )
+        )
+        WHERE ts >= toUnixTimestamp({{since:DateTime}})
+        ORDER BY ts
+        LIMIT {{limit:UInt32}}
+        """,
+        parameters=params,
+    )
+
+    series = [
+        {
+            "time": int(r[0]),
+            "realized_price": (float(r[1]) if r[1] is not None else None),
+            "current_price": float(r[2]),
+        }
+        for r in rows.result_rows
+    ]
+    return response.json({"token": token, "exchange": exchange, "interval": interval, "series": series})
