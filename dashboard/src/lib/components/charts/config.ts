@@ -2519,7 +2519,7 @@ export function newChartInstance(
   }
   if (kind === 'ohlcv') {
     base.pin = false;
-    base.volumeUnit = 'token';
+    base.volumeUnit = 'usd';
   }
   if (kind === 'fr') {
     base.frDisplay = 'rate8h';

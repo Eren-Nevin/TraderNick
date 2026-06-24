@@ -3353,7 +3353,8 @@
   let ohlcvCandles = $derived.by(() => {
     if (instance.kind !== 'ohlcv') return [] as Candle[];
     const src = data as Candle[];
-    if ((instance.volumeUnit ?? 'token') !== 'usd') return src;
+    // Default to USD notional; token (raw coin volume) is the opt-in.
+    if ((instance.volumeUnit ?? 'usd') !== 'usd') return src;
     return src.map((c) => ({
       ...c,
       volume: c.volume_usd ?? c.volume,
@@ -6523,9 +6524,11 @@
             <option value="token">{instance.token ?? 'Token'}</option>
           </select>
         {/if}
-        {#if instance.kind === 'volume'}
-          <!-- Volume unit: dollar notional (sum of per-1m volume×close) vs
-               token amount. Reuses the shared volumeUnit field. -->
+        {#if instance.kind === 'volume' || instance.kind === 'ohlcv'}
+          <!-- Volume unit: dollar notional vs token amount. For ohlcv it
+               denominates the candle chart's volume sub-pane; for the volume
+               kind it's the plotted line. Reuses the shared volumeUnit field;
+               display-only (both ride each candle). -->
           <select
             value={instance.volumeUnit ?? 'usd'}
             onchange={(e) => (instance.volumeUnit = e.currentTarget.value as 'usd' | 'token')}
@@ -7530,9 +7533,9 @@
         candles={ohlcvCandles}
         lines={ohlcvLinesM}
         showCandles={instance.showPoint}
-        formatVolume={(instance.volumeUnit ?? 'token') === 'usd'
+        formatVolume={(instance.volumeUnit ?? 'usd') === 'usd'
           ? fmtUsdCompact
-          : (v: number) => v.toFixed(2)}
+          : fmtAmountTooltip}
         height={chartCanvasHeight}
         {xExtent}
         view={effectiveView}
