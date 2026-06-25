@@ -141,7 +141,7 @@ def _live_loop(ds, event: str, tokens: list[str]):
 
     async def loop():
         while True:
-            tokens = token_batches.get_ingest_tokens()
+            tokens = token_batches.get_live_tokens()
             tick_end = time.monotonic() + tick_s
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             since = now - timedelta(minutes=overlap_m)
@@ -182,11 +182,11 @@ async def main():
     if not config.DEFISTREAM_API_KEY:
         log.error("DEFISTREAM_API_KEY is not set")
         sys.exit(2)
-    if not token_batches.get_ingest_tokens():
+    if not token_batches.get_live_tokens():
         log.error("INGEST_TOKENS is empty")
         sys.exit(2)
 
-    tokens = token_batches.get_ingest_tokens()
+    tokens = token_batches.get_live_tokens()
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     t_start = datetime.now(timezone.utc).replace(tzinfo=None)
     log.info("polling %d HL endpoints over %d tokens + gap-fill from min-watermark",

@@ -111,7 +111,94 @@
     }
   }
 
-  onMount(load);
+  // ── Token overrides (deprecated + renamed) ──────────────────────────────
+  type Renamed = { old: string; new: string };
+  let deprecated = $state<string[]>([]);
+  let renamed = $state<Renamed[]>([]);
+  let ovrErr = $state<string | null>(null);
+  let newDep = $state('');
+  let newRenOld = $state('');
+  let newRenNew = $state('');
+  let ovrBusy = $state(false);
+
+  async function loadOverrides() {
+    try {
+      const res = await fetch('/api/admin/config/token_overrides');
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      const body = await res.json();
+      deprecated = body.deprecated ?? [];
+      renamed = body.renamed ?? [];
+      ovrErr = null;
+    } catch (e) {
+      ovrErr = String(e);
+    }
+  }
+
+  async function putOverride(payload: Record<string, string>): Promise<boolean> {
+    ovrBusy = true;
+    msg = null;
+    try {
+      const res = await fetch('/api/admin/config/token_overrides', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      await loadOverrides();
+      return true;
+    } catch (e) {
+      msg = `Failed: ${e}`;
+      return false;
+    } finally {
+      ovrBusy = false;
+    }
+  }
+
+  async function addDeprecated() {
+    const token = newDep.trim().toUpperCase();
+    if (!token) return;
+    if (await putOverride({ kind: 'deprecated', token })) {
+      msg = `Deprecated “${token}”.`;
+      newDep = '';
+    }
+  }
+
+  async function addRenamed() {
+    const oldT = newRenOld.trim().toUpperCase();
+    const newT = newRenNew.trim().toUpperCase();
+    if (!oldT || !newT) {
+      msg = 'Renamed needs both old and new token.';
+      return;
+    }
+    if (await putOverride({ kind: 'renamed', token: oldT, new_token: newT })) {
+      msg = `Renamed “${oldT}” → “${newT}”.`;
+      newRenOld = '';
+      newRenNew = '';
+    }
+  }
+
+  async function removeOverride(kind: string, token: string) {
+    ovrBusy = true;
+    msg = null;
+    try {
+      const res = await fetch(
+        `/api/admin/config/token_overrides/${encodeURIComponent(kind)}/${encodeURIComponent(token)}`,
+        { method: 'DELETE' }
+      );
+      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+      msg = `Removed ${kind} “${token}”.`;
+      await loadOverrides();
+    } catch (e) {
+      msg = `Delete failed: ${e}`;
+    } finally {
+      ovrBusy = false;
+    }
+  }
+
+  onMount(() => {
+    load();
+    loadOverrides();
+  });
 </script>
 
 <svelte:head><title>Token Batches — Admin</title></svelte:head>
@@ -198,5 +285,91 @@
         </tbody>
       </table>
     {/if}
+  </div>
+
+  <!-- Token overrides -->
+  <div class="mt-8 border-t border-zinc-800 pt-5">
+    <h2 class="text-sm font-semibold text-zinc-100">Token Overrides</h2>
+    <p class="text-xs text-zinc-500 mt-1 max-w-2xl">
+      <span class="text-zinc-300">Deprecated</span> tokens are dropped from the
+      <em>live</em> roster (still backfillable).
+      <span class="text-zinc-300">Renamed</span> tokens are swapped old→new for
+      live; backfill keeps both. Applies to Binance + Hyperliquid.
+    </p>
+    {#if ovrErr}
+      <div class="mt-2 text-xs text-red-400">Failed to load overrides: {ovrErr}</div>
+    {/if}
+
+    <div class="mt-4 grid gap-4 md:grid-cols-2">
+      <!-- Deprecated -->
+      <div class="border border-zinc-800 rounded p-3 bg-zinc-950">
+        <div class="text-xs font-medium text-zinc-300 mb-2">Deprecated tokens</div>
+        <div class="flex gap-2">
+          <input
+            bind:value={newDep}
+            placeholder="Token (e.g. PAXG)"
+            onkeydown={(e) => e.key === 'Enter' && addDeprecated()}
+            class="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-100 placeholder:text-zinc-600"
+          />
+          <button
+            onclick={addDeprecated}
+            disabled={ovrBusy}
+            class="shrink-0 px-3 py-1 text-xs rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-100 disabled:opacity-40"
+          >Add</button>
+        </div>
+        <div class="mt-2 flex flex-wrap gap-1.5">
+          {#each deprecated as t (t)}
+            <span class="inline-flex items-center gap-1 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs font-mono text-zinc-200">
+              {t}
+              <button
+                onclick={() => removeOverride('deprecated', t)}
+                disabled={ovrBusy}
+                class="text-zinc-500 hover:text-red-400 disabled:opacity-40"
+                title="Remove">×</button>
+            </span>
+          {:else}
+            <span class="text-xs text-zinc-600">none</span>
+          {/each}
+        </div>
+      </div>
+
+      <!-- Renamed -->
+      <div class="border border-zinc-800 rounded p-3 bg-zinc-950">
+        <div class="text-xs font-medium text-zinc-300 mb-2">Renamed tokens (old → new)</div>
+        <div class="flex gap-2">
+          <input
+            bind:value={newRenOld}
+            placeholder="Old (MKR)"
+            class="w-24 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-100 placeholder:text-zinc-600"
+          />
+          <span class="text-zinc-600 self-center">→</span>
+          <input
+            bind:value={newRenNew}
+            placeholder="New (SKY)"
+            onkeydown={(e) => e.key === 'Enter' && addRenamed()}
+            class="w-24 bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-100 placeholder:text-zinc-600"
+          />
+          <button
+            onclick={addRenamed}
+            disabled={ovrBusy}
+            class="shrink-0 px-3 py-1 text-xs rounded bg-zinc-700 hover:bg-zinc-600 text-zinc-100 disabled:opacity-40"
+          >Add</button>
+        </div>
+        <div class="mt-2 flex flex-wrap gap-1.5">
+          {#each renamed as r (r.old)}
+            <span class="inline-flex items-center gap-1 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs font-mono text-zinc-200">
+              {r.old} → {r.new}
+              <button
+                onclick={() => removeOverride('renamed', r.old)}
+                disabled={ovrBusy}
+                class="text-zinc-500 hover:text-red-400 disabled:opacity-40"
+                title="Remove">×</button>
+            </span>
+          {:else}
+            <span class="text-xs text-zinc-600">none</span>
+          {/each}
+        </div>
+      </div>
+    </div>
   </div>
 </div>

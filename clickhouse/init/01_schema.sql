@@ -17,6 +17,22 @@ CREATE TABLE IF NOT EXISTS tradernick.ingestion_token_batches
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY name;
 
+-- Token overrides that adjust the batch union differently for live vs backfill
+-- (see services/ingestion/src/token_batches.py). kind='deprecated' → dropped
+-- from the LIVE roster (but kept for backfill); kind='renamed' → live swaps
+-- token→new_token, backfill keeps BOTH. Admin-managed at /admin/batches.
+-- Soft-delete via deleted=1 (RMT keeps the latest row per (kind, token)).
+CREATE TABLE IF NOT EXISTS tradernick.ingestion_token_overrides
+(
+    kind        String,
+    token       String,
+    new_token   String         DEFAULT '',
+    deleted     UInt8          DEFAULT 0,
+    updated_at  DateTime64(3)  DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (kind, token);
+
 CREATE TABLE IF NOT EXISTS tradernick.binance_ohlcv_1m
 (
     token                LowCardinality(String),

@@ -186,7 +186,7 @@ async def main(job_id):
     if not config.DEFISTREAM_API_KEY: sys.exit(2)
     job = await _load_job(job_id)
     job_type, args, started_at = job["job_type"], job["args"], job["started_at"]
-    tokens = args.get("tokens") or token_batches.get_ingest_tokens()
+    tokens = args.get("tokens") or token_batches.get_backfill_tokens()
     events = args.get("events") or list(HL_EVENTS.keys())
     unknown = [e for e in events if e not in HL_EVENTS]
     if unknown: log.error("unknown events: %s", unknown); sys.exit(2)

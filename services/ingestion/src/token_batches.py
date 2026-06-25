@@ -35,14 +35,18 @@ import config
 log = logging.getLogger(__name__)
 
 TABLE = "tradernick.ingestion_token_batches"
+OVERRIDES_TABLE = "tradernick.ingestion_token_overrides"
 _CACHE_TTL_S = 30.0
 
 _lock = threading.Lock()
 _client_obj = None
 _table_ready = False
+_overrides_table_ready = False
 _seed_checked = False
 # batches: list[tuple[str, list[str]]] | None ; ts: monotonic seconds
 _cache = {"batches": None, "ts": 0.0}
+# overrides: (deprecated: set, renamed: dict) | None ; ts: monotonic seconds
+_ovr_cache = {"value": None, "ts": 0.0}
 
 
 def _client():
@@ -209,3 +213,169 @@ def delete_batch(name: str) -> dict:
     )
     _bust_cache()
     return {"name": name, "deleted": True}
+
+
+# ── Token overrides (deprecated / renamed) ─────────────────────────────────
+# Adjust the batch union differently for live vs backfill (all exchanges):
+#   deprecated → dropped from the LIVE roster, kept for backfill.
+#   renamed    → live swaps old→new; backfill keeps BOTH old and new.
+# Stored in OVERRIDES_TABLE, admin-managed, same cache/fallback model as batches.
+
+def _ensure_overrides_table(ch):
+    global _overrides_table_ready
+    if _overrides_table_ready:
+        return
+    ch.command(
+        f"""
+        CREATE TABLE IF NOT EXISTS {OVERRIDES_TABLE} (
+            kind        String,
+            token       String,
+            new_token   String         DEFAULT '',
+            deleted     UInt8          DEFAULT 0,
+            updated_at  DateTime64(3)  DEFAULT now64(3)
+        )
+        ENGINE = ReplacingMergeTree(updated_at)
+        ORDER BY (kind, token)
+        """
+    )
+    _overrides_table_ready = True
+
+
+def _read_overrides() -> tuple[set, dict]:
+    ch = _client()
+    _ensure_overrides_table(ch)
+    rows = ch.query(
+        f"SELECT kind, token, new_token FROM {OVERRIDES_TABLE} FINAL "
+        f"WHERE deleted = 0"
+    ).result_rows
+    deprecated: set[str] = set()
+    renamed: dict[str, str] = {}
+    for kind, token, new_token in rows:
+        token = str(token).strip()
+        if not token:
+            continue
+        if kind == "deprecated":
+            deprecated.add(token)
+        elif kind == "renamed" and str(new_token).strip():
+            renamed[token] = str(new_token).strip()
+    return deprecated, renamed
+
+
+def get_overrides(force: bool = False) -> tuple[set, dict]:
+    """(deprecated: set[str], renamed: dict[old→new]). Cached ~30s; on CH error
+    serves the last good cache, else empty (no overrides) so jobs keep running."""
+    now = time.monotonic()
+    if not force:
+        with _lock:
+            if _ovr_cache["value"] is not None and (now - _ovr_cache["ts"]) < _CACHE_TTL_S:
+                return _ovr_cache["value"]
+    try:
+        value = _read_overrides()
+        with _lock:
+            _ovr_cache["value"] = value
+            _ovr_cache["ts"] = time.monotonic()
+        return value
+    except Exception as exc:  # noqa: BLE001
+        with _lock:
+            cached = _ovr_cache["value"]
+        if cached is not None:
+            log.warning("token_overrides read failed (%s); serving cached overrides", exc)
+            return cached
+        log.warning("token_overrides read failed (%s); proceeding with no overrides", exc)
+        return set(), {}
+
+
+def get_live_tokens() -> list[str]:
+    """Roster for LIVE jobs: the batch union with deprecated tokens dropped and
+    renamed tokens swapped old→new (de-duped, order preserved)."""
+    deprecated, renamed = get_overrides()
+    seen: set[str] = set()
+    out: list[str] = []
+    for t in get_ingest_tokens():
+        if t in deprecated:
+            continue
+        t2 = renamed.get(t, t)
+        if t2 in deprecated or t2 in seen:
+            continue
+        seen.add(t2)
+        out.append(t2)
+    return out
+
+
+def expand_backfill_tokens(tokens) -> list[str]:
+    """Roster for BACKFILL jobs: the given tokens PLUS the renamed-new name for
+    any old token present (de-duped). Deprecated are NOT removed — their history
+    is still fetchable."""
+    _deprecated, renamed = get_overrides()
+    out: list[str] = []
+    seen: set[str] = set()
+    for t in (tokens or []):
+        t = str(t).strip()
+        if t and t not in seen:
+            seen.add(t)
+            out.append(t)
+    for t in list(out):
+        new = renamed.get(t)
+        if new and new not in seen:
+            seen.add(new)
+            out.append(new)
+    return out
+
+
+def get_backfill_tokens() -> list[str]:
+    """Full backfill roster = the batch union expanded with renamed-new names."""
+    return expand_backfill_tokens(get_ingest_tokens())
+
+
+def _bust_overrides_cache():
+    with _lock:
+        _ovr_cache["ts"] = 0.0
+
+
+def upsert_override(kind: str, token: str, new_token: str = "") -> dict:
+    """Create/replace an override. kind ∈ {'deprecated','renamed'}; 'renamed'
+    requires a non-empty new_token."""
+    kind = (kind or "").strip().lower()
+    token = (token or "").strip()
+    new_token = (new_token or "").strip()
+    if kind not in ("deprecated", "renamed"):
+        raise ValueError("kind must be 'deprecated' or 'renamed'")
+    if not token:
+        raise ValueError("token required")
+    if kind == "renamed" and not new_token:
+        raise ValueError("renamed requires new_token")
+    if kind == "deprecated":
+        new_token = ""
+    ch = _client()
+    _ensure_overrides_table(ch)
+    ch.insert(
+        OVERRIDES_TABLE,
+        [[kind, token, new_token, 0]],
+        column_names=["kind", "token", "new_token", "deleted"],
+    )
+    _bust_overrides_cache()
+    return {"kind": kind, "token": token, "new_token": new_token}
+
+
+def delete_override(kind: str, token: str) -> dict:
+    """Soft-delete an override (re-insert with deleted=1)."""
+    kind = (kind or "").strip().lower()
+    token = (token or "").strip()
+    if not kind or not token:
+        raise ValueError("kind and token required")
+    ch = _client()
+    _ensure_overrides_table(ch)
+    rows = ch.query(
+        f"SELECT new_token FROM {OVERRIDES_TABLE} FINAL "
+        f"WHERE kind = {{k:String}} AND token = {{t:String}}",
+        parameters={"k": kind, "t": token},
+    ).result_rows
+    if not rows:
+        return {"kind": kind, "token": token, "deleted": False, "reason": "not found"}
+    ch.insert(
+        OVERRIDES_TABLE,
+        [[kind, token, rows[0][0], 1]],
+        column_names=["kind", "token", "new_token", "deleted"],
+    )
+    _bust_overrides_cache()
+    return {"kind": kind, "token": token, "deleted": True}

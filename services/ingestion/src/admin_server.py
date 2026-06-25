@@ -322,6 +322,47 @@ async def delete_token_batch(_request, name: str):
     return response.json({"ok": True, **result})
 
 
+@app.get("/config/token_overrides")
+async def get_token_overrides(_request):
+    """Token overrides that adjust the batch union: deprecated (dropped from
+    live, kept for backfill) + renamed (live swaps old→new, backfill keeps
+    both). Read from the runtime store; managed at /admin/batches."""
+    deprecated, renamed = token_batches.get_overrides()
+    return response.json({
+        "deprecated": sorted(deprecated),
+        "renamed": [{"old": o, "new": n} for o, n in sorted(renamed.items())],
+    })
+
+
+@app.put("/config/token_overrides")
+async def upsert_token_override(request):
+    """Create/replace an override. Body: {kind, token, new_token?}. kind is
+    'deprecated' or 'renamed' ('renamed' requires new_token). Takes effect
+    across all ingestion processes within the cache TTL — no restart."""
+    body = request.json or {}
+    try:
+        result = token_batches.upsert_override(
+            body.get("kind", ""), body.get("token", ""), body.get("new_token", ""),
+        )
+    except ValueError as exc:
+        return response.json({"error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        return response.json({"error": f"upsert failed: {exc}"}, status=500)
+    return response.json({"ok": True, "override": result})
+
+
+@app.delete("/config/token_overrides/<kind>/<token>")
+async def delete_token_override(_request, kind: str, token: str):
+    """Remove an override (soft-delete). Takes effect within the cache TTL."""
+    try:
+        result = token_batches.delete_override(kind, token)
+    except ValueError as exc:
+        return response.json({"error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        return response.json({"error": f"delete failed: {exc}"}, status=500)
+    return response.json({"ok": True, **result})
+
+
 @app.get("/streams")
 async def list_streams(request):
     """Query each unique upstream URL once and slice the response by the

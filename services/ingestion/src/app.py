@@ -438,7 +438,11 @@ def _parse_backfill_window(body: dict):
 async def _create_backfill(request, job_type: str):
     """Token-based backfill (binance_*). Body: {since, until?, tokens?, force?}."""
     body = request.json or {}
-    tokens = body.get("tokens") or token_batches.get_ingest_tokens()
+    # Backfill roster: explicit list (expanded with renamed-new names) or the
+    # full backfill roster (union + renamed-new). Deprecated tokens are kept so
+    # their history is still fetchable.
+    tokens = (token_batches.expand_backfill_tokens(body["tokens"])
+              if body.get("tokens") else token_batches.get_backfill_tokens())
     force = bool(body.get("force", False))
     if not tokens:
         return response.json({"error": "no tokens"}, status=400)
@@ -1003,8 +1007,13 @@ def _extract_hyperliquid_events(body):
     if unknown:
         return f"unknown events: {unknown}", None
     out = {"events": list(events)}
+    # Backfill roster: explicit list expanded with renamed-new names, or the
+    # full backfill roster (union + renamed-new) when none given. Deprecated
+    # tokens are kept so their history is still fetchable.
     if tokens is not None:
-        out["tokens"] = [str(t).upper() for t in tokens]
+        out["tokens"] = token_batches.expand_backfill_tokens([str(t).upper() for t in tokens])
+    else:
+        out["tokens"] = token_batches.get_backfill_tokens()
     return None, out
 
 

@@ -48,12 +48,12 @@ async def main(stream_name: str | None = None):
     if not config.DEFISTREAM_API_KEY:
         log.error("DEFISTREAM_API_KEY is not set")
         sys.exit(2)
-    if not token_batches.get_ingest_tokens():
+    if not token_batches.get_live_tokens():
         log.error("INGEST_TOKENS is empty")
         sys.exit(2)
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
-    tokens = token_batches.get_ingest_tokens()
+    tokens = token_batches.get_live_tokens()
     log.info("polling %d tokens every %ss + gap-fill from min-watermark — 1 multi-token call/tick",
              len(tokens), config.POLL_INTERVAL_SECONDS)
 
@@ -63,7 +63,7 @@ async def main(stream_name: str | None = None):
         log.info("live_loop: waiting %.0fs before first fire", jitter)
         await asyncio.sleep(jitter)
         while True:
-            tokens = token_batches.get_ingest_tokens()
+            tokens = token_batches.get_live_tokens()
             tick_end = time.monotonic() + config.POLL_INTERVAL_SECONDS
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             since = now - sweep.LIVE_OVERLAP
@@ -89,7 +89,7 @@ async def main(stream_name: str | None = None):
             await asyncio.sleep(jitter)
         ch = await async_client()
         while True:
-            tokens = token_batches.get_ingest_tokens()
+            tokens = token_batches.get_live_tokens()
             next_fire = time.monotonic() + sweep_cadence
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             _sweep_rows = 0
