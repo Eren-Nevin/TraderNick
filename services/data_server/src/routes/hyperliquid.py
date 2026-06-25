@@ -1994,6 +1994,116 @@ async def smart_wallet_oi(request):
     })
 
 
+@bp.get("/hyperliquid/smart_wallet_token_list")
+@throttled("heavy")
+async def smart_wallet_token_list(request):
+    """Per-token long/short OI summed across the FILTERED wallet set, at the
+    latest position snapshot plus 24h-ago and 7d-ago, with absolute OI deltas and
+    HL-perp 24h/7d price change. Returns every token the cohort holds (in any of
+    the 3 snapshots); the client sorts in place. Powers the Smart Wallets
+    (Dynamic) "Token List" view.
+
+    Reuses the same selection machinery as /smart_wallet_metrics + _oi: the
+    filter params resolve to a cached wallet set, and OI is summed over the
+    hourly position rollup (hl_position_history_1h, argMax-state) bounded to the
+    3 snapshot buckets and pruned by the wallet set."""
+    try:
+        sel = _build_smart_wallet_selection(request)
+    except ValueError as e:
+        return response.json({"error": str(e)}, status=400)
+
+    ch = await client()
+    sel_key = await _resolve_passing(ch, sel)
+
+    # Latest hourly position snapshot; the 24h / 7d comparison points align to
+    # hourly buckets since the rollup is hourly.
+    tnow_rows = await ch.query("SELECT max(bucket) FROM tradernick.hl_position_history_1h")
+    if not tnow_rows.result_rows or tnow_rows.result_rows[0][0] is None:
+        return response.json({"tokens": []})
+    t_now = tnow_rows.result_rows[0][0]
+    t_24h = t_now - timedelta(hours=24)
+    t_7d = t_now - timedelta(days=7)
+
+    cache_filter = f"""wallet IN (
+        SELECT wallet FROM {_SET_CACHE_TABLE}
+        WHERE sel_key = {{sel_key:String}}
+          AND computed_at = (SELECT max(computed_at) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{sel_key:String}})
+    )"""
+    params = {"sel_key": sel_key, "t_now": t_now, "t_24h": t_24h, "t_7d": t_7d}
+
+    # Inner: latest position per (token, side, wallet) within each of the 3
+    # buckets (argMaxMerge over the hour's state). Outer: sum across wallets per
+    # token, split by side × snapshot, in token units (amt) and USD (sz).
+    oi_rows = await ch.query(
+        f"""
+        SELECT
+            token,
+            sumIf(amt, side = 'long'  AND b = 'now') AS long_now_t,
+            sumIf(amt, side = 'short' AND b = 'now') AS short_now_t,
+            sumIf(sz,  side = 'long'  AND b = 'now') AS long_now_u,
+            sumIf(sz,  side = 'short' AND b = 'now') AS short_now_u,
+            sumIf(amt, side = 'long'  AND b = '24h') AS long_24_t,
+            sumIf(amt, side = 'short' AND b = '24h') AS short_24_t,
+            sumIf(sz,  side = 'long'  AND b = '24h') AS long_24_u,
+            sumIf(sz,  side = 'short' AND b = '24h') AS short_24_u,
+            sumIf(amt, side = 'long'  AND b = '7d')  AS long_7_t,
+            sumIf(amt, side = 'short' AND b = '7d')  AS short_7_t,
+            sumIf(sz,  side = 'long'  AND b = '7d')  AS long_7_u,
+            sumIf(sz,  side = 'short' AND b = '7d')  AS short_7_u
+        FROM (
+            SELECT
+                token, side, wallet,
+                multiIf(bucket = {{t_now:DateTime}}, 'now',
+                        bucket = {{t_24h:DateTime}}, '24h',
+                        bucket = {{t_7d:DateTime}},  '7d', '') AS b,
+                argMaxMerge(amount_state) AS amt,
+                argMaxMerge(size_state)   AS sz
+            FROM tradernick.hl_position_history_1h
+            WHERE bucket IN ({{t_now:DateTime}}, {{t_24h:DateTime}}, {{t_7d:DateTime}})
+              AND {cache_filter}
+            GROUP BY token, side, wallet, bucket
+        )
+        GROUP BY token
+        """,
+        parameters=params,
+    )
+
+    # HL-perp price now / 24h-ago / 7d-ago (relative to the snapshot times).
+    price_rows = await ch.query(
+        """
+        SELECT
+            token,
+            argMaxIf(close, time, time <= {t_now:DateTime})  AS p_now,
+            argMaxIf(close, time, time <= {t_24h:DateTime})  AS p_24h,
+            argMaxIf(close, time, time <= {t_7d:DateTime})   AS p_7d
+        FROM tradernick.hl_ohlcv_1m
+        WHERE time >= {t_7d:DateTime} - INTERVAL 1 DAY AND time <= {t_now:DateTime}
+        GROUP BY token
+        """,
+        parameters={"t_now": t_now, "t_24h": t_24h, "t_7d": t_7d},
+    )
+    price = {r[0]: (float(r[1]), float(r[2]), float(r[3])) for r in price_rows.result_rows}
+
+    out = []
+    for r in oi_rows.result_rows:
+        (token, l_now_t, s_now_t, l_now_u, s_now_u,
+         l_24_t, s_24_t, l_24_u, s_24_u,
+         l_7_t, s_7_t, l_7_u, s_7_u) = (r[0],) + tuple(float(x) for x in r[1:])
+        p_now, p_24h, p_7d = price.get(token, (0.0, 0.0, 0.0))
+        out.append({
+            "token": token,
+            "long_oi_token": l_now_t, "long_oi_usd": l_now_u,
+            "short_oi_token": s_now_t, "short_oi_usd": s_now_u,
+            "long_chg24_token": l_now_t - l_24_t, "long_chg24_usd": l_now_u - l_24_u,
+            "short_chg24_token": s_now_t - s_24_t, "short_chg24_usd": s_now_u - s_24_u,
+            "long_chg7d_token": l_now_t - l_7_t, "long_chg7d_usd": l_now_u - l_7_u,
+            "short_chg7d_token": s_now_t - s_7_t, "short_chg7d_usd": s_now_u - s_7_u,
+            "pct_24h": ((p_now - p_24h) / p_24h * 100.0) if p_24h > 0 else None,
+            "pct_7d": ((p_now - p_7d) / p_7d * 100.0) if p_7d > 0 else None,
+        })
+    return response.json({"tokens": out, "wallet_set": sel_key})
+
+
 @bp.get("/hyperliquid/smart_wallet_oi_rolling")
 @throttled("heavy")
 async def smart_wallet_oi_rolling(request):

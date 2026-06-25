@@ -6,6 +6,7 @@
   import TokenLeaderboardTable from '$lib/components/TokenLeaderboardTable.svelte';
   import SpotCvdTable from '$lib/components/SpotCvdTable.svelte';
   import SmartWalletMetricsTable from '$lib/components/SmartWalletMetricsTable.svelte';
+  import SmartWalletTokenListTable from '$lib/components/SmartWalletTokenListTable.svelte';
   import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
   import HlTopVaultsTable from '$lib/components/HlTopVaultsTable.svelte';
   import HlTopVaultLpsTable from '$lib/components/HlTopVaultLpsTable.svelte';
@@ -663,7 +664,7 @@
   // 'chart' = OI series). The two shapes are incompatible, so on a view switch
   // we must drop `data` before the new load — otherwise the chart branch would
   // render table rows (no valid points → a black chart) for the whole load.
-  let dualDataView = $state<'table' | 'chart' | ''>('');
+  let dualDataView = $state<'table' | 'chart' | 'token_list' | ''>('');
 
   // ---- effective view + hoverTime ----
   // A chart follows the shared zoom/pan only when global sync is on AND it
@@ -851,6 +852,11 @@
         // client-side line show/hide — no refetch (important for the expensive
         // dynamic rolling fetch, and it keeps the refresh-only contract).
         return `${swTableKey()}|chart|${instance.token}|${instance.interval}`;
+      }
+      // Token List: per-token OI over the SAME selection. Selection-driven only
+      // (unit is display-only → not in the key).
+      if (instance.viewMode === 'token_list') {
+        return `${swTableKey()}|token_list`;
       }
       return swTableKey();
     }
@@ -1725,6 +1731,17 @@
           data = instance.kind === 'smart_wallets_dynamic'
             ? await fetchSmartWalletOiRollingWindow(sinceIso, untilIso, signal)
             : await fetchSmartWalletOiWindow(sinceIso, untilIso, signal);
+        } else if (instance.viewMode === 'token_list') {
+          // Token List view: per-token long/short OI summed over the SAME found
+          // wallet set at now / 24h-ago / 7d-ago. Server returns every held
+          // token; the table sorts client-side.
+          const res = await queuedFetch(
+            `/api/hyperliquid/smart_wallet_token_list?${swSelectionParams()}`,
+            { signal }
+          );
+          if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+          const body = await res.json();
+          data = [{ tokens: body.tokens ?? [] } as unknown as AnyDatum];
         } else {
           // Table view: the ranked top-N rows + the FULL found count (`total`).
           const body = await fetchSmartWalletMetrics(signal);
@@ -5567,12 +5584,12 @@
           <button
             type="button"
             onclick={() => {
-              // Drop the chart-shaped data synchronously so the table branch
-              // never renders OI rows (and vice-versa) during the switch.
-              if ((instance.viewMode ?? 'table') === 'chart') data = [];
+              // Drop the other view's data synchronously so the table branch
+              // never renders OI rows / token rows during the switch.
+              if ((instance.viewMode ?? 'table') !== 'table') data = [];
               instance.viewMode = 'table';
             }}
-            class={'px-2 py-1 text-xs ' + ((instance.viewMode ?? 'table') !== 'chart'
+            class={'px-2 py-1 text-xs ' + ((instance.viewMode ?? 'table') === 'table'
               ? 'bg-zinc-800 text-zinc-100'
               : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
             title="Table view"
@@ -5594,6 +5611,19 @@
               : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
             title="Chart view — OI of the found wallets"
           >Chart</button>
+          {#if instance.kind === 'smart_wallets_dynamic'}
+            <button
+              type="button"
+              onclick={() => {
+                if (instance.viewMode !== 'token_list') data = [];
+                instance.viewMode = 'token_list';
+              }}
+              class={'px-2 py-1 text-xs border-l border-zinc-700 ' + (instance.viewMode === 'token_list'
+                ? 'bg-zinc-800 text-zinc-100'
+                : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+              title="Token List — long/short OI per token across the found wallets"
+            >Tokens</button>
+          {/if}
         </div>
       {/if}
       {#if isLidoKind(instance.kind)}
@@ -6442,6 +6472,18 @@
              panel. The toolbar just carries a static source chip. (Chart view
              falls through to the generic OI controls below.) -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL · smart wallets{instance.kind === 'smart_wallets_dynamic' ? ' · dynamic' : ''}</span>
+        {#if instance.viewMode === 'token_list'}
+          <!-- Token List view: OI columns in USD or token units (display-only). -->
+          <select
+            value={instance.swtUnit ?? 'usd'}
+            onchange={(e) => (instance.swtUnit = e.currentTarget.value as 'usd' | 'token')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Show OI + OI-change columns in USD or token units"
+          >
+            <option value="usd">$</option>
+            <option value="token">Token</option>
+          </select>
+        {/if}
       {:else}
         {#if instance.kind === 'smart_wallets_dynamic'}
           <!-- Dynamic chart: the set is re-selected per bucket over a ROLLING
@@ -8140,6 +8182,13 @@
         formatTooltip={exchangeFlowUseUsd ? fmtUsdTooltip : fmtAmountTooltip}
         formatY2={instance.showSum ? (exchangeFlowUseUsd ? fmtUsdAxis : fmtAmountAxis) : undefined}
         formatTooltip2={instance.showSum ? (exchangeFlowUseUsd ? fmtUsdTooltip : fmtAmountTooltip) : undefined}
+      />
+    {:else if isSwKind(instance.kind) && instance.viewMode === 'token_list'}
+      <SmartWalletTokenListTable
+        rows={data.length > 0 ? ((data[0] as unknown as {tokens?: Record<string, unknown>[]}).tokens ?? []) : []}
+        unit={instance.swtUnit ?? 'usd'}
+        loading={loading}
+        error={error}
       />
     {:else if isSwKind(instance.kind)}
       <SmartWalletMetricsTable

@@ -1949,8 +1949,12 @@ export type ChartInstance = {
   swMaxVolumeShare?: number | null;
   /** Dual-view widgets only (see DUAL_VIEW_KINDS): which sub-view is active.
    *  'table' renders the kind's normal table; 'chart' renders the mapped chart
-   *  kind over the same widget's data. Persisted per widget; default 'table'. */
-  viewMode?: 'table' | 'chart';
+   *  kind over the same widget's data. 'token_list' (smart_wallets_dynamic only)
+   *  renders the per-token OI table. Persisted per widget; default 'table'. */
+  viewMode?: 'table' | 'chart' | 'token_list';
+  /** smart_wallets_dynamic 'token_list' view: 'usd' (default) or 'token' for the
+   *  OI + OI-change columns. Display-only (server returns both) → not in load key. */
+  swtUnit?: 'usd' | 'token';
   /** smart_wallets_table chart mode: overlay the token's HL close price as a
    *  secondary-axis line (from hl_ohlcv). Default false. */
   swShowClose?: boolean;
