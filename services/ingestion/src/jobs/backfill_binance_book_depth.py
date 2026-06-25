@@ -15,7 +15,11 @@ from clickhouse import BOOK_DEPTH_COLUMNS, async_client, book_depth_df_to_rows, 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [backfill_book_depth] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-CHUNK_DAYS = 31
+# 1-week chunks: book_depth is the heaviest dataset, and a whole-month request
+# over a large token roster (97+) takes 5+ min per chunk and shows progress
+# only once per month. Weekly chunks keep each request ~4× smaller/faster and
+# surface progress more often. DeFiStream's book_depth cap is 31 days/request.
+CHUNK_DAYS = 7
 TABLE = "tradernick.binance_book_depth"
 _stop = False
 
