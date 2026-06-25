@@ -432,6 +432,7 @@ export type ChartKind =
   | 'ps'
   | 'realized_price'
   | 'spot_cvd'
+  | 'spot_cvd_table'
   | 'token_leaderboard'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
@@ -568,6 +569,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ps: 'Perp vs Spot',
   realized_price: 'Realized Price',
   spot_cvd: 'Spot CVD',
+  spot_cvd_table: 'Spot CVD Table',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1336,6 +1338,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
       || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls' || kind === 'ps'
       || kind === 'realized_price'
       || kind === 'spot_cvd'
+      || kind === 'spot_cvd_table'
       || kind === 'token_leaderboard') {
     return 'Exchange';
   }
@@ -1671,6 +1674,11 @@ export type ChartInstance = {
   /** spot_cvd only (cumulative mode): accumulation window — 'all' (default,
    *  from the first record) or a trailing N days. In the load key. */
   cvdLookback?: 'all' | '1' | '7' | '14' | '30' | '90';
+  /** spot_cvd_table only: lookback for the per-token CVD aggregate. In the key. */
+  cvdtLookback?: 'all' | '1' | '7' | '14' | '30' | '90';
+  /** spot_cvd_table only: 'usd' (default) or 'token' for the Avg-Vol + CVD-Vol
+   *  columns. Display-only (server returns both) → NOT in the load key. */
+  cvdtUnit?: 'usd' | 'token';
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2569,6 +2577,13 @@ export function newChartInstance(
     base.cvdMode = 'cumulative';
     base.cvdUnit = 'usd';
     base.cvdLookback = 'all';
+  }
+  if (kind === 'spot_cvd_table') {
+    // Token leaderboard ranked by cumulative Binance-spot CVD. Spot-only;
+    // default = all-time lookback, USD columns.
+    base.exchange = 'binance_spot';
+    base.cvdtLookback = 'all';
+    base.cvdtUnit = 'usd';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

@@ -4,6 +4,7 @@
   import LineChart from '$lib/components/charts/lwc/LwcLineChart.svelte';
   import TableChart from '$lib/components/TableChart.svelte';
   import TokenLeaderboardTable from '$lib/components/TokenLeaderboardTable.svelte';
+  import SpotCvdTable from '$lib/components/SpotCvdTable.svelte';
   import SmartWalletMetricsTable from '$lib/components/SmartWalletMetricsTable.svelte';
   import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
   import HlTopVaultsTable from '$lib/components/HlTopVaultsTable.svelte';
@@ -858,6 +859,11 @@
       // now() server-side, so there are no per-instance params. Constant key:
       // one chart's fetch serves every token_leaderboard on the page.
       return 'token_leaderboard';
+    }
+    if (instance.kind === 'spot_cvd_table') {
+      // lookback varies the per-token aggregate → in the key. unit is
+      // display-only (server returns both $ and token), so it's NOT here.
+      return `spot_cvd_table|lb:${instance.cvdtLookback ?? 'all'}`;
     }
     if (instance.kind === 'sz') {
       const ex = instance.exchange ?? 'binance';
@@ -1752,6 +1758,23 @@
       // leaderboard kinds); the table sorts client-side.
       if (instance.kind === 'token_leaderboard') {
         const res = await queuedFetch('/api/token_leaderboard', { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = [{ tokens: body.tokens ?? [] } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = defaultView(sinceIso, untilIso);
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Spot CVD tableview: per-token cumulative CVD over the lookback. Server
+      // returns every token; the table sorts/limits client-side.
+      if (instance.kind === 'spot_cvd_table') {
+        const qs = new URLSearchParams({
+          exchange: 'binance_spot',
+          lookback: instance.cvdtLookback ?? 'all'
+        });
+        const res = await queuedFetch(`/api/spot_cvd_leaderboard?${qs}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
         const body = await res.json();
         data = [{ tokens: body.tokens ?? [] } as unknown as AnyDatum];
@@ -4949,6 +4972,7 @@
     && instance.kind !== 'hl_top_vault_lps'
     && instance.kind !== 'hl_vault_detail'
     && instance.kind !== 'token_leaderboard'
+    && instance.kind !== 'spot_cvd_table'
     && instance.kind !== 'smart_wallets_table'
     && !isLeaderboardKind(instance.kind)
   );
@@ -4958,6 +4982,7 @@
   // meaningless for them — the settings panel hides that whole block.
   let isTableviewKind = $derived(
     instance.kind === 'token_leaderboard'
+    || instance.kind === 'spot_cvd_table'
     // Dual-view chart mode renders a real LineChart, so the chart-only settings
     // (Point / Week lines / MA / zoom-sync) DO apply there — only the table view
     // counts as a tableview kind.
@@ -6384,6 +6409,32 @@
              dimension (Binance-sourced, all tokens). Sorting lives in the table
              header, so the toolbar just carries a static source chip. -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">Binance · all tokens</span>
+      {:else if instance.kind === 'spot_cvd_table'}
+        <!-- Spot CVD table: global per-token, no token dimension. Lookback +
+             units live here; sort-criteria/direction + limit live in the table. -->
+        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">Binance spot · all tokens</span>
+        <select
+          value={instance.cvdtLookback ?? 'all'}
+          onchange={(e) => (instance.cvdtLookback = e.currentTarget.value as 'all' | '1' | '7' | '14' | '30' | '90')}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Lookback window for the cumulative CVD + avg daily volume"
+        >
+          <option value="all">All (from start)</option>
+          <option value="1">1d</option>
+          <option value="7">7d</option>
+          <option value="14">14d</option>
+          <option value="30">30d</option>
+          <option value="90">90d</option>
+        </select>
+        <select
+          value={instance.cvdtUnit ?? 'usd'}
+          onchange={(e) => (instance.cvdtUnit = e.currentTarget.value as 'usd' | 'token')}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Show Avg-Vol + CVD-Vol columns in USD or token volume"
+        >
+          <option value="usd">$</option>
+          <option value="token">Token</option>
+        </select>
       {:else if isSwKind(instance.kind) && instance.viewMode !== 'chart'}
         <!-- Smart Wallets finder (TABLE view): HL-only. Every control (metric /
              lookback / token selectors + the snapshot slider) lives inside the
@@ -6692,7 +6743,7 @@
           {/each}
         </select>
       {/if}
-      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
+      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'spot_cvd_table' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
         <select
           bind:value={instance.interval}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -8121,6 +8172,14 @@
         rows={data.length > 0 ? ((data[0] as unknown as {tokens?: Record<string, unknown>[]}).tokens ?? []) : []}
         loading={loading}
         error={error}
+      />
+    {:else if instance.kind === 'spot_cvd_table'}
+      <SpotCvdTable
+        rows={data.length > 0 ? ((data[0] as unknown as {tokens?: Record<string, unknown>[]}).tokens ?? []) : []}
+        loading={loading}
+        error={error}
+        unit={instance.cvdtUnit ?? 'usd'}
+        lookbackLabel={(instance.cvdtLookback ?? 'all') === 'all' ? 'All' : `${instance.cvdtLookback}d`}
       />
     {:else if instance.kind === 'hl_top_traders'}
       <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />

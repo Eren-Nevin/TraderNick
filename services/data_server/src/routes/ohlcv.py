@@ -112,6 +112,92 @@ async def token_leaderboard(_request):
     return response.json({"tokens": out})
 
 
+@bp.get("/spot_cvd_leaderboard")
+async def spot_cvd_leaderboard(request):
+    """Per-token cumulative spot CVD ranking over a lookback window — powers the
+    Spot CVD tableview. One row per Binance-spot token; the client sorts/limits.
+
+    Per token over [since, until):
+      cvd_token = Σ(buyer_taker_volume − seller_taker_volume)
+      cvd_usd   = Σ((buyer_taker_volume − seller_taker_volume)·close)
+      avg daily volume = Σ(volume)/days-traded   (USD: Σ(volume·close)/days)
+      pct_24h  = close-change vs the most-recent close ≤ 24h ago
+      pct_lb   = close-change vs the earliest close in the window
+      ratio_*  = cvd_* / avg_volume_*  (× 100)
+
+    The inner subquery materialises per-row products before the outer aggregates
+    so ClickHouse doesn't bind columns to the outer aggregate aliases. FINAL
+    dedupes the ReplacingMergeTree rows so sums don't double-count.
+    """
+    exchange = request.args.get("exchange", "binance_spot")
+    lookback = request.args.get("lookback", "all")
+    if exchange not in _OHLCV_TABLE:
+        return response.json({"error": f"exchange must be one of {list(_OHLCV_TABLE)}"}, status=400)
+    if lookback not in ("all", "1", "7", "14", "30", "90"):
+        return response.json({"error": "lookback must be all|1|7|14|30|90"}, status=400)
+    table = _OHLCV_TABLE[exchange]
+
+    # 'all' → no lower time bound; else trailing N days. now()-24h baseline for
+    # pct_24h is only meaningful when the window covers ≥24h (lookback ≥ 1d).
+    since_clause = "" if lookback == "all" else "AND time >= now() - INTERVAL {days:UInt32} DAY"
+    params = {} if lookback == "all" else {"days": int(lookback)}
+
+    ch = await client()
+    rows = await ch.query(
+        f"""
+        SELECT
+            token,
+            argMax(close, time)                                    AS price,
+            sum(cvd_token_row)                                     AS cvd_token,
+            sum(cvd_usd_row)                                       AS cvd_usd,
+            sum(volume)                                            AS vol_token_total,
+            sum(vol_usd_row)                                       AS vol_usd_total,
+            uniqExact(toDate(time))                                AS days,
+            argMaxIf(close, time, time <= now() - INTERVAL 24 HOUR) AS price_24h,
+            argMin(close, time)                                    AS price_first
+        FROM (
+            SELECT
+                token, time, close, volume,
+                (buyer_taker_volume - seller_taker_volume)         AS cvd_token_row,
+                (buyer_taker_volume - seller_taker_volume) * close AS cvd_usd_row,
+                volume * close                                     AS vol_usd_row
+            FROM {table} FINAL
+            WHERE token != '' {since_clause}
+        )
+        GROUP BY token
+        ORDER BY token
+        """,
+        parameters=params,
+    )
+
+    out = []
+    for r in rows.result_rows:
+        (token, price, cvd_token, cvd_usd, vol_token_total, vol_usd_total,
+         days, price_24h, price_first) = r
+        price = float(price)
+        days = int(days) or 1
+        avg_vol_token = float(vol_token_total) / days
+        avg_vol_usd = float(vol_usd_total) / days
+        cvd_token = float(cvd_token)
+        cvd_usd = float(cvd_usd)
+        p24 = float(price_24h)
+        pf = float(price_first)
+        out.append({
+            "token": token,
+            "price": price,
+            "avg_volume_token": avg_vol_token,
+            "avg_volume_usd": avg_vol_usd,
+            "cvd_token": cvd_token,
+            "cvd_usd": cvd_usd,
+            # null when no baseline candle exists → table renders an em-dash.
+            "pct_24h": ((price - p24) / p24 * 100.0) if p24 > 0 else None,
+            "pct_lookback": ((price - pf) / pf * 100.0) if pf > 0 else None,
+            "ratio_token": (cvd_token / avg_vol_token * 100.0) if avg_vol_token else None,
+            "ratio_usd": (cvd_usd / avg_vol_usd * 100.0) if avg_vol_usd else None,
+        })
+    return response.json({"exchange": exchange, "lookback": lookback, "tokens": out})
+
+
 @bp.get("/ohlcv")
 async def ohlcv(request):
     token = request.args.get("token")
