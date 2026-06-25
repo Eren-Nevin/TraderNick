@@ -431,6 +431,7 @@ export type ChartKind =
   | 'ls'
   | 'ps'
   | 'realized_price'
+  | 'spot_cvd'
   | 'token_leaderboard'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
@@ -566,6 +567,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   ls: 'Long/Short',
   ps: 'Perp vs Spot',
   realized_price: 'Realized Price',
+  spot_cvd: 'Spot CVD',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1333,6 +1335,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
       || kind === 'book_depth'
       || kind === 'bs' || kind === 'sz' || kind === 'tt' || kind === 'ls' || kind === 'ps'
       || kind === 'realized_price'
+      || kind === 'spot_cvd'
       || kind === 'token_leaderboard') {
     return 'Exchange';
   }
@@ -1660,6 +1663,14 @@ export type ChartInstance = {
    *  first record) or a trailing window of N days. Affects the calculation, so
    *  it's in the load key. */
   rpLookback?: 'all' | '1' | '7' | '14' | '30' | '90';
+  /** spot_cvd only: 'cumulative' (default, running sum → line) or 'periodic'
+   *  (per-bucket delta → bars). Changes the query + render, so it's in the key. */
+  cvdMode?: 'cumulative' | 'periodic';
+  /** spot_cvd only: 'usd' (default) or 'token' volume units. In the load key. */
+  cvdUnit?: 'usd' | 'token';
+  /** spot_cvd only (cumulative mode): accumulation window — 'all' (default,
+   *  from the first record) or a trailing N days. In the load key. */
+  cvdLookback?: 'all' | '1' | '7' | '14' | '30' | '90';
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2550,6 +2561,14 @@ export function newChartInstance(
     base.exchange = 'binance_spot';
     base.rpMode = 'price';
     base.rpLookback = 'all';
+  }
+  if (kind === 'spot_cvd') {
+    // Spot Cumulative Volume Delta of Binance SPOT (taker buy − sell). Spot-only
+    // (no exchange selector); default = cumulative line in USD from inception.
+    base.exchange = 'binance_spot';
+    base.cvdMode = 'cumulative';
+    base.cvdUnit = 'usd';
+    base.cvdLookback = 'all';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

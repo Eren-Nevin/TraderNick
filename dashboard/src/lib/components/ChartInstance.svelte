@@ -868,6 +868,10 @@
       // display-only (both fields ride each row), so it's NOT.
       return `${instance.kind}|${instance.token}|${instance.interval}|lb:${instance.rpLookback ?? 'all'}`;
     }
+    if (instance.kind === 'spot_cvd') {
+      // mode / unit / lookback all change the query → all in the key.
+      return `${instance.kind}|${instance.token}|${instance.interval}|m:${instance.cvdMode ?? 'cumulative'}|u:${instance.cvdUnit ?? 'usd'}|lb:${instance.cvdLookback ?? 'all'}`;
+    }
     if (instance.kind === 'transfer') {
       // Key encodes whether each axis is singleton or group so cache busts
       // when the user toggles between e.g. ETH-USDC and EVM-USDC.
@@ -2668,6 +2672,18 @@
           rpQs.set('exchange', 'binance_spot');
           rpQs.set('lookback', instance.rpLookback ?? 'all');
           url = `/api/realized_price?${rpQs}`;
+          pickArr = (b) => (b.series ?? []) as AnyDatum[];
+          break;
+        }
+        case 'spot_cvd': {
+          // Spot CVD — cumulative (line) or per-bucket (bar) taker buy−sell
+          // volume delta of Binance spot, in USD or token units.
+          const cvdQs = new URLSearchParams(baseQS);
+          cvdQs.set('exchange', 'binance_spot');
+          cvdQs.set('mode', instance.cvdMode ?? 'cumulative');
+          cvdQs.set('unit', instance.cvdUnit ?? 'usd');
+          cvdQs.set('lookback', instance.cvdLookback ?? 'all');
+          url = `/api/spot_cvd?${cvdQs}`;
           pickArr = (b) => (b.series ?? []) as AnyDatum[];
           break;
         }
@@ -5444,6 +5460,12 @@
     return [realized, { key: 'current_price', label: 'Current price', color: '#06b6d4',
       compute: (d: RPRow) => d.current_price ?? NaN }];
   });
+  // spot_cvd cumulative mode: single running-CVD line (USD or token units).
+  let cvdLinesD = $derived.by(() => {
+    type CvdRow = { time: number; value?: number };
+    return [{ key: 'value', label: instance.cvdUnit === 'token' ? 'CVD (token)' : 'CVD ($)',
+      color: '#22c55e', compute: (d: CvdRow) => d.value ?? NaN }];
+  });
   // ps (Perp vs Spot): the spot/perp volume-ratio line. Two variants — on the
   // SECONDARY (left) axis when shown alongside the basis bars ('all'), or on the
   // primary axis when it's the only series ('volume').
@@ -6509,6 +6531,45 @@
             <option value="30">30d</option>
             <option value="90">90d</option>
           </select>
+        {/if}
+        {#if instance.kind === 'spot_cvd'}
+          <!-- Mode: cumulative running sum (line) vs per-bucket delta (bars).
+               Changes the query → refetches. -->
+          <select
+            value={instance.cvdMode ?? 'cumulative'}
+            onchange={(e) => (instance.cvdMode = e.currentTarget.value as 'cumulative' | 'periodic')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Cumulative running CVD (line) or per-bucket delta (bars)"
+          >
+            <option value="cumulative">Cumulative</option>
+            <option value="periodic">Periodic</option>
+          </select>
+          <!-- Units: USD vs token volume. Changes the query → refetches. -->
+          <select
+            value={instance.cvdUnit ?? 'usd'}
+            onchange={(e) => (instance.cvdUnit = e.currentTarget.value as 'usd' | 'token')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Denominate the delta in USD or token volume"
+          >
+            <option value="usd">$</option>
+            <option value="token">Token</option>
+          </select>
+          {#if (instance.cvdMode ?? 'cumulative') === 'cumulative'}
+            <!-- Accumulation window (cumulative only). Changes the query. -->
+            <select
+              value={instance.cvdLookback ?? 'all'}
+              onchange={(e) => (instance.cvdLookback = e.currentTarget.value as 'all' | '1' | '7' | '14' | '30' | '90')}
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+              title="How far back the cumulative CVD accumulates"
+            >
+              <option value="all">All (from start)</option>
+              <option value="1">1d</option>
+              <option value="7">7d</option>
+              <option value="14">14d</option>
+              <option value="30">30d</option>
+              <option value="90">90d</option>
+            </select>
+          {/if}
         {/if}
         {#if instance.kind === 'sz'}
           <!-- Mode: bucket totals vs the chosen bracket split into buyer-taker
@@ -7718,6 +7779,45 @@
         formatY2={instance.rpMode === 'diff' ? ((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`) : undefined}
         formatTooltip2={instance.rpMode === 'diff' ? ((v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`) : undefined}
       />
+    {:else if instance.kind === 'spot_cvd'}
+      <!-- Spot CVD (Binance spot taker buy − sell). Cumulative = running-sum
+           line; Periodic = per-bucket signed bars (green = net buy, red = net
+           sell). USD or token units. -->
+      {@const cvdUseToken = instance.cvdUnit === 'token'}
+      {#if (instance.cvdMode ?? 'cumulative') === 'periodic'}
+        <SignedBarChart
+          data={data as unknown as Array<{ time: number; value: number }>}
+          valueKey="value"
+          lines={[]}
+          showBars={true}
+          valueLabel="CVD"
+          height={chartCanvasHeight}
+          {xExtent}
+          view={effectiveView}
+          onView={handleView}
+          hoverTime={effectiveHoverTime}
+          onHover={handleHover}
+          vRefLines={weekVRefLines}
+          formatY={cvdUseToken ? fmtAmountAxis : fmtUsdAxis}
+          formatTooltip={cvdUseToken ? fmtAmountTooltip : fmtUsdTooltip}
+          minBarWidthPx={3}
+        />
+      {:else}
+        <LineChart
+          data={data as unknown as Array<{ time: number; value?: number }>}
+          lines={cvdLinesD}
+          refLines={[{ value: 0, color: '#52525b', label: '0' }]}
+          height={chartCanvasHeight}
+          {xExtent}
+          view={effectiveView}
+          onView={handleView}
+          hoverTime={effectiveHoverTime}
+          onHover={handleHover}
+          vRefLines={weekVRefLines}
+          formatY={cvdUseToken ? fmtAmountAxis : fmtUsdAxis}
+          formatTooltip={cvdUseToken ? fmtAmountTooltip : fmtUsdTooltip}
+        />
+      {/if}
     {:else if instance.kind === 'fr'}
       <SignedBarChart
         data={frBpsData}

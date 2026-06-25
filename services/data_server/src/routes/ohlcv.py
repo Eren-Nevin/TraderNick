@@ -300,3 +300,127 @@ async def realized_price(request):
         for r in rows.result_rows
     ]
     return response.json({"token": token, "exchange": exchange, "interval": interval, "series": series})
+
+
+@bp.get("/spot_cvd")
+async def spot_cvd(request):
+    """Spot Cumulative Volume Delta — taker buy-minus-sell volume from the
+    1-minute spot OHLCV (buyer_taker / seller_taker columns).
+
+      per-row delta = buyer_taker_volume - seller_taker_volume          (token)
+                    = (buyer_taker_volume - seller_taker_volume)*close   (USD)
+
+    mode='cumulative' (default): running sum of delta through each bucket — a
+      LINE. `lookback` caps the accumulation window: 'all' (from the first
+      record) or a trailing N days.
+    mode='periodic': per-bucket delta sum — a BAR at the chosen `interval`.
+    unit='usd' (default) or 'token'. Defaults to Binance spot; any _OHLCV_TABLE
+    exchange works so more can be added later.
+    """
+    token = request.args.get("token")
+    exchange = request.args.get("exchange", "binance_spot")
+    interval = request.args.get("interval", "1h")
+    since = request.args.get("since")
+    until = request.args.get("until")
+    mode = request.args.get("mode", "cumulative")
+    unit = request.args.get("unit", "usd")
+    lookback = request.args.get("lookback", "all")
+    limit = int(request.args.get("limit", "200000"))
+
+    if not token:
+        return response.json({"error": "missing token"}, status=400)
+    if exchange not in _OHLCV_TABLE:
+        return response.json({"error": f"exchange must be one of {list(_OHLCV_TABLE)}"}, status=400)
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    if mode not in ("cumulative", "periodic"):
+        return response.json({"error": "mode must be cumulative|periodic"}, status=400)
+    if unit not in ("usd", "token"):
+        return response.json({"error": "unit must be usd|token"}, status=400)
+    if lookback not in ("all", "1", "7", "14", "30", "90"):
+        return response.json({"error": "lookback must be all|1|7|14|30|90"}, status=400)
+
+    seconds = INTERVAL_SECONDS[interval]
+    since_dt = _parse_iso(since)
+    until_dt = _parse_iso(until)
+    table = _OHLCV_TABLE[exchange]
+
+    # Fixed expression (unit is validated, not interpolated user text). The
+    # subquery materialises the per-row delta before the outer aggregate so
+    # ClickHouse doesn't bind the columns to the outer aggregate aliases.
+    row_delta = "(buyer_taker_volume - seller_taker_volume)"
+    if unit == "usd":
+        row_delta = f"{row_delta} * close"
+
+    ch = await client()
+    params = {
+        "seconds": seconds, "token": token,
+        "since": since_dt, "until": until_dt, "limit": limit,
+    }
+
+    if mode == "periodic":
+        rows = await ch.query(
+            f"""
+            SELECT
+                toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS ts,
+                sum(d) AS value
+            FROM (
+                SELECT time, {row_delta} AS d
+                FROM {table} FINAL
+                WHERE token = {{token:String}}
+                  AND time >= {{since:DateTime}} AND time < {{until:DateTime}}
+            )
+            GROUP BY ts
+            ORDER BY ts
+            LIMIT {{limit:UInt32}}
+            """,
+            parameters=params,
+        )
+    else:
+        # Cumulative: prefix/rolling sum ordered by bucket timestamp (numeric,
+        # required for the RANGE frame). Outer WHERE clips to the display window
+        # AFTER the running sum is formed. Same frame logic as /realized_price.
+        if lookback == "all":
+            frame = "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
+            lower_bound = ""
+        else:
+            frame = f"RANGE BETWEEN {int(lookback) * 86400} PRECEDING AND CURRENT ROW"
+            lower_bound = " AND time >= {fetch_start:DateTime}"
+            params["fetch_start"] = since_dt - timedelta(days=int(lookback))
+        # The running sum must be computed in an INNER subquery so the display
+        # clip (`WHERE ts >= since`) is applied AFTER it — SQL evaluates WHERE
+        # before window functions, so clipping at the same level would make
+        # 'all' accumulate only from `since` instead of from inception.
+        rows = await ch.query(
+            f"""
+            SELECT ts, value
+            FROM (
+                SELECT
+                    ts,
+                    sum(bucket_delta) OVER (ORDER BY ts {frame}) AS value
+                FROM (
+                    SELECT
+                        toUnixTimestamp(toStartOfInterval(time, INTERVAL {{seconds:UInt32}} SECOND)) AS ts,
+                        sum(d) AS bucket_delta
+                    FROM (
+                        SELECT time, {row_delta} AS d
+                        FROM {table} FINAL
+                        WHERE token = {{token:String}} AND time < {{until:DateTime}}{lower_bound}
+                    )
+                    GROUP BY ts
+                )
+            )
+            WHERE ts >= toUnixTimestamp({{since:DateTime}})
+            ORDER BY ts
+            LIMIT {{limit:UInt32}}
+            """,
+            parameters=params,
+        )
+
+    series = [{"time": int(r[0]), "value": float(r[1])} for r in rows.result_rows]
+    return response.json({
+        "token": token, "exchange": exchange, "interval": interval,
+        "mode": mode, "unit": unit, "series": series,
+    })
