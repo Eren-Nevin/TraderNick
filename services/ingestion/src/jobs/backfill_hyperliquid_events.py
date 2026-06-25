@@ -58,11 +58,12 @@ _CHUNK_HOURS = {
     # are not a chunk-size issue — they're a live-overlap contention
     # issue handled by `_LIVE_OVERLAP_BUFFER` below.
     "position_history": 2,
-    # trade_history is now DAILY absolute snapshots (window deprecated). 28-day
-    # chunks pulled ~46M rows each (every wallet that ever traded a token gets a
-    # daily row) and took ~9.5 min/request — too slow. 7-day chunks keep each
-    # request bounded (still well under DeFiStream's 31-day/request cap).
-    "trade_history":    24 * 7,
+    # trade_history is now DAILY absolute snapshots (window deprecated). Every
+    # wallet that ever traded a token gets a daily row, so payloads scale with
+    # (#wallets x #tokens x #days). At a 97-token roster a 7-day chunk pulled
+    # ~18M rows across ~398k wallets into a ~9.4 GB process — OOM risk. 1-day
+    # chunks keep each request to a single daily snapshot, bounding memory.
+    "trade_history":    24,
     "transfers":        6,
     "funding":          6,
     "vaults":           6,
