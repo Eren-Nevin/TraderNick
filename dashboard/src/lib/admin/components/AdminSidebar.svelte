@@ -139,6 +139,15 @@
         </a>
       {/each}
     {/if}
+
+    <!-- Token Batches -->
+    <a
+      href="/admin/batches"
+      class="block px-4 py-1.5 hover:bg-zinc-900 mt-2"
+      class:bg-zinc-900={isActive('/admin/batches')}
+      class:text-zinc-100={isActive('/admin/batches')}
+      class:text-zinc-400={!isActive('/admin/batches')}
+    >Token Batches</a>
   </nav>
 
   <div class="px-4 py-2 border-t border-zinc-800 text-[10px] text-zinc-600">

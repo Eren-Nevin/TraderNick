@@ -16,6 +16,7 @@ from scripts.bootstrap_wallets import (
 )
 
 import config
+import token_batches
 from jobs.manager import (
     JOB_TYPE_BACKFILL_BOOK_DEPTH,
     JOB_TYPE_BACKFILL_BTC_TRANSFERS,
@@ -155,14 +156,15 @@ async def health(_request):
 
 @app.get("/config/token_batches")
 async def get_token_batches(_request):
-    """Ingestion token batches — Batch 1 (original roster) plus any later
-    INGEST_TOKENS_BATCH_N. The admin backfill UI uses this to let an operator
-    target a specific batch instead of all-or-none. Live jobs always poll the
-    union of every batch; the trading dashboard never sees this."""
+    """Ingestion token batches, read from the runtime store
+    (token_batches.get_batches() → tradernick.ingestion_token_batches). The
+    admin backfill UI uses this to let an operator target a specific batch
+    instead of all-or-none. Live jobs always poll the union of every batch;
+    the trading dashboard never sees this."""
     return response.json({
         "batches": [
             {"name": name, "tokens": toks, "count": len(toks)}
-            for name, toks in config.INGEST_TOKEN_BATCHES
+            for name, toks in token_batches.get_batches()
         ],
     })
 
@@ -436,7 +438,7 @@ def _parse_backfill_window(body: dict):
 async def _create_backfill(request, job_type: str):
     """Token-based backfill (binance_*). Body: {since, until?, tokens?, force?}."""
     body = request.json or {}
-    tokens = body.get("tokens") or config.INGEST_TOKENS
+    tokens = body.get("tokens") or token_batches.get_ingest_tokens()
     force = bool(body.get("force", False))
     if not tokens:
         return response.json({"error": "no tokens"}, status=400)

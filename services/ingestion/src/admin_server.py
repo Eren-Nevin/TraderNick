@@ -33,6 +33,7 @@ from sanic import Sanic, response
 from sanic.request import Request
 
 import config
+import token_batches
 import provider_registry as pr
 
 log = logging.getLogger("admin_server")
@@ -277,16 +278,48 @@ async def health(_request):
 
 @app.get("/config/token_batches")
 async def get_token_batches(_request):
-    """Ingestion token batches (Batch 1 + any INGEST_TOKENS_BATCH_N), read
-    from this gateway's own config (admin_server loads the same .env). The
-    admin backfill UI uses this to target a batch instead of all-or-none.
-    Served locally — no provider fan-out — since batches are global config."""
+    """Ingestion token batches, read from the runtime store
+    (token_batches.get_batches() → tradernick.ingestion_token_batches). The
+    admin backfill + Token Batches UIs use this. Served locally — no provider
+    fan-out — since batches are global config."""
     return response.json({
         "batches": [
             {"name": name, "tokens": toks, "count": len(toks)}
-            for name, toks in config.INGEST_TOKEN_BATCHES
+            for name, toks in token_batches.get_batches()
         ],
     })
+
+
+@app.put("/config/token_batches")
+async def upsert_token_batch(request):
+    """Create or replace a batch (keyed by name). Body: {name, tokens, position?}
+    where tokens is a CSV string or a list. Takes effect across all ingestion
+    processes within the token-batch cache TTL — no restart."""
+    body = request.json or {}
+    name = (body.get("name") or "").strip()
+    if not name:
+        return response.json({"error": "missing batch name"}, status=400)
+    try:
+        result = token_batches.upsert_batch(
+            name, body.get("tokens", ""), body.get("position"),
+        )
+    except ValueError as exc:
+        return response.json({"error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        return response.json({"error": f"upsert failed: {exc}"}, status=500)
+    return response.json({"ok": True, "batch": result})
+
+
+@app.delete("/config/token_batches/<name>")
+async def delete_token_batch(_request, name: str):
+    """Remove a batch (soft-delete). Takes effect within the cache TTL."""
+    try:
+        result = token_batches.delete_batch(name)
+    except ValueError as exc:
+        return response.json({"error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        return response.json({"error": f"delete failed: {exc}"}, status=500)
+    return response.json({"ok": True, **result})
 
 
 @app.get("/streams")

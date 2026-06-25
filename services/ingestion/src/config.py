@@ -1,3 +1,4 @@
+import json
 import os
 from dotenv import load_dotenv
 
@@ -46,6 +47,23 @@ while True:
     if _toks:
         INGEST_TOKEN_BATCHES.append((f"Batch {_batch_n}", _toks))
     _batch_n += 1
+
+# Named batches — supplied as a JSON map {"<name>": "<CSV>", ...} via
+# INGEST_NAMED_BATCHES. Unlike the numbered batches above these carry a
+# human-readable category name (e.g. "Majors", "Memes"). They're appended to
+# INGEST_TOKEN_BATCHES so they participate in the flat union and act as the
+# SEED for the runtime token-batch store (token_batches.py). After first run
+# the admin panel is the source of truth; this env var only re-seeds an empty
+# store. Malformed JSON is ignored so a bad var can't break startup.
+_named_raw = os.environ.get("INGEST_NAMED_BATCHES")
+if _named_raw:
+    try:
+        for _name, _csv in json.loads(_named_raw).items():
+            _toks = _parse_token_csv(_csv)
+            if _toks:
+                INGEST_TOKEN_BATCHES.append((str(_name), _toks))
+    except (ValueError, TypeError, AttributeError):
+        pass
 
 # Flat, de-duplicated union across all batches (first occurrence wins, order
 # preserved). Drop-in replacement for the old flat list — every existing

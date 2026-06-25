@@ -16,3 +16,20 @@ export const GET: RequestHandler = async ({ fetch }) => {
     headers: { 'content-type': 'application/json' }
   });
 };
+
+// Create / replace a batch. Body: {name, tokens, position?}. The store is
+// read by every ingestion process with a short TTL cache, so the change takes
+// effect (backfill targeting + live roster) within ~30s — no restart.
+export const PUT: RequestHandler = async ({ fetch, request }) => {
+  const body = await request.text();
+  const res = await fetch(`${INTERNAL_INGESTION_URL}/config/token_batches`, {
+    method: 'PUT',
+    headers: { Authorization: ingestionAuthHeader(), 'content-type': 'application/json' },
+    body
+  });
+  if (!res.ok) throw error(res.status, await res.text());
+  return new Response(await res.text(), {
+    status: 200,
+    headers: { 'content-type': 'application/json' }
+  });
+};

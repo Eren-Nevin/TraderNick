@@ -1,5 +1,22 @@
 CREATE DATABASE IF NOT EXISTS tradernick;
 
+-- Runtime-managed token batches. Batches used to be env-only (parsed into
+-- config.INGEST_TOKEN_BATCHES at process start); they now live here so the
+-- admin panel can add / edit / remove batches with no restart (see
+-- services/ingestion/src/token_batches.py). One row per batch; `tokens` is a
+-- CSV. Soft-delete via `deleted=1` (RMT keeps the latest row per name by
+-- `updated_at`). The env batches seed this table once, when it is empty.
+CREATE TABLE IF NOT EXISTS tradernick.ingestion_token_batches
+(
+    name        String,
+    tokens      String,
+    position    UInt32,
+    deleted     UInt8          DEFAULT 0,
+    updated_at  DateTime64(3)  DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY name;
+
 CREATE TABLE IF NOT EXISTS tradernick.binance_ohlcv_1m
 (
     token                LowCardinality(String),

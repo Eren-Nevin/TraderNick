@@ -19,6 +19,7 @@ from defistream import AsyncDeFiStream
 
 import ch_status
 import config
+import token_batches
 import sweep
 from clickhouse import HL_EVENTS, async_client
 from gap_fill import latest_time, min_watermark_per_token
@@ -36,14 +37,14 @@ async def run(stream_name: str, event: str) -> None:
     if not config.DEFISTREAM_API_KEY:
         log.error("DEFISTREAM_API_KEY is not set")
         sys.exit(2)
-    if not config.INGEST_TOKENS:
+    if not token_batches.get_ingest_tokens():
         log.error("INGEST_TOKENS is empty")
         sys.exit(2)
     if event not in _CADENCE:
         log.error("unknown HL event %s", event)
         sys.exit(2)
 
-    tokens = list(config.INGEST_TOKENS)
+    tokens = token_batches.get_ingest_tokens()
     # Generous per-request timeout — position_history responses can balloon
     # when the sweep `since` reaches back across a long stale gap. SDK
     # default is 600s; bump to 1800s so we don't trip ReadTimeout while
@@ -96,6 +97,7 @@ async def run(stream_name: str, event: str) -> None:
         log.info("live_loop: waiting %.0fs before first fire", jitter)
         await asyncio.sleep(jitter)
         while True:
+            tokens = token_batches.get_ingest_tokens()
             tick_end = time.monotonic() + tick_s
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             _sweep_rows = 0
@@ -162,6 +164,7 @@ async def run(stream_name: str, event: str) -> None:
         wider), and returns (rows_inserted, error_string). Shared between
         the cadenced sweep_loop and the boot sweep that fires before
         live_loop starts."""
+        tokens = token_batches.get_ingest_tokens()
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         try:
             if per_token:

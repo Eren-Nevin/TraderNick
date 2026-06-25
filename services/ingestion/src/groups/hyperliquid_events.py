@@ -22,6 +22,7 @@ from datetime import datetime, timedelta, timezone
 from defistream import AsyncDeFiStream
 
 import config
+import token_batches
 from clickhouse import HL_EVENTS, async_client
 from gap_fill import latest_time, min_watermark_per_token, resolve_since, run_chunked
 
@@ -140,6 +141,7 @@ def _live_loop(ds, event: str, tokens: list[str]):
 
     async def loop():
         while True:
+            tokens = token_batches.get_ingest_tokens()
             tick_end = time.monotonic() + tick_s
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             since = now - timedelta(minutes=overlap_m)
@@ -180,11 +182,11 @@ async def main():
     if not config.DEFISTREAM_API_KEY:
         log.error("DEFISTREAM_API_KEY is not set")
         sys.exit(2)
-    if not config.INGEST_TOKENS:
+    if not token_batches.get_ingest_tokens():
         log.error("INGEST_TOKENS is empty")
         sys.exit(2)
 
-    tokens = list(config.INGEST_TOKENS)
+    tokens = token_batches.get_ingest_tokens()
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     t_start = datetime.now(timezone.utc).replace(tzinfo=None)
     log.info("polling %d HL endpoints over %d tokens + gap-fill from min-watermark",
