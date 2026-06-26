@@ -14,11 +14,9 @@
     token: string;
     long_oi_token: number; long_oi_usd: number;
     short_oi_token: number; short_oi_usd: number;
-    long_chg24_token: number; long_chg24_usd: number;
-    short_chg24_token: number; short_chg24_usd: number;
-    long_chg7d_token: number; long_chg7d_usd: number;
-    short_chg7d_token: number; short_chg7d_usd: number;
     pct_24h: number | null; pct_7d: number | null;
+    // per-side OI change vs each window (1h/4h/24/7d), token + usd.
+    [k: string]: number | string | null;
   };
 
   let {
@@ -60,9 +58,8 @@
   type SortKey =
     | 'token'
     | 'long_oi_token' | 'long_oi_usd' | 'short_oi_token' | 'short_oi_usd'
-    | 'net'
+    | 'net' | 'netchg1h' | 'netchg4h' | 'netchg24' | 'netchg7d'
     | 'long_chg24_token' | 'long_chg24_usd' | 'short_chg24_token' | 'short_chg24_usd'
-    | 'long_chg7d_token' | 'long_chg7d_usd' | 'short_chg7d_token' | 'short_chg7d_usd'
     | 'pct_24h' | 'pct_7d';
 
   // Net OI = long − short (selected unit); its % = (long − short)/(long + short)
@@ -76,22 +73,39 @@
     const tot = l + s;
     return tot ? ((l - s) / tot) * 100 : null;
   }
+  // Net OI delta over a window (sfx = '1h'|'4h'|'24'|'7d') = Δlong − Δshort =
+  // ΔnetOI (selected unit). Field access is generic over the suffix.
+  function netChg(r: Row, sfx: string): number {
+    const un = unit === 'token' ? 'token' : 'usd';
+    return (Number(r[`long_chg${sfx}_${un}`]) || 0) - (Number(r[`short_chg${sfx}_${un}`]) || 0);
+  }
+  // Net OI delta ÷ avg total OI (now & prior snapshot) → unit-independent %
+  // (price cancels). avgTotal = ((long+short)_now + (long+short)_prior)/2, and
+  // prior = now − change, so avgTotal = total_now − (Δlong + Δshort)/2 ≥ 0.
+  function netChgPct(r: Row, sfx: string): number | null {
+    const lc = Number(r[`long_chg${sfx}_usd`]) || 0;
+    const sc = Number(r[`short_chg${sfx}_usd`]) || 0;
+    const avgTotal = (r.long_oi_usd + r.short_oi_usd) - (lc + sc) / 2;
+    return avgTotal ? ((lc - sc) / avgTotal) * 100 : null;
+  }
 
   // 'oi' = OI magnitude (long green / short red); 'net' = long−short with %;
   // 'chg' = signed change; 'pct' = price %.
-  type Col = { key: SortKey; label: string; kind: 'oi_long' | 'oi_short' | 'net' | 'chg' | 'pct' };
+  type Col = { key: SortKey; label: string; kind: 'oi_long' | 'oi_short' | 'net' | 'netchg' | 'chg' | 'pct'; win?: string };
   let u = $derived(unit === 'token' ? 'token' : 'usd');
   let valueFmt = $derived(unit === 'token' ? fmtAmount : fmtUsd);
   let cols = $derived<Col[]>([
     { key: `long_oi_${u}` as SortKey, label: 'Long OI', kind: 'oi_long' },
     { key: `short_oi_${u}` as SortKey, label: 'Short OI', kind: 'oi_short' },
     { key: 'net', label: 'Net OI', kind: 'net' },
+    { key: 'netchg1h', label: '1h Net OI', kind: 'netchg', win: '1h' },
+    { key: 'netchg4h', label: '4h Net OI', kind: 'netchg', win: '4h' },
+    { key: 'netchg24', label: '24h Net OI', kind: 'netchg', win: '24' },
+    { key: 'netchg7d', label: '7d Net OI', kind: 'netchg', win: '7d' },
     { key: 'pct_24h', label: '24h Price Δ', kind: 'pct' },
     { key: 'pct_7d', label: '7d Price Δ', kind: 'pct' },
     { key: `long_chg24_${u}` as SortKey, label: '24h Long Δ', kind: 'chg' },
-    { key: `short_chg24_${u}` as SortKey, label: '24h Short Δ', kind: 'chg' },
-    { key: `long_chg7d_${u}` as SortKey, label: '7d Long Δ', kind: 'chg' },
-    { key: `short_chg7d_${u}` as SortKey, label: '7d Short Δ', kind: 'chg' }
+    { key: `short_chg24_${u}` as SortKey, label: '24h Short Δ', kind: 'chg' }
   ]);
 
   let sortKey = $state<SortKey>('long_oi_usd');
@@ -121,8 +135,12 @@
     const k = effSortKey;
     return [...arr].sort((a, b) => {
       if (k === 'token') return String(a.token).localeCompare(String(b.token)) * dir;
-      const av = k === 'net' ? netVal(a) : (a[k] as number | null);
-      const bv = k === 'net' ? netVal(b) : (b[k] as number | null);
+      const sv = (r: Row) =>
+        k === 'net' ? netVal(r)
+        : k.startsWith('netchg') ? netChg(r, k.slice(6))
+        : ((r as unknown as Record<string, number | null>)[k]);
+      const av = sv(a);
+      const bv = sv(b);
       const an = av === null || av === undefined || !isFinite(av as number);
       const bn = bv === null || bv === undefined || !isFinite(bv as number);
       if (an && bn) return 0;
@@ -135,16 +153,22 @@
   function cellText(r: Row, c: Col): string {
     if (c.kind === 'net') {
       const n = netVal(r);
-      const sign = n > 0 ? '+' : '';
-      return `${sign}${valueFmt(n)} (${fmtPct(netPct(r))})`;
+      return `${n > 0 ? '+' : ''}${valueFmt(n)} (${fmtPct(netPct(r))})`;
     }
+    if (c.kind === 'netchg') {
+      const n = netChg(r, c.win ?? '24');
+      return `${n > 0 ? '+' : ''}${valueFmt(n)} (${fmtPct(netChgPct(r, c.win ?? '24'))})`;
+    }
+    // (signClass handles netchg sign below)
     const v = (r as unknown as Record<string, number | null>)[c.key];
     return c.kind === 'pct' ? fmtPct(v) : valueFmt(Number(v));
   }
   function signClass(r: Row, c: Col): string {
     if (c.kind === 'oi_long') return 'text-emerald-300';
     if (c.kind === 'oi_short') return 'text-rose-300';
-    const v = c.kind === 'net' ? netVal(r) : (r as unknown as Record<string, number | null>)[c.key];
+    const v = c.kind === 'net' ? netVal(r)
+      : c.kind === 'netchg' ? netChg(r, c.win ?? '24')
+      : (r as unknown as Record<string, number | null>)[c.key];
     if (v === null || v === undefined || !isFinite(v) || v === 0) return 'text-zinc-500';
     return v > 0 ? 'text-emerald-400' : 'text-rose-400';
   }

@@ -2021,6 +2021,8 @@ async def smart_wallet_token_list(request):
     if not tnow_rows.result_rows or tnow_rows.result_rows[0][0] is None:
         return response.json({"tokens": []})
     t_now = tnow_rows.result_rows[0][0]
+    t_1h = t_now - timedelta(hours=1)
+    t_4h = t_now - timedelta(hours=4)
     t_24h = t_now - timedelta(hours=24)
     t_7d = t_now - timedelta(days=7)
 
@@ -2029,37 +2031,38 @@ async def smart_wallet_token_list(request):
         WHERE sel_key = {{sel_key:String}}
           AND computed_at = (SELECT max(computed_at) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{sel_key:String}})
     )"""
-    params = {"sel_key": sel_key, "t_now": t_now, "t_24h": t_24h, "t_7d": t_7d}
+    params = {"sel_key": sel_key, "t_now": t_now, "t_1h": t_1h, "t_4h": t_4h,
+              "t_24h": t_24h, "t_7d": t_7d}
 
     # Inner: latest position per (token, side, wallet) within each of the 3
     # buckets (argMaxMerge over the hour's state). Outer: sum across wallets per
     # token, split by side × snapshot, in token units (amt) and USD (sz).
+    # snapshot label → (long/short) × (token/usd). 5 snapshots: now/1h/4h/24h/7d.
+    def _oi_cols(b):
+        return (
+            f"sumIf(amt, side='long'  AND b='{b}') AS long_{b}_t,"
+            f"sumIf(amt, side='short' AND b='{b}') AS short_{b}_t,"
+            f"sumIf(sz,  side='long'  AND b='{b}') AS long_{b}_u,"
+            f"sumIf(sz,  side='short' AND b='{b}') AS short_{b}_u"
+        )
+    oi_select = ",\n            ".join(_oi_cols(b) for b in ("now", "1h", "4h", "24h", "7d"))
     oi_rows = await ch.query(
         f"""
         SELECT
             token,
-            sumIf(amt, side = 'long'  AND b = 'now') AS long_now_t,
-            sumIf(amt, side = 'short' AND b = 'now') AS short_now_t,
-            sumIf(sz,  side = 'long'  AND b = 'now') AS long_now_u,
-            sumIf(sz,  side = 'short' AND b = 'now') AS short_now_u,
-            sumIf(amt, side = 'long'  AND b = '24h') AS long_24_t,
-            sumIf(amt, side = 'short' AND b = '24h') AS short_24_t,
-            sumIf(sz,  side = 'long'  AND b = '24h') AS long_24_u,
-            sumIf(sz,  side = 'short' AND b = '24h') AS short_24_u,
-            sumIf(amt, side = 'long'  AND b = '7d')  AS long_7_t,
-            sumIf(amt, side = 'short' AND b = '7d')  AS short_7_t,
-            sumIf(sz,  side = 'long'  AND b = '7d')  AS long_7_u,
-            sumIf(sz,  side = 'short' AND b = '7d')  AS short_7_u
+            {oi_select}
         FROM (
             SELECT
                 token, side, wallet,
                 multiIf(bucket = {{t_now:DateTime}}, 'now',
+                        bucket = {{t_1h:DateTime}},  '1h',
+                        bucket = {{t_4h:DateTime}},  '4h',
                         bucket = {{t_24h:DateTime}}, '24h',
                         bucket = {{t_7d:DateTime}},  '7d', '') AS b,
                 argMaxMerge(amount_state) AS amt,
                 argMaxMerge(size_state)   AS sz
             FROM tradernick.hl_position_history_1h
-            WHERE bucket IN ({{t_now:DateTime}}, {{t_24h:DateTime}}, {{t_7d:DateTime}})
+            WHERE bucket IN ({{t_now:DateTime}}, {{t_1h:DateTime}}, {{t_4h:DateTime}}, {{t_24h:DateTime}}, {{t_7d:DateTime}})
               AND {cache_filter}
             GROUP BY token, side, wallet, bucket
         )
@@ -2084,23 +2087,32 @@ async def smart_wallet_token_list(request):
     )
     price = {r[0]: (float(r[1]), float(r[2]), float(r[3])) for r in price_rows.result_rows}
 
+    # SELECT order is long_t, short_t, long_u, short_u per snapshot — match it.
+    col_order = [
+        f"{side}_{b}_{u}"
+        for b in ("now", "1h", "4h", "24h", "7d")
+        for u in ("t", "u")
+        for side in ("long", "short")
+    ]
     out = []
     for r in oi_rows.result_rows:
-        (token, l_now_t, s_now_t, l_now_u, s_now_u,
-         l_24_t, s_24_t, l_24_u, s_24_u,
-         l_7_t, s_7_t, l_7_u, s_7_u) = (r[0],) + tuple(float(x) for x in r[1:])
+        token = r[0]
+        v = {c: float(x) for c, x in zip(col_order, r[1:])}
         p_now, p_24h, p_7d = price.get(token, (0.0, 0.0, 0.0))
-        out.append({
+        row = {
             "token": token,
-            "long_oi_token": l_now_t, "long_oi_usd": l_now_u,
-            "short_oi_token": s_now_t, "short_oi_usd": s_now_u,
-            "long_chg24_token": l_now_t - l_24_t, "long_chg24_usd": l_now_u - l_24_u,
-            "short_chg24_token": s_now_t - s_24_t, "short_chg24_usd": s_now_u - s_24_u,
-            "long_chg7d_token": l_now_t - l_7_t, "long_chg7d_usd": l_now_u - l_7_u,
-            "short_chg7d_token": s_now_t - s_7_t, "short_chg7d_usd": s_now_u - s_7_u,
+            "long_oi_token": v["long_now_t"], "long_oi_usd": v["long_now_u"],
+            "short_oi_token": v["short_now_t"], "short_oi_usd": v["short_now_u"],
             "pct_24h": ((p_now - p_24h) / p_24h * 100.0) if p_24h > 0 else None,
             "pct_7d": ((p_now - p_7d) / p_7d * 100.0) if p_7d > 0 else None,
-        })
+        }
+        # Per-side OI change (now − ago) for each window, token + USD.
+        for win in ("1h", "4h", "24", "7d"):
+            b = "24h" if win == "24" else win
+            for side in ("long", "short"):
+                row[f"{side}_chg{win}_token"] = v[f"{side}_now_t"] - v[f"{side}_{b}_t"]
+                row[f"{side}_chg{win}_usd"] = v[f"{side}_now_u"] - v[f"{side}_{b}_u"]
+        out.append(row)
     return response.json({"tokens": out, "wallet_set": sel_key})
 
 
