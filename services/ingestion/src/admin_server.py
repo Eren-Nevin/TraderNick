@@ -26,7 +26,7 @@ import hmac
 import logging
 import os
 from typing import Any
-from urllib.parse import urlencode
+from urllib.parse import unquote, urlencode
 
 import httpx
 from sanic import Sanic, response
@@ -313,6 +313,7 @@ async def upsert_token_batch(request):
 @app.delete("/config/token_batches/<name>")
 async def delete_token_batch(_request, name: str):
     """Remove a batch (soft-delete). Takes effect within the cache TTL."""
+    name = unquote(name)  # Sanic doesn't URL-decode path params → names with spaces
     try:
         result = token_batches.delete_batch(name)
     except ValueError as exc:
@@ -354,6 +355,7 @@ async def upsert_token_override(request):
 @app.delete("/config/token_overrides/<kind>/<token>")
 async def delete_token_override(_request, kind: str, token: str):
     """Remove an override (soft-delete). Takes effect within the cache TTL."""
+    kind, token = unquote(kind), unquote(token)
     try:
         result = token_batches.delete_override(kind, token)
     except ValueError as exc:
