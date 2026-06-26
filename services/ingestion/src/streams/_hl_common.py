@@ -72,20 +72,20 @@ async def run(stream_name: str, event: str) -> None:
         "fills":             3600.0,
         "trade_history":     3600.0,
         "transfers":         3600.0,
-        "position_history":  3600.0,  # 1 h (was 30 min — aligned with trade_history)
+        "position_history":  1800.0,  # 30 min — keep the sweep backstop tight so
+                                      # position_history lands within ~30 min.
     }
     sweep_cadence = _SWEEP_CADENCE_OVERRIDES.get(event, sweep.sweep_cadence_s(tick_s))
 
-    # Events whose sweep `since` / `until` should be snapped to whole-hour
-    # boundaries. The HL position_history and trade_history endpoints
-    # aggregate over discrete buckets (15m and 1h respectively); asking DS
-    # for an off-grid window forces them to recompute on partial buckets,
-    # which has been the trigger for HTTP 500 Code 241 on
-    # `position_history` (their CH hits its memory limit on the half-open
-    # last bucket). Snapping keeps every sweep request on the same grid
-    # the live tick uses and reduces the chance of DS being asked the
-    # same "almost there" query twice.
-    _HOUR_ALIGNED_SWEEP_EVENTS = {"position_history", "trade_history"}
+    # Per-event sweep grid (minutes). The HL position_history / trade_history
+    # endpoints aggregate over discrete buckets (15m / 1h); asking DS for an
+    # OFF-grid window forces them to recompute on a partial bucket, which has
+    # triggered HTTP 500 Code 241 (their CH OOMs on the half-open last bucket).
+    # Snapping `since`/`until` to the event's bucket grid avoids that. Crucially
+    # position_history snaps to its REAL 15m grid (not whole hours) so the sweep
+    # can advance to within ~15m of now — landing within ~30m instead of ~1h.
+    # trade_history stays on its 1h bucket grid.
+    _SWEEP_GRID_MIN = {"position_history": 15, "trade_history": 60}
     _method, table, _cols, _tf = HL_EVENTS[event]
     per_token = event in _PER_TOKEN_TABLE
 
@@ -122,7 +122,13 @@ async def run(stream_name: str, event: str) -> None:
                 minute=(now.minute // 15) * 15,
                 second=0, microsecond=0,
             )
-            since = floor_now - timedelta(minutes=15)
+            # position_history snapshots are published ~25m late upstream, so a
+            # 15m live window (just-closed slot) always misses them and we used
+            # to rely on the slow hourly sweep. Re-fetch the last 45m of 15m
+            # slots each tick so a late-published snapshot lands within ~30m.
+            # Window stays on the 15m grid; RMT dedups the re-fetched overlap.
+            _live_lookback = 45 if event == "position_history" else 15
+            since = floor_now - timedelta(minutes=_live_lookback)
             until = floor_now
             n = 0
             err: str | None = None
@@ -173,16 +179,15 @@ async def run(stream_name: str, event: str) -> None:
                 last_seen = await latest_time(ch, table=table)
             since = sweep.sweep_since(now=now, sweep_cadence_seconds=sweep_cadence, last_seen=last_seen)
             sweep_until = now
-            if event in _HOUR_ALIGNED_SWEEP_EVENTS:
-                # Round `until` DOWN to the most-recently-closed hour so we
-                # never ask DS for the in-progress hour. Round `since` DOWN
-                # to the same grid so the request lines up bucket-to-bucket
-                # with the live tick's window.
-                sweep_until = now.replace(minute=0, second=0, microsecond=0)
-                since = since.replace(minute=0, second=0, microsecond=0)
+            _grid = _SWEEP_GRID_MIN.get(event)
+            if _grid:
+                # Snap `since`/`until` DOWN to the event's bucket grid so we
+                # never ask DS for the in-progress (partial) bucket, while still
+                # advancing to the most-recently-closed bucket on that grid.
+                sweep_until = now.replace(minute=(now.minute // _grid) * _grid, second=0, microsecond=0)
+                since = since.replace(minute=(since.minute // _grid) * _grid, second=0, microsecond=0)
                 if since >= sweep_until:
-                    # We're inside the current hour and haven't crossed an
-                    # hour boundary since last_seen — nothing to sweep.
+                    # No closed bucket crossed since last_seen — nothing to sweep.
                     return 0, None
             if since >= sweep_until:
                 return 0, None
