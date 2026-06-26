@@ -827,7 +827,7 @@
     return [
       instance.kind, instance.swMetric ?? 'sharpe', instance.swLookback ?? 7,
       instance.swToken ?? '__all__', swSnapshotIso(),
-      swF('swMinDays', 3), swF('swMinVolume', 100000),
+      swF('swMinDays', 3), swF('swMinVolume', 0),
       swF('swMinRealized', 0), swF('swMinOi', 0),
       swF('swMinAvgTradeSize', 0), swF('swMinTakerPct', 0),
       committedFilters.swMaxFeePct ?? '', committedFilters.swMaxFundingPct ?? '',
@@ -3004,7 +3004,7 @@
       // Guards come from the COMMITTED snapshot (applied on refresh), not the
       // live gear inputs — so the table doesn't reload while the user edits.
       min_days: String(Math.max(1, swF('swMinDays', 3))),
-      min_volume: String(Math.max(0, swF('swMinVolume', 100000))),
+      min_volume: String(Math.max(0, swF('swMinVolume', 0))),
       min_realized: String(swF('swMinRealized', 0)),
       min_oi: String(Math.max(0, swF('swMinOi', 0))),
       min_avg_trade_size: String(Math.max(0, swF('swMinAvgTradeSize', 0))),
@@ -6998,7 +6998,7 @@
                 <span class={swLabel}>Min volume ($)</span>
                 <input
                   type="number" min="0" step="10000"
-                  value={instance.swMinVolume ?? 100000}
+                  value={instance.swMinVolume ?? 0}
                   onchange={(e) => (instance.swMinVolume = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
                   title="Minimum window volume (USD) for a wallet to be ranked"
                   class={swCell}

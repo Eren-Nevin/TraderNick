@@ -1141,7 +1141,7 @@
         inst.swMinDays =
           typeof r.swMinDays === 'number' && r.swMinDays >= 1 ? Math.floor(r.swMinDays) : 3;
         inst.swMinVolume =
-          typeof r.swMinVolume === 'number' && r.swMinVolume >= 0 ? r.swMinVolume : 100000;
+          typeof r.swMinVolume === 'number' && r.swMinVolume >= 0 ? r.swMinVolume : 0;
         inst.swMinRealized =
           typeof r.swMinRealized === 'number' ? r.swMinRealized : 0;
         inst.swMinOi =
@@ -1180,6 +1180,63 @@
             ? (r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>) : 'total';
         inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
         inst.swShowClose = r.swShowClose === true;
+      }
+      if (inst.kind === 'smart_wallets_dynamic') {
+        // Dynamic finder persists the SAME sw* criteria as the table finder, but
+        // it had NO sanitize branch — so on reload every filter reverted to
+        // undefined and swMinVolume fell back to 100K. Restore each field from
+        // the save; missing fields fall back to the newChartInstance defaults
+        // (active days 7, account age 30, win rate 60%, OI share 0.05, no
+        // volume floor) so the documented defaults actually survive a reload.
+        inst.chain = 'HL';
+        inst.exchange = 'hl';
+        inst.swMetric = 'sharpe';
+        const lb = r.swLookback;
+        inst.swLookback = (lb === 1 || lb === 3 || lb === 7 || lb === 14 || lb === 30) ? lb : 30;
+        inst.swToken = typeof r.swToken === 'string' && r.swToken.length > 0 ? r.swToken : null;
+        inst.swMinDays =
+          typeof r.swMinDays === 'number' && r.swMinDays >= 1 ? Math.floor(r.swMinDays) : 7;
+        inst.swMinAccountDuration =
+          typeof r.swMinAccountDuration === 'number' && r.swMinAccountDuration >= 0
+            ? Math.floor(r.swMinAccountDuration) : 30;
+        inst.swMinWinRate =
+          typeof r.swMinWinRate === 'number' && r.swMinWinRate >= 0 ? r.swMinWinRate : 60;
+        inst.swMinAvgOiShare =
+          typeof r.swMinAvgOiShare === 'number' && r.swMinAvgOiShare >= 0 ? r.swMinAvgOiShare : 0.05;
+        inst.swMinVolume =
+          typeof r.swMinVolume === 'number' && r.swMinVolume >= 0 ? r.swMinVolume : 0;
+        inst.swMinRealized = typeof r.swMinRealized === 'number' ? r.swMinRealized : 0;
+        inst.swMinOi = typeof r.swMinOi === 'number' && r.swMinOi >= 0 ? r.swMinOi : 0;
+        inst.swMinAvgTradeSize =
+          typeof r.swMinAvgTradeSize === 'number' && r.swMinAvgTradeSize >= 0 ? r.swMinAvgTradeSize : 0;
+        inst.swMinTakerPct =
+          typeof r.swMinTakerPct === 'number' && r.swMinTakerPct >= 0 ? r.swMinTakerPct : 0;
+        inst.swMinTokens =
+          typeof r.swMinTokens === 'number' && r.swMinTokens >= 0 ? Math.floor(r.swMinTokens) : 0;
+        inst.swMinTradesPerDay =
+          typeof r.swMinTradesPerDay === 'number' && r.swMinTradesPerDay >= 0 ? r.swMinTradesPerDay : 0;
+        inst.swMinVolumeShare =
+          typeof r.swMinVolumeShare === 'number' && r.swMinVolumeShare >= 0 ? r.swMinVolumeShare : 0;
+        inst.swMaxFeePct = typeof r.swMaxFeePct === 'number' ? r.swMaxFeePct : null;
+        inst.swMaxFundingPct = typeof r.swMaxFundingPct === 'number' ? r.swMaxFundingPct : null;
+        inst.swMaxTradesPerDay = typeof r.swMaxTradesPerDay === 'number' ? r.swMaxTradesPerDay : null;
+        inst.swMinAnnualizedSharpe = typeof r.swMinAnnualizedSharpe === 'number' ? r.swMinAnnualizedSharpe : null;
+        inst.swMaxAvgOiShare = typeof r.swMaxAvgOiShare === 'number' ? r.swMaxAvgOiShare : null;
+        inst.swMaxVolumeShare = typeof r.swMaxVolumeShare === 'number' ? r.swMaxVolumeShare : null;
+        inst.viewMode =
+          r.viewMode === 'table' ? 'table' : r.viewMode === 'token_list' ? 'token_list' : 'chart';
+        inst.token =
+          typeof r.token === 'string' && r.token.length > 0 ? r.token : (inst.swToken || 'BTC');
+        inst.interval =
+          typeof r.interval === 'string' && r.interval.length > 0 ? (r.interval as Interval) : '1h';
+        inst.oiHlDisplay =
+          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net', 'count'] as const)
+            .includes(r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>)
+            ? (r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>) : 'total';
+        inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
+        inst.swtUnit = r.swtUnit === 'token' ? 'token' : 'usd';
+        inst.swShowClose = r.swShowClose !== false;
+        inst.smartShowWalletCount = r.smartShowWalletCount === true;
       }
       // Compound overlays — preserved across reloads. Each entry is validated
       // through sanitizeOverlay() so a corrupt save can't strand the chart.

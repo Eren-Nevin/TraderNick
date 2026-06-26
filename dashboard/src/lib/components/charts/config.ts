@@ -2841,18 +2841,16 @@ export function newChartInstance(
     base.exchange = 'hl';
     base.viewMode = 'chart';
     base.interval = '1h';
-    base.swMetric = 'sharpe';
-    base.swLookback = 7;          // from SMART_WALLET_DYNAMIC_LOOKBACKS
-    base.swToken = null;          // global (all tokens) by default
-    // Default criteria: ONLY these four are pre-set; all other criteria are
-    // left unset (no default floor) so the finder starts lean.
-    base.swMinAvgOiShare = 0.05;
-    base.swMinDays = 1;
-    base.swMinWinRate = 70;
-    base.swMinAnnualizedSharpe = 2;
-    // Explicit 0 = no volume floor. Must be set, else the query builder + UI
-    // fall back to `swMinVolume ?? 100000` and reintroduce a 100K default.
-    base.swMinVolume = 0;
+    base.swMetric = 'sharpe';        // ranking metric (not a filter)
+    base.swLookback = 30;            // 30-day lookback
+    base.swToken = null;             // global (all tokens)
+    // Default wallet-filter criteria — ONLY these four are active; every other
+    // criterion stays unset/neutral (no volume floor, no Sharpe min, etc.).
+    base.swMinDays = 7;              // min active days
+    base.swMinAccountDuration = 30;  // min account age (days)
+    base.swMinWinRate = 60;          // min win rate %
+    base.swMinAvgOiShare = 0.05;     // min avg OI share
+    base.swMinVolume = 0;            // no volume floor (fallbacks elsewhere are 0 too)
     base.swShowClose = true;          // overlay the token's close price by default
     base.smartShowWalletCount = false; // per-day wallet-count overlay off by default
   }
