@@ -5324,6 +5324,15 @@
       );
       return buildOverlayLines(range);
     }
+    // Spot CVD periodic mode is bars (SignedBarChart) — derive the overlay
+    // range from the signed bar values like FR. Cumulative mode falls through
+    // to the primary-lines path below (primaryLines = cvdLinesD).
+    if (instance.kind === 'spot_cvd' && (instance.cvdMode ?? 'cumulative') === 'periodic') {
+      const range = computePrimaryRangeFromField(
+        data as unknown as Record<string, number>[], 'value', true
+      );
+      return buildOverlayLines(range);
+    }
     // Pick the right per-kind primary-lines array. Falls through to an empty
     // range when no primary lines exist (overlay will render flat-centered).
     let primaryLines: typeof aaveLinesD = [];
@@ -5336,6 +5345,7 @@
     else if (instance.kind === 'sz') primaryLines = (instance.szMode === 'taker_split' ? szTakerSplitLinesD : szLinesD);
     else if (instance.kind === 'transfer') primaryLines = transferLinesD;
     else if (instance.kind === 'exchange_flow') primaryLines = exchangeFlowLinesD;
+    else if (instance.kind === 'spot_cvd') primaryLines = cvdLinesD;
     else if (instance.kind === 'hl_unrealized_pnl') primaryLines = hlUnrealizedLinesD;
     else if (instance.kind === 'hl_pnl' && (instance.hlPnlSide ?? 'total') !== 'total') primaryLines = hlPnlSplitLinesD as typeof aaveLinesD;
     else if (instance.kind === 'hl_vault_net') primaryLines = hlVaultFlowLinesD;
@@ -5510,6 +5520,9 @@
     return [{ key: 'value', label: instance.cvdUnit === 'token' ? 'CVD (token)' : 'CVD ($)',
       color: '#22c55e', compute: (d: CvdRow) => d.value ?? NaN }];
   });
+  // Merged variant so an enabled overlay (e.g. OHLCV close) renders on the CVD
+  // line. Defined here (after cvdLinesD) rather than with the other *LinesM.
+  let cvdLinesM = $derived(overlayLinesD.length === 0 ? cvdLinesD : [...cvdLinesD, ...overlayLinesD]);
   // ps (Perp vs Spot): the spot/perp volume-ratio line. Two variants — on the
   // SECONDARY (left) axis when shown alongside the basis bars ('all'), or on the
   // primary axis when it's the only series ('volume').
@@ -7881,7 +7894,7 @@
         <SignedBarChart
           data={data as unknown as Array<{ time: number; value: number }>}
           valueKey="value"
-          lines={[]}
+          lines={overlayLinesD}
           showBars={true}
           valueLabel="CVD"
           height={chartCanvasHeight}
@@ -7898,7 +7911,7 @@
       {:else}
         <LineChart
           data={data as unknown as Array<{ time: number; value?: number }>}
-          lines={cvdLinesD}
+          lines={cvdLinesM}
           refLines={[{ value: 0, color: '#52525b', label: '0' }]}
           height={chartCanvasHeight}
           {xExtent}
