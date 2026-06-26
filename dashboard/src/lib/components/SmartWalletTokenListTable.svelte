@@ -60,17 +60,32 @@
   type SortKey =
     | 'token'
     | 'long_oi_token' | 'long_oi_usd' | 'short_oi_token' | 'short_oi_usd'
+    | 'net'
     | 'long_chg24_token' | 'long_chg24_usd' | 'short_chg24_token' | 'short_chg24_usd'
     | 'long_chg7d_token' | 'long_chg7d_usd' | 'short_chg7d_token' | 'short_chg7d_usd'
     | 'pct_24h' | 'pct_7d';
 
-  // 'oi' = OI magnitude (long green / short red); 'chg' = signed change; 'pct' = price %.
-  type Col = { key: SortKey; label: string; kind: 'oi_long' | 'oi_short' | 'chg' | 'pct' };
+  // Net OI = long − short (selected unit); its % = (long − short)/(long + short)
+  // — unit-independent (price cancels), so it reads the same in $ or token.
+  function netVal(r: Row): number {
+    return unit === 'token' ? r.long_oi_token - r.short_oi_token : r.long_oi_usd - r.short_oi_usd;
+  }
+  function netPct(r: Row): number | null {
+    const l = unit === 'token' ? r.long_oi_token : r.long_oi_usd;
+    const s = unit === 'token' ? r.short_oi_token : r.short_oi_usd;
+    const tot = l + s;
+    return tot ? ((l - s) / tot) * 100 : null;
+  }
+
+  // 'oi' = OI magnitude (long green / short red); 'net' = long−short with %;
+  // 'chg' = signed change; 'pct' = price %.
+  type Col = { key: SortKey; label: string; kind: 'oi_long' | 'oi_short' | 'net' | 'chg' | 'pct' };
   let u = $derived(unit === 'token' ? 'token' : 'usd');
   let valueFmt = $derived(unit === 'token' ? fmtAmount : fmtUsd);
   let cols = $derived<Col[]>([
     { key: `long_oi_${u}` as SortKey, label: 'Long OI', kind: 'oi_long' },
     { key: `short_oi_${u}` as SortKey, label: 'Short OI', kind: 'oi_short' },
+    { key: 'net', label: 'Net OI', kind: 'net' },
     { key: 'pct_24h', label: '24h Price Δ', kind: 'pct' },
     { key: 'pct_7d', label: '7d Price Δ', kind: 'pct' },
     { key: `long_chg24_${u}` as SortKey, label: '24h Long Δ', kind: 'chg' },
@@ -106,8 +121,8 @@
     const k = effSortKey;
     return [...arr].sort((a, b) => {
       if (k === 'token') return String(a.token).localeCompare(String(b.token)) * dir;
-      const av = a[k] as number | null;
-      const bv = b[k] as number | null;
+      const av = k === 'net' ? netVal(a) : (a[k] as number | null);
+      const bv = k === 'net' ? netVal(b) : (b[k] as number | null);
       const an = av === null || av === undefined || !isFinite(av as number);
       const bn = bv === null || bv === undefined || !isFinite(bv as number);
       if (an && bn) return 0;
@@ -118,13 +133,18 @@
   });
 
   function cellText(r: Row, c: Col): string {
-    const v = r[c.key] as number | null;
+    if (c.kind === 'net') {
+      const n = netVal(r);
+      const sign = n > 0 ? '+' : '';
+      return `${sign}${valueFmt(n)} (${fmtPct(netPct(r))})`;
+    }
+    const v = (r as unknown as Record<string, number | null>)[c.key];
     return c.kind === 'pct' ? fmtPct(v) : valueFmt(Number(v));
   }
   function signClass(r: Row, c: Col): string {
     if (c.kind === 'oi_long') return 'text-emerald-300';
     if (c.kind === 'oi_short') return 'text-rose-300';
-    const v = r[c.key] as number | null;
+    const v = c.kind === 'net' ? netVal(r) : (r as unknown as Record<string, number | null>)[c.key];
     if (v === null || v === undefined || !isFinite(v) || v === 0) return 'text-zinc-500';
     return v > 0 ? 'text-emerald-400' : 'text-rose-400';
   }
