@@ -175,8 +175,9 @@
     if (c.kind === 'lsnum') {
       const lc = Math.round(Number(r.long_count ?? 0));
       const sc = Math.round(Number(r.short_count ?? 0));
-      // L/S ratio as a percentage = long ÷ short (e.g. 30/100 → 30%).
-      const pct = sc > 0 ? `${Math.round((lc / sc) * 100)}%` : (lc > 0 ? '∞' : '—');
+      // Long share = long ÷ (long + short), bounded to 100% (e.g. 30/100 → 23%).
+      const tot = lc + sc;
+      const pct = tot > 0 ? `${Math.round((lc / tot) * 100)}%` : '—';
       return `${lc.toLocaleString()}/${sc.toLocaleString()} (${pct})`;
     }
     // (signClass handles netchg sign below)
