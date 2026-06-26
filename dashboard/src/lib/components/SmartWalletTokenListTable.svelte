@@ -58,7 +58,7 @@
   type SortKey =
     | 'token'
     | 'long_oi_token' | 'long_oi_usd' | 'short_oi_token' | 'short_oi_usd'
-    | 'net' | 'netchg1h' | 'netchg4h' | 'netchg24' | 'netchg7d'
+    | 'net' | 'netchg1h' | 'netchg4h' | 'netchg24' | 'netchg7d' | 'lsnum'
     | 'long_chg24_token' | 'long_chg24_usd' | 'short_chg24_token' | 'short_chg24_usd'
     | 'pct_24h' | 'pct_7d';
 
@@ -91,12 +91,13 @@
 
   // 'oi' = OI magnitude (long green / short red); 'net' = long−short with %;
   // 'chg' = signed change; 'pct' = price %.
-  type Col = { key: SortKey; label: string; kind: 'oi_long' | 'oi_short' | 'net' | 'netchg' | 'chg' | 'pct'; win?: string };
+  type Col = { key: SortKey; label: string; kind: 'oi_long' | 'oi_short' | 'net' | 'netchg' | 'chg' | 'pct' | 'lsnum'; win?: string };
   let u = $derived(unit === 'token' ? 'token' : 'usd');
   let valueFmt = $derived(unit === 'token' ? fmtAmount : fmtUsd);
   let cols = $derived<Col[]>([
     { key: `long_oi_${u}` as SortKey, label: 'Long OI', kind: 'oi_long' },
     { key: `short_oi_${u}` as SortKey, label: 'Short OI', kind: 'oi_short' },
+    { key: 'lsnum', label: 'L/S num', kind: 'lsnum' },
     { key: 'net', label: 'Net OI', kind: 'net' },
     { key: 'netchg1h', label: '1h Net OI', kind: 'netchg', win: '1h' },
     { key: 'netchg4h', label: '4h Net OI', kind: 'netchg', win: '4h' },
@@ -148,6 +149,7 @@
       if (k === 'token') return String(a.token).localeCompare(String(b.token)) * dir;
       const sv = (r: Row) =>
         k === 'net' ? netVal(r)
+        : k === 'lsnum' ? Number(r.long_count ?? 0)
         : k.startsWith('netchg') ? netChg(r, k.slice(6))
         : ((r as unknown as Record<string, number | null>)[k]);
       const av = sv(a);
@@ -170,6 +172,13 @@
       const n = netChg(r, c.win ?? '24');
       return `${n > 0 ? '+' : ''}${valueFmt(n)} (${fmtPct(netChgPct(r, c.win ?? '24'))})`;
     }
+    if (c.kind === 'lsnum') {
+      const lc = Math.round(Number(r.long_count ?? 0));
+      const sc = Math.round(Number(r.short_count ?? 0));
+      // L/S ratio as a percentage = long ÷ short (e.g. 30/100 → 30%).
+      const pct = sc > 0 ? `${Math.round((lc / sc) * 100)}%` : (lc > 0 ? '∞' : '—');
+      return `${lc.toLocaleString()}/${sc.toLocaleString()} (${pct})`;
+    }
     // (signClass handles netchg sign below)
     const v = (r as unknown as Record<string, number | null>)[c.key];
     return c.kind === 'pct' ? fmtPct(v) : valueFmt(Number(v));
@@ -177,6 +186,7 @@
   function signClass(r: Row, c: Col): string {
     if (c.kind === 'oi_long') return 'text-emerald-300';
     if (c.kind === 'oi_short') return 'text-rose-300';
+    if (c.kind === 'lsnum') return 'text-zinc-300';
     const v = c.kind === 'net' ? netVal(r)
       : c.kind === 'netchg' ? netChg(r, c.win ?? '24')
       : (r as unknown as Record<string, number | null>)[c.key];

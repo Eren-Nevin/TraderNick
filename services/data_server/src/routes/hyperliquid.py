@@ -2054,7 +2054,9 @@ async def smart_wallet_token_list(request):
         f"""
         SELECT
             token,
-            {oi_select}
+            {oi_select},
+            toUInt32(uniqExactIf(wallet, side='long'  AND b='now' AND amt > 0)) AS long_count,
+            toUInt32(uniqExactIf(wallet, side='short' AND b='now' AND amt > 0)) AS short_count
         FROM (
             SELECT
                 token, side, wallet,
@@ -2103,10 +2105,13 @@ async def smart_wallet_token_list(request):
         token = r[0]
         v = {c: float(x) for c, x in zip(col_order, r[1:])}
         p_now, p_24h, p_7d = price.get(token, (0.0, 0.0, 0.0))
+        # Count columns follow the 20 OI columns (uniqExactIf at the 'now' snapshot).
+        n_oi = len(col_order)
         row = {
             "token": token,
             "long_oi_token": v["long_now_t"], "long_oi_usd": v["long_now_u"],
             "short_oi_token": v["short_now_t"], "short_oi_usd": v["short_now_u"],
+            "long_count": int(r[1 + n_oi]), "short_count": int(r[2 + n_oi]),
             "pct_24h": ((p_now - p_24h) / p_24h * 100.0) if p_24h > 0 else None,
             "pct_7d": ((p_now - p_7d) / p_7d * 100.0) if p_7d > 0 else None,
         }
