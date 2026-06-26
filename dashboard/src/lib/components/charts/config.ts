@@ -2849,6 +2849,9 @@ export function newChartInstance(
     base.swMinDays = 1;
     base.swMinWinRate = 70;
     base.swMinAnnualizedSharpe = 2;
+    // Explicit 0 = no volume floor. Must be set, else the query builder + UI
+    // fall back to `swMinVolume ?? 100000` and reintroduce a 100K default.
+    base.swMinVolume = 0;
     base.swShowClose = true;          // overlay the token's close price by default
     base.smartShowWalletCount = false; // per-day wallet-count overlay off by default
   }
