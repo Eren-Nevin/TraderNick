@@ -2843,12 +2843,12 @@ export function newChartInstance(
     base.swMetric = 'sharpe';
     base.swLookback = 7;          // from SMART_WALLET_DYNAMIC_LOOKBACKS
     base.swToken = null;          // global (all tokens) by default
-    // Default criteria: only these four are active (volume floor removed → 0).
-    base.swMinDays = 3;
-    base.swMinWinRate = 50;
+    // Default criteria: ONLY these four are pre-set; all other criteria are
+    // left unset (no default floor) so the finder starts lean.
+    base.swMinAvgOiShare = 0.05;
+    base.swMinDays = 1;
+    base.swMinWinRate = 70;
     base.swMinAnnualizedSharpe = 2;
-    base.swMinAvgOiShare = 0.1;   // 0.01% units (30 = 0.30%) → 0.1 = 0.001%
-    base.swMinVolume = 0;
     base.swShowClose = true;          // overlay the token's close price by default
     base.smartShowWalletCount = false; // per-day wallet-count overlay off by default
   }
