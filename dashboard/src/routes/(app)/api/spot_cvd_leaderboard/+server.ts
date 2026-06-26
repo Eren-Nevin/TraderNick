@@ -4,7 +4,7 @@ import type { RequestHandler } from './$types';
 
 // Proxy for /spot_cvd_leaderboard — per-token cumulative spot CVD ranking over a
 // lookback window. Returns every token; the table sorts/limits client-side.
-const PASSTHROUGH = ['exchange', 'lookback'];
+const PASSTHROUGH = ['exchange', 'lookback', 'multi'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

@@ -1787,10 +1787,12 @@
       // Spot CVD tableview: per-token cumulative CVD over the lookback. Server
       // returns every token; the table sorts/limits client-side.
       if (instance.kind === 'spot_cvd_table') {
-        const qs = new URLSearchParams({
-          exchange: 'binance_spot',
-          lookback: instance.cvdtLookback ?? 'all'
-        });
+        // 'all' = multi-period comparison (1d/7d/14d pairs in one response);
+        // a specific period = single-period columns for that lookback.
+        const lb = instance.cvdtLookback ?? 'all';
+        const qs = new URLSearchParams({ exchange: 'binance_spot' });
+        if (lb === 'all') qs.set('multi', '1');
+        else qs.set('lookback', lb);
         const res = await queuedFetch(`/api/spot_cvd_leaderboard?${qs}`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
         const body = await res.json();
@@ -6445,16 +6447,14 @@
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">Binance spot · all tokens</span>
         <select
           value={instance.cvdtLookback ?? 'all'}
-          onchange={(e) => (instance.cvdtLookback = e.currentTarget.value as 'all' | '1' | '7' | '14' | '30' | '90')}
+          onchange={(e) => (instance.cvdtLookback = e.currentTarget.value as 'all' | '1' | '7' | '14')}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          title="Lookback window for the cumulative CVD + avg daily volume"
+          title="All = 1d/7d/14d comparison; or a single period"
         >
-          <option value="all">All (from start)</option>
+          <option value="all">All (1d/7d/14d)</option>
           <option value="1">1d</option>
           <option value="7">7d</option>
           <option value="14">14d</option>
-          <option value="30">30d</option>
-          <option value="90">90d</option>
         </select>
         <select
           value={instance.cvdtUnit ?? 'usd'}
@@ -8228,6 +8228,7 @@
         loading={loading}
         error={error}
         unit={instance.cvdtUnit ?? 'usd'}
+        multi={(instance.cvdtLookback ?? 'all') === 'all'}
         lookbackLabel={(instance.cvdtLookback ?? 'all') === 'all' ? 'All' : `${instance.cvdtLookback}d`}
       />
     {:else if instance.kind === 'hl_top_traders'}

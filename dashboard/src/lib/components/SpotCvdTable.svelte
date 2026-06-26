@@ -11,30 +11,24 @@
 
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
 
-  type Row = {
-    token: string;
-    price: number;
-    avg_volume_usd: number;
-    avg_volume_token: number;
-    cvd_usd: number;
-    cvd_token: number;
-    pct_24h: number | null;
-    pct_lookback: number | null;
-    ratio_token: number | null;
-    ratio_usd: number | null;
-  };
+  // Single-period rows carry cvd_*/avg_volume_*/ratio_*; multi ('All') rows
+  // carry per-period cvd_{usd,token}_{1,7,14} + ratio_usd_{1,7,14}. Access is
+  // generic (record), so one Row type with optional fields suffices.
+  type Row = Record<string, number | null> & { token: string };
 
   let {
     rows = [],
     loading = false,
     error = null,
     unit = 'usd',
+    multi = false,
     lookbackLabel = 'Lookback'
   }: {
     rows: Record<string, unknown>[] | Row[];
     loading?: boolean;
     error?: string | null;
     unit?: 'usd' | 'token';
+    multi?: boolean;
     lookbackLabel?: string;
   } = $props();
 
@@ -70,37 +64,46 @@
     return sign + n.toFixed(2) + '%';
   }
 
-  type SortKey =
-    | 'token' | 'price' | 'avg_volume_usd' | 'avg_volume_token'
-    | 'cvd_usd' | 'cvd_token' | 'pct_24h' | 'pct_lookback'
-    | 'ratio_token' | 'ratio_usd';
+  type SortKey = string;
 
-  let sortKey = $state<SortKey>('cvd_usd');
+  let u = $derived(unit === 'token' ? 'token' : 'usd');
+  let valueFmt = $derived(unit === 'token' ? fmtAmount : fmtUsd);
   let sortDir = $state<1 | -1>(-1);
   let limit = $state<'10' | '30' | 'all'>('30');
+  // Default ranking differs by mode; reset when the mode flips so a stale key
+  // (e.g. 'cvd_usd_14' from multi) doesn't sort by undefined in single mode.
+  let sortKey = $state<SortKey>('cvd_usd');
+  $effect(() => {
+    sortKey = multi ? 'cvd_usd_14' : 'cvd_usd';
+    sortDir = -1;
+  });
 
-  // Sort-criteria dropdown — the 3 ranking metrics from the spec.
   type Criteria = 'cvd_usd' | 'ratio_usd' | 'ratio_token';
   function applyCriteria(c: Criteria) {
     sortKey = c;
   }
 
-  // The unit toggle re-points the Avg-Vol + CVD-Vol columns. Keep the sort on
-  // the displayed value when the user is sorting one of those paired columns.
-  let avgVolKey = $derived<SortKey>(unit === 'token' ? 'avg_volume_token' : 'avg_volume_usd');
-  let cvdKey = $derived<SortKey>(unit === 'token' ? 'cvd_token' : 'cvd_usd');
-  let valueFmt = $derived(unit === 'token' ? fmtAmount : fmtUsd);
-
   type Col = { key: SortKey; label: string; kind: 'price' | 'value' | 'pct' };
-  let cols = $derived<Col[]>([
-    { key: 'price', label: 'Price', kind: 'price' },
-    { key: avgVolKey, label: 'Avg Vol', kind: 'value' },
-    { key: cvdKey, label: 'CVD Vol', kind: 'value' },
-    { key: 'pct_24h', label: '24h Δ', kind: 'pct' },
-    { key: 'pct_lookback', label: `${lookbackLabel} Δ`, kind: 'pct' },
-    { key: 'ratio_token', label: 'CVD/Vol %', kind: 'pct' },
-    { key: 'ratio_usd', label: '$CVD/$Vol %', kind: 'pct' }
-  ]);
+  let cols = $derived<Col[]>(multi
+    ? [
+        { key: 'price', label: 'Price', kind: 'price' },
+        { key: 'pct_24h', label: '24h Δ', kind: 'pct' },
+        { key: `cvd_${u}_1`, label: '1d CVD', kind: 'value' },
+        { key: `cvd_${u}_7`, label: '7d CVD', kind: 'value' },
+        { key: `cvd_${u}_14`, label: '14d CVD', kind: 'value' },
+        { key: 'ratio_usd_1', label: '1d $CVD/vol%', kind: 'pct' },
+        { key: 'ratio_usd_7', label: '7d $CVD/vol%', kind: 'pct' },
+        { key: 'ratio_usd_14', label: '14d $CVD/vol%', kind: 'pct' }
+      ]
+    : [
+        { key: 'price', label: 'Price', kind: 'price' },
+        { key: `avg_volume_${u}`, label: 'Avg Vol', kind: 'value' },
+        { key: `cvd_${u}`, label: 'CVD Vol', kind: 'value' },
+        { key: 'pct_24h', label: '24h Δ', kind: 'pct' },
+        { key: 'pct_lookback', label: `${lookbackLabel} Δ`, kind: 'pct' },
+        { key: 'ratio_token', label: 'CVD/Vol %', kind: 'pct' },
+        { key: 'ratio_usd', label: '$CVD/$Vol %', kind: 'pct' }
+      ]);
 
   function onSort(k: SortKey) {
     if (sortKey === k) sortDir = sortDir === 1 ? -1 : 1;
@@ -152,13 +155,17 @@
 <div class="h-full flex flex-col text-xs" use:stopDragEvents>
   <!-- In-table controls: sort criteria + direction + row limit. -->
   <div class="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 text-zinc-400">
-    <span class="text-[11px]">Sort</span>
-    <select class={selClass} value={sortKey === 'ratio_usd' || sortKey === 'ratio_token' ? sortKey : 'cvd_usd'}
-      onchange={(e) => applyCriteria(e.currentTarget.value as Criteria)} title="Ranking metric">
-      <option value="cvd_usd">Cum $ CVD</option>
-      <option value="ratio_usd">$CVD ÷ $AvgVol</option>
-      <option value="ratio_token">CVD ÷ AvgVol</option>
-    </select>
+    {#if !multi}
+      <span class="text-[11px]">Sort</span>
+      <select class={selClass} value={sortKey === 'ratio_usd' || sortKey === 'ratio_token' ? sortKey : 'cvd_usd'}
+        onchange={(e) => applyCriteria(e.currentTarget.value as Criteria)} title="Ranking metric">
+        <option value="cvd_usd">Cum $ CVD</option>
+        <option value="ratio_usd">$CVD ÷ $AvgVol</option>
+        <option value="ratio_token">CVD ÷ AvgVol</option>
+      </select>
+    {:else}
+      <span class="text-[11px]">1d / 7d / 14d CVD · click a header to sort</span>
+    {/if}
     <button class={selClass} onclick={() => (sortDir = sortDir === 1 ? -1 : 1)}
       title="Toggle ascending / descending">{sortDir === 1 ? 'Asc ↑' : 'Desc ↓'}</button>
     <span class="ml-auto text-[11px]">Show</span>

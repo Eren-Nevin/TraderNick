@@ -131,11 +131,69 @@ async def spot_cvd_leaderboard(request):
     """
     exchange = request.args.get("exchange", "binance_spot")
     lookback = request.args.get("lookback", "all")
+    multi = request.args.get("multi") in ("1", "true", "yes")
     if exchange not in _OHLCV_TABLE:
         return response.json({"error": f"exchange must be one of {list(_OHLCV_TABLE)}"}, status=400)
     if lookback not in ("all", "1", "7", "14", "30", "90"):
         return response.json({"error": "lookback must be all|1|7|14|30|90"}, status=400)
     table = _OHLCV_TABLE[exchange]
+
+    if multi:
+        # Multi-period comparison: per token, CVD (token + USD) and $CVD/avg-daily-
+        # $vol for each of 1d/7d/14d, computed in ONE 14-day scan via conditional
+        # sums (cheaper than three separate windowed queries — the 14d scan covers
+        # 1d/7d too). Powers the Spot CVD table's "All" view.
+        ch = await client()
+        rows = await ch.query(
+            f"""
+            SELECT
+                token,
+                argMax(close, time)                                     AS price,
+                argMaxIf(close, time, time <= now() - INTERVAL 24 HOUR)  AS price_24h,
+                sumIf(cvd_token_row, time >= now() - INTERVAL 1 DAY)     AS cvd_t_1,
+                sumIf(cvd_usd_row,   time >= now() - INTERVAL 1 DAY)     AS cvd_u_1,
+                sumIf(vol_usd_row,   time >= now() - INTERVAL 1 DAY)     AS vol_u_1,
+                uniqExactIf(toDate(time), time >= now() - INTERVAL 1 DAY) AS days_1,
+                sumIf(cvd_token_row, time >= now() - INTERVAL 7 DAY)     AS cvd_t_7,
+                sumIf(cvd_usd_row,   time >= now() - INTERVAL 7 DAY)     AS cvd_u_7,
+                sumIf(vol_usd_row,   time >= now() - INTERVAL 7 DAY)     AS vol_u_7,
+                uniqExactIf(toDate(time), time >= now() - INTERVAL 7 DAY) AS days_7,
+                sum(cvd_token_row)                                      AS cvd_t_14,
+                sum(cvd_usd_row)                                        AS cvd_u_14,
+                sum(vol_usd_row)                                        AS vol_u_14,
+                uniqExact(toDate(time))                                 AS days_14
+            FROM (
+                SELECT
+                    token, time, close,
+                    (buyer_taker_volume - seller_taker_volume)         AS cvd_token_row,
+                    (buyer_taker_volume - seller_taker_volume) * close AS cvd_usd_row,
+                    volume * close                                     AS vol_usd_row
+                FROM {table} FINAL
+                WHERE token != '' AND time >= now() - INTERVAL 14 DAY
+            )
+            GROUP BY token
+            ORDER BY token
+            """,
+        )
+
+        def _ratio(cvd_u, vol_u, days):
+            avg = float(vol_u) / (int(days) or 1)
+            return (float(cvd_u) / avg * 100.0) if avg else None
+
+        out = []
+        for r in rows.result_rows:
+            token, price, price_24h = r[0], float(r[1]), float(r[2])
+            ct1, cu1, vu1, d1 = r[3], r[4], r[5], r[6]
+            ct7, cu7, vu7, d7 = r[7], r[8], r[9], r[10]
+            ct14, cu14, vu14, d14 = r[11], r[12], r[13], r[14]
+            out.append({
+                "token": token, "price": price,
+                "pct_24h": ((price - price_24h) / price_24h * 100.0) if price_24h > 0 else None,
+                "cvd_token_1": float(ct1), "cvd_usd_1": float(cu1), "ratio_usd_1": _ratio(cu1, vu1, d1),
+                "cvd_token_7": float(ct7), "cvd_usd_7": float(cu7), "ratio_usd_7": _ratio(cu7, vu7, d7),
+                "cvd_token_14": float(ct14), "cvd_usd_14": float(cu14), "ratio_usd_14": _ratio(cu14, vu14, d14),
+            })
+        return response.json({"exchange": exchange, "multi": True, "tokens": out})
 
     # 'all' → no lower time bound; else trailing N days. now()-24h baseline for
     # pct_24h is only meaningful when the window covers ≥24h (lookback ≥ 1d).
