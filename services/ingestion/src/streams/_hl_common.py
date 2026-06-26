@@ -160,9 +160,27 @@ async def run(stream_name: str, event: str) -> None:
     # HTTP 500 Code 241 (upstream ClickHouse OOM) during the 2026-06-06
     # incident. Capping at 1 hour keeps each chunk well within the volume
     # DeFiStream demonstrably handles in steady state.
-    _SWEEP_CHUNK_OVERRIDES = {"position_history": timedelta(hours=1)}
+    #
+    # `fills` is per-token, so the sweep watermark is min_watermark_per_token —
+    # a single stale token (e.g. TST, last fill 2026-05-25) drags `since` back
+    # ~30 days, and with the 30-day default the whole gap loads in ONE request
+    # (~150M rows ≈ 70 GB RSS — the 2026-06-26 OOM). 6-hour chunks (~1M fills)
+    # keep each fetch bounded regardless of how far the watermark has drifted.
+    _SWEEP_CHUNK_OVERRIDES = {
+        "position_history": timedelta(hours=1),
+        "fills":            timedelta(hours=6),
+    }
     MAX_SWEEP_CHUNK = _SWEEP_CHUNK_OVERRIDES.get(event, timedelta(days=30))
     CHUNK_PACING_S = 0.5
+
+    # Per-event cap on how far back a sweep may reach. `fills` is per-token, so a
+    # single dead token (e.g. TST, no fills since 2026-05-25) pins
+    # min_watermark_per_token ~30 days back and the sweep would re-walk a month
+    # every cycle. The live tick owns recency (15-min window); the sweep only
+    # needs to close recent gaps — cap its look-back so one stale token can't
+    # drag it into a perpetual 30-day re-fetch. Larger genuine gaps (long
+    # downtime, new-token history) use an explicit backfill job, not this sweep.
+    _SWEEP_MAX_LOOKBACK = {"fills": timedelta(hours=24)}
 
     async def _run_sweep_once(ch, label: str) -> tuple[int, str | None]:
         """Single sweep iteration. Reads the watermark, computes since,
@@ -178,6 +196,9 @@ async def run(stream_name: str, event: str) -> None:
             else:
                 last_seen = await latest_time(ch, table=table)
             since = sweep.sweep_since(now=now, sweep_cadence_seconds=sweep_cadence, last_seen=last_seen)
+            _cap = _SWEEP_MAX_LOOKBACK.get(event)
+            if _cap is not None and since < now - _cap:
+                since = now - _cap
             sweep_until = now
             _grid = _SWEEP_GRID_MIN.get(event)
             if _grid:
