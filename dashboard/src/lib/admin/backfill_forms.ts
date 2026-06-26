@@ -379,6 +379,9 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
           'hl_fills_pnl_daily',
           'hl_fills_vol_daily',
           'hl_funding_daily',
+          'hl_trade_history_wallet_daily',
+          // sources hl_position_history_1h → keep last so it rebuilds after it.
+          'hl_position_history_oi_wallet_daily',
         ],
         defaultSelected: [
           'hl_position_history_15m',
@@ -387,6 +390,8 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
           'hl_fills_pnl_daily',
           'hl_fills_vol_daily',
           'hl_funding_daily',
+          'hl_trade_history_wallet_daily',
+          'hl_position_history_oi_wallet_daily',
         ] }
     ]
   }
