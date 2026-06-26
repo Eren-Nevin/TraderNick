@@ -1950,7 +1950,9 @@ async def smart_wallet_oi(request):
             sumIf(latest_size,   side='long')      AS long_oi_value,
             sumIf(latest_size,   side='short')     AS short_oi_value,
             sum(latest_size)                       AS total_oi_value,
-            toUInt32(uniqExact(wallet))            AS wallet_count
+            toUInt32(uniqExact(wallet))            AS wallet_count,
+            toUInt32(uniqExactIf(wallet, side='long'  AND latest_amount > 0)) AS long_count,
+            toUInt32(uniqExactIf(wallet, side='short' AND latest_amount > 0)) AS short_count
         FROM (
             SELECT
                 toStartOfInterval({oi_time_col}, INTERVAL {{seconds:UInt32}} SECOND) AS bucket,
@@ -1984,6 +1986,8 @@ async def smart_wallet_oi(request):
             "short_oi_value": float(r[5]),
             "total_oi_value": float(r[6]),
             "wallet_count": int(r[7]),
+            "long_count": int(r[8]),
+            "short_count": int(r[9]),
         }
         for r in rows.result_rows
     ]
@@ -2210,9 +2214,11 @@ async def smart_wallet_oi_rolling(request):
         "    sumIf(latest_size,   side='long')  AS long_oi_value,\n"
         "    sumIf(latest_size,   side='short') AS short_oi_value,\n"
         "    sum(latest_size)                   AS total_oi_value,\n"
-        "    toUInt32(any(day_cnt))             AS wallet_count\n"
+        "    toUInt32(any(day_cnt))             AS wallet_count,\n"
+        "    toUInt32(uniqExactIf(wallet, side='long'  AND latest_amount > 0)) AS long_count,\n"
+        "    toUInt32(uniqExactIf(wallet, side='short' AND latest_amount > 0)) AS short_count\n"
         "FROM (\n"
-        "    SELECT p.bucket AS bucket, p.side AS side,\n"
+        "    SELECT p.bucket AS bucket, p.side AS side, p.wallet AS wallet,\n"
         "        p.latest_amount AS latest_amount, p.latest_size AS latest_size,\n"
         "        dc.cnt AS day_cnt\n"
         "    FROM (\n"
@@ -2247,6 +2253,8 @@ async def smart_wallet_oi_rolling(request):
             "short_oi_value": float(r[5]),
             "total_oi_value": float(r[6]),
             "wallet_count": int(r[7]),
+            "long_count": int(r[8]),
+            "short_count": int(r[9]),
         }
         for r in rows.result_rows
     ]

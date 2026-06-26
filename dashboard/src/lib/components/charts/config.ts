@@ -1778,9 +1778,10 @@ export type ChartInstance = {
    *  'total' (default, matches the Binance behavior), 'long', 'short',
    *  'long_short' (two lines: long + short, no total), 'long_to_short'
    *  (one line: long / short ratio), 'net_pct' (unitless skew), or
-   *  'net' (long - short in the same unit as oiUnit). Ignored when
-   *  exchange='binance' (the long/short split isn't available there). */
-  oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short' | 'long_to_short' | 'net_pct' | 'net';
+   *  'net' (long - short in the same unit as oiUnit), or 'count'
+   *  (hl_smart_oi only — # wallets long vs # short, equal-weighting small
+   *  wallets). Ignored when exchange='binance' (no long/short split there). */
+  oiHlDisplay?: 'total' | 'long' | 'short' | 'long_short' | 'long_to_short' | 'net_pct' | 'net' | 'count';
   /** OI unit: 'usd' = dollar notional (default, matches Binance OI panel
    *  conventions), 'token' = the underlying coin amount (e.g. BTC count).
    *  The Long/Short ratio mode ignores this — it's mathematically the same
