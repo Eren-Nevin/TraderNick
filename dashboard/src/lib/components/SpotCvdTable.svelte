@@ -70,6 +70,17 @@
   let valueFmt = $derived(unit === 'token' ? fmtAmount : fmtUsd);
   let sortDir = $state<1 | -1>(-1);
   let limit = $state<'10' | '30' | 'all'>('30');
+  let search = $state('');
+
+  // Fuzzy token match: query chars appear in order in the token (case-insensitive).
+  function fuzzy(q: string, t: string): boolean {
+    q = q.trim().toLowerCase();
+    if (!q) return true;
+    t = t.toLowerCase();
+    let i = 0;
+    for (const ch of t) { if (ch === q[i]) i++; if (i === q.length) return true; }
+    return false;
+  }
   // Default ranking differs by mode; reset when the mode flips so a stale key
   // (e.g. 'cvd_usd_14' from multi) doesn't sort by undefined in single mode.
   let sortKey = $state<SortKey>('cvd_usd');
@@ -118,7 +129,7 @@
   }
 
   let sortedRows = $derived.by(() => {
-    const arr = rows as Row[];
+    const arr = (rows as Row[]).filter((r) => fuzzy(search, String(r.token)));
     const dir = sortDir;
     const k = sortKey;
     const s = [...arr].sort((a, b) => {
@@ -168,6 +179,8 @@
     {/if}
     <button class={selClass} onclick={() => (sortDir = sortDir === 1 ? -1 : 1)}
       title="Toggle ascending / descending">{sortDir === 1 ? 'Asc ↑' : 'Desc ↓'}</button>
+    <input class={selClass + ' w-24'} placeholder="Token…" bind:value={search}
+      title="Fuzzy filter by token name" />
     <span class="ml-auto text-[11px]">Show</span>
     <select class={selClass} bind:value={limit} title="Number of rows to show">
       <option value="10">10</option>

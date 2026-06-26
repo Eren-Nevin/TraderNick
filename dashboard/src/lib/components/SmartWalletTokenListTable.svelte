@@ -110,6 +110,17 @@
 
   let sortKey = $state<SortKey>('long_oi_usd');
   let sortDir = $state<1 | -1>(-1);
+  let search = $state('');
+
+  // Fuzzy token match: query chars appear in order in the token (case-insensitive).
+  function fuzzy(q: string, t: string): boolean {
+    q = q.trim().toLowerCase();
+    if (!q) return true;
+    t = t.toLowerCase();
+    let i = 0;
+    for (const ch of t) { if (ch === q[i]) i++; if (i === q.length) return true; }
+    return false;
+  }
   // Keep the sort on the displayed unit when sorting an OI/change column.
   let effSortKey = $derived<SortKey>(
     (sortKey.endsWith('_usd') || sortKey.endsWith('_token'))
@@ -130,7 +141,7 @@
   }
 
   let sortedRows = $derived.by(() => {
-    const arr = rows as Row[];
+    const arr = (rows as Row[]).filter((r) => fuzzy(search, String(r.token)));
     const dir = sortDir;
     const k = effSortKey;
     return [...arr].sort((a, b) => {
@@ -174,7 +185,16 @@
   }
 </script>
 
-<div class="h-full overflow-auto scrollbar-none text-xs" use:stopDragEvents>
+<div class="h-full flex flex-col text-xs" use:stopDragEvents>
+  <!-- Fuzzy token-name filter. -->
+  <div class="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 text-zinc-400">
+    <span class="text-[11px]">Token</span>
+    <input
+      class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200 hover:border-zinc-600 focus:outline-none w-28"
+      placeholder="Token…" bind:value={search} title="Fuzzy filter by token name" />
+    <span class="ml-auto text-[11px] text-zinc-600">{(sortedRows as Row[]).length} shown</span>
+  </div>
+  <div class="flex-1 overflow-auto scrollbar-none">
   {#if error}
     <div class="h-full flex items-center justify-center text-rose-400 px-4 text-center">{error}</div>
   {:else if loading && (rows as Row[]).length === 0}
@@ -207,4 +227,5 @@
       </tbody>
     </table>
   {/if}
+  </div>
 </div>
