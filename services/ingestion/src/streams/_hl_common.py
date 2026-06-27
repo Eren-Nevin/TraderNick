@@ -173,14 +173,18 @@ async def run(stream_name: str, event: str) -> None:
     MAX_SWEEP_CHUNK = _SWEEP_CHUNK_OVERRIDES.get(event, timedelta(days=30))
     CHUNK_PACING_S = 0.5
 
-    # Per-event cap on how far back a sweep may reach. `fills` is per-token, so a
-    # single dead token (e.g. TST, no fills since 2026-05-25) pins
-    # min_watermark_per_token ~30 days back and the sweep would re-walk a month
-    # every cycle. The live tick owns recency (15-min window); the sweep only
-    # needs to close recent gaps — cap its look-back so one stale token can't
-    # drag it into a perpetual 30-day re-fetch. Larger genuine gaps (long
-    # downtime, new-token history) use an explicit backfill job, not this sweep.
-    _SWEEP_MAX_LOOKBACK = {"fills": timedelta(hours=24)}
+    # Per-event cap on how far back a sweep may reach. These endpoints are
+    # per-token, so the sweep watermark is min_watermark_per_token — a single
+    # dead/inactive token pins it far back and the sweep re-walks (and re-inserts)
+    # that whole span every cycle, which also keeps re-invalidating the derived
+    # rollups. Examples: `fills` TST (no fills since 2026-05-25, ~30d) and
+    # `position_history` VINE (~2d). The live tick owns recency (15/45-min
+    # window); the sweep only closes recent gaps, so cap its look-back. Larger
+    # genuine gaps (long downtime, new-token history) use an explicit backfill.
+    _SWEEP_MAX_LOOKBACK = {
+        "fills":            timedelta(hours=24),
+        "position_history": timedelta(hours=24),
+    }
 
     async def _run_sweep_once(ch, label: str) -> tuple[int, str | None]:
         """Single sweep iteration. Reads the watermark, computes since,
