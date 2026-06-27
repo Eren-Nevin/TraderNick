@@ -6,7 +6,7 @@ import type { RequestHandler } from './$types';
 // OI summed across the filtered wallet set at now / 24h-ago / 7d-ago. Same filter
 // params as smart_wallet_metrics; the table sorts client-side.
 const PASSTHROUGH = [
-  'token', 'lookback', 'snapshot', 'metric', 'order_by', 'limit',
+  'token', 'lookback', 'snapshot', 'metric', 'order_by', 'limit', 'cutoff', 'lookbacks',
   'min_days', 'min_volume', 'min_realized', 'min_oi',
   'min_avg_trade_size', 'min_taker_pct', 'max_fee_pct', 'max_funding_pct',
   'min_account_duration', 'min_tokens', 'min_win_rate',

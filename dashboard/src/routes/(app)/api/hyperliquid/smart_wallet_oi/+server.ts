@@ -11,7 +11,7 @@ const PASSTHROUGH = [
   // OI params
   'oi_token', 'interval', 'since', 'until', 'limit',
   // Selection params (mirror smart_wallet_metrics)
-  'token', 'lookback', 'snapshot', 'metric', 'order_by',
+  'token', 'lookback', 'snapshot', 'metric', 'order_by', 'cutoff', 'lookbacks',
   'min_days', 'min_volume', 'min_realized', 'min_oi',
   'min_avg_trade_size', 'min_taker_pct', 'max_fee_pct', 'max_funding_pct',
   'min_account_duration', 'min_tokens', 'min_win_rate',

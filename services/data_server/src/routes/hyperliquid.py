@@ -446,7 +446,9 @@ async def leaderboard(request):
     })
 
 
-def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
+def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
+                                  lookback_override=None, snapshot_override=None,
+                                  membership_override=None):
     """Parse the smart-wallet finder's filter params and build the shared
     wallet-SELECTION SQL: the CTE chain that computes each wallet's window
     metrics, plus the FROM/JOIN/WHERE that keeps only wallets passing every
@@ -465,7 +467,8 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
     token = request.args.get("token")
     if token in ("", "__all__", "__global__", "all"):
         token = None
-    lookback = int(request.args.get("lookback", "7"))
+    lookback = int(lookback_override) if lookback_override is not None \
+        else int(request.args.get("lookback", "7"))
     if lookback not in (1, 3, 7, 14, 30, 90, 150):
         raise ValueError("lookback must be 1|3|7|14|30|90|150")
     metric = request.args.get("metric", "sharpe")
@@ -478,7 +481,7 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
     }
     if order_by not in ORDER_COLS:
         raise ValueError("bad order_by")
-    limit = min(int(request.args.get("limit", "100")), 500)
+    limit = min(int(request.args.get("limit", "100")), 1000)
     min_days = max(int(request.args.get("min_days", "3")), 1)
     try:
         min_volume = float(request.args.get("min_volume", "0"))
@@ -562,7 +565,7 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
     except ValueError:
         max_volume_share = NO_MAX
 
-    snap_arg = request.args.get("snapshot")
+    snap_arg = snapshot_override or request.args.get("snapshot")
     if snap_arg:
         try:
             e_dt = _parse_iso(snap_arg).replace(tzinfo=None)
@@ -866,14 +869,15 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
           AND coalesce(10000 * ow.oi_sum / nullIf(oi_total, 0), 0) >= {min_avg_oi_share:Float64}
           AND coalesce(10000 * ow.oi_sum / nullIf(oi_total, 0), 0) <= {max_avg_oi_share:Float64}""" if oi_share_active else ""
 
-    from_where_block = """
+    _joins_block = """
         FROM win w
         LEFT JOIN sharpe_agg sa ON sa.wallet = w.wallet
         LEFT JOIN unreal_now u  ON u.wallet = w.wallet
         LEFT JOIN oi_now oi     ON oi.wallet = w.wallet
         LEFT JOIN taker_agg tk  ON tk.wallet = w.wallet
         LEFT JOIN funding_agg fn ON fn.wallet = w.wallet
-        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet""" + oi_share_join + """
+        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet""" + oi_share_join
+    _guards_block = """
         WHERE w.volume >= {min_volume:Float64}
           AND w.realized >= {min_realized:Float64}
           AND coalesce(oi.oi_usd, 0) >= {min_oi:Float64}
@@ -890,6 +894,12 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False):
           AND coalesce(sa.sharpe, 0) >= {min_annualized_sharpe:Float64}
           AND coalesce(10000 * w.volume / nullIf(vol_total, 0), 0) >= {min_volume_share:Float64}
           AND coalesce(10000 * w.volume / nullIf(vol_total, 0), 0) <= {max_volume_share:Float64}""" + oi_share_guard
+    # Cutoff (union) table reuses the metric CTEs but selects a precomputed wallet
+    # set instead of re-applying the guards; membership_override is the WHERE then.
+    from_where_block = (
+        _joins_block + "\n        WHERE " + membership_override
+        if membership_override else _joins_block + _guards_block
+    )
 
     echo = {
         "metric": metric, "order_by": order_by, "token": token,
@@ -1000,6 +1010,95 @@ async def _warm_passing(ch, sel: dict) -> None:
         await _resolve_passing(ch, sel)
     except Exception:  # noqa: BLE001
         logging.exception("passing-set warm failed")
+
+
+# ── CUTOFF (union-over-lookbacks) smart-wallet selection ──────────────────
+# The Fixed builder resolves ONE passing set for one lookback at a cutoff day.
+# The Cutoff selection resolves the SAME criteria over SEVERAL lookback windows
+# at one cutoff and UNIONs the passing wallets into a single STATIC set. Because
+# the set never changes over time, the chart/token views sum OI over it with no
+# per-day refiltering (fast) and there's no per-bucket wallet count.
+_CUTOFF_LOOKBACKS = (1, 3, 7, 14, 30, 90)
+
+
+def _parse_cutoff_lookbacks(request) -> list[int]:
+    raw = request.args.get("lookbacks")
+    if not raw:
+        return list(_CUTOFF_LOOKBACKS)
+    out: list[int] = []
+    for tok in raw.split(","):
+        tok = tok.strip()
+        if not tok:
+            continue
+        try:
+            v = int(tok)
+        except ValueError:
+            continue
+        if v in _CUTOFF_LOOKBACKS and v not in out:
+            out.append(v)
+    return out or list(_CUTOFF_LOOKBACKS)
+
+
+def _cutoff_membership_sql(union_key: str, col: str = "w.wallet") -> str:
+    """Predicate selecting the union set's latest batch. union_key is an md5 hex
+    digest (safe to inline)."""
+    return (
+        f"{col} IN (SELECT wallet FROM {_SET_CACHE_TABLE} "
+        f"WHERE sel_key = '{union_key}' AND computed_at = "
+        f"(SELECT max(computed_at) FROM {_SET_CACHE_TABLE} WHERE sel_key = '{union_key}'))"
+    )
+
+
+async def _resolve_cutoff_passing(ch, request) -> tuple[str, int]:
+    """Union the per-lookback fixed passing sets at one cutoff into a static set.
+    Returns (union_sel_key, display_lookback) — display_lookback = max selected,
+    used for the table's per-wallet metrics."""
+    lookbacks = _parse_cutoff_lookbacks(request)
+    snapshot = request.args.get("snapshot")
+    per_keys: list[str] = []
+    base_echo = None
+    for L in lookbacks:
+        sel = _build_smart_wallet_selection(
+            request, lookback_override=L, snapshot_override=snapshot)
+        if base_echo is None:
+            base_echo = sel["echo"]
+        per_keys.append(await _resolve_passing(ch, sel))
+
+    # Union key = criteria (minus lookback) + cutoff + the lookback SET.
+    kf = {k: base_echo[k] for k in _PASSING_KEY_FIELDS if k != "lookback"}
+    kf["cutoff_lookbacks"] = lookbacks
+    union_key = "cut-" + hashlib.md5(
+        json.dumps(kf, sort_keys=True, default=str).encode()).hexdigest()
+    display_lb = max(lookbacks)
+
+    now = time.time()
+    if (last := _set_ensured.get(union_key)) and now - last < _SET_CACHE_TTL:
+        return union_key, display_lb
+    await _ensure_set_table(ch)
+    r = await ch.query(
+        f"SELECT toUnixTimestamp(max(computed_at)) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
+        parameters={"k": union_key},
+    )
+    mx = r.result_rows[0][0] if (r and r.result_rows) else 0
+    if mx and now - float(mx) < _SET_CACHE_TTL:
+        _set_ensured[union_key] = now
+        return union_key, display_lb
+
+    keys_list = "(" + ",".join("'" + k + "'" for k in per_keys) + ")"
+    await ch.command(
+        f"INSERT INTO {_SET_CACHE_TABLE} (sel_key, wallet, computed_at)\n"
+        f"WITH latest AS (\n"
+        f"    SELECT sel_key, max(computed_at) AS mc FROM {_SET_CACHE_TABLE}\n"
+        f"    WHERE sel_key IN {keys_list} GROUP BY sel_key\n"
+        f")\n"
+        f"SELECT {{uk:String}} AS sel_key, c.wallet AS wallet, now() AS computed_at\n"
+        f"FROM {_SET_CACHE_TABLE} c\n"
+        f"INNER JOIN latest ON latest.sel_key = c.sel_key AND latest.mc = c.computed_at\n"
+        f"GROUP BY c.wallet",
+        parameters={"uk": union_key},
+    )
+    _set_ensured[union_key] = now
+    return union_key, display_lb
 
 
 # ── ROLLING smart-wallet selection ───────────────────────────────────────
@@ -1675,12 +1774,25 @@ async def smart_wallet_metrics(request):
       min_realized— min window realized PnL USD (default 0 → profitable only)
       min_oi    — min open interest USD as of the snapshot (default 0)
     """
+    # Cutoff mode: rank the static union-over-lookbacks set (membership from the
+    # cache) with per-wallet metrics over the longest selected lookback. Else the
+    # regular single-window guarded selection.
+    cutoff = request.args.get("cutoff") in ("1", "true", "yes")
     try:
-        sel = _build_smart_wallet_selection(request, include_avg_oi=True)
+        if cutoff:
+            ch = await client()
+            union_key, display_lb = await _resolve_cutoff_passing(ch, request)
+            sel = _build_smart_wallet_selection(
+                request, include_avg_oi=True,
+                lookback_override=display_lb,
+                snapshot_override=request.args.get("snapshot"),
+                membership_override=_cutoff_membership_sql(union_key))
+        else:
+            sel = _build_smart_wallet_selection(request, include_avg_oi=True)
     except ValueError as e:
         return response.json({"error": str(e)}, status=400)
 
-    # `count() OVER ()` rides the filtered (pre-LIMIT) set, so total_found is the
+    # `count() OVER () rides the filtered (pre-LIMIT) set, so total_found is the
     # FULL number of wallets passing every guard even though we only return the
     # top `limit` rows. The table shows the top-N but reports this total.
     sql = f"""
@@ -1903,10 +2015,15 @@ async def smart_wallet_oi(request):
         return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
     if not since or not until:
         return response.json({"error": "missing since/until"}, status=400)
-    try:
-        sel = _build_smart_wallet_selection(request)
-    except ValueError as e:
-        return response.json({"error": str(e)}, status=400)
+    # Cutoff mode: a static union-over-lookbacks set (no per-day refilter, no
+    # wallet count). Otherwise the regular single-window fixed selection.
+    cutoff = request.args.get("cutoff") in ("1", "true", "yes")
+    sel = None
+    if not cutoff:
+        try:
+            sel = _build_smart_wallet_selection(request)
+        except ValueError as e:
+            return response.json({"error": str(e)}, status=400)
 
     seconds = INTERVAL_SECONDS[interval]
     oi_since_dt = _parse_iso(since)
@@ -1933,7 +2050,13 @@ async def smart_wallet_oi(request):
     # table view) or compute it once. The OI query then filters via a sub-SELECT
     # against the cache — no selection CTE and no giant IN-list over the wire —
     # so a cache hit makes the chart / token-switching / panning fast.
-    sel_key = await _resolve_passing(ch, sel)
+    if cutoff:
+        try:
+            sel_key, _ = await _resolve_cutoff_passing(ch, request)
+        except ValueError as e:
+            return response.json({"error": str(e)}, status=400)
+    else:
+        sel_key = await _resolve_passing(ch, sel)
 
     params = {
         "seconds": seconds, "oi_token": oi_token,
@@ -2019,45 +2142,57 @@ async def smart_wallet_token_list(request):
         return response.json({"tokens": []})
     raw_now = raw_rows.result_rows[0][0]
 
-    # Resolve the rolling per-day cohort over a generous trailing window — wide
-    # enough that the 7d snapshot stays covered after "now" is pulled back to the
-    # cohort's latest covered day below (request carries no since/until).
-    try:
-        sel = _build_rolling_selection(
-            request,
-            since_override=(raw_now - timedelta(days=9)).strftime("%Y-%m-%dT%H:%M:%SZ"),
-            until_override=raw_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+    # Cutoff = static union-over-lookbacks set (fixed-set join on every bucket;
+    # t_now = the latest bucket, no rolling-cohort day to snap to). Else the
+    # Dynamic rolling per-day cohort.
+    cutoff = request.args.get("cutoff") in ("1", "true", "yes")
+    union_key = None
+    sel_key = None
+    if cutoff:
+        try:
+            union_key, _ = await _resolve_cutoff_passing(ch, request)
+        except ValueError as e:
+            return response.json({"error": str(e)}, status=400)
+        t_now = raw_now
+    else:
+        # Resolve the rolling per-day cohort over a generous trailing window —
+        # wide enough that the 7d snapshot stays covered after "now" is pulled
+        # back to the cohort's latest covered day (request carries no since/until).
+        try:
+            sel = _build_rolling_selection(
+                request,
+                since_override=(raw_now - timedelta(days=9)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                until_override=raw_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            )
+        except ValueError as e:
+            return response.json({"error": str(e)}, status=400)
+        sel_key = await _resolve_rolling_passing(ch, sel)
+        # The rolling cohort is per COMPLETE day, so it lags position_history by
+        # ~1 day. Snap "now" to the latest bucket the cohort covers — exactly the
+        # chart's latest point (the chart drops uncovered current-day buckets).
+        mday_rows = await ch.query(
+            f"SELECT max(day) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{k:String}} "
+            f"AND computed_at = (SELECT max(computed_at) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{k:String}})",
+            parameters={"k": sel_key},
         )
-    except ValueError as e:
-        return response.json({"error": str(e)}, status=400)
-    sel_key = await _resolve_rolling_passing(ch, sel)
-
-    # The rolling cohort is defined per COMPLETE day, so it lags position_history
-    # by ~1 day. Snap "now" to the latest bucket the cohort covers — exactly the
-    # chart's latest point (the chart drops the uncovered current-day buckets in
-    # its per-day join). 1h/4h/24h/7d align to hourly buckets off that t_now.
-    mday_rows = await ch.query(
-        f"SELECT max(day) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{k:String}} "
-        f"AND computed_at = (SELECT max(computed_at) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{k:String}})",
-        parameters={"k": sel_key},
-    )
-    if not mday_rows.result_rows or mday_rows.result_rows[0][0] is None:
-        return response.json({"tokens": []})
-    rolling_max_day = mday_rows.result_rows[0][0]
-    tnow_rows = await ch.query(
-        "SELECT max(bucket) FROM tradernick.hl_position_history_1h WHERE toDate(bucket) = {d:Date}",
-        parameters={"d": rolling_max_day},
-    )
-    if not tnow_rows.result_rows or tnow_rows.result_rows[0][0] is None:
-        return response.json({"tokens": []})
-    t_now = tnow_rows.result_rows[0][0]
+        if not mday_rows.result_rows or mday_rows.result_rows[0][0] is None:
+            return response.json({"tokens": []})
+        rolling_max_day = mday_rows.result_rows[0][0]
+        tnow_rows = await ch.query(
+            "SELECT max(bucket) FROM tradernick.hl_position_history_1h WHERE toDate(bucket) = {d:Date}",
+            parameters={"d": rolling_max_day},
+        )
+        if not tnow_rows.result_rows or tnow_rows.result_rows[0][0] is None:
+            return response.json({"tokens": []})
+        t_now = tnow_rows.result_rows[0][0]
     t_1h = t_now - timedelta(hours=1)
     t_4h = t_now - timedelta(hours=4)
     t_24h = t_now - timedelta(hours=24)
     t_7d = t_now - timedelta(days=7)
 
-    params = {"sel_key": sel_key, "t_now": t_now, "t_1h": t_1h, "t_4h": t_4h,
-              "t_24h": t_24h, "t_7d": t_7d}
+    params = {"t_now": t_now, "t_1h": t_1h, "t_4h": t_4h, "t_24h": t_24h, "t_7d": t_7d}
+    if sel_key is not None:
+        params["sel_key"] = sel_key
 
     # Inner: latest position per (token, side, wallet, bucket) (argMaxMerge over
     # the hour's state), carrying the bucket's day. INNER JOIN the rolling per-day
@@ -2072,36 +2207,58 @@ async def smart_wallet_token_list(request):
             f"sumIf(sz,  side='short' AND b='{b}') AS short_{b}_u"
         )
     oi_select = ",\n            ".join(_oi_cols(b) for b in ("now", "1h", "4h", "24h", "7d"))
-    oi_rows = await ch.query(
-        f"""
-        WITH pset AS (
+    _multiif = (
+        "multiIf(bucket = {t_now:DateTime}, 'now',\n"
+        "                    bucket = {t_1h:DateTime},  '1h',\n"
+        "                    bucket = {t_4h:DateTime},  '4h',\n"
+        "                    bucket = {t_24h:DateTime}, '24h',\n"
+        "                    bucket = {t_7d:DateTime},  '7d', '') AS b"
+    )
+    _bucket_in = ("bucket IN ({t_now:DateTime}, {t_1h:DateTime}, {t_4h:DateTime}, "
+                  "{t_24h:DateTime}, {t_7d:DateTime})")
+    if cutoff:
+        # Static set: filter to the union membership on every bucket — no per-day
+        # join, no WITH. Same outer aggregation (incl. long/short wallet counts).
+        with_block = ""
+        inner_block = f"""
+            SELECT
+                token, side, wallet,
+                {_multiif},
+                argMaxMerge(amount_state) AS amt,
+                argMaxMerge(size_state)   AS sz
+            FROM tradernick.hl_position_history_1h
+            WHERE {_bucket_in}
+              AND {_cutoff_membership_sql(union_key, col="wallet")}
+            GROUP BY token, side, wallet, bucket"""
+    else:
+        with_block = f"""WITH pset AS (
             SELECT day, wallet FROM {_ROLLING_SET_CACHE_TABLE}
             WHERE sel_key = {{sel_key:String}}
               AND computed_at = (SELECT max(computed_at) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{sel_key:String}})
         )
-        SELECT
-            token,
-            {oi_select},
-            toUInt32(uniqExactIf(wallet, side='long'  AND b='now' AND amt > 0)) AS long_count,
-            toUInt32(uniqExactIf(wallet, side='short' AND b='now' AND amt > 0)) AS short_count
-        FROM (
+        """
+        inner_block = f"""
             SELECT p.token AS token, p.side AS side, p.wallet AS wallet,
                    p.b AS b, p.amt AS amt, p.sz AS sz
             FROM (
                 SELECT
                     token, side, wallet, toDate(bucket) AS day,
-                    multiIf(bucket = {{t_now:DateTime}}, 'now',
-                            bucket = {{t_1h:DateTime}},  '1h',
-                            bucket = {{t_4h:DateTime}},  '4h',
-                            bucket = {{t_24h:DateTime}}, '24h',
-                            bucket = {{t_7d:DateTime}},  '7d', '') AS b,
+                    {_multiif},
                     argMaxMerge(amount_state) AS amt,
                     argMaxMerge(size_state)   AS sz
                 FROM tradernick.hl_position_history_1h
-                WHERE bucket IN ({{t_now:DateTime}}, {{t_1h:DateTime}}, {{t_4h:DateTime}}, {{t_24h:DateTime}}, {{t_7d:DateTime}})
+                WHERE {_bucket_in}
                 GROUP BY token, side, wallet, bucket
             ) p
-            INNER JOIN pset s ON s.wallet = p.wallet AND s.day = p.day
+            INNER JOIN pset s ON s.wallet = p.wallet AND s.day = p.day"""
+    oi_rows = await ch.query(
+        f"""
+        {with_block}SELECT
+            token,
+            {oi_select},
+            toUInt32(uniqExactIf(wallet, side='long'  AND b='now' AND amt > 0)) AS long_count,
+            toUInt32(uniqExactIf(wallet, side='short' AND b='now' AND amt > 0)) AS short_count
+        FROM ({inner_block}
         )
         GROUP BY token
         """,
