@@ -20,7 +20,7 @@ function defaultGroup(): WalletGroup {
 
 let _groups = $state<WalletGroup[]>([defaultGroup()]);
 let _pins = $state<WalletPin[]>([]);
-let _hydrated = false;
+let _hydrateP: Promise<void> | null = null;
 
 // Saves are serialised through one promise chain so rapid mutations POST in
 // order — out-of-order snapshot writes could otherwise drop a just-made change.
@@ -35,6 +35,9 @@ function persist() {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body,
+      // Complete even if the user navigates away right after pinning (otherwise
+      // the browser aborts the in-flight save on page unload).
+      keepalive: true,
     })
       .then(() => undefined)
       .catch(() => undefined),
@@ -84,33 +87,39 @@ export const walletPinsStore = {
     return _pins;
   },
 
-  async hydrate() {
-    if (_hydrated) return;
-    _hydrated = true;
-    if (typeof fetch === 'undefined') return;
-    try {
-      const res = await fetch(API_URL);
-      if (!res.ok) return;
-      const parsed = await res.json();
-      const groups = (Array.isArray(parsed?.groups) ? parsed.groups : [])
-        .map(sanitizeGroup)
-        .filter((g: WalletGroup | null): g is WalletGroup => g !== null);
-      // Default is permanent — always present, always exactly one.
-      const withoutDefault = groups.filter((g: WalletGroup) => g.id !== DEFAULT_GROUP_ID);
-      _groups = [defaultGroup(), ...withoutDefault];
-      const knownIds = new Set(_groups.map((g) => g.id));
-      _pins = (Array.isArray(parsed?.pins) ? parsed.pins : [])
-        .map(sanitizePin)
-        .filter((p: WalletPin | null): p is WalletPin => p !== null)
-        // drop memberships pointing at groups that no longer exist
-        .map((p: WalletPin) => ({
-          ...p,
-          groups: p.groups.filter((m) => knownIds.has(m.groupId)),
-        }))
-        .filter((p: WalletPin) => p.groups.length > 0);
-    } catch {
-      /* ignore — keep the in-memory default */
-    }
+  // Returns the (shared) load promise so callers can AWAIT it before mutating —
+  // mutating before the existing pins are loaded would build a snapshot POST
+  // that drops everyone else (the pin-removes-another-pin bug). Idempotent: the
+  // GET fires once; later callers await the same promise.
+  hydrate(): Promise<void> {
+    if (_hydrateP) return _hydrateP;
+    _hydrateP = (async () => {
+      if (typeof fetch === 'undefined') return;
+      try {
+        const res = await fetch(API_URL);
+        if (!res.ok) return;
+        const parsed = await res.json();
+        const groups = (Array.isArray(parsed?.groups) ? parsed.groups : [])
+          .map(sanitizeGroup)
+          .filter((g: WalletGroup | null): g is WalletGroup => g !== null);
+        // Default is permanent — always present, always exactly one.
+        const withoutDefault = groups.filter((g: WalletGroup) => g.id !== DEFAULT_GROUP_ID);
+        _groups = [defaultGroup(), ...withoutDefault];
+        const knownIds = new Set(_groups.map((g) => g.id));
+        _pins = (Array.isArray(parsed?.pins) ? parsed.pins : [])
+          .map(sanitizePin)
+          .filter((p: WalletPin | null): p is WalletPin => p !== null)
+          // drop memberships pointing at groups that no longer exist
+          .map((p: WalletPin) => ({
+            ...p,
+            groups: p.groups.filter((m) => knownIds.has(m.groupId)),
+          }))
+          .filter((p: WalletPin) => p.groups.length > 0);
+      } catch {
+        /* ignore — keep the in-memory default */
+      }
+    })();
+    return _hydrateP;
   },
 
   groupById(id: string): WalletGroup | undefined {

@@ -13,7 +13,11 @@
   // Opening the menu on a not-yet-pinned wallet selects Default by default
   // (the default pin target). Already-pinned wallets keep their groups.
   onMount(() => {
-    if (!walletPinsStore.isPinned(address)) walletPinsStore.quickPin(address);
+    // Await the load first — auto-pinning before the existing pins are loaded
+    // would build a snapshot that drops every other pinned wallet.
+    walletPinsStore.hydrate().then(() => {
+      if (!walletPinsStore.isPinned(address)) walletPinsStore.quickPin(address);
+    });
   });
 
   // New-group form.
