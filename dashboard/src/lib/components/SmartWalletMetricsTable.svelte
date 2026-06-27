@@ -189,17 +189,19 @@
         {/each}
       </select>
     {/if}
-    <span class="text-zinc-500">Metric:</span>
-    <select
-      value={metric}
-      onchange={(e) => onChangeMetric(e.currentTarget.value as SmartWalletMetric)}
-      title={metricDef.desc}
-      class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-    >
-      {#each SMART_WALLET_METRICS as m (m.key)}
-        <option value={m.key}>{m.label}</option>
-      {/each}
-    </select>
+    {#if !groupMode}
+      <span class="text-zinc-500">Metric:</span>
+      <select
+        value={metric}
+        onchange={(e) => onChangeMetric(e.currentTarget.value as SmartWalletMetric)}
+        title={metricDef.desc}
+        class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+      >
+        {#each SMART_WALLET_METRICS as m (m.key)}
+          <option value={m.key}>{m.label}</option>
+        {/each}
+      </select>
+    {/if}
 
     {#if cutoff}
       <!-- Cutoff: union the passing sets over the SELECTED lookback windows. -->
