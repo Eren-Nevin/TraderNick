@@ -1028,7 +1028,7 @@ async def _warm_passing(ch, sel: dict) -> None:
 _ROLLING_LOOKBACKS = (1, 3, 7, 14, 30)
 
 
-def _build_rolling_selection(request):
+def _build_rolling_selection(request, since_override=None, until_override=None):
     """Parse the SAME smart-wallet filter params as `_build_smart_wallet_selection`
     and build the CTE chain that emits a per-(day, wallet) PASSING relation over
     [since, until] — each day selecting wallets passing every guard over its own
@@ -1085,8 +1085,8 @@ def _build_rolling_selection(request):
     if token is not None:
         min_tokens = 0
 
-    since_arg = request.args.get("since")
-    until_arg = request.args.get("until")
+    since_arg = since_override or request.args.get("since")
+    until_arg = until_override or request.args.get("until")
     if not since_arg or not until_arg:
         raise ValueError("missing since/until")
     # Parse the calendar date directly from the ISO string (date prefix) so the
@@ -2007,21 +2007,47 @@ async def smart_wallet_token_list(request):
     the 3 snapshots); the client sorts in place. Powers the Smart Wallets
     (Dynamic) "Token List" view.
 
-    Reuses the same selection machinery as /smart_wallet_metrics + _oi: the
-    filter params resolve to a cached wallet set, and OI is summed over the
-    hourly position rollup (hl_position_history_1h, argMax-state) bounded to the
-    3 snapshot buckets and pruned by the wallet set."""
+    Uses the SAME rolling per-day cohort as the chart (/smart_wallet_oi_rolling):
+    each snapshot bucket is joined to the wallets that qualified over the trailing
+    lookback ending THAT bucket's day, so the "now" OI matches the chart's latest
+    point and the 24h/7d values match the chart's historical points. OI is summed
+    over the hourly position rollup (hl_position_history_1h, argMax-state)."""
+    ch = await client()
+
+    raw_rows = await ch.query("SELECT max(bucket) FROM tradernick.hl_position_history_1h")
+    if not raw_rows.result_rows or raw_rows.result_rows[0][0] is None:
+        return response.json({"tokens": []})
+    raw_now = raw_rows.result_rows[0][0]
+
+    # Resolve the rolling per-day cohort over a generous trailing window — wide
+    # enough that the 7d snapshot stays covered after "now" is pulled back to the
+    # cohort's latest covered day below (request carries no since/until).
     try:
-        sel = _build_smart_wallet_selection(request)
+        sel = _build_rolling_selection(
+            request,
+            since_override=(raw_now - timedelta(days=9)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            until_override=raw_now.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        )
     except ValueError as e:
         return response.json({"error": str(e)}, status=400)
+    sel_key = await _resolve_rolling_passing(ch, sel)
 
-    ch = await client()
-    sel_key = await _resolve_passing(ch, sel)
-
-    # Latest hourly position snapshot; the 24h / 7d comparison points align to
-    # hourly buckets since the rollup is hourly.
-    tnow_rows = await ch.query("SELECT max(bucket) FROM tradernick.hl_position_history_1h")
+    # The rolling cohort is defined per COMPLETE day, so it lags position_history
+    # by ~1 day. Snap "now" to the latest bucket the cohort covers — exactly the
+    # chart's latest point (the chart drops the uncovered current-day buckets in
+    # its per-day join). 1h/4h/24h/7d align to hourly buckets off that t_now.
+    mday_rows = await ch.query(
+        f"SELECT max(day) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{k:String}} "
+        f"AND computed_at = (SELECT max(computed_at) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{k:String}})",
+        parameters={"k": sel_key},
+    )
+    if not mday_rows.result_rows or mday_rows.result_rows[0][0] is None:
+        return response.json({"tokens": []})
+    rolling_max_day = mday_rows.result_rows[0][0]
+    tnow_rows = await ch.query(
+        "SELECT max(bucket) FROM tradernick.hl_position_history_1h WHERE toDate(bucket) = {d:Date}",
+        parameters={"d": rolling_max_day},
+    )
     if not tnow_rows.result_rows or tnow_rows.result_rows[0][0] is None:
         return response.json({"tokens": []})
     t_now = tnow_rows.result_rows[0][0]
@@ -2030,18 +2056,14 @@ async def smart_wallet_token_list(request):
     t_24h = t_now - timedelta(hours=24)
     t_7d = t_now - timedelta(days=7)
 
-    cache_filter = f"""wallet IN (
-        SELECT wallet FROM {_SET_CACHE_TABLE}
-        WHERE sel_key = {{sel_key:String}}
-          AND computed_at = (SELECT max(computed_at) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{sel_key:String}})
-    )"""
     params = {"sel_key": sel_key, "t_now": t_now, "t_1h": t_1h, "t_4h": t_4h,
               "t_24h": t_24h, "t_7d": t_7d}
 
-    # Inner: latest position per (token, side, wallet) within each of the 3
-    # buckets (argMaxMerge over the hour's state). Outer: sum across wallets per
+    # Inner: latest position per (token, side, wallet, bucket) (argMaxMerge over
+    # the hour's state), carrying the bucket's day. INNER JOIN the rolling per-day
+    # passing set on (wallet, day) so each snapshot is summed over the cohort that
+    # qualified AS OF that bucket's day — identical to the chart. Outer: sum per
     # token, split by side × snapshot, in token units (amt) and USD (sz).
-    # snapshot label → (long/short) × (token/usd). 5 snapshots: now/1h/4h/24h/7d.
     def _oi_cols(b):
         return (
             f"sumIf(amt, side='long'  AND b='{b}') AS long_{b}_t,"
@@ -2052,25 +2074,34 @@ async def smart_wallet_token_list(request):
     oi_select = ",\n            ".join(_oi_cols(b) for b in ("now", "1h", "4h", "24h", "7d"))
     oi_rows = await ch.query(
         f"""
+        WITH pset AS (
+            SELECT day, wallet FROM {_ROLLING_SET_CACHE_TABLE}
+            WHERE sel_key = {{sel_key:String}}
+              AND computed_at = (SELECT max(computed_at) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{sel_key:String}})
+        )
         SELECT
             token,
             {oi_select},
             toUInt32(uniqExactIf(wallet, side='long'  AND b='now' AND amt > 0)) AS long_count,
             toUInt32(uniqExactIf(wallet, side='short' AND b='now' AND amt > 0)) AS short_count
         FROM (
-            SELECT
-                token, side, wallet,
-                multiIf(bucket = {{t_now:DateTime}}, 'now',
-                        bucket = {{t_1h:DateTime}},  '1h',
-                        bucket = {{t_4h:DateTime}},  '4h',
-                        bucket = {{t_24h:DateTime}}, '24h',
-                        bucket = {{t_7d:DateTime}},  '7d', '') AS b,
-                argMaxMerge(amount_state) AS amt,
-                argMaxMerge(size_state)   AS sz
-            FROM tradernick.hl_position_history_1h
-            WHERE bucket IN ({{t_now:DateTime}}, {{t_1h:DateTime}}, {{t_4h:DateTime}}, {{t_24h:DateTime}}, {{t_7d:DateTime}})
-              AND {cache_filter}
-            GROUP BY token, side, wallet, bucket
+            SELECT p.token AS token, p.side AS side, p.wallet AS wallet,
+                   p.b AS b, p.amt AS amt, p.sz AS sz
+            FROM (
+                SELECT
+                    token, side, wallet, toDate(bucket) AS day,
+                    multiIf(bucket = {{t_now:DateTime}}, 'now',
+                            bucket = {{t_1h:DateTime}},  '1h',
+                            bucket = {{t_4h:DateTime}},  '4h',
+                            bucket = {{t_24h:DateTime}}, '24h',
+                            bucket = {{t_7d:DateTime}},  '7d', '') AS b,
+                    argMaxMerge(amount_state) AS amt,
+                    argMaxMerge(size_state)   AS sz
+                FROM tradernick.hl_position_history_1h
+                WHERE bucket IN ({{t_now:DateTime}}, {{t_1h:DateTime}}, {{t_4h:DateTime}}, {{t_24h:DateTime}}, {{t_7d:DateTime}})
+                GROUP BY token, side, wallet, bucket
+            ) p
+            INNER JOIN pset s ON s.wallet = p.wallet AND s.day = p.day
         )
         GROUP BY token
         """,
