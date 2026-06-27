@@ -21,6 +21,7 @@ from routes.gmx import bp as gmx_bp
 from routes.hyperliquid import bp as hyperliquid_bp
 from routes.exchange_flow import bp as exchange_flow_bp
 from routes.book_depth import bp as book_depth_bp
+from routes.wallet_pins import bp as wallet_pins_bp, ensure_tables as ensure_wallet_pins
 from throttle import register_health_endpoint
 from clickhouse import client
 from wallets.cache import ensure_table as ensure_wallets_cache
@@ -50,6 +51,7 @@ app.blueprint(gmx_bp)
 app.blueprint(hyperliquid_bp)
 app.blueprint(exchange_flow_bp)
 app.blueprint(book_depth_bp)
+app.blueprint(wallet_pins_bp)
 
 
 @app.listener("before_server_start")
@@ -59,6 +61,8 @@ async def _warm_caches(_app):
     await warm_streams_cache()
     # Create the smart-wallet leaderboard cache table if absent.
     await ensure_wallets_cache(await client())
+    # Create the wallet pins + groups tables if absent.
+    await ensure_wallet_pins(await client())
 
 
 @app.get("/health")

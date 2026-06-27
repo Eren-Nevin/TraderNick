@@ -99,7 +99,9 @@
   let copied = $state(false);
   // Pin menu (group checkboxes) open state. Reflect pinned groups in the button.
   let pinMenuOpen = $state(false);
-  onMount(() => walletPinsStore.hydrate());
+  onMount(() => {
+    walletPinsStore.hydrate();
+  });
   const pinnedGroups = $derived(walletPinsStore.groupsForWallet(address));
 
   // Single token (max one) whose daily close price is overlaid on the PnL

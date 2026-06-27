@@ -1,9 +1,10 @@
 // Pinned wallets + wallet groups. A "pin" is a tag relating a wallet to one or
-// more groups; a permanent "Default" group always exists. Persisted to
-// `tradernick:wallet-pins:v1` (mirrors the filters/pages store lifecycle).
-// localStorage for now; a DB-backed version comes later.
+// more groups; a permanent "Default" group always exists. Persisted server-side
+// in ClickHouse (user_id-scoped) via /api/wallet_pins — GET to load, POST to save
+// a full snapshot. The store keeps an in-memory reactive mirror so every getter
+// stays synchronous; mutations update it and fire a (serialised) background save.
 
-const STORAGE_KEY = 'tradernick:wallet-pins:v1';
+const API_URL = '/api/wallet_pins';
 
 export const DEFAULT_GROUP_ID = 'default';
 /** Neutral zinc — the look of an uncoloured (color = null) group capsule. */
@@ -21,16 +22,23 @@ let _groups = $state<WalletGroup[]>([defaultGroup()]);
 let _pins = $state<WalletPin[]>([]);
 let _hydrated = false;
 
+// Saves are serialised through one promise chain so rapid mutations POST in
+// order — out-of-order snapshot writes could otherwise drop a just-made change.
+// Each call captures the current state as a JSON string at call time.
+let _saveChain: Promise<void> = Promise.resolve();
+
 function persist() {
-  if (typeof localStorage === 'undefined') return;
-  try {
-    localStorage.setItem(
-      STORAGE_KEY,
-      JSON.stringify({ version: 1, groups: _groups, pins: _pins }),
-    );
-  } catch {
-    /* localStorage may be full or disabled */
-  }
+  if (typeof fetch === 'undefined') return;
+  const body = JSON.stringify({ groups: _groups, pins: _pins });
+  _saveChain = _saveChain.then(() =>
+    fetch(API_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body,
+    })
+      .then(() => undefined)
+      .catch(() => undefined),
+  );
 }
 
 function newId(): string {
@@ -76,14 +84,14 @@ export const walletPinsStore = {
     return _pins;
   },
 
-  hydrate() {
+  async hydrate() {
     if (_hydrated) return;
     _hydrated = true;
-    if (typeof localStorage === 'undefined') return;
+    if (typeof fetch === 'undefined') return;
     try {
-      const raw = localStorage.getItem(STORAGE_KEY);
-      if (!raw) return;
-      const parsed = JSON.parse(raw);
+      const res = await fetch(API_URL);
+      if (!res.ok) return;
+      const parsed = await res.json();
       const groups = (Array.isArray(parsed?.groups) ? parsed.groups : [])
         .map(sanitizeGroup)
         .filter((g: WalletGroup | null): g is WalletGroup => g !== null);
@@ -101,7 +109,7 @@ export const walletPinsStore = {
         }))
         .filter((p: WalletPin) => p.groups.length > 0);
     } catch {
-      /* ignore */
+      /* ignore — keep the in-memory default */
     }
   },
 

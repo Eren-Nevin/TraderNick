@@ -13,7 +13,9 @@
   import { isValidWalletAddress, normalizeAddress, walletHlUrl } from '$lib/arkham';
   import WalletAddress from '$lib/components/WalletAddress.svelte';
 
-  onMount(() => walletPinsStore.hydrate());
+  onMount(() => {
+    walletPinsStore.hydrate();
+  });
 
   // ── Address entry ──────────────────────────────────────────────────
   let addr = $state('');
