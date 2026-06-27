@@ -113,6 +113,15 @@
   let sortDir = $state<1 | -1>(-1);
   let search = $state('');
 
+  // L/S long share = long ÷ (long + short), as a %. NaN for tokens with no
+  // holders so they sort to the bottom (matches the displayed "—").
+  function lsPct(r: Row): number {
+    const lc = Number(r.long_count ?? 0);
+    const sc = Number(r.short_count ?? 0);
+    const tot = lc + sc;
+    return tot > 0 ? (lc / tot) * 100 : NaN;
+  }
+
   // Fuzzy token match: query chars appear in order in the token (case-insensitive).
   function fuzzy(q: string, t: string): boolean {
     q = q.trim().toLowerCase();
@@ -149,7 +158,7 @@
       if (k === 'token') return String(a.token).localeCompare(String(b.token)) * dir;
       const sv = (r: Row) =>
         k === 'net' ? netVal(r)
-        : k === 'lsnum' ? Number(r.long_count ?? 0)
+        : k === 'lsnum' ? lsPct(r)
         : k.startsWith('netchg') ? netChg(r, k.slice(6))
         : ((r as unknown as Record<string, number | null>)[k]);
       const av = sv(a);
