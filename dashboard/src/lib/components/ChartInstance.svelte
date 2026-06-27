@@ -6550,7 +6550,6 @@
                trailing window, so there's no fixed snapshot/end. Surface the
                rolling lookback as a text chip (changed via the table view's
                lookback selector). -->
-          <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL · smart wallets · dynamic</span>
           <span class="text-zinc-400 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700" title="Each point selects wallets over a rolling trailing window of this length (set in the table view).">Rolling {instance.swLookback ?? 7}d lookback</span>
         {/if}
         {#if instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'volume' || instance.kind === 'pc' || instance.kind === 'ls'}
