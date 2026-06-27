@@ -22,26 +22,32 @@ let _groups = $state<WalletGroup[]>([defaultGroup()]);
 let _pins = $state<WalletPin[]>([]);
 let _hydrateP: Promise<void> | null = null;
 
-// Saves are serialised through one promise chain so rapid mutations POST in
-// order — out-of-order snapshot writes could otherwise drop a just-made change.
-// Each call captures the current state as a JSON string at call time.
+// Each mutation is a GRANULAR write (one membership / one group) — never a full
+// snapshot. So a stale/partial in-memory state can't drop another wallet's pin
+// (the bug class). Writes are serialised through one chain so same-key toggles
+// land in order, and use keepalive so they survive page navigation.
 let _saveChain: Promise<void> = Promise.resolve();
 
-function persist() {
+function send(action: 'pin' | 'unpin' | 'group' | 'group_delete', body: object) {
   if (typeof fetch === 'undefined') return;
-  const body = JSON.stringify({ groups: _groups, pins: _pins });
+  const payload = JSON.stringify(body);
   _saveChain = _saveChain.then(() =>
-    fetch(API_URL, {
+    fetch(`${API_URL}/${action}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body,
-      // Complete even if the user navigates away right after pinning (otherwise
-      // the browser aborts the in-flight save on page unload).
+      body: payload,
       keepalive: true,
     })
       .then(() => undefined)
       .catch(() => undefined),
   );
+}
+
+/** Group payload for an upsert (granular /group write): name + color + index. */
+function groupPayload(id: string) {
+  const idx = _groups.findIndex((g) => g.id === id);
+  const g = _groups[idx];
+  return { id, name: g?.name ?? '', color: g?.color ?? null, sort: idx < 0 ? 0 : idx };
 }
 
 function newId(): string {
@@ -162,21 +168,20 @@ export const walletPinsStore = {
     const a = norm(address);
     if (!_groups.some((g) => g.id === groupId)) return;
     const pin = _pins.find((p) => p.address === a);
-    if (!pin) {
-      _pins = [..._pins, { address: a, groups: [{ groupId, addedAt: Date.now() }] }];
-    } else if (pin.groups.some((m) => m.groupId === groupId)) {
-      const groups = pin.groups.filter((m) => m.groupId !== groupId);
+    const inGroup = !!pin?.groups.some((m) => m.groupId === groupId);
+    if (inGroup) {
+      const groups = pin!.groups.filter((m) => m.groupId !== groupId);
       _pins = groups.length
         ? _pins.map((p) => (p.address === a ? { ...p, groups } : p))
         : _pins.filter((p) => p.address !== a);
+      send('unpin', { address: a, groupId });
     } else {
-      _pins = _pins.map((p) =>
-        p.address === a
-          ? { ...p, groups: [...p.groups, { groupId, addedAt: Date.now() }] }
-          : p,
-      );
+      const addedAt = Date.now();
+      _pins = pin
+        ? _pins.map((p) => (p.address === a ? { ...p, groups: [...p.groups, { groupId, addedAt }] } : p))
+        : [..._pins, { address: a, groups: [{ groupId, addedAt }] }];
+      send('pin', { address: a, groupId, addedAt });
     }
-    persist();
   },
 
   /** Pin to the Default group (the quick-pin default action). */
@@ -195,7 +200,7 @@ export const walletPinsStore = {
     const trimmed = name.trim() || `Group ${_groups.length}`;
     const g: WalletGroup = { id: newId(), name: trimmed, color };
     _groups = [..._groups, g];
-    persist();
+    send('group', groupPayload(g.id));
     return g;
   },
 
@@ -203,12 +208,12 @@ export const walletPinsStore = {
     const trimmed = name.trim();
     if (!trimmed) return;
     _groups = _groups.map((g) => (g.id === id ? { ...g, name: trimmed } : g));
-    persist();
+    send('group', groupPayload(id));
   },
 
   setGroupColor(id: string, color: string | null) {
     _groups = _groups.map((g) => (g.id === id ? { ...g, color } : g));
-    persist();
+    send('group', groupPayload(id));
   },
 
   /** Delete a group (and strip it from every pin). Default can't be deleted. */
@@ -219,7 +224,7 @@ export const walletPinsStore = {
     _pins = _pins
       .map((p) => ({ ...p, groups: p.groups.filter((m) => m.groupId !== id) }))
       .filter((p) => p.groups.length > 0);
-    persist();
+    send('group_delete', { id });
     return true;
   },
 };
