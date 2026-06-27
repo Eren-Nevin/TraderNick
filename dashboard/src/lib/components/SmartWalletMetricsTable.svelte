@@ -57,7 +57,11 @@
     onToggleCutoffLookback = () => {},
     rowLimit = 100,
     rowLimits = [100, 250, 500, 1000],
-    onChangeRowLimit = () => {}
+    onChangeRowLimit = () => {},
+    groupMode = false,
+    groups = [],
+    selectedGroup = '',
+    onChangeGroup = () => {}
   }: {
     rows: SmartWalletRow[];
     total?: number;
@@ -90,6 +94,11 @@
     rowLimit?: number;
     rowLimits?: ReadonlyArray<number>;
     onChangeRowLimit?: (n: number) => void;
+    /** Group widget: the wallet set is a pinned group (no criteria). */
+    groupMode?: boolean;
+    groups?: ReadonlyArray<{ id: string; name: string }>;
+    selectedGroup?: string;
+    onChangeGroup?: (id: string) => void;
   } = $props();
 
   const metricDef = $derived(smartWalletMetricDef(metric));
@@ -167,6 +176,19 @@
       title={!loading && total > rows.length ? `${total.toLocaleString()} wallets found; showing top ${rows.length}` : undefined}
       >Smart Wallets{#if !loading} ({total.toLocaleString()}){/if}</span
     >
+    {#if groupMode}
+      <span class="text-zinc-500">Group:</span>
+      <select
+        value={selectedGroup}
+        onchange={(e) => onChangeGroup(e.currentTarget.value)}
+        class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+        title="Pinned wallet group whose members are the set"
+      >
+        {#each groups as g (g.id)}
+          <option value={g.id}>{g.name}</option>
+        {/each}
+      </select>
+    {/if}
     <span class="text-zinc-500">Metric:</span>
     <select
       value={metric}
@@ -253,7 +275,12 @@
     </span>
   </div>
 
-  {#if dynamic}
+  {#if groupMode}
+    <!-- Group: stats are as of the latest snapshot; lookback is the stats window. -->
+    <div class="flex items-center px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/30 text-[10px] text-zinc-500">
+      Stats for the group's wallets over the last {lookback}d, as of {snapshot}.
+    </div>
+  {:else if dynamic}
     <!-- Dynamic: no snapshot slider (the set rolls per day). This table view
          shows the LATEST day's set; the chart view plots the full rolling series. -->
     <div class="flex items-center px-3 py-1.5 border-b border-zinc-800 bg-zinc-900/30 text-[10px] text-zinc-500">

@@ -1101,6 +1101,50 @@ async def _resolve_cutoff_passing(ch, request) -> tuple[str, int]:
     return union_key, display_lb
 
 
+# ── GROUP (pinned wallet-group) selection ─────────────────────────────────
+# The wallet set IS a user-pinned group (tradernick.wallet_pins) — no criteria.
+# Materialise the current membership into the shared set cache under a CONTENT-
+# addressed key (group_id + sorted members), so a changed/emptied group gets a
+# fresh key automatically and the OI/metrics/token queries reuse the same
+# sel_key machinery. user_id is the single 'local' placeholder until real users.
+_WALLET_PINS_USER = "local"
+
+
+async def _resolve_group_passing(ch, request) -> str:
+    group_id = request.args.get("group") or ""
+    if not group_id:
+        raise ValueError("missing group")
+    await _ensure_set_table(ch)
+    mem = await ch.query(
+        "SELECT address FROM tradernick.wallet_pins FINAL "
+        "WHERE user_id = {u:String} AND group_id = {g:String} AND deleted = 0 "
+        "ORDER BY address",
+        parameters={"u": _WALLET_PINS_USER, "g": group_id},
+    )
+    addrs = [r[0] for r in mem.result_rows]
+    key = "grp-" + hashlib.md5((group_id + "|" + ",".join(addrs)).encode()).hexdigest()
+    now = time.time()
+    if (last := _set_ensured.get(key)) and now - last < _SET_CACHE_TTL:
+        return key
+    r = await ch.query(
+        f"SELECT toUnixTimestamp(max(computed_at)) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
+        parameters={"k": key},
+    )
+    mx = r.result_rows[0][0] if (r and r.result_rows) else 0
+    if mx and now - float(mx) < _SET_CACHE_TTL:
+        _set_ensured[key] = now
+        return key
+    # Empty group → no batch inserted; the queries then see 0 wallets (correct).
+    if addrs:
+        stamp = datetime.now(timezone.utc).replace(tzinfo=None)
+        await ch.insert(
+            _SET_CACHE_TABLE, [[key, a, stamp] for a in addrs],
+            column_names=["sel_key", "wallet", "computed_at"],
+        )
+    _set_ensured[key] = now
+    return key
+
+
 # ── ROLLING smart-wallet selection ───────────────────────────────────────
 # The Fixed builder computes ONE passing set for the single window
 # [snapshot-lookback, snapshot]. The Rolling builder computes, for EVERY day D
@@ -1777,9 +1821,18 @@ async def smart_wallet_metrics(request):
     # Cutoff mode: rank the static union-over-lookbacks set (membership from the
     # cache) with per-wallet metrics over the longest selected lookback. Else the
     # regular single-window guarded selection.
+    group = request.args.get("group")
     cutoff = request.args.get("cutoff") in ("1", "true", "yes")
     try:
-        if cutoff:
+        if group:
+            # Group mode: stats for the pinned group's wallets over the request
+            # lookback ending at the latest snapshot (no criteria guards).
+            ch = await client()
+            group_key = await _resolve_group_passing(ch, request)
+            sel = _build_smart_wallet_selection(
+                request, include_avg_oi=True,
+                membership_override=_cutoff_membership_sql(group_key))
+        elif cutoff:
             ch = await client()
             union_key, display_lb = await _resolve_cutoff_passing(ch, request)
             sel = _build_smart_wallet_selection(
@@ -2015,11 +2068,13 @@ async def smart_wallet_oi(request):
         return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
     if not since or not until:
         return response.json({"error": "missing since/until"}, status=400)
-    # Cutoff mode: a static union-over-lookbacks set (no per-day refilter, no
-    # wallet count). Otherwise the regular single-window fixed selection.
+    # Static set modes: `group` (a pinned wallet group) or `cutoff` (union over
+    # lookbacks). Both skip per-day refilter + the wallet count. Otherwise the
+    # regular single-window fixed selection.
+    group = request.args.get("group")
     cutoff = request.args.get("cutoff") in ("1", "true", "yes")
     sel = None
-    if not cutoff:
+    if not cutoff and not group:
         try:
             sel = _build_smart_wallet_selection(request)
         except ValueError as e:
@@ -2050,7 +2105,12 @@ async def smart_wallet_oi(request):
     # table view) or compute it once. The OI query then filters via a sub-SELECT
     # against the cache — no selection CTE and no giant IN-list over the wire —
     # so a cache hit makes the chart / token-switching / panning fast.
-    if cutoff:
+    if group:
+        try:
+            sel_key = await _resolve_group_passing(ch, request)
+        except ValueError as e:
+            return response.json({"error": str(e)}, status=400)
+    elif cutoff:
         try:
             sel_key, _ = await _resolve_cutoff_passing(ch, request)
         except ValueError as e:
@@ -2142,15 +2202,18 @@ async def smart_wallet_token_list(request):
         return response.json({"tokens": []})
     raw_now = raw_rows.result_rows[0][0]
 
-    # Cutoff = static union-over-lookbacks set (fixed-set join on every bucket;
-    # t_now = the latest bucket, no rolling-cohort day to snap to). Else the
+    # Static set (fixed-set join on every bucket; t_now = the latest bucket):
+    # `group` (a pinned wallet group) or `cutoff` (union over lookbacks). Else the
     # Dynamic rolling per-day cohort.
+    group = request.args.get("group")
     cutoff = request.args.get("cutoff") in ("1", "true", "yes")
-    union_key = None
+    static = bool(group) or cutoff
+    static_key = None
     sel_key = None
-    if cutoff:
+    if static:
         try:
-            union_key, _ = await _resolve_cutoff_passing(ch, request)
+            static_key = (await _resolve_group_passing(ch, request)) if group \
+                else (await _resolve_cutoff_passing(ch, request))[0]
         except ValueError as e:
             return response.json({"error": str(e)}, status=400)
         t_now = raw_now
@@ -2216,9 +2279,9 @@ async def smart_wallet_token_list(request):
     )
     _bucket_in = ("bucket IN ({t_now:DateTime}, {t_1h:DateTime}, {t_4h:DateTime}, "
                   "{t_24h:DateTime}, {t_7d:DateTime})")
-    if cutoff:
-        # Static set: filter to the union membership on every bucket — no per-day
-        # join, no WITH. Same outer aggregation (incl. long/short wallet counts).
+    if static:
+        # Static set (group or cutoff): filter to the membership on every bucket
+        # — no per-day join, no WITH. Same outer aggregation (incl. counts).
         with_block = ""
         inner_block = f"""
             SELECT
@@ -2228,7 +2291,7 @@ async def smart_wallet_token_list(request):
                 argMaxMerge(size_state)   AS sz
             FROM tradernick.hl_position_history_1h
             WHERE {_bucket_in}
-              AND {_cutoff_membership_sql(union_key, col="wallet")}
+              AND {_cutoff_membership_sql(static_key, col="wallet")}
             GROUP BY token, side, wallet, bucket"""
     else:
         with_block = f"""WITH pset AS (

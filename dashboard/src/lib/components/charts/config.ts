@@ -437,6 +437,7 @@ export type ChartKind =
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
+  | 'smart_wallets_group'
   | 'transfer'
   | 'exchange_flow'
   | 'pc'
@@ -575,6 +576,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
   smart_wallets_cutoff: 'Smart Wallets (Cutoff)',
+  smart_wallets_group: 'Smart Wallets (Group)',
   transfer: 'Token Flow',
   exchange_flow: 'Exchange Flow',
   pc: 'Relative Price',
@@ -820,7 +822,8 @@ export function isLeaderboardKind(kind: ChartKind): boolean {
 export const DUAL_VIEW_KINDS: Partial<Record<ChartKind, { chartKind: ChartKind }>> = {
   smart_wallets_table: { chartKind: 'hl_smart_oi' },
   smart_wallets_dynamic: { chartKind: 'hl_smart_oi' },
-  smart_wallets_cutoff: { chartKind: 'hl_smart_oi' }
+  smart_wallets_cutoff: { chartKind: 'hl_smart_oi' },
+  smart_wallets_group: { chartKind: 'hl_smart_oi' }
 };
 
 export function isDualViewKind(kind: ChartKind): boolean {
@@ -1365,7 +1368,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Perp — GMX V2 + Hyperliquid family. smart_wallets_table is an HL-only
   // experimental tableview (no hl_ prefix so it stays out of the many
   // isHlKind() chart-control branches) — categorise it here explicitly.
-  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff') return 'Perp';
+  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group') return 'Perp';
   // Staking — Lido (and future Stader/Frax).
   if (kind === 'lido') return 'Staking';
   return null;
@@ -1963,6 +1966,9 @@ export type ChartInstance = {
   swCutoffDate?: string | null;
   /** Smart-wallet table view: how many rows to fetch/show (100|250|500|1000). */
   swRowLimit?: number;
+  /** smart_wallets_group only: the pinned wallet-group id whose members ARE the
+   *  set (no criteria). Default 'default'. */
+  swGroupId?: string;
   /** Dual-view widgets only (see DUAL_VIEW_KINDS): which sub-view is active.
    *  'table' renders the kind's normal table; 'chart' renders the mapped chart
    *  kind over the same widget's data. 'token_list' (smart_wallets_dynamic only)
@@ -2892,6 +2898,23 @@ export function newChartInstance(
     base.swMinVolume = 0;
     base.swShowClose = true;
     base.smartShowWalletCount = false; // static set → no wallet-count overlay
+  }
+  if (kind === 'smart_wallets_group') {
+    // Group finder: the wallet set IS a pinned group (no criteria). Table shows
+    // the group's per-wallet stats (current snapshot); chart/tokens use the same
+    // static set. Refresh reloads the group + members from CH.
+    base.width = 3;
+    base.height = 3;
+    base.exchange = 'hl';
+    base.viewMode = 'table';
+    base.interval = '1h';
+    base.swMetric = 'sharpe';
+    base.swGroupId = 'default';       // the Default group
+    base.swLookback = 30;             // stats window (ending at the latest snapshot)
+    base.swToken = null;
+    base.swRowLimit = 100;
+    base.swShowClose = true;
+    base.smartShowWalletCount = false;
   }
   return base;
 }

@@ -1287,6 +1287,32 @@
         inst.swShowClose = r.swShowClose !== false;
         inst.smartShowWalletCount = false;
       }
+      if (inst.kind === 'smart_wallets_group') {
+        // Wallet set = a pinned group (no criteria). Restore the group id, the
+        // stats lookback window, row limit, view + chart fields.
+        inst.chain = 'HL';
+        inst.exchange = 'hl';
+        inst.swMetric = 'sharpe';
+        inst.swGroupId = typeof r.swGroupId === 'string' && r.swGroupId.length > 0 ? r.swGroupId : 'default';
+        const glb = r.swLookback;
+        inst.swLookback = (glb === 1 || glb === 7 || glb === 30 || glb === 90 || glb === 150) ? glb : 30;
+        inst.swToken = typeof r.swToken === 'string' && r.swToken.length > 0 ? r.swToken : null;
+        inst.swRowLimit = [100, 250, 500, 1000].includes(Number(r.swRowLimit)) ? Number(r.swRowLimit) : 100;
+        inst.viewMode =
+          r.viewMode === 'chart' ? 'chart' : r.viewMode === 'token_list' ? 'token_list' : 'table';
+        inst.token =
+          typeof r.token === 'string' && r.token.length > 0 ? r.token : (inst.swToken || 'BTC');
+        inst.interval =
+          typeof r.interval === 'string' && r.interval.length > 0 ? (r.interval as Interval) : '1h';
+        inst.oiHlDisplay =
+          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net', 'count'] as const)
+            .includes(r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>)
+            ? (r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>) : 'total';
+        inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
+        inst.swtUnit = r.swtUnit === 'token' ? 'token' : 'usd';
+        inst.swShowClose = r.swShowClose !== false;
+        inst.smartShowWalletCount = false;
+      }
       // Compound overlays — preserved across reloads. Each entry is validated
       // through sanitizeOverlay() so a corrupt save can't strand the chart.
       if (Array.isArray(r.overlays)) {

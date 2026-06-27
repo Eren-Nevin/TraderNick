@@ -134,6 +134,7 @@
   import AddOverlayDialog from '$lib/components/AddOverlayDialog.svelte';
   import SmartWalletsDialog from '$lib/components/SmartWalletsDialog.svelte';
   import { filtersStore } from '$lib/stores/filters.svelte';
+  import { walletPinsStore } from '$lib/stores/walletPins.svelte';
   import { expandFilter, filterWireKey, type FilterWire } from '$lib/components/charts/filters';
   import Pencil from '@lucide/svelte/icons/pencil';
   import PlusCircle from '@lucide/svelte/icons/plus-circle';
@@ -435,6 +436,8 @@
   let walletCategories = $state<WalletCategory[]>([]);
   let walletEntities = $state<WalletCategory[]>([]);
   onMount(async () => {
+    // Group widget: load the wallet groups so the group dropdown is populated.
+    if (isGroup) walletPinsStore.hydrate();
     if (instance.kind !== 'transfer') return;
     try {
       const [catsRes, entsRes] = await Promise.all([
@@ -745,6 +748,8 @@
   // instance.swSnapshot; this is the single source of truth for the fetch +
   // the table header.
   function swSnapshotIso(): string {
+    // Group: stats are "as of now" → the latest day.
+    if (instance.kind === 'smart_wallets_group') return swTodayIso();
     // Cutoff: the user-selectable cutoff day (default = latest/today).
     if (instance.kind === 'smart_wallets_cutoff') return instance.swCutoffDate || swTodayIso();
     if (instance.swSnapshot) return instance.swSnapshot;
@@ -765,8 +770,9 @@
       .toISOString().slice(0, 10);
   }
   // Both smart-wallet widgets share criteria, gear panel, and refresh-gating.
-  const isSwKind = (k: string) => k === 'smart_wallets_table' || k === 'smart_wallets_dynamic' || k === 'smart_wallets_cutoff';
+  const isSwKind = (k: string) => k === 'smart_wallets_table' || k === 'smart_wallets_dynamic' || k === 'smart_wallets_cutoff' || k === 'smart_wallets_group';
   const isCutoff = $derived(instance.kind === 'smart_wallets_cutoff');
+  const isGroup = $derived(instance.kind === 'smart_wallets_group');
 
   // ── Deferred smart-wallet FILTERS ─────────────────────────────────────
   // The gear inputs edit instance.sw* live (so they persist), but the table's
@@ -841,7 +847,8 @@
       committedFilters.swMinAnnualizedSharpe ?? '',
       swF('swMinAvgOiShare', 0), committedFilters.swMaxAvgOiShare ?? '',
       swF('swMinVolumeShare', 0), committedFilters.swMaxVolumeShare ?? '',
-      (instance.swCutoffLookbacks ?? []).join(','), instance.swRowLimit ?? 100
+      (instance.swCutoffLookbacks ?? []).join(','), instance.swRowLimit ?? 100,
+      instance.swGroupId ?? ''
     ].join('|');
   }
 
@@ -3028,6 +3035,11 @@
     if (committedFilters.swMaxAvgOiShare != null) qs.set('max_avg_oi_share', String(committedFilters.swMaxAvgOiShare));
     if (committedFilters.swMaxVolumeShare != null) qs.set('max_volume_share', String(committedFilters.swMaxVolumeShare));
     if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
+    // Group: the wallet set IS a pinned group (no criteria) — backend resolves
+    // membership from wallet_pins; lookback is the stats window (table only).
+    if (instance.kind === 'smart_wallets_group') {
+      qs.set('group', instance.swGroupId || 'default');
+    }
     // Cutoff: union over multiple lookbacks at the cutoff (snapshot) → static set.
     if (instance.kind === 'smart_wallets_cutoff') {
       qs.set('cutoff', '1');
@@ -3396,6 +3408,9 @@
     // the armed selection key AFTER committing so it matches what the effect
     // compares against. swForceFreshNext carries the cache-bust into that load.
     if (isSwKind(instance.kind)) {
+      // Group widget: refresh also reloads the groups + memberships from CH so
+      // the dropdown and the resolved set reflect the latest pins.
+      if (isGroup) walletPinsStore.reload();
       commitSwFilters();
       swArmed = true;
       swArmedSelectionKey = swTableKey();
@@ -5658,7 +5673,7 @@
               : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
             title="Chart view — OI of the found wallets"
           >Chart</button>
-          {#if instance.kind === 'smart_wallets_dynamic' || isCutoff}
+          {#if instance.kind === 'smart_wallets_dynamic' || isCutoff || isGroup}
             <button
               type="button"
               onclick={() => {
@@ -6930,7 +6945,7 @@
   {#if settingsOpen}
     <div class="absolute inset-0 z-20 bg-zinc-950/95 overflow-y-auto">
     <div class="px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/30 flex items-center gap-3 flex-wrap text-xs">
-      {#if isSwKind(instance.kind) && (instance.kind === 'smart_wallets_dynamic' || isCutoff || instance.viewMode !== 'chart')}
+      {#if isSwKind(instance.kind) && !isGroup && (instance.kind === 'smart_wallets_dynamic' || isCutoff || instance.viewMode !== 'chart')}
         <!-- Smart-wallet finder filters. For Fixed they show in TABLE view only
              (chart mode shows chart-appearance settings); for Dynamic they
              ALWAYS show (the criteria define the per-day rolling set the chart
@@ -8256,6 +8271,10 @@
         cutoffOptions={SMART_WALLET_CUTOFF_LOOKBACKS}
         cutoffLookbacks={instance.swCutoffLookbacks ?? [...SMART_WALLET_CUTOFF_LOOKBACKS]}
         rowLimit={instance.swRowLimit ?? 100}
+        groupMode={isGroup}
+        groups={walletPinsStore.groups.map((g) => ({ id: g.id, name: g.name }))}
+        selectedGroup={instance.swGroupId ?? 'default'}
+        onChangeGroup={(id) => (instance.swGroupId = id)}
         onChangeMetric={(m) => (instance.swMetric = m)}
         onChangeLookback={(l) => (instance.swLookback = l)}
         onToggleCutoffLookback={(l) => {

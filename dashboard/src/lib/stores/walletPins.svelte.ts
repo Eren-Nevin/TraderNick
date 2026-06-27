@@ -128,6 +128,12 @@ export const walletPinsStore = {
     return _hydrateP;
   },
 
+  /** Force a fresh load from CH (the Group widget's refresh button). */
+  reload(): Promise<void> {
+    _hydrateP = null;
+    return this.hydrate();
+  },
+
   groupById(id: string): WalletGroup | undefined {
     return _groups.find((g) => g.id === id);
   },
