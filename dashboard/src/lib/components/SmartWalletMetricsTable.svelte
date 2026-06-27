@@ -216,7 +216,7 @@
           >{l}d</button>
         {/each}
       </div>
-    {:else}
+    {:else if !groupMode}
       <span class="text-zinc-500 ml-1">Lookback:</span>
       <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
         {#each lookbacks as l, i (l)}
@@ -244,17 +244,19 @@
       {/each}
     </select>
 
-    <span class="text-zinc-500 ml-1">Token:</span>
-    <select
-      value={token ?? ''}
-      onchange={(e) => onChangeToken(e.currentTarget.value === '' ? null : e.currentTarget.value)}
-      class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-    >
-      <option value="">All tokens</option>
-      {#each tokens as t (t)}
-        <option value={t}>{t}</option>
-      {/each}
-    </select>
+    {#if !groupMode}
+      <span class="text-zinc-500 ml-1">Token:</span>
+      <select
+        value={token ?? ''}
+        onchange={(e) => onChangeToken(e.currentTarget.value === '' ? null : e.currentTarget.value)}
+        class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+      >
+        <option value="">All tokens</option>
+        {#each tokens as t (t)}
+          <option value={t}>{t}</option>
+        {/each}
+      </select>
+    {/if}
 
     {#if !isGlobal}
       <!-- OI display unit — token amount vs USD. Pure frontend (both values are
