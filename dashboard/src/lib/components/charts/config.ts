@@ -436,6 +436,7 @@ export type ChartKind =
   | 'token_leaderboard'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
+  | 'smart_wallets_cutoff'
   | 'transfer'
   | 'exchange_flow'
   | 'pc'
@@ -573,6 +574,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
+  smart_wallets_cutoff: 'Smart Wallets (Cutoff)',
   transfer: 'Token Flow',
   exchange_flow: 'Exchange Flow',
   pc: 'Relative Price',
@@ -817,7 +819,8 @@ export function isLeaderboardKind(kind: ChartKind): boolean {
  *  when adding future table/chart dual widgets. */
 export const DUAL_VIEW_KINDS: Partial<Record<ChartKind, { chartKind: ChartKind }>> = {
   smart_wallets_table: { chartKind: 'hl_smart_oi' },
-  smart_wallets_dynamic: { chartKind: 'hl_smart_oi' }
+  smart_wallets_dynamic: { chartKind: 'hl_smart_oi' },
+  smart_wallets_cutoff: { chartKind: 'hl_smart_oi' }
 };
 
 export function isDualViewKind(kind: ChartKind): boolean {
@@ -1362,7 +1365,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Perp — GMX V2 + Hyperliquid family. smart_wallets_table is an HL-only
   // experimental tableview (no hl_ prefix so it stays out of the many
   // isHlKind() chart-control branches) — categorise it here explicitly.
-  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic') return 'Perp';
+  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff') return 'Perp';
   // Staking — Lido (and future Stader/Frax).
   if (kind === 'lido') return 'Staking';
   return null;
@@ -1583,6 +1586,9 @@ export type SmartWalletLookback = 1 | 3 | 7 | 14 | 30 | 90 | 150;
 export const SMART_WALLET_LOOKBACKS: ReadonlyArray<SmartWalletLookback> = [1, 7, 30, 90, 150];
 // Dynamic widget rolls the lookback per day, so it's capped at 30d (heavier).
 export const SMART_WALLET_DYNAMIC_LOOKBACKS: ReadonlyArray<SmartWalletLookback> = [1, 3, 7, 14, 30];
+// Cutoff finder: the lookback windows whose passing sets get UNIONed at the
+// cutoff (multi-select; 90d added per the roster). Static set, so 90d is cheap.
+export const SMART_WALLET_CUTOFF_LOOKBACKS: ReadonlyArray<SmartWalletLookback> = [1, 3, 7, 14, 30, 90];
 
 export type SmartWalletMetricDef = {
   key: SmartWalletMetric;
@@ -1948,6 +1954,15 @@ export type ChartInstance = {
   swMaxAvgOiShare?: number | null;
   swMinVolumeShare?: number;
   swMaxVolumeShare?: number | null;
+  /** smart_wallets_cutoff only: the lookback windows whose passing sets are
+   *  UNIONed at the cutoff into one static set. Default = all of
+   *  SMART_WALLET_CUTOFF_LOOKBACKS. */
+  swCutoffLookbacks?: number[];
+  /** smart_wallets_cutoff only: the cutoff day (ISO date). null/undefined =
+   *  latest (start of today). */
+  swCutoffDate?: string | null;
+  /** Smart-wallet table view: how many rows to fetch/show (100|250|500|1000). */
+  swRowLimit?: number;
   /** Dual-view widgets only (see DUAL_VIEW_KINDS): which sub-view is active.
    *  'table' renders the kind's normal table; 'chart' renders the mapped chart
    *  kind over the same widget's data. 'token_list' (smart_wallets_dynamic only)
@@ -2853,6 +2868,30 @@ export function newChartInstance(
     base.swMinVolume = 0;            // no volume floor (fallbacks elsewhere are 0 too)
     base.swShowClose = true;          // overlay the token's close price by default
     base.smartShowWalletCount = false; // per-day wallet-count overlay off by default
+  }
+  if (kind === 'smart_wallets_cutoff') {
+    // Cutoff finder: filter at ONE cutoff over MULTIPLE lookback windows, union
+    // the passing sets into one STATIC set used by all 3 views. Static → the
+    // chart sums OI over a fixed set (fast, no per-day refilter) and there's no
+    // per-bucket wallet count. Same criteria fields as Dynamic.
+    base.width = 3;
+    base.height = 3;
+    base.exchange = 'hl';
+    base.viewMode = 'chart';
+    base.interval = '1h';
+    base.swMetric = 'sharpe';
+    base.swCutoffLookbacks = [...SMART_WALLET_CUTOFF_LOOKBACKS]; // union all by default
+    base.swCutoffDate = null;         // latest (start of today)
+    base.swToken = null;              // global (all tokens)
+    base.swRowLimit = 100;
+    // Same default criteria as Dynamic.
+    base.swMinDays = 7;
+    base.swMinAccountDuration = 30;
+    base.swMinWinRate = 60;
+    base.swMinAvgOiShare = 0.05;
+    base.swMinVolume = 0;
+    base.swShowClose = true;
+    base.smartShowWalletCount = false; // static set → no wallet-count overlay
   }
   return base;
 }

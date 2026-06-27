@@ -118,6 +118,7 @@
     DUAL_VIEW_KINDS,
     SMART_WALLET_LOOKBACKS,
     SMART_WALLET_DYNAMIC_LOOKBACKS,
+    SMART_WALLET_CUTOFF_LOOKBACKS,
     type LeaderboardMetric,
     type SmartWalletMetric,
     type SmartWalletLookback,
@@ -744,6 +745,8 @@
   // instance.swSnapshot; this is the single source of truth for the fetch +
   // the table header.
   function swSnapshotIso(): string {
+    // Cutoff: the user-selectable cutoff day (default = latest/today).
+    if (instance.kind === 'smart_wallets_cutoff') return instance.swCutoffDate || swTodayIso();
     if (instance.swSnapshot) return instance.swSnapshot;
     // Dynamic has no snapshot slider — its table view shows the LATEST day, and
     // its rolling chart ignores snapshot entirely (the proxy strips it). So the
@@ -762,7 +765,8 @@
       .toISOString().slice(0, 10);
   }
   // Both smart-wallet widgets share criteria, gear panel, and refresh-gating.
-  const isSwKind = (k: string) => k === 'smart_wallets_table' || k === 'smart_wallets_dynamic';
+  const isSwKind = (k: string) => k === 'smart_wallets_table' || k === 'smart_wallets_dynamic' || k === 'smart_wallets_cutoff';
+  const isCutoff = $derived(instance.kind === 'smart_wallets_cutoff');
 
   // ── Deferred smart-wallet FILTERS ─────────────────────────────────────
   // The gear inputs edit instance.sw* live (so they persist), but the table's
@@ -836,7 +840,8 @@
       swF('swMinTradesPerDay', 0), committedFilters.swMaxTradesPerDay ?? '',
       committedFilters.swMinAnnualizedSharpe ?? '',
       swF('swMinAvgOiShare', 0), committedFilters.swMaxAvgOiShare ?? '',
-      swF('swMinVolumeShare', 0), committedFilters.swMaxVolumeShare ?? ''
+      swF('swMinVolumeShare', 0), committedFilters.swMaxVolumeShare ?? '',
+      (instance.swCutoffLookbacks ?? []).join(','), instance.swRowLimit ?? 100
     ].join('|');
   }
 
@@ -3023,6 +3028,14 @@
     if (committedFilters.swMaxAvgOiShare != null) qs.set('max_avg_oi_share', String(committedFilters.swMaxAvgOiShare));
     if (committedFilters.swMaxVolumeShare != null) qs.set('max_volume_share', String(committedFilters.swMaxVolumeShare));
     if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
+    // Cutoff: union over multiple lookbacks at the cutoff (snapshot) → static set.
+    if (instance.kind === 'smart_wallets_cutoff') {
+      qs.set('cutoff', '1');
+      const lbs = (instance.swCutoffLookbacks && instance.swCutoffLookbacks.length > 0)
+        ? instance.swCutoffLookbacks
+        : [...SMART_WALLET_CUTOFF_LOOKBACKS];
+      qs.set('lookbacks', lbs.join(','));
+    }
     return qs;
   }
 
@@ -3033,7 +3046,7 @@
     signal?: AbortSignal
   ): Promise<{ wallets: Array<{ wallet: string }>; total: number }> {
     const qs = swSelectionParams();
-    qs.set('limit', '100');
+    qs.set('limit', String(instance.swRowLimit ?? 100));
     const res = await queuedFetch(`/api/hyperliquid/smart_wallet_metrics?${qs}`, { signal });
     if (!res.ok) throw new Error(`smart_wallets_table ${res.status}`);
     const body = await res.json();
@@ -8239,8 +8252,18 @@
         token={instance.swToken ?? null}
         snapshot={swSnapshotIso()}
         dynamic={instance.kind === 'smart_wallets_dynamic'}
+        cutoff={isCutoff}
+        cutoffOptions={SMART_WALLET_CUTOFF_LOOKBACKS}
+        cutoffLookbacks={instance.swCutoffLookbacks ?? [...SMART_WALLET_CUTOFF_LOOKBACKS]}
+        rowLimit={instance.swRowLimit ?? 100}
         onChangeMetric={(m) => (instance.swMetric = m)}
         onChangeLookback={(l) => (instance.swLookback = l)}
+        onToggleCutoffLookback={(l) => {
+          const cur = instance.swCutoffLookbacks ?? [...SMART_WALLET_CUTOFF_LOOKBACKS];
+          const next = cur.includes(l) ? cur.filter((x) => x !== l) : [...cur, l];
+          if (next.length > 0) instance.swCutoffLookbacks = next.sort((a, b) => a - b);
+        }}
+        onChangeRowLimit={(n) => (instance.swRowLimit = n)}
         onChangeToken={(t) => {
           instance.swToken = t;
           // Keep the chart's OI token in lockstep with the table's selection
@@ -8249,7 +8272,10 @@
           // since the OI chart needs one concrete token to plot.
           if (t) instance.token = t;
         }}
-        onChangeSnapshot={(iso) => (instance.swSnapshot = iso)}
+        onChangeSnapshot={(iso) => {
+          if (isCutoff) instance.swCutoffDate = iso;
+          else instance.swSnapshot = iso;
+        }}
         loading={loading}
         error={error}
         notRun={!swArmed}

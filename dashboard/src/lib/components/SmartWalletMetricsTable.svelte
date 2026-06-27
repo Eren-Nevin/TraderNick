@@ -50,7 +50,14 @@
     error = null,
     notRun = false,
     lookbacks = SMART_WALLET_LOOKBACKS,
-    dynamic = false
+    dynamic = false,
+    cutoff = false,
+    cutoffLookbacks = [],
+    cutoffOptions = [],
+    onToggleCutoffLookback = () => {},
+    rowLimit = 100,
+    rowLimits = [100, 250, 500, 1000],
+    onChangeRowLimit = () => {}
   }: {
     rows: SmartWalletRow[];
     total?: number;
@@ -74,6 +81,15 @@
     /** Dynamic widget: the set ROLLS per day, so there's no snapshot slider —
      *  this table view shows the LATEST day's set. Swaps the slider for a note. */
     dynamic?: boolean;
+    /** Cutoff widget: lookback is a MULTI-select unioned at the cutoff. */
+    cutoff?: boolean;
+    cutoffLookbacks?: number[];
+    cutoffOptions?: ReadonlyArray<number>;
+    onToggleCutoffLookback?: (l: number) => void;
+    /** Table row count selector (all smart-wallet tables). */
+    rowLimit?: number;
+    rowLimits?: ReadonlyArray<number>;
+    onChangeRowLimit?: (n: number) => void;
   } = $props();
 
   const metricDef = $derived(smartWalletMetricDef(metric));
@@ -163,19 +179,48 @@
       {/each}
     </select>
 
-    <span class="text-zinc-500 ml-1">Lookback:</span>
-    <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
-      {#each lookbacks as l, i (l)}
-        <button
-          type="button"
-          onclick={() => onChangeLookback(l)}
-          class={'px-2 py-0.5 text-[11px] ' + (i > 0 ? 'border-l border-zinc-700 ' : '') + (lookback === l
-            ? 'bg-zinc-800 text-zinc-100'
-            : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
-          title={dynamic ? `${l}-day rolling window` : `${l}-day window`}
-        >{l}d</button>
+    {#if cutoff}
+      <!-- Cutoff: union the passing sets over the SELECTED lookback windows. -->
+      <span class="text-zinc-500 ml-1" title="A wallet joins the static set if it passes over ANY checked window">Lookbacks (union):</span>
+      <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
+        {#each cutoffOptions as l, i (l)}
+          <button
+            type="button"
+            onclick={() => onToggleCutoffLookback(l)}
+            class={'px-2 py-0.5 text-[11px] ' + (i > 0 ? 'border-l border-zinc-700 ' : '') + (cutoffLookbacks.includes(l)
+              ? 'bg-emerald-800 text-zinc-100'
+              : 'bg-zinc-950 text-zinc-500 hover:text-zinc-200')}
+            title={`Union the ${l}-day window`}
+          >{l}d</button>
+        {/each}
+      </div>
+    {:else}
+      <span class="text-zinc-500 ml-1">Lookback:</span>
+      <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
+        {#each lookbacks as l, i (l)}
+          <button
+            type="button"
+            onclick={() => onChangeLookback(l)}
+            class={'px-2 py-0.5 text-[11px] ' + (i > 0 ? 'border-l border-zinc-700 ' : '') + (lookback === l
+              ? 'bg-zinc-800 text-zinc-100'
+              : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+            title={dynamic ? `${l}-day rolling window` : `${l}-day window`}
+          >{l}d</button>
+        {/each}
+      </div>
+    {/if}
+
+    <span class="text-zinc-500 ml-1">Show:</span>
+    <select
+      value={rowLimit}
+      onchange={(e) => onChangeRowLimit(Number(e.currentTarget.value))}
+      class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+      title="Number of rows to fetch/show"
+    >
+      {#each rowLimits as n (n)}
+        <option value={n}>{n}</option>
       {/each}
-    </div>
+    </select>
 
     <span class="text-zinc-500 ml-1">Token:</span>
     <select
