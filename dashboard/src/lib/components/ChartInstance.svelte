@@ -5658,7 +5658,7 @@
               : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
             title="Chart view — OI of the found wallets"
           >Chart</button>
-          {#if instance.kind === 'smart_wallets_dynamic'}
+          {#if instance.kind === 'smart_wallets_dynamic' || isCutoff}
             <button
               type="button"
               onclick={() => {
@@ -6930,7 +6930,7 @@
   {#if settingsOpen}
     <div class="absolute inset-0 z-20 bg-zinc-950/95 overflow-y-auto">
     <div class="px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/30 flex items-center gap-3 flex-wrap text-xs">
-      {#if isSwKind(instance.kind) && (instance.kind === 'smart_wallets_dynamic' || instance.viewMode !== 'chart')}
+      {#if isSwKind(instance.kind) && (instance.kind === 'smart_wallets_dynamic' || isCutoff || instance.viewMode !== 'chart')}
         <!-- Smart-wallet finder filters. For Fixed they show in TABLE view only
              (chart mode shows chart-appearance settings); for Dynamic they
              ALWAYS show (the criteria define the per-day rolling set the chart
