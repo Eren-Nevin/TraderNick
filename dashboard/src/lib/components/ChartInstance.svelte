@@ -6768,11 +6768,13 @@
             <!-- Accumulation window (cumulative only). Changes the query. -->
             <select
               value={instance.cvdLookback ?? 'all'}
-              onchange={(e) => (instance.cvdLookback = e.currentTarget.value as 'all' | '1' | '7' | '14' | '30' | '90')}
+              onchange={(e) => (instance.cvdLookback = e.currentTarget.value as 'all' | '1h' | '4h' | '1' | '7' | '14' | '30' | '90')}
               class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
               title="How far back the cumulative CVD accumulates"
             >
               <option value="all">All (from start)</option>
+              <option value="1h">1h</option>
+              <option value="4h">4h</option>
               <option value="1">1d</option>
               <option value="7">7d</option>
               <option value="14">14d</option>

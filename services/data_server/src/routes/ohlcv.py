@@ -16,6 +16,12 @@ INTERVAL_SECONDS = {
     "1d": 86400,
 }
 
+# Spot-CVD cumulative accumulation windows → seconds (intraday 1h/4h + day-based).
+CVD_LOOKBACK_SECONDS = {
+    "1h": 3600, "4h": 14400,
+    "1": 86400, "7": 604800, "14": 1209600, "30": 2592000, "90": 7776000,
+}
+
 
 def _parse_iso(s: str) -> datetime:
     return datetime.fromisoformat(s.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
@@ -483,8 +489,8 @@ async def spot_cvd(request):
         return response.json({"error": "mode must be cumulative|periodic"}, status=400)
     if unit not in ("usd", "token"):
         return response.json({"error": "unit must be usd|token"}, status=400)
-    if lookback not in ("all", "1", "7", "14", "30", "90"):
-        return response.json({"error": "lookback must be all|1|7|14|30|90"}, status=400)
+    if lookback != "all" and lookback not in CVD_LOOKBACK_SECONDS:
+        return response.json({"error": f"lookback must be all|{'|'.join(CVD_LOOKBACK_SECONDS)}"}, status=400)
 
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since)
@@ -530,9 +536,10 @@ async def spot_cvd(request):
             frame = "ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW"
             lower_bound = ""
         else:
-            frame = f"RANGE BETWEEN {int(lookback) * 86400} PRECEDING AND CURRENT ROW"
+            lb_sec = CVD_LOOKBACK_SECONDS[lookback]
+            frame = f"RANGE BETWEEN {lb_sec} PRECEDING AND CURRENT ROW"
             lower_bound = " AND time >= {fetch_start:DateTime}"
-            params["fetch_start"] = since_dt - timedelta(days=int(lookback))
+            params["fetch_start"] = since_dt - timedelta(seconds=lb_sec)
         # The running sum must be computed in an INNER subquery so the display
         # clip (`WHERE ts >= since`) is applied AFTER it — SQL evaluates WHERE
         # before window functions, so clipping at the same level would make
