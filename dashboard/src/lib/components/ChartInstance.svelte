@@ -786,7 +786,10 @@
     'swMinTakerPct', 'swMaxFeePct', 'swMaxFundingPct', 'swMinAccountDuration',
     'swMinTokens', 'swMinWinRate', 'swMinTradesPerDay', 'swMaxTradesPerDay',
     'swMinAnnualizedSharpe',
-    'swMinAvgOiShare', 'swMaxAvgOiShare', 'swMinVolumeShare', 'swMaxVolumeShare',
+    'swMinAvgOiShare', 'swMaxAvgOiShare',
+    'swMinAvgOi', 'swMaxAvgOi', 'swMinAvgGlobalOi', 'swMaxAvgGlobalOi',
+    'swMinAvgGlobalOiShare', 'swMaxAvgGlobalOiShare',
+    'swMinVolumeShare', 'swMaxVolumeShare',
   ] as const;
   type SwFilterField = (typeof SW_FILTER_FIELDS)[number];
   function swFilterSnap(): Record<SwFilterField, number | null | undefined> {
@@ -849,6 +852,9 @@
       swF('swMinTradesPerDay', 0), committedFilters.swMaxTradesPerDay ?? '',
       committedFilters.swMinAnnualizedSharpe ?? '',
       swF('swMinAvgOiShare', 0), committedFilters.swMaxAvgOiShare ?? '',
+      committedFilters.swMinAvgOi ?? '', committedFilters.swMaxAvgOi ?? '',
+      committedFilters.swMinAvgGlobalOi ?? '', committedFilters.swMaxAvgGlobalOi ?? '',
+      committedFilters.swMinAvgGlobalOiShare ?? '', committedFilters.swMaxAvgGlobalOiShare ?? '',
       swF('swMinVolumeShare', 0), committedFilters.swMaxVolumeShare ?? '',
       (instance.swCutoffLookbacks ?? []).join(','), instance.swRowLimit ?? 100,
       instance.swGroupId ?? '', instance.swCutoffCombine ?? 'union'
@@ -3036,6 +3042,13 @@
     if (committedFilters.swMaxFeePct != null) qs.set('max_fee_pct', String(committedFilters.swMaxFeePct));
     if (committedFilters.swMaxFundingPct != null) qs.set('max_funding_pct', String(committedFilters.swMaxFundingPct));
     if (committedFilters.swMaxAvgOiShare != null) qs.set('max_avg_oi_share', String(committedFilters.swMaxAvgOiShare));
+    // Optional avg-OI guards (unset → omitted → backend no floor/limit).
+    if (committedFilters.swMinAvgOi != null) qs.set('min_avg_oi', String(committedFilters.swMinAvgOi));
+    if (committedFilters.swMaxAvgOi != null) qs.set('max_avg_oi', String(committedFilters.swMaxAvgOi));
+    if (committedFilters.swMinAvgGlobalOi != null) qs.set('min_avg_global_oi', String(committedFilters.swMinAvgGlobalOi));
+    if (committedFilters.swMaxAvgGlobalOi != null) qs.set('max_avg_global_oi', String(committedFilters.swMaxAvgGlobalOi));
+    if (committedFilters.swMinAvgGlobalOiShare != null) qs.set('min_avg_global_oi_share', String(committedFilters.swMinAvgGlobalOiShare));
+    if (committedFilters.swMaxAvgGlobalOiShare != null) qs.set('max_avg_global_oi_share', String(committedFilters.swMaxAvgGlobalOiShare));
     if (committedFilters.swMaxVolumeShare != null) qs.set('max_volume_share', String(committedFilters.swMaxVolumeShare));
     // Optional PnL floors (unset → omitted → backend applies no floor).
     if (committedFilters.swMinUnrealized != null) qs.set('min_unrealized', String(committedFilters.swMinUnrealized));
@@ -7217,23 +7230,45 @@
             <legend class={swLegend} title="Units of 0.01% — 30 means 0.30% of the market">Market share <span class="text-zinc-600 normal-case tracking-normal font-normal">· 30 = 0.30%</span></legend>
             <div class={swGrid}>
               <label class="flex flex-col gap-1">
-                <span class={swLabel}>Min OI share</span>
+                <span class={swLabel}>Min avg OI share</span>
                 <input
                   type="number" min="0" step="1"
                   value={instance.swMinAvgOiShare ?? 0}
                   onchange={(e) => (instance.swMinAvgOiShare = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
-                  title="Minimum average OI as a share of total OI, in 0.01% units (30 = 0.30%). Avg over the lookback window."
+                  title="Minimum window-AVERAGE OI as a share of total avg OI, in 0.01% units (30 = 0.30%). Averaged over the whole lookback (not the snapshot)."
                   class={swCell}
                 />
               </label>
               <label class="flex flex-col gap-1">
-                <span class={swLabel}>Max OI share</span>
+                <span class={swLabel}>Max avg OI share</span>
                 <input
                   type="number" min="0" step="1"
                   value={instance.swMaxAvgOiShare ?? ''}
                   placeholder="∞"
                   onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxAvgOiShare = Number.isFinite(v) ? v : null; }}
-                  title="Maximum average OI share, in 0.01% units (blank = no limit). Excludes whales that dominate the book."
+                  title="Maximum window-AVERAGE OI share, in 0.01% units (blank = no limit). Averaged over the whole lookback. Excludes whales that dominate the book."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min avg global OI share</span>
+                <input
+                  type="number" min="0" step="1"
+                  value={instance.swMinAvgGlobalOiShare ?? ''}
+                  placeholder="off"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMinAvgGlobalOiShare = Number.isFinite(v) ? v : null; }}
+                  title="Token mode only: min window-average GLOBAL (all-tokens) OI share, 0.01% units. In global mode this equals Min avg OI share. Blank = off."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Max avg global OI share</span>
+                <input
+                  type="number" min="0" step="1"
+                  value={instance.swMaxAvgGlobalOiShare ?? ''}
+                  placeholder="∞"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxAvgGlobalOiShare = Number.isFinite(v) ? v : null; }}
+                  title="Token mode only: max window-average GLOBAL OI share, 0.01% units. Blank = no limit."
                   class={swCell}
                 />
               </label>
@@ -7255,6 +7290,60 @@
                   placeholder="∞"
                   onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxVolumeShare = Number.isFinite(v) ? v : null; }}
                   title="Maximum window volume share, in 0.01% units (blank = no limit)."
+                  class={swCell}
+                />
+              </label>
+            </div>
+          </fieldset>
+
+          <fieldset class={swGroup}>
+            <!-- Window-average OI (USD) over the WHOLE lookback (not the
+                 snapshot). Current-scope = the selected token, or global. The
+                 "global" pair is the wallet's all-tokens avg OI; in global mode
+                 it equals the plain pair, so it only adds value in token mode. -->
+            <legend class={swLegend}>Avg OI ($)</legend>
+            <div class={swGrid}>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min avg OI ($)</span>
+                <input
+                  type="number" step="1000"
+                  value={instance.swMinAvgOi ?? ''}
+                  placeholder="off"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMinAvgOi = Number.isFinite(v) ? v : null; }}
+                  title="Minimum window-average OI (USD) over the whole lookback, current scope (token or global). Blank = no floor."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Max avg OI ($)</span>
+                <input
+                  type="number" step="1000"
+                  value={instance.swMaxAvgOi ?? ''}
+                  placeholder="∞"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxAvgOi = Number.isFinite(v) ? v : null; }}
+                  title="Maximum window-average OI (USD), current scope. Blank = no limit."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min avg global OI ($)</span>
+                <input
+                  type="number" step="1000"
+                  value={instance.swMinAvgGlobalOi ?? ''}
+                  placeholder="off"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMinAvgGlobalOi = Number.isFinite(v) ? v : null; }}
+                  title="Token mode only: min window-average GLOBAL (all-tokens) OI (USD). In global mode equals Min avg OI. Blank = off."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Max avg global OI ($)</span>
+                <input
+                  type="number" step="1000"
+                  value={instance.swMaxAvgGlobalOi ?? ''}
+                  placeholder="∞"
+                  onchange={(e) => { const v = parseFloat(e.currentTarget.value); instance.swMaxAvgGlobalOi = Number.isFinite(v) ? v : null; }}
+                  title="Token mode only: max window-average GLOBAL OI (USD). Blank = no limit."
                   class={swCell}
                 />
               </label>

@@ -1963,6 +1963,18 @@ export type ChartInstance = {
    *  max_* null = no ceiling. */
   swMinAvgOiShare?: number;
   swMaxAvgOiShare?: number | null;
+  /** smart-wallet filter: window-average OI (USD over the whole lookback), in
+   *  the current scope (the token, or global). Optional — null = no floor/limit. */
+  swMinAvgOi?: number | null;
+  swMaxAvgOi?: number | null;
+  /** smart-wallet filter: window-average GLOBAL (all-tokens) OI (USD). Only acts
+   *  in token mode; in global mode it equals swMin/MaxAvgOi. null = unset. */
+  swMinAvgGlobalOi?: number | null;
+  swMaxAvgGlobalOi?: number | null;
+  /** smart-wallet filter: window-average GLOBAL OI share (0.01% units). Only acts
+   *  in token mode. null = unset. */
+  swMinAvgGlobalOiShare?: number | null;
+  swMaxAvgGlobalOiShare?: number | null;
   swMinVolumeShare?: number;
   swMaxVolumeShare?: number | null;
   /** smart_wallets_cutoff only: the lookback windows whose passing sets are

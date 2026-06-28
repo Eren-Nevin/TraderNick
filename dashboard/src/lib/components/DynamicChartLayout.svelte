@@ -1226,6 +1226,12 @@
         inst.swMaxTradesPerDay = typeof r.swMaxTradesPerDay === 'number' ? r.swMaxTradesPerDay : null;
         inst.swMinAnnualizedSharpe = typeof r.swMinAnnualizedSharpe === 'number' ? r.swMinAnnualizedSharpe : null;
         inst.swMaxAvgOiShare = typeof r.swMaxAvgOiShare === 'number' ? r.swMaxAvgOiShare : null;
+        inst.swMinAvgOi = typeof r.swMinAvgOi === 'number' ? r.swMinAvgOi : null;
+        inst.swMaxAvgOi = typeof r.swMaxAvgOi === 'number' ? r.swMaxAvgOi : null;
+        inst.swMinAvgGlobalOi = typeof r.swMinAvgGlobalOi === 'number' ? r.swMinAvgGlobalOi : null;
+        inst.swMaxAvgGlobalOi = typeof r.swMaxAvgGlobalOi === 'number' ? r.swMaxAvgGlobalOi : null;
+        inst.swMinAvgGlobalOiShare = typeof r.swMinAvgGlobalOiShare === 'number' ? r.swMinAvgGlobalOiShare : null;
+        inst.swMaxAvgGlobalOiShare = typeof r.swMaxAvgGlobalOiShare === 'number' ? r.swMaxAvgGlobalOiShare : null;
         inst.swMaxVolumeShare = typeof r.swMaxVolumeShare === 'number' ? r.swMaxVolumeShare : null;
         inst.viewMode =
           r.viewMode === 'table' ? 'table' : r.viewMode === 'token_list' ? 'token_list' : 'chart';
@@ -1278,6 +1284,12 @@
         inst.swMaxTradesPerDay = typeof r.swMaxTradesPerDay === 'number' ? r.swMaxTradesPerDay : null;
         inst.swMinAnnualizedSharpe = typeof r.swMinAnnualizedSharpe === 'number' ? r.swMinAnnualizedSharpe : null;
         inst.swMaxAvgOiShare = typeof r.swMaxAvgOiShare === 'number' ? r.swMaxAvgOiShare : null;
+        inst.swMinAvgOi = typeof r.swMinAvgOi === 'number' ? r.swMinAvgOi : null;
+        inst.swMaxAvgOi = typeof r.swMaxAvgOi === 'number' ? r.swMaxAvgOi : null;
+        inst.swMinAvgGlobalOi = typeof r.swMinAvgGlobalOi === 'number' ? r.swMinAvgGlobalOi : null;
+        inst.swMaxAvgGlobalOi = typeof r.swMaxAvgGlobalOi === 'number' ? r.swMaxAvgGlobalOi : null;
+        inst.swMinAvgGlobalOiShare = typeof r.swMinAvgGlobalOiShare === 'number' ? r.swMinAvgGlobalOiShare : null;
+        inst.swMaxAvgGlobalOiShare = typeof r.swMaxAvgGlobalOiShare === 'number' ? r.swMaxAvgGlobalOiShare : null;
         inst.swMaxVolumeShare = typeof r.swMaxVolumeShare === 'number' ? r.swMaxVolumeShare : null;
         inst.viewMode =
           r.viewMode === 'table' ? 'table' : r.viewMode === 'token_list' ? 'token_list' : 'chart';

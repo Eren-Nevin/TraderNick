@@ -567,6 +567,22 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
         max_avg_oi_share = float(request.args.get("max_avg_oi_share", str(NO_MAX)))
     except ValueError:
         max_avg_oi_share = NO_MAX
+
+    # Window-average OI guards: avg OI over the WHOLE lookback (Σ OI·buckets ÷
+    # buckets), in USD. *_avg_oi = current scope (the token, or global). The
+    # *_avg_global_oi[_share] variants always use GLOBAL (all-tokens) OI — only
+    # meaningful in token mode; in global mode they equal the plain ones.
+    def _flt(name, default):
+        try:
+            return float(request.args.get(name, str(default)))
+        except (TypeError, ValueError):
+            return default
+    min_avg_oi = _flt("min_avg_oi", 0.0)
+    max_avg_oi = _flt("max_avg_oi", NO_MAX)
+    min_avg_global_oi = _flt("min_avg_global_oi", 0.0)
+    max_avg_global_oi = _flt("max_avg_global_oi", NO_MAX)
+    min_avg_global_oi_share = _flt("min_avg_global_oi_share", 0.0)
+    max_avg_global_oi_share = _flt("max_avg_global_oi_share", NO_MAX)
     try:
         min_volume_share = float(request.args.get("min_volume_share", "0"))
     except ValueError:
@@ -608,6 +624,14 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
         "min_trades_per_day": min_trades_per_day,
         "min_annualized_sharpe": min_annualized_sharpe,
         "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
+        "min_avg_oi": min_avg_oi, "max_avg_oi": max_avg_oi,
+        "min_avg_global_oi": min_avg_global_oi, "max_avg_global_oi": max_avg_global_oi,
+        "min_avg_global_oi_share": min_avg_global_oi_share,
+        "max_avg_global_oi_share": max_avg_global_oi_share,
+        "min_avg_oi": min_avg_oi, "max_avg_oi": max_avg_oi,
+        "min_avg_global_oi": min_avg_global_oi, "max_avg_global_oi": max_avg_global_oi,
+        "min_avg_global_oi_share": min_avg_global_oi_share,
+        "max_avg_global_oi_share": max_avg_global_oi_share,
         "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
         "lookback": lookback,
     }
@@ -789,7 +813,18 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
     # opted into that cost). Hence token-scope avg_oi shows only when filtering
     # on OI share; otherwise it's NULL (the column renders "—").
     oi_share_active = (min_avg_oi_share > 0) or (max_avg_oi_share < NO_MAX)
-    build_oi_window = oi_share_active or (include_avg_oi and token is None)
+    avg_oi_val_active = (min_avg_oi > 0) or (max_avg_oi < NO_MAX)
+    cur_active = oi_share_active or avg_oi_val_active
+    g_val_active = (min_avg_global_oi > 0) or (max_avg_global_oi < NO_MAX)
+    g_share_active = (min_avg_global_oi_share > 0) or (max_avg_global_oi_share < NO_MAX)
+    global_active = g_val_active or g_share_active
+    guards_path = (membership_override is None)
+    build_oi_window = cur_active or (include_avg_oi and token is None) \
+        or (global_active and token is None and guards_path)
+    # Separate GLOBAL (all-tokens) window only when a token is selected AND a
+    # global-OI guard is active AND we're applying guards (not the membership
+    # ranking path). In global mode the global guards reuse oi_window (gw == ow).
+    build_global_window = (token is not None) and global_active and guards_path
     if token is None:
         oi_window_cte = """
         oi_window AS (
@@ -813,6 +848,16 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
                 )
                 GROUP BY wallet, bucket
             )
+            GROUP BY wallet
+        )"""
+
+    # GLOBAL (all-tokens) window — cheap per-day rollup, aliased separately so the
+    # *_avg_global_oi[_share] guards can use it alongside a token-scoped oi_window.
+    oi_window_global_cte = """
+        oi_window_global AS (
+            SELECT wallet, sumMerge(s_total_oi_usd_state) AS oi_sum
+            FROM tradernick.hl_position_history_oi_wallet_daily
+            WHERE day > {start_day:Date} AND day <= {end_day:Date}
             GROUP BY wallet
         )"""
 
@@ -860,6 +905,8 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
         {first_seen}"""
     if build_oi_window:
         cte_block += f",\n{oi_window_cte}"
+    if build_global_window:
+        cte_block += f",\n{oi_window_global_cte}"
     # Share denominators as SCALAR CTEs (WITH (…) AS x): ClickHouse evaluates
     # these once, whereas a `(SELECT … FROM win)` referenced inline in the WHERE
     # re-inlines (re-runs) the whole table CTE on every reference. vol_total is
@@ -868,6 +915,8 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
     cte_block += "\n        , (SELECT sum(volume) FROM win) AS vol_total"
     if build_oi_window:
         cte_block += "\n        , (SELECT sum(oi_sum) FROM oi_window) AS oi_total"
+    if build_global_window:
+        cte_block += "\n        , (SELECT sum(oi_sum) FROM oi_window_global) AS oi_total_global"
 
     # Share guards: volume-share is cheap (sum over the existing `win` CTE) so
     # it's always present (a no-op at the 0/NO_MAX defaults); OI-share joins the
@@ -877,9 +926,28 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
     oi_share_join = (
         "\n        LEFT JOIN oi_window ow ON ow.wallet = w.wallet"
         if build_oi_window else "")
+    global_join = (
+        "\n        LEFT JOIN oi_window_global gw ON gw.wallet = w.wallet"
+        if build_global_window else "")
+    # avg OI (USD) over the whole lookback = Σ OI·buckets ÷ (days × 24).
+    _avg_oi = "ow.oi_sum / nullIf(toFloat64({lookback:UInt32}) * 24, 0)"
+    avg_oi_guard = (f"""
+          AND coalesce({_avg_oi}, 0) >= {{min_avg_oi:Float64}}
+          AND coalesce({_avg_oi}, 0) <= {{max_avg_oi:Float64}}""" if avg_oi_val_active else "")
     oi_share_guard = """
           AND coalesce(10000 * ow.oi_sum / nullIf(oi_total, 0), 0) >= {min_avg_oi_share:Float64}
           AND coalesce(10000 * ow.oi_sum / nullIf(oi_total, 0), 0) <= {max_avg_oi_share:Float64}""" if oi_share_active else ""
+    # Global-OI guards: in token mode use the separate global window (gw /
+    # oi_total_global); in global mode reuse the current window (ow / oi_total).
+    _g = "ow" if token is None else "gw"
+    _g_total = "oi_total" if token is None else "oi_total_global"
+    _g_avg = f"{_g}.oi_sum / nullIf(toFloat64({{lookback:UInt32}}) * 24, 0)"
+    global_val_guard = (f"""
+          AND coalesce({_g_avg}, 0) >= {{min_avg_global_oi:Float64}}
+          AND coalesce({_g_avg}, 0) <= {{max_avg_global_oi:Float64}}""" if g_val_active else "")
+    global_share_guard = (f"""
+          AND coalesce(10000 * {_g}.oi_sum / nullIf({_g_total}, 0), 0) >= {{min_avg_global_oi_share:Float64}}
+          AND coalesce(10000 * {_g}.oi_sum / nullIf({_g_total}, 0), 0) <= {{max_avg_global_oi_share:Float64}}""" if g_share_active else "")
 
     _joins_block = """
         FROM win w
@@ -888,7 +956,7 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
         LEFT JOIN oi_now oi     ON oi.wallet = w.wallet
         LEFT JOIN taker_agg tk  ON tk.wallet = w.wallet
         LEFT JOIN funding_agg fn ON fn.wallet = w.wallet
-        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet""" + oi_share_join
+        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet""" + oi_share_join + global_join
     _guards_block = """
         WHERE w.volume >= {min_volume:Float64}
           AND w.realized >= {min_realized:Float64}
@@ -907,7 +975,7 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
           AND coalesce(w.trades / nullIf(sa.n_days, 0), 0) >= {min_trades_per_day:Float64}
           AND coalesce(sa.sharpe, 0) >= {min_annualized_sharpe:Float64}
           AND coalesce(10000 * w.volume / nullIf(vol_total, 0), 0) >= {min_volume_share:Float64}
-          AND coalesce(10000 * w.volume / nullIf(vol_total, 0), 0) <= {max_volume_share:Float64}""" + oi_share_guard
+          AND coalesce(10000 * w.volume / nullIf(vol_total, 0), 0) <= {max_volume_share:Float64}""" + avg_oi_guard + oi_share_guard + global_val_guard + global_share_guard
     # Cutoff (union) table reuses the metric CTEs but selects a precomputed wallet
     # set instead of re-applying the guards; membership_override is the WHERE then.
     from_where_block = (
@@ -928,6 +996,14 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
         "min_trades_per_day": min_trades_per_day,
         "min_annualized_sharpe": min_annualized_sharpe,
         "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
+        "min_avg_oi": min_avg_oi, "max_avg_oi": max_avg_oi,
+        "min_avg_global_oi": min_avg_global_oi, "max_avg_global_oi": max_avg_global_oi,
+        "min_avg_global_oi_share": min_avg_global_oi_share,
+        "max_avg_global_oi_share": max_avg_global_oi_share,
+        "min_avg_oi": min_avg_oi, "max_avg_oi": max_avg_oi,
+        "min_avg_global_oi": min_avg_global_oi, "max_avg_global_oi": max_avg_global_oi,
+        "min_avg_global_oi_share": min_avg_global_oi_share,
+        "max_avg_global_oi_share": max_avg_global_oi_share,
         "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
     }
     # Window time-average OI (USD) for the avg_oi column: Σ OI·buckets over the
@@ -964,7 +1040,10 @@ _PASSING_KEY_FIELDS = (
     "min_oi", "min_avg_trade_size", "min_taker_pct", "max_fee_pct",
     "max_funding_pct", "min_account_duration", "min_tokens", "min_win_rate",
     "min_trades_per_day", "max_trades_per_day", "min_annualized_sharpe",
-    "min_avg_oi_share", "max_avg_oi_share", "min_volume_share", "max_volume_share",
+    "min_avg_oi_share", "max_avg_oi_share",
+    "min_avg_oi", "max_avg_oi", "min_avg_global_oi", "max_avg_global_oi",
+    "min_avg_global_oi_share", "max_avg_global_oi_share",
+    "min_volume_share", "max_volume_share",
 )
 # In-process hint of when we last ensured a key was fresh, to skip the freshness
 # round-trip on hot keys. The CH table is the source of truth.
@@ -1268,6 +1347,12 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
     min_annualized_sharpe = _f("min_annualized_sharpe", -NO_MAX)
     min_avg_oi_share = _f("min_avg_oi_share", 0)
     max_avg_oi_share = _f("max_avg_oi_share", NO_MAX)
+    min_avg_oi = _f("min_avg_oi", 0)
+    max_avg_oi = _f("max_avg_oi", NO_MAX)
+    min_avg_global_oi = _f("min_avg_global_oi", 0)
+    max_avg_global_oi = _f("max_avg_global_oi", NO_MAX)
+    min_avg_global_oi_share = _f("min_avg_global_oi_share", 0)
+    max_avg_global_oi_share = _f("max_avg_global_oi_share", NO_MAX)
     min_volume_share = _f("min_volume_share", 0)
     max_volume_share = _f("max_volume_share", NO_MAX)
 
@@ -1298,6 +1383,16 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
     eod_start = since_day - timedelta(days=lookback + 2)
 
     oi_share_active = (min_avg_oi_share > 0) or (max_avg_oi_share < NO_MAX)
+    avg_oi_val_active = (min_avg_oi > 0) or (max_avg_oi < NO_MAX)
+    cur_oi_active = oi_share_active or avg_oi_val_active     # needs oi_roll (current scope)
+    g_val_active = (min_avg_global_oi > 0) or (max_avg_global_oi < NO_MAX)
+    g_share_active = (min_avg_global_oi_share > 0) or (max_avg_global_oi_share < NO_MAX)
+    global_oi_active = g_val_active or g_share_active
+    # In token mode the global-OI guards need a SEPARATE global per-day window;
+    # in global mode they reuse oi_roll/oi_total (the current window IS global),
+    # so the current window must also build for global guards in global mode.
+    build_cur_window = cur_oi_active or (global_oi_active and token is None)
+    build_global_window = (token is not None) and global_oi_active
     tokens_active = min_tokens > 0
 
     params: dict = {
@@ -1313,6 +1408,14 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
         "min_trades_per_day": min_trades_per_day,
         "min_annualized_sharpe": min_annualized_sharpe,
         "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
+        "min_avg_oi": min_avg_oi, "max_avg_oi": max_avg_oi,
+        "min_avg_global_oi": min_avg_global_oi, "max_avg_global_oi": max_avg_global_oi,
+        "min_avg_global_oi_share": min_avg_global_oi_share,
+        "max_avg_global_oi_share": max_avg_global_oi_share,
+        "min_avg_oi": min_avg_oi, "max_avg_oi": max_avg_oi,
+        "min_avg_global_oi": min_avg_global_oi, "max_avg_global_oi": max_avg_global_oi,
+        "min_avg_global_oi_share": min_avg_global_oi_share,
+        "max_avg_global_oi_share": max_avg_global_oi_share,
         "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
         "lookback": lookback,
     }
@@ -1608,10 +1711,11 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
         first_seen,
     ]
 
-    # Gated OI-share window (per-(day,wallet) trailing OI sum + per-day total).
-    # Same dense-spine self-join as taker/funding so a candidate day with no OI
-    # row that day still sees its earlier in-window OI.
-    if oi_share_active:
+    # Gated OI window (per-(day,wallet) trailing OI sum + per-day total). Needed
+    # for both the avg-OI-value guard and the avg-OI-share guard. Same dense-spine
+    # self-join as taker/funding so a candidate day with no OI row that day still
+    # sees its earlier in-window OI.
+    if build_cur_window:
         if token is None:
             cte_parts.append(
                 "        oi_window AS (\n"
@@ -1653,6 +1757,28 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
             "            SELECT d, sum(oi_sum) AS tot FROM oi_roll GROUP BY d\n"
             "        )")
 
+    # Separate GLOBAL (all-tokens) trailing OI window for the *_avg_global_oi
+    # guards when a token is selected (cheap per-day rollup; same shape as the
+    # global oi_roll above).
+    if build_global_window:
+        cte_parts.append(
+            "        oi_window_global AS (\n"
+            "            SELECT wallet, day AS d, sumMerge(s_total_oi_usd_state) AS d_oi\n"
+            "            FROM tradernick.hl_position_history_oi_wallet_daily\n"
+            "            WHERE day >= {fetch_start:Date} AND day <= {until_day:Date}\n"
+            "            GROUP BY wallet, day\n"
+            "        ),\n"
+            "        oi_roll_global AS (\n"
+            "            SELECT s.wallet AS wallet, s.d AS d, sum(o.d_oi) AS oi_sum\n"
+            "            FROM spine s\n"
+            "            INNER JOIN oi_window_global o ON o.wallet = s.wallet\n"
+            "            WHERE o.d > s.d - " + lb + " AND o.d <= s.d\n"
+            "            GROUP BY s.wallet, s.d\n"
+            "        ),\n"
+            "        oi_total_global AS (\n"
+            "            SELECT d, sum(oi_sum) AS tot FROM oi_roll_global GROUP BY d\n"
+            "        )")
+
     # n_tokens (distinct tokens over the trailing window) — gated (only when
     # min_tokens > 0). There is no rolling uniqExact window fn, so we range
     # self-join the per-day token set against the DENSE candidate spine: for each
@@ -1690,15 +1816,36 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
     # every join also keyed on `d` (the per-day dimension).
     oi_share_join = (
         "\n        LEFT JOIN oi_roll ow  ON ow.wallet = w.wallet AND ow.d = w.d"
-        "\n        LEFT JOIN oi_total ot ON ot.d = w.d" if oi_share_active else "")
+        "\n        LEFT JOIN oi_total ot ON ot.d = w.d" if build_cur_window else "")
+    global_join = (
+        "\n        LEFT JOIN oi_roll_global gw  ON gw.wallet = w.wallet AND gw.d = w.d"
+        "\n        LEFT JOIN oi_total_global gt ON gt.d = w.d" if build_global_window else "")
     ntok_join = (
         "\n        LEFT JOIN ntok nt ON nt.wallet = w.wallet AND nt.d = w.d"
         if tokens_active else "")
     ntok_expr = "coalesce(nt.n_tokens, 0)" if tokens_active else "1"
+    # avg OI (USD) over the trailing lookback = Σ daily OI ÷ (lookback days × 24).
+    _avg_oi_r = "ow.oi_sum / nullIf(toFloat64(" + lb + ") * 24, 0)"
+    avg_oi_guard = (
+        "\n          AND coalesce(" + _avg_oi_r + ", 0) >= {min_avg_oi:Float64}"
+        "\n          AND coalesce(" + _avg_oi_r + ", 0) <= {max_avg_oi:Float64}"
+        if avg_oi_val_active else "")
     oi_share_guard = (
         "\n          AND coalesce(10000 * ow.oi_sum / nullIf(ot.tot, 0), 0) >= {min_avg_oi_share:Float64}"
         "\n          AND coalesce(10000 * ow.oi_sum / nullIf(ot.tot, 0), 0) <= {max_avg_oi_share:Float64}"
         if oi_share_active else "")
+    # Global-OI guards: token mode uses gw/gt; global mode reuses ow/ot.
+    _gr = "ow" if token is None else "gw"
+    _gt = "ot" if token is None else "gt"
+    _g_avg_r = _gr + ".oi_sum / nullIf(toFloat64(" + lb + ") * 24, 0)"
+    global_val_guard = (
+        "\n          AND coalesce(" + _g_avg_r + ", 0) >= {min_avg_global_oi:Float64}"
+        "\n          AND coalesce(" + _g_avg_r + ", 0) <= {max_avg_global_oi:Float64}"
+        if g_val_active else "")
+    global_share_guard = (
+        "\n          AND coalesce(10000 * " + _gr + ".oi_sum / nullIf(" + _gt + ".tot, 0), 0) >= {min_avg_global_oi_share:Float64}"
+        "\n          AND coalesce(10000 * " + _gr + ".oi_sum / nullIf(" + _gt + ".tot, 0), 0) <= {max_avg_global_oi_share:Float64}"
+        if g_share_active else "")
 
     passing_select = (
         "        SELECT w.d AS day, w.wallet AS wallet\n"
@@ -1709,7 +1856,7 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
         "        LEFT JOIN funding_agg fn ON fn.wallet = w.wallet AND fn.d = w.d\n"
         "        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet\n"
         "        LEFT JOIN eod_daily edl ON edl.wallet = w.wallet AND edl.d = w.d\n"
-        "        LEFT JOIN vol_total vt ON vt.d = w.d" + oi_share_join + ntok_join + "\n"
+        "        LEFT JOIN vol_total vt ON vt.d = w.d" + oi_share_join + global_join + ntok_join + "\n"
         "        WHERE w.d >= {since_day:Date} AND w.d <= {until_day:Date}\n"
         "          AND w.volume >= {min_volume:Float64}\n"
         "          AND w.realized >= {min_realized:Float64}\n"
@@ -1729,7 +1876,7 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
         "          AND coalesce(sa.sharpe, 0) >= {min_annualized_sharpe:Float64}\n"
         "          AND coalesce(10000 * w.volume / nullIf(vt.tot, 0), 0) >= {min_volume_share:Float64}\n"
         "          AND coalesce(10000 * w.volume / nullIf(vt.tot, 0), 0) <= {max_volume_share:Float64}"
-        + oi_share_guard)
+        + avg_oi_guard + oi_share_guard + global_val_guard + global_share_guard)
 
     echo = {
         "token": token, "lookback": lookback,
@@ -1744,6 +1891,14 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
         "min_trades_per_day": min_trades_per_day,
         "min_annualized_sharpe": min_annualized_sharpe,
         "min_avg_oi_share": min_avg_oi_share, "max_avg_oi_share": max_avg_oi_share,
+        "min_avg_oi": min_avg_oi, "max_avg_oi": max_avg_oi,
+        "min_avg_global_oi": min_avg_global_oi, "max_avg_global_oi": max_avg_global_oi,
+        "min_avg_global_oi_share": min_avg_global_oi_share,
+        "max_avg_global_oi_share": max_avg_global_oi_share,
+        "min_avg_oi": min_avg_oi, "max_avg_oi": max_avg_oi,
+        "min_avg_global_oi": min_avg_global_oi, "max_avg_global_oi": max_avg_global_oi,
+        "min_avg_global_oi_share": min_avg_global_oi_share,
+        "max_avg_global_oi_share": max_avg_global_oi_share,
         "min_volume_share": min_volume_share, "max_volume_share": max_volume_share,
     }
     return {
@@ -1763,6 +1918,8 @@ _ROLLING_KEY_FIELDS = (
     "max_fee_pct", "max_funding_pct", "min_account_duration", "min_tokens",
     "min_win_rate", "min_trades_per_day", "max_trades_per_day",
     "min_annualized_sharpe", "min_avg_oi_share", "max_avg_oi_share",
+    "min_avg_oi", "max_avg_oi", "min_avg_global_oi", "max_avg_global_oi",
+    "min_avg_global_oi_share", "max_avg_global_oi_share",
     "min_volume_share", "max_volume_share",
 )
 _rolling_ensured: dict[str, float] = {}

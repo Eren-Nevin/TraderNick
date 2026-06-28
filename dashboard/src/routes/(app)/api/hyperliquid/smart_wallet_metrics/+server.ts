@@ -9,7 +9,7 @@ const PASSTHROUGH = [
   'min_account_duration', 'min_tokens', 'min_win_rate',
   'min_trades_per_day', 'max_trades_per_day',
   'min_annualized_sharpe',
-  'min_avg_oi_share', 'max_avg_oi_share', 'min_volume_share', 'max_volume_share'
+  'min_avg_oi_share', 'max_avg_oi_share', 'min_avg_oi', 'max_avg_oi', 'min_avg_global_oi', 'max_avg_global_oi', 'min_avg_global_oi_share', 'max_avg_global_oi_share', 'min_volume_share', 'max_volume_share'
 ];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
