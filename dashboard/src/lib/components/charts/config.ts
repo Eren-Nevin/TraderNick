@@ -349,7 +349,9 @@ export const LS_LINES = [
 ];
 
 export const NEUTRAL_REF = [{ value: 1 }];
-export const ZERO_REF = [{ value: 0 }];
+// Pronounced solid zero line — for net charts (Net OI / Net (Num) / netflow)
+// so positive vs negative is easy to read at a glance.
+export const ZERO_REF = [{ value: 0, color: '#a1a1aa', width: 2, bold: true, label: '0' }];
 
 export function sizeSeries(under: number, over: number) {
   return [

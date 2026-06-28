@@ -33,7 +33,7 @@
      *  only — never plotted. */
     pct?: (d: Datum, i: number, data: Datum[]) => number;
   };
-  type RefLine = { value: number; label?: string; color?: string; axis?: 'primary' | 'secondary' };
+  type RefLine = { value: number; label?: string; color?: string; axis?: 'primary' | 'secondary'; width?: number; bold?: boolean };
   type VRefLine = { time: number; color?: string; dash?: string };
 
   let {
@@ -266,8 +266,8 @@
       const pl = host.series.createPriceLine({
         price: r.value,
         color: r.color ?? '#71717a',
-        lineStyle: LineStyle.Dashed,
-        lineWidth: 1,
+        lineStyle: r.bold ? LineStyle.Solid : LineStyle.Dashed,
+        lineWidth: (r.width ?? 1) as 1 | 2 | 3 | 4,
         axisLabelVisible: true,
         title: r.label ?? ''
       });
