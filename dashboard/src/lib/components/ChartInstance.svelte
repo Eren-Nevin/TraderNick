@@ -5089,7 +5089,7 @@
     try {
       const qs = swSelectionParams();
       qs.set('oi_token', token);
-      qs.set('n', '10');
+      qs.set('n', '50');
       if (timeSec) qs.set('time', String(Math.floor(timeSec)));
       if (instance.kind === 'smart_wallets_dynamic') qs.set('rolling', '1');
       const res = await fetch(`/api/hyperliquid/smart_wallet_top_oi?${qs}`, { signal: walletsFetchCtl.signal });
