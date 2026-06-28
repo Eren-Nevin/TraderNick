@@ -1686,7 +1686,7 @@ export type ChartInstance = {
    *  from the first record) or a trailing N days. In the load key. */
   cvdLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14' | '30' | '90';
   /** spot_cvd_table only: lookback for the per-token CVD aggregate. In the key. */
-  cvdtLookback?: 'all' | '1' | '7' | '14';
+  cvdtLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14';
   /** spot_cvd_table only: 'usd' (default) or 'token' for the Avg-Vol + CVD-Vol
    *  columns. Display-only (server returns both) → NOT in the load key. */
   cvdtUnit?: 'usd' | 'token';

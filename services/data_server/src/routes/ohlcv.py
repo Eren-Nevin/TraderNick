@@ -140,9 +140,10 @@ async def spot_cvd_leaderboard(request):
     multi = request.args.get("multi") in ("1", "true", "yes")
     if exchange not in _OHLCV_TABLE:
         return response.json({"error": f"exchange must be one of {list(_OHLCV_TABLE)}"}, status=400)
-    if lookback not in ("all", "1", "7", "14", "30", "90"):
-        return response.json({"error": "lookback must be all|1|7|14|30|90"}, status=400)
+    if lookback not in ("all", "1h", "4h", "1", "7", "14", "30", "90"):
+        return response.json({"error": "lookback must be all|1h|4h|1|7|14|30|90"}, status=400)
     table = _OHLCV_TABLE[exchange]
+    _HOUR_LB = {"1h": 1, "4h": 4}
 
     if multi:
         # Multi-period comparison: per token, CVD (token + USD) and $CVD/avg-daily-
@@ -156,6 +157,12 @@ async def spot_cvd_leaderboard(request):
                 token,
                 argMax(close, time)                                     AS price,
                 argMaxIf(close, time, time <= now() - INTERVAL 24 HOUR)  AS price_24h,
+                sumIf(cvd_token_row, time >= now() - INTERVAL 1 HOUR)    AS cvd_t_1h,
+                sumIf(cvd_usd_row,   time >= now() - INTERVAL 1 HOUR)    AS cvd_u_1h,
+                sumIf(vol_usd_row,   time >= now() - INTERVAL 1 HOUR)    AS vol_u_1h,
+                sumIf(cvd_token_row, time >= now() - INTERVAL 4 HOUR)    AS cvd_t_4h,
+                sumIf(cvd_usd_row,   time >= now() - INTERVAL 4 HOUR)    AS cvd_u_4h,
+                sumIf(vol_usd_row,   time >= now() - INTERVAL 4 HOUR)    AS vol_u_4h,
                 sumIf(cvd_token_row, time >= now() - INTERVAL 1 DAY)     AS cvd_t_1,
                 sumIf(cvd_usd_row,   time >= now() - INTERVAL 1 DAY)     AS cvd_u_1,
                 sumIf(vol_usd_row,   time >= now() - INTERVAL 1 DAY)     AS vol_u_1,
@@ -186,15 +193,24 @@ async def spot_cvd_leaderboard(request):
             avg = float(vol_u) / (int(days) or 1)
             return (float(cvd_u) / avg * 100.0) if avg else None
 
+        # Sub-day windows have no "avg daily vol" — ratio = CVD / window vol %.
+        def _ratio_raw(cvd_u, vol_u):
+            v = float(vol_u)
+            return (float(cvd_u) / v * 100.0) if v else None
+
         out = []
         for r in rows.result_rows:
             token, price, price_24h = r[0], float(r[1]), float(r[2])
-            ct1, cu1, vu1, d1 = r[3], r[4], r[5], r[6]
-            ct7, cu7, vu7, d7 = r[7], r[8], r[9], r[10]
-            ct14, cu14, vu14, d14 = r[11], r[12], r[13], r[14]
+            ct1h, cu1h, vu1h = r[3], r[4], r[5]
+            ct4h, cu4h, vu4h = r[6], r[7], r[8]
+            ct1, cu1, vu1, d1 = r[9], r[10], r[11], r[12]
+            ct7, cu7, vu7, d7 = r[13], r[14], r[15], r[16]
+            ct14, cu14, vu14, d14 = r[17], r[18], r[19], r[20]
             out.append({
                 "token": token, "price": price,
                 "pct_24h": ((price - price_24h) / price_24h * 100.0) if price_24h > 0 else None,
+                "cvd_token_1h": float(ct1h), "cvd_usd_1h": float(cu1h), "ratio_usd_1h": _ratio_raw(cu1h, vu1h),
+                "cvd_token_4h": float(ct4h), "cvd_usd_4h": float(cu4h), "ratio_usd_4h": _ratio_raw(cu4h, vu4h),
                 "cvd_token_1": float(ct1), "cvd_usd_1": float(cu1), "ratio_usd_1": _ratio(cu1, vu1, d1),
                 "cvd_token_7": float(ct7), "cvd_usd_7": float(cu7), "ratio_usd_7": _ratio(cu7, vu7, d7),
                 "cvd_token_14": float(ct14), "cvd_usd_14": float(cu14), "ratio_usd_14": _ratio(cu14, vu14, d14),
@@ -203,8 +219,15 @@ async def spot_cvd_leaderboard(request):
 
     # 'all' → no lower time bound; else trailing N days. now()-24h baseline for
     # pct_24h is only meaningful when the window covers ≥24h (lookback ≥ 1d).
-    since_clause = "" if lookback == "all" else "AND time >= now() - INTERVAL {days:UInt32} DAY"
-    params = {} if lookback == "all" else {"days": int(lookback)}
+    if lookback == "all":
+        since_clause = ""
+        params = {}
+    elif lookback in _HOUR_LB:
+        since_clause = "AND time >= now() - INTERVAL {hrs:UInt32} HOUR"
+        params = {"hrs": _HOUR_LB[lookback]}
+    else:
+        since_clause = "AND time >= now() - INTERVAL {days:UInt32} DAY"
+        params = {"days": int(lookback)}
 
     ch = await client()
     rows = await ch.query(

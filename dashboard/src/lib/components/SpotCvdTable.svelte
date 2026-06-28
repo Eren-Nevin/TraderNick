@@ -99,9 +99,13 @@
     ? [
         { key: 'price', label: 'Price', kind: 'price' },
         { key: 'pct_24h', label: '24h Δ', kind: 'pct' },
+        { key: `cvd_${u}_1h`, label: '1h CVD', kind: 'value' },
+        { key: `cvd_${u}_4h`, label: '4h CVD', kind: 'value' },
         { key: `cvd_${u}_1`, label: '1d CVD', kind: 'value' },
         { key: `cvd_${u}_7`, label: '7d CVD', kind: 'value' },
         { key: `cvd_${u}_14`, label: '14d CVD', kind: 'value' },
+        { key: 'ratio_usd_1h', label: '1h $CVD/vol%', kind: 'pct' },
+        { key: 'ratio_usd_4h', label: '4h $CVD/vol%', kind: 'pct' },
         { key: 'ratio_usd_1', label: '1d $CVD/vol%', kind: 'pct' },
         { key: 'ratio_usd_7', label: '7d $CVD/vol%', kind: 'pct' },
         { key: 'ratio_usd_14', label: '14d $CVD/vol%', kind: 'pct' }
@@ -175,7 +179,7 @@
         <option value="ratio_token">CVD ÷ AvgVol</option>
       </select>
     {:else}
-      <span class="text-[11px]">1d / 7d / 14d CVD · click a header to sort</span>
+      <span class="text-[11px]">1h / 4h / 1d / 7d / 14d CVD · click a header to sort</span>
     {/if}
     <button class={selClass} onclick={() => (sortDir = sortDir === 1 ? -1 : 1)}
       title="Toggle ascending / descending">{sortDir === 1 ? 'Asc ↑' : 'Desc ↓'}</button>

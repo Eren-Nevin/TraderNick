@@ -6584,11 +6584,13 @@
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">Binance spot · all tokens</span>
         <select
           value={instance.cvdtLookback ?? 'all'}
-          onchange={(e) => (instance.cvdtLookback = e.currentTarget.value as 'all' | '1' | '7' | '14')}
+          onchange={(e) => (instance.cvdtLookback = e.currentTarget.value as 'all' | '1h' | '4h' | '1' | '7' | '14')}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          title="All = 1d/7d/14d comparison; or a single period"
+          title="All = 1h/4h/1d/7d/14d comparison; or a single period"
         >
-          <option value="all">All (1d/7d/14d)</option>
+          <option value="all">All (1h/4h/1d/7d/14d)</option>
+          <option value="1h">1h</option>
+          <option value="4h">4h</option>
           <option value="1">1d</option>
           <option value="7">7d</option>
           <option value="14">14d</option>
@@ -8493,7 +8495,11 @@
         error={error}
         unit={instance.cvdtUnit ?? 'usd'}
         multi={(instance.cvdtLookback ?? 'all') === 'all'}
-        lookbackLabel={(instance.cvdtLookback ?? 'all') === 'all' ? 'All' : `${instance.cvdtLookback}d`}
+        lookbackLabel={(instance.cvdtLookback ?? 'all') === 'all'
+          ? 'All'
+          : (instance.cvdtLookback === '1h' || instance.cvdtLookback === '4h'
+            ? (instance.cvdtLookback as string)
+            : `${instance.cvdtLookback}d`)}
       />
     {:else if instance.kind === 'hl_top_traders'}
       <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />
