@@ -299,7 +299,7 @@ REGISTRY: list[MaterializerSpec] = [
         partition_grain="hour",
         recent_partitions=6,
         recent_cadence_s=5 * 60,
-        sweep_window_days=30,
+        sweep_window_days=7,
         sweep_cadence_s=6 * 60 * 60,
     ),
     MaterializerSpec(
@@ -311,7 +311,7 @@ REGISTRY: list[MaterializerSpec] = [
         partition_grain="day",
         recent_partitions=3,
         recent_cadence_s=15 * 60,
-        sweep_window_days=30,
+        sweep_window_days=7,
         sweep_cadence_s=6 * 60 * 60,
     ),
     MaterializerSpec(
@@ -323,7 +323,7 @@ REGISTRY: list[MaterializerSpec] = [
         partition_grain="day",
         recent_partitions=3,
         recent_cadence_s=15 * 60,
-        sweep_window_days=30,
+        sweep_window_days=7,
         sweep_cadence_s=6 * 60 * 60,
     ),
     MaterializerSpec(
@@ -335,7 +335,7 @@ REGISTRY: list[MaterializerSpec] = [
         partition_grain="day",
         recent_partitions=3,
         recent_cadence_s=15 * 60,
-        sweep_window_days=30,
+        sweep_window_days=7,
         sweep_cadence_s=6 * 60 * 60,
     ),
     MaterializerSpec(
@@ -347,7 +347,7 @@ REGISTRY: list[MaterializerSpec] = [
         partition_grain="day",
         recent_partitions=3,
         recent_cadence_s=15 * 60,
-        sweep_window_days=30,
+        sweep_window_days=7,
         sweep_cadence_s=6 * 60 * 60,
     ),
     MaterializerSpec(
@@ -359,7 +359,7 @@ REGISTRY: list[MaterializerSpec] = [
         partition_grain="day",
         recent_partitions=3,
         recent_cadence_s=15 * 60,
-        sweep_window_days=30,
+        sweep_window_days=7,
         sweep_cadence_s=6 * 60 * 60,
     ),
     MaterializerSpec(
@@ -371,7 +371,7 @@ REGISTRY: list[MaterializerSpec] = [
         partition_grain="day",
         recent_partitions=3,
         recent_cadence_s=15 * 60,
-        sweep_window_days=30,
+        sweep_window_days=7,
         sweep_cadence_s=6 * 60 * 60,
     ),
     # Global smart_selector accelerators (sum metrics + Sharpe). Maintained by
@@ -385,7 +385,7 @@ REGISTRY: list[MaterializerSpec] = [
         partition_grain="day",
         recent_partitions=3,
         recent_cadence_s=15 * 60,
-        sweep_window_days=30,
+        sweep_window_days=7,
         sweep_cadence_s=6 * 60 * 60,
     ),
     # Sourced from the hl_position_history_1h rollup (above) — must rebuild
@@ -399,7 +399,7 @@ REGISTRY: list[MaterializerSpec] = [
         partition_grain="day",
         recent_partitions=3,
         recent_cadence_s=15 * 60,
-        sweep_window_days=30,
+        sweep_window_days=7,
         sweep_cadence_s=6 * 60 * 60,
     ),
 ]
