@@ -1050,10 +1050,14 @@ def _cutoff_membership_sql(union_key: str, col: str = "w.wallet") -> str:
 
 
 async def _resolve_cutoff_passing(ch, request) -> tuple[str, int]:
-    """Union the per-lookback fixed passing sets at one cutoff into a static set.
-    Returns (union_sel_key, display_lookback) — display_lookback = max selected,
-    used for the table's per-wallet metrics."""
+    """Combine the per-lookback fixed passing sets at one cutoff into a static
+    set. `combine` = 'union' (wallet passes ANY selected lookback; default) or
+    'intersection' (passes EVERY selected lookback). Returns (sel_key,
+    display_lookback) — display_lookback = max selected, for the table metrics."""
     lookbacks = _parse_cutoff_lookbacks(request)
+    combine = request.args.get("combine", "union")
+    if combine not in ("union", "intersection"):
+        combine = "union"
     snapshot = request.args.get("snapshot")
     per_keys: list[str] = []
     base_echo = None
@@ -1064,9 +1068,10 @@ async def _resolve_cutoff_passing(ch, request) -> tuple[str, int]:
             base_echo = sel["echo"]
         per_keys.append(await _resolve_passing(ch, sel))
 
-    # Union key = criteria (minus lookback) + cutoff + the lookback SET.
+    # Key = criteria (minus lookback) + cutoff + the lookback SET + combine mode.
     kf = {k: base_echo[k] for k in _PASSING_KEY_FIELDS if k != "lookback"}
     kf["cutoff_lookbacks"] = lookbacks
+    kf["combine"] = combine
     union_key = "cut-" + hashlib.md5(
         json.dumps(kf, sort_keys=True, default=str).encode()).hexdigest()
     display_lb = max(lookbacks)
@@ -1085,6 +1090,10 @@ async def _resolve_cutoff_passing(ch, request) -> tuple[str, int]:
         return union_key, display_lb
 
     keys_list = "(" + ",".join("'" + k + "'" for k in per_keys) + ")"
+    # Intersection: wallet must appear in EVERY selected lookback's set (count of
+    # distinct source keys = number of lookbacks). Union: any (no HAVING).
+    having = (f"HAVING uniqExact(c.sel_key) = {len(lookbacks)}"
+              if combine == "intersection" else "")
     await ch.command(
         f"INSERT INTO {_SET_CACHE_TABLE} (sel_key, wallet, computed_at)\n"
         f"WITH latest AS (\n"
@@ -1094,7 +1103,8 @@ async def _resolve_cutoff_passing(ch, request) -> tuple[str, int]:
         f"SELECT {{uk:String}} AS sel_key, c.wallet AS wallet, now() AS computed_at\n"
         f"FROM {_SET_CACHE_TABLE} c\n"
         f"INNER JOIN latest ON latest.sel_key = c.sel_key AND latest.mc = c.computed_at\n"
-        f"GROUP BY c.wallet",
+        f"GROUP BY c.wallet\n"
+        f"{having}",
         parameters={"uk": union_key},
     )
     _set_ensured[union_key] = now

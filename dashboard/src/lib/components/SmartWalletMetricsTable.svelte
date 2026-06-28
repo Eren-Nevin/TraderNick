@@ -55,6 +55,8 @@
     cutoffLookbacks = [],
     cutoffOptions = [],
     onToggleCutoffLookback = () => {},
+    cutoffCombine = 'union',
+    onChangeCutoffCombine = () => {},
     rowLimit = 100,
     rowLimits = [100, 250, 500, 1000],
     onChangeRowLimit = () => {},
@@ -90,6 +92,8 @@
     cutoffLookbacks?: number[];
     cutoffOptions?: ReadonlyArray<number>;
     onToggleCutoffLookback?: (l: number) => void;
+    cutoffCombine?: 'union' | 'intersection';
+    onChangeCutoffCombine?: (m: 'union' | 'intersection') => void;
     /** Table row count selector (all smart-wallet tables). */
     rowLimit?: number;
     rowLimits?: ReadonlyArray<number>;
@@ -214,9 +218,18 @@
             class={'px-2 py-0.5 text-[11px] ' + (i > 0 ? 'border-l border-zinc-700 ' : '') + (cutoffLookbacks.includes(l)
               ? 'bg-emerald-800 text-zinc-100'
               : 'bg-zinc-950 text-zinc-500 hover:text-zinc-200')}
-            title={`Union the ${l}-day window`}
+            title={`Include the ${l}-day window`}
           >{l}d</button>
         {/each}
+      </div>
+      <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden"
+        title="Union = wallet passing ANY window; Intersection = passing EVERY window">
+        <button type="button" onclick={() => onChangeCutoffCombine('union')}
+          class={'px-2 py-0.5 text-[11px] ' + (cutoffCombine === 'union' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+        >Union</button>
+        <button type="button" onclick={() => onChangeCutoffCombine('intersection')}
+          class={'px-2 py-0.5 text-[11px] border-l border-zinc-700 ' + (cutoffCombine === 'intersection' ? 'bg-zinc-800 text-zinc-100' : 'bg-zinc-950 text-zinc-400 hover:text-zinc-200')}
+        >Intersect</button>
       </div>
     {:else if !groupMode}
       <span class="text-zinc-500 ml-1">Lookback:</span>

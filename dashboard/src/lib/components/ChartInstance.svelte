@@ -848,7 +848,7 @@
       swF('swMinAvgOiShare', 0), committedFilters.swMaxAvgOiShare ?? '',
       swF('swMinVolumeShare', 0), committedFilters.swMaxVolumeShare ?? '',
       (instance.swCutoffLookbacks ?? []).join(','), instance.swRowLimit ?? 100,
-      instance.swGroupId ?? ''
+      instance.swGroupId ?? '', instance.swCutoffCombine ?? 'union'
     ].join('|');
   }
 
@@ -3047,6 +3047,7 @@
         ? instance.swCutoffLookbacks
         : [...SMART_WALLET_CUTOFF_LOOKBACKS];
       qs.set('lookbacks', lbs.join(','));
+      qs.set('combine', instance.swCutoffCombine ?? 'union');
     }
     return qs;
   }
@@ -8269,6 +8270,8 @@
         cutoff={isCutoff}
         cutoffOptions={SMART_WALLET_CUTOFF_LOOKBACKS}
         cutoffLookbacks={instance.swCutoffLookbacks ?? [...SMART_WALLET_CUTOFF_LOOKBACKS]}
+        cutoffCombine={instance.swCutoffCombine ?? 'union'}
+        onChangeCutoffCombine={(m) => (instance.swCutoffCombine = m)}
         rowLimit={instance.swRowLimit ?? 100}
         groupMode={isGroup}
         groups={walletPinsStore.groups.map((g) => ({ id: g.id, name: g.name }))}

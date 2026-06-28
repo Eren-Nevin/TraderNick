@@ -1252,6 +1252,7 @@
               .filter((x) => allowed.includes(x))
           : [];
         inst.swCutoffLookbacks = lbs.length > 0 ? Array.from(new Set(lbs)).sort((a, b) => a - b) : [...allowed];
+        inst.swCutoffCombine = r.swCutoffCombine === 'intersection' ? 'intersection' : 'union';
         inst.swCutoffDate = typeof r.swCutoffDate === 'string' ? r.swCutoffDate : null;
         inst.swRowLimit = [100, 250, 500, 1000].includes(Number(r.swRowLimit)) ? Number(r.swRowLimit) : 100;
         inst.swMinDays = typeof r.swMinDays === 'number' && r.swMinDays >= 1 ? Math.floor(r.swMinDays) : 7;

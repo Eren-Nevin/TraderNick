@@ -1961,6 +1961,9 @@ export type ChartInstance = {
    *  UNIONed at the cutoff into one static set. Default = all of
    *  SMART_WALLET_CUTOFF_LOOKBACKS. */
   swCutoffLookbacks?: number[];
+  /** smart_wallets_cutoff only: how to combine the per-lookback passing sets —
+   *  'union' (any window; default) or 'intersection' (every window). */
+  swCutoffCombine?: 'union' | 'intersection';
   /** smart_wallets_cutoff only: the cutoff day (ISO date). null/undefined =
    *  latest (start of today). */
   swCutoffDate?: string | null;
@@ -2887,6 +2890,7 @@ export function newChartInstance(
     base.interval = '1h';
     base.swMetric = 'sharpe';
     base.swCutoffLookbacks = [...SMART_WALLET_CUTOFF_LOOKBACKS]; // union all by default
+    base.swCutoffCombine = 'union';
     base.swCutoffDate = null;         // latest (start of today)
     base.swToken = null;              // global (all tokens)
     base.swRowLimit = 100;
