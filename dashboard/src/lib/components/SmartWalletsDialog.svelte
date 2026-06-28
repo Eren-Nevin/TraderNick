@@ -353,9 +353,9 @@
                       class="font-mono tabular-nums text-sm font-semibold mr-2 {posClass(w)}"
                       title={posTitle(w)}
                     >{posText(w)}</span>
-                    <!-- Anchor so middle-click + Ctrl-click open the
-                         Coinglass URL via the browser's default new-tab
-                         behaviour. Left-click is intercepted and copies. -->
+                    <!-- Anchor so middle-click + Ctrl-click open the wallet
+                         page via the browser's default new-tab behaviour.
+                         Left-click is intercepted and copies. -->
                     <a
                       href={walletUrl(w)}
                       target="_blank"
