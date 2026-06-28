@@ -3554,6 +3554,12 @@
               dash: SUB_DASH[0], compute: (_d: OpenInterestRow, i: number) => shortArr[i] });
             break;
           }
+          if (hlMode === 'net_count') {
+            const netArr = maArray(rows.map((d) => (d.long_count ?? 0) - (d.short_count ?? 0)), ma.length, ma.type);
+            out.push({ key: `cum_oi_${idx}`, label: `Net # ${tag}`, color,
+              dash: SUB_DASH[0], compute: (_d: OpenInterestRow, i: number) => netArr[i] });
+            break;
+          }
           if (hlMode === 'long_short') {
             const longArr = maArray(
               rows.map((d) => (useTok ? (d.long_oi  ?? 0) : (d.long_oi_value  ?? 0))),
@@ -4439,7 +4445,7 @@
     const unitLabel = oiIsToken ? ` (${instance.token ?? ''})` : ' (USD)';
     if (mode === 'long')  return { color: '#22c55e', field: oiIsToken ? 'long_oi'  : 'long_oi_value',  label: 'Long OI'  + unitLabel };
     if (mode === 'short') return { color: '#ef4444', field: oiIsToken ? 'short_oi' : 'short_oi_value', label: 'Short OI' + unitLabel };
-    if (mode === 'long_short' || mode === 'long_to_short' || mode === 'net_pct' || mode === 'net' || mode === 'count') return null;
+    if (mode === 'long_short' || mode === 'long_to_short' || mode === 'net_pct' || mode === 'net' || mode === 'count' || mode === 'net_count') return null;
     return { color: '#06b6d4', field: oiIsToken ? 'total_oi' : 'total_oi_value', label: 'OI' + unitLabel };
   });
   // Long/Short ratio: guard against zero-short buckets (early-history HL
@@ -4494,6 +4500,13 @@
           compute: (d: Record<string, number>) => (d.long_count ?? 0) },
         { key: 'oi_short_n', label: '# Short wallets', color: '#ef4444',
           compute: (d: Record<string, number>) => (d.short_count ?? 0) },
+        ...cumulativeLines
+      ];
+    } else if (effectiveKind === 'hl_smart_oi' && mode === 'net_count') {
+      // Net wallet count: # long − # short (one line, primary axis).
+      base = [
+        { key: 'oi_net_n', label: 'Net # wallets', color: '#f97316',
+          compute: (d: Record<string, number>) => (d.long_count ?? 0) - (d.short_count ?? 0) },
         ...cumulativeLines
       ];
     } else if (ex === 'hl' && mode === 'long_to_short') {
@@ -6818,7 +6831,7 @@
                construction. -->
           <select
             value={instance.oiHlDisplay ?? 'total'}
-            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short' | 'long_to_short' | 'net_pct' | 'net' | 'count')}
+            onchange={(e) => (instance.oiHlDisplay = e.currentTarget.value as 'long' | 'short' | 'total' | 'long_short' | 'long_to_short' | 'net_pct' | 'net' | 'count' | 'net_count')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="Which side(s) of HL OI to plot"
           >
@@ -6830,7 +6843,8 @@
             <option value="long_to_short">Long / Short</option>
             <option value="net_pct">Net OI %</option>
             {#if effectiveKind === 'hl_smart_oi'}
-              <option value="count">Long + Short num</option>
+              <option value="count">Long + Short (Num)</option>
+              <option value="net_count">Net (Num)</option>
             {/if}
           </select>
         {/if}
@@ -6854,7 +6868,7 @@
             <option value="asks_bids_share">Asks + Bids share</option>
           </select>
         {/if}
-        {#if (instance.kind === 'oi' || effectiveKind === 'hl_smart_oi') && !((effectiveKind === 'hl_smart_oi' || (instance.exchange ?? 'binance') === 'hl') && ((instance.oiHlDisplay ?? 'total') === 'long_to_short' || (instance.oiHlDisplay ?? 'total') === 'net_pct' || (instance.oiHlDisplay ?? 'total') === 'count'))}
+        {#if (instance.kind === 'oi' || effectiveKind === 'hl_smart_oi') && !((effectiveKind === 'hl_smart_oi' || (instance.exchange ?? 'binance') === 'hl') && ((instance.oiHlDisplay ?? 'total') === 'long_to_short' || (instance.oiHlDisplay ?? 'total') === 'net_pct' || (instance.oiHlDisplay ?? 'total') === 'count' || (instance.oiHlDisplay ?? 'total') === 'net_count'))}
           <!-- USD vs token-amount unit selector for OI. Hidden in the Long/Short
                ratio mode where the unit cancels out. -->
           <select
@@ -7368,7 +7382,7 @@
              here so the display-unit choice sits with the other smart-OI
              chart controls. Hidden in long_to_short / net_pct where the
              unit is mathematically meaningless. -->
-        {#if (instance.oiHlDisplay ?? 'total') !== 'long_to_short' && (instance.oiHlDisplay ?? 'total') !== 'net_pct' && (instance.oiHlDisplay ?? 'total') !== 'count'}
+        {#if (instance.oiHlDisplay ?? 'total') !== 'long_to_short' && (instance.oiHlDisplay ?? 'total') !== 'net_pct' && (instance.oiHlDisplay ?? 'total') !== 'count' && (instance.oiHlDisplay ?? 'total') !== 'net_count'}
           <span class="w-px h-4 bg-zinc-800"></span>
           <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Unit</span>
           <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
@@ -7913,7 +7927,8 @@
       {@const oiIsRatio = oiHlMode === 'long_to_short'}
       {@const oiIsPct = oiHlMode === 'net_pct'}
       {@const oiIsNet = oiHlMode === 'net'}
-      {@const oiIsCount = oiHlMode === 'count'}
+      {@const oiIsNetCount = oiHlMode === 'net_count'}
+      {@const oiIsCount = oiHlMode === 'count' || oiHlMode === 'net_count'}
       {@const oiUseToken = (instance.oiUnit ?? 'usd') === 'token' && !oiIsRatio && !oiIsPct && !oiIsCount}
       {@const showWalletCount = effectiveKind === 'hl_smart_oi' && (instance.smartShowWalletCount ?? false)}
       {@const showClose = effectiveKind === 'hl_smart_oi' && (instance.swShowClose ?? false)}
@@ -7927,7 +7942,7 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={chartVRefLines}
-        refLines={(oiIsNet || oiIsPct) ? ZERO_REF : []}
+        refLines={(oiIsNet || oiIsPct || oiIsNetCount) ? ZERO_REF : []}
         formatY={oiIsRatio ? fmtRatio
                  : oiIsPct ? ((v: number) => `${(v >= 0 ? '+' : '')}${(v * 100).toFixed(1)}%`)
                  : oiIsCount ? ((v: number) => Math.round(v).toLocaleString())

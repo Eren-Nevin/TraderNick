@@ -864,7 +864,7 @@
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
         inst.oiHlDisplay = (r.oiHlDisplay === 'long' || r.oiHlDisplay === 'short'
           || r.oiHlDisplay === 'long_short' || r.oiHlDisplay === 'long_to_short'
-          || r.oiHlDisplay === 'net_pct' || r.oiHlDisplay === 'count')
+          || r.oiHlDisplay === 'net_pct' || r.oiHlDisplay === 'count' || r.oiHlDisplay === 'net_count')
           ? r.oiHlDisplay : 'total';
         inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
       }
@@ -933,7 +933,7 @@
           inst.exchange = 'hl';
           inst.oiHlDisplay = (r.oiHlDisplay === 'long' || r.oiHlDisplay === 'short'
             || r.oiHlDisplay === 'long_short' || r.oiHlDisplay === 'long_to_short'
-            || r.oiHlDisplay === 'net' || r.oiHlDisplay === 'net_pct' || r.oiHlDisplay === 'count')
+            || r.oiHlDisplay === 'net' || r.oiHlDisplay === 'net_pct' || r.oiHlDisplay === 'count' || r.oiHlDisplay === 'net_count')
             ? r.oiHlDisplay : 'total';
           inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
           inst.smartShowWalletCount = r.smartShowWalletCount === true;
@@ -1175,7 +1175,7 @@
         inst.interval =
           typeof r.interval === 'string' && r.interval.length > 0 ? (r.interval as Interval) : '1h';
         inst.oiHlDisplay =
-          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net', 'count'] as const)
+          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net', 'count', 'net_count'] as const)
             .includes(r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>)
             ? (r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>) : 'total';
         inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
@@ -1230,7 +1230,7 @@
         inst.interval =
           typeof r.interval === 'string' && r.interval.length > 0 ? (r.interval as Interval) : '1h';
         inst.oiHlDisplay =
-          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net', 'count'] as const)
+          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net', 'count', 'net_count'] as const)
             .includes(r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>)
             ? (r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>) : 'total';
         inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
@@ -1280,7 +1280,7 @@
         inst.interval =
           typeof r.interval === 'string' && r.interval.length > 0 ? (r.interval as Interval) : '1h';
         inst.oiHlDisplay =
-          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net', 'count'] as const)
+          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net', 'count', 'net_count'] as const)
             .includes(r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>)
             ? (r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>) : 'total';
         inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
@@ -1306,7 +1306,7 @@
         inst.interval =
           typeof r.interval === 'string' && r.interval.length > 0 ? (r.interval as Interval) : '1h';
         inst.oiHlDisplay =
-          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net', 'count'] as const)
+          (['total', 'long', 'short', 'long_short', 'long_to_short', 'net_pct', 'net', 'count', 'net_count'] as const)
             .includes(r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>)
             ? (r.oiHlDisplay as NonNullable<ChartInstanceT['oiHlDisplay']>) : 'total';
         inst.oiUnit = r.oiUnit === 'token' ? 'token' : 'usd';
