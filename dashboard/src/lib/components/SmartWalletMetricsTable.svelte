@@ -395,11 +395,10 @@
                   class:text-emerald-400={r.unrealized_pnl > 0}
                   class:text-rose-400={r.unrealized_pnl < 0}
                   class:text-zinc-500={r.unrealized_pnl === 0}>{fmtUsd(r.unrealized_pnl)}</td>
-              {@const totalPnl = (r.total_pnl ?? (r.realized_pnl + r.unrealized_pnl))}
               <td class="px-3 py-1 text-right font-mono"
-                  class:text-emerald-400={totalPnl > 0}
-                  class:text-rose-400={totalPnl < 0}
-                  class:text-zinc-500={totalPnl === 0}>{fmtUsd(totalPnl)}</td>
+                  class:text-emerald-400={(r.total_pnl ?? 0) > 0}
+                  class:text-rose-400={(r.total_pnl ?? 0) < 0}
+                  class:text-zinc-500={(r.total_pnl ?? 0) === 0}>{fmtUsd(r.total_pnl ?? 0)}</td>
               <td class="px-3 py-1 text-right font-mono font-semibold"
                   class:text-emerald-400={r.metric > 0}
                   class:text-rose-400={r.metric < 0}
