@@ -159,10 +159,12 @@
     const k = effSortKey;
     return [...arr].sort((a, b) => {
       if (k === 'token') return String(a.token).localeCompare(String(b.token)) * dir;
+      // Net OI + its windowed changes sort by the PERCENTAGE (the parenthesised
+      // value), not the raw amount — so ranking is comparable across tokens.
       const sv = (r: Row) =>
-        k === 'net' ? netVal(r)
+        k === 'net' ? netPct(r)
         : k === 'lsnum' ? lsPct(r)
-        : k.startsWith('netchg') ? netChg(r, k.slice(6))
+        : k.startsWith('netchg') ? netChgPct(r, k.slice(6))
         : ((r as unknown as Record<string, number | null>)[k]);
       const av = sv(a);
       const bv = sv(b);
