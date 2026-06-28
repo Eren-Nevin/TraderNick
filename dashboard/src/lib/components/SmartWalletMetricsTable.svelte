@@ -25,6 +25,8 @@
     volume: number;
     realized_pnl: number;
     unrealized_pnl: number;
+    /** realized + unrealized; derived client-side for the Total column. */
+    total_pnl?: number;
     oi_token: number | null;
     oi_usd: number;
     avg_oi: number | null;
@@ -159,9 +161,13 @@
     return sortDir === 1 ? ' ↑' : ' ↓';
   }
   let sortedRows = $derived.by(() => {
-    if (!sortKey) return rows;
+    // Derive Total PnL (realized + unrealized) on every row so it renders + sorts.
+    const withTotal = rows.map((r) => ({
+      ...r, total_pnl: (r.realized_pnl ?? 0) + (r.unrealized_pnl ?? 0)
+    }));
+    if (!sortKey) return withTotal;
     const dir = sortDir;
-    return [...rows].sort((a, b) => {
+    return withTotal.sort((a, b) => {
       const an = (a as unknown as Record<string, number>)[sortKey] ?? 0;
       const bn = (b as unknown as Record<string, number>)[sortKey] ?? 0;
       return (an - bn) * dir;
@@ -349,6 +355,8 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort('unrealized_pnl')} title="Unrealized PnL as of the snapshot (USD)">Unrealized{sortArrow('unrealized_pnl')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
+                onclick={() => onSort('total_pnl')} title="Total PnL = realized + unrealized (USD)">Total{sortArrow('total_pnl')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 class:text-zinc-200={!sortKey || sortKey === 'metric'}
                 onclick={() => onSort('metric')} title={metricDef.desc}>{metricDef.label}{sortArrow('metric')}</th>
           </tr>
@@ -387,6 +395,11 @@
                   class:text-emerald-400={r.unrealized_pnl > 0}
                   class:text-rose-400={r.unrealized_pnl < 0}
                   class:text-zinc-500={r.unrealized_pnl === 0}>{fmtUsd(r.unrealized_pnl)}</td>
+              {@const totalPnl = (r.total_pnl ?? (r.realized_pnl + r.unrealized_pnl))}
+              <td class="px-3 py-1 text-right font-mono"
+                  class:text-emerald-400={totalPnl > 0}
+                  class:text-rose-400={totalPnl < 0}
+                  class:text-zinc-500={totalPnl === 0}>{fmtUsd(totalPnl)}</td>
               <td class="px-3 py-1 text-right font-mono font-semibold"
                   class:text-emerald-400={r.metric > 0}
                   class:text-rose-400={r.metric < 0}
