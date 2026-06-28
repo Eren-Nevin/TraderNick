@@ -781,7 +781,8 @@
   // button (which commits + reloads). Metric / lookback / token / snapshot stay
   // immediate (they're header selectors, not gear "settings").
   const SW_FILTER_FIELDS = [
-    'swMinDays', 'swMinVolume', 'swMinRealized', 'swMinOi', 'swMinAvgTradeSize',
+    'swMinDays', 'swMinVolume', 'swMinRealized', 'swMinUnrealized', 'swMinTotalPnl',
+    'swMinOi', 'swMinAvgTradeSize',
     'swMinTakerPct', 'swMaxFeePct', 'swMaxFundingPct', 'swMinAccountDuration',
     'swMinTokens', 'swMinWinRate', 'swMinTradesPerDay', 'swMaxTradesPerDay',
     'swMinAnnualizedSharpe',
@@ -838,7 +839,9 @@
       instance.kind, instance.swMetric ?? 'sharpe', instance.swLookback ?? 7,
       instance.swToken ?? '__all__', swSnapshotIso(),
       swF('swMinDays', 3), swF('swMinVolume', 0),
-      swF('swMinRealized', 0), swF('swMinOi', 0),
+      swF('swMinRealized', 0),
+      committedFilters.swMinUnrealized ?? '', committedFilters.swMinTotalPnl ?? '',
+      swF('swMinOi', 0),
       swF('swMinAvgTradeSize', 0), swF('swMinTakerPct', 0),
       committedFilters.swMaxFeePct ?? '', committedFilters.swMaxFundingPct ?? '',
       swF('swMinAccountDuration', 0), swF('swMinTokens', 0),
@@ -3034,6 +3037,9 @@
     if (committedFilters.swMaxFundingPct != null) qs.set('max_funding_pct', String(committedFilters.swMaxFundingPct));
     if (committedFilters.swMaxAvgOiShare != null) qs.set('max_avg_oi_share', String(committedFilters.swMaxAvgOiShare));
     if (committedFilters.swMaxVolumeShare != null) qs.set('max_volume_share', String(committedFilters.swMaxVolumeShare));
+    // Optional PnL floors (unset → omitted → backend applies no floor).
+    if (committedFilters.swMinUnrealized != null) qs.set('min_unrealized', String(committedFilters.swMinUnrealized));
+    if (committedFilters.swMinTotalPnl != null) qs.set('min_total_pnl', String(committedFilters.swMinTotalPnl));
     if (instance.swToken && instance.swToken.length > 0) qs.set('token', instance.swToken);
     // Group: the wallet set IS a pinned group (no criteria) — backend resolves
     // membership from wallet_pins; lookback is the stats window (table only).
@@ -7125,6 +7131,26 @@
                   value={instance.swMinRealized ?? 0}
                   onchange={(e) => (instance.swMinRealized = parseFloat(e.currentTarget.value) || 0)}
                   title="Minimum window realized PnL (USD) for a wallet to be ranked. 0 = profitable only; set negative to include losers."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min unrealized ($)</span>
+                <input
+                  type="number" step="1000"
+                  value={instance.swMinUnrealized ?? ''}
+                  onchange={(e) => { const v = e.currentTarget.value.trim(); instance.swMinUnrealized = v === '' ? null : (parseFloat(v) || 0); }}
+                  title="Minimum current unrealized PnL (USD). Blank = no floor."
+                  class={swCell}
+                />
+              </label>
+              <label class="flex flex-col gap-1">
+                <span class={swLabel}>Min total PnL ($)</span>
+                <input
+                  type="number" step="1000"
+                  value={instance.swMinTotalPnl ?? ''}
+                  onchange={(e) => { const v = e.currentTarget.value.trim(); instance.swMinTotalPnl = v === '' ? null : (parseFloat(v) || 0); }}
+                  title="Minimum total PnL = realized + unrealized (USD). Blank = no floor."
                   class={swCell}
                 />
               </label>

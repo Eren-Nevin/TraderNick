@@ -491,6 +491,17 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
         min_realized = float(request.args.get("min_realized", "0"))
     except ValueError:
         min_realized = 0.0
+    # Total PnL = realized + (current) unrealized; unrealized alone. Default to a
+    # huge negative so "no floor" never excludes loss-making wallets.
+    NO_MIN = -1e18
+    try:
+        min_unrealized = float(request.args.get("min_unrealized", str(NO_MIN)))
+    except ValueError:
+        min_unrealized = NO_MIN
+    try:
+        min_total_pnl = float(request.args.get("min_total_pnl", str(NO_MIN)))
+    except ValueError:
+        min_total_pnl = NO_MIN
     try:
         min_oi = float(request.args.get("min_oi", "0"))
     except ValueError:
@@ -589,6 +600,7 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
         "until": e_dt, "end_day": end_day, "start_day": start_day,
         "min_days": min_days, "min_volume": min_volume,
         "min_realized": min_realized, "min_oi": min_oi, "limit": limit,
+        "min_unrealized": min_unrealized, "min_total_pnl": min_total_pnl,
         "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
         "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
         "min_account_duration": min_account_duration, "min_tokens": min_tokens,
@@ -880,6 +892,8 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
     _guards_block = """
         WHERE w.volume >= {min_volume:Float64}
           AND w.realized >= {min_realized:Float64}
+          AND coalesce(u.unrealized, 0) >= {min_unrealized:Float64}
+          AND w.realized + coalesce(u.unrealized, 0) >= {min_total_pnl:Float64}
           AND coalesce(oi.oi_usd, 0) >= {min_oi:Float64}
           AND coalesce(sa.n_days, 0) >= {min_days:UInt32}
           AND coalesce(w.volume / nullIf(w.trades, 0), 0) >= {min_avg_trade_size:Float64}
@@ -906,6 +920,7 @@ def _build_smart_wallet_selection(request, include_avg_oi: bool = False,
         "lookback": lookback, "snapshot": end_day.isoformat(),
         "limit": limit, "min_days": min_days, "min_volume": min_volume,
         "min_realized": min_realized, "min_oi": min_oi,
+        "min_unrealized": min_unrealized, "min_total_pnl": min_total_pnl,
         "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
         "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
         "min_account_duration": min_account_duration, "min_tokens": min_tokens,
@@ -945,6 +960,7 @@ _SET_CACHE_TTL = 300.0
 # wallets qualify, only the ranking/size of the returned table page).
 _PASSING_KEY_FIELDS = (
     "token", "lookback", "snapshot", "min_days", "min_volume", "min_realized",
+    "min_unrealized", "min_total_pnl",
     "min_oi", "min_avg_trade_size", "min_taker_pct", "max_fee_pct",
     "max_funding_pct", "min_account_duration", "min_tokens", "min_win_rate",
     "min_trades_per_day", "max_trades_per_day", "min_annualized_sharpe",
@@ -1218,6 +1234,10 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
 
     min_volume = _f("min_volume", 0)
     min_realized = _f("min_realized", 0)
+    # No-floor sentinel for the optional total/unrealized PnL criteria.
+    _NO_MIN = -1e18
+    min_unrealized = _f("min_unrealized", _NO_MIN)
+    min_total_pnl = _f("min_total_pnl", _NO_MIN)
     min_oi = _f("min_oi", 0)
     min_avg_trade_size = _f("min_avg_trade_size", 0)
     min_taker_pct = _f("min_taker_pct", 0)
@@ -1268,6 +1288,7 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
         "fetch_start": fetch_start, "eod_start": eod_start,
         "min_days": min_days, "min_volume": min_volume,
         "min_realized": min_realized, "min_oi": min_oi,
+        "min_unrealized": min_unrealized, "min_total_pnl": min_total_pnl,
         "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
         "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
         "min_account_duration": min_account_duration, "min_tokens": min_tokens,
@@ -1670,10 +1691,13 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
         "        LEFT JOIN taker_agg tk  ON tk.wallet = w.wallet AND tk.d = w.d\n"
         "        LEFT JOIN funding_agg fn ON fn.wallet = w.wallet AND fn.d = w.d\n"
         "        LEFT JOIN first_seen fseen ON fseen.wallet = w.wallet\n"
+        "        LEFT JOIN eod_daily edl ON edl.wallet = w.wallet AND edl.d = w.d\n"
         "        LEFT JOIN vol_total vt ON vt.d = w.d" + oi_share_join + ntok_join + "\n"
         "        WHERE w.d >= {since_day:Date} AND w.d <= {until_day:Date}\n"
         "          AND w.volume >= {min_volume:Float64}\n"
         "          AND w.realized >= {min_realized:Float64}\n"
+        "          AND coalesce(edl.un, 0) >= {min_unrealized:Float64}\n"
+        "          AND w.realized + coalesce(edl.un, 0) >= {min_total_pnl:Float64}\n"
         "          AND coalesce(oi.oi_usd, 0) >= {min_oi:Float64}\n"
         "          AND coalesce(sa.n_days, 0) >= {min_days:UInt32}\n"
         "          AND coalesce(w.volume / nullIf(w.trades, 0), 0) >= {min_avg_trade_size:Float64}\n"
@@ -1695,6 +1719,7 @@ def _build_rolling_selection(request, since_override=None, until_override=None):
         "since": since_day.isoformat(), "until": until_day.isoformat(),
         "min_days": min_days, "min_volume": min_volume,
         "min_realized": min_realized, "min_oi": min_oi,
+        "min_unrealized": min_unrealized, "min_total_pnl": min_total_pnl,
         "min_avg_trade_size": min_avg_trade_size, "min_taker_pct": min_taker_pct,
         "max_fee_pct": max_fee_pct, "max_funding_pct": max_funding_pct,
         "min_account_duration": min_account_duration, "min_tokens": min_tokens,
@@ -1716,7 +1741,8 @@ _ROLLING_SET_CACHE_TTL = 300.0
 # Set-defining fields: same criteria as Fixed PLUS the rolling range bounds.
 _ROLLING_KEY_FIELDS = (
     "token", "lookback", "since", "until", "min_days", "min_volume",
-    "min_realized", "min_oi", "min_avg_trade_size", "min_taker_pct",
+    "min_realized", "min_unrealized", "min_total_pnl",
+    "min_oi", "min_avg_trade_size", "min_taker_pct",
     "max_fee_pct", "max_funding_pct", "min_account_duration", "min_tokens",
     "min_win_rate", "min_trades_per_day", "max_trades_per_day",
     "min_annualized_sharpe", "min_avg_oi_share", "max_avg_oi_share",
@@ -1826,6 +1852,8 @@ async def smart_wallet_metrics(request):
       min_days  — min active days in window (noise guard; default 3)
       min_volume— min window volume USD (noise guard; default 0)
       min_realized— min window realized PnL USD (default 0 → profitable only)
+      min_unrealized— min current unrealized PnL USD (default off / no floor)
+      min_total_pnl— min realized+unrealized PnL USD (default off / no floor)
       min_oi    — min open interest USD as of the snapshot (default 0)
     """
     # Cutoff mode: rank the static union-over-lookbacks set (membership from the

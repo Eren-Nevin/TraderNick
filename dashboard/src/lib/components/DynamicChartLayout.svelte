@@ -1144,6 +1144,8 @@
           typeof r.swMinVolume === 'number' && r.swMinVolume >= 0 ? r.swMinVolume : 0;
         inst.swMinRealized =
           typeof r.swMinRealized === 'number' ? r.swMinRealized : 0;
+        inst.swMinUnrealized = typeof r.swMinUnrealized === 'number' ? r.swMinUnrealized : null;
+        inst.swMinTotalPnl = typeof r.swMinTotalPnl === 'number' ? r.swMinTotalPnl : null;
         inst.swMinOi =
           typeof r.swMinOi === 'number' && r.swMinOi >= 0 ? r.swMinOi : 0;
         inst.swMinAvgTradeSize =
@@ -1206,6 +1208,8 @@
         inst.swMinVolume =
           typeof r.swMinVolume === 'number' && r.swMinVolume >= 0 ? r.swMinVolume : 0;
         inst.swMinRealized = typeof r.swMinRealized === 'number' ? r.swMinRealized : 0;
+        inst.swMinUnrealized = typeof r.swMinUnrealized === 'number' ? r.swMinUnrealized : null;
+        inst.swMinTotalPnl = typeof r.swMinTotalPnl === 'number' ? r.swMinTotalPnl : null;
         inst.swMinOi = typeof r.swMinOi === 'number' && r.swMinOi >= 0 ? r.swMinOi : 0;
         inst.swMinAvgTradeSize =
           typeof r.swMinAvgTradeSize === 'number' && r.swMinAvgTradeSize >= 0 ? r.swMinAvgTradeSize : 0;
@@ -1261,6 +1265,8 @@
         inst.swMinAvgOiShare = typeof r.swMinAvgOiShare === 'number' && r.swMinAvgOiShare >= 0 ? r.swMinAvgOiShare : 0.05;
         inst.swMinVolume = typeof r.swMinVolume === 'number' && r.swMinVolume >= 0 ? r.swMinVolume : 0;
         inst.swMinRealized = typeof r.swMinRealized === 'number' ? r.swMinRealized : 0;
+        inst.swMinUnrealized = typeof r.swMinUnrealized === 'number' ? r.swMinUnrealized : null;
+        inst.swMinTotalPnl = typeof r.swMinTotalPnl === 'number' ? r.swMinTotalPnl : null;
         inst.swMinOi = typeof r.swMinOi === 'number' && r.swMinOi >= 0 ? r.swMinOi : 0;
         inst.swMinAvgTradeSize = typeof r.swMinAvgTradeSize === 'number' && r.swMinAvgTradeSize >= 0 ? r.swMinAvgTradeSize : 0;
         inst.swMinTakerPct = typeof r.swMinTakerPct === 'number' && r.swMinTakerPct >= 0 ? r.swMinTakerPct : 0;

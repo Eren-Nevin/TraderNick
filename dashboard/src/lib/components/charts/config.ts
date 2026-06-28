@@ -1916,6 +1916,12 @@ export type ChartInstance = {
   /** smart_wallets_table only: minimum window realized PnL (USD) for a wallet
    *  to enter the ranking. Configurable; default 0 (profitable only). */
   swMinRealized?: number;
+  /** smart-wallet filter: min current unrealized PnL (USD). Optional —
+   *  null/undefined = no floor (does not exclude). */
+  swMinUnrealized?: number | null;
+  /** smart-wallet filter: min total PnL = realized + unrealized (USD). Optional —
+   *  null/undefined = no floor. */
+  swMinTotalPnl?: number | null;
   /** smart_wallets_table only: minimum open interest (USD, as of the snapshot)
    *  for a wallet to enter the ranking. Configurable; default 0. */
   swMinOi?: number;
