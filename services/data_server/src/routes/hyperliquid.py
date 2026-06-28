@@ -969,6 +969,20 @@ _PASSING_KEY_FIELDS = (
 # In-process hint of when we last ensured a key was fresh, to skip the freshness
 # round-trip on hot keys. The CH table is the source of truth.
 _set_ensured: dict[str, float] = {}
+# Single-flight: one in-flight materialisation per cache key. Concurrent callers
+# (e.g. the table / chart / tokens views resolving the SAME set at once, or two
+# tabs) await the first instead of each launching the same expensive INSERT.
+# Without this they contend, exceed the client timeout, abort uncached, and
+# retry forever — pinning ClickHouse.
+_resolve_locks: dict[str, asyncio.Lock] = {}
+
+
+def _resolve_lock(key: str) -> asyncio.Lock:
+    lk = _resolve_locks.get(key)
+    if lk is None:
+        lk = asyncio.Lock()
+        _resolve_locks[key] = lk
+    return lk
 
 
 def _passing_key(sel: dict) -> str:
@@ -994,29 +1008,30 @@ async def _resolve_passing(ch, sel: dict) -> str:
     `sel_key`. The OI query then filters via `wallet IN (SELECT … WHERE sel_key)`.
     Computing the set IS the ~5s selection; a fresh cache hit is instant."""
     key = _passing_key(sel)
-    now = time.time()
-    if (last := _set_ensured.get(key)) and now - last < _SET_CACHE_TTL:
-        return key
-    await _ensure_set_table(ch)
-    r = await ch.query(
-        f"SELECT toUnixTimestamp(max(computed_at)) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
-        parameters={"k": key},
-    )
-    mx = r.result_rows[0][0] if (r and r.result_rows) else 0
-    if mx and now - float(mx) < _SET_CACHE_TTL:
+    async with _resolve_lock(key):
+        now = time.time()
+        if (last := _set_ensured.get(key)) and now - last < _SET_CACHE_TTL:
+            return key
+        await _ensure_set_table(ch)
+        r = await ch.query(
+            f"SELECT toUnixTimestamp(max(computed_at)) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
+            parameters={"k": key},
+        )
+        mx = r.result_rows[0][0] if (r and r.result_rows) else 0
+        if mx and now - float(mx) < _SET_CACHE_TTL:
+            _set_ensured[key] = now
+            return key
+        # Recompute: materialise the current passing set as a new (timestamped) batch.
+        p = dict(sel["params"])
+        p["sk"] = key
+        await ch.command(
+            f"INSERT INTO {_SET_CACHE_TABLE} (sel_key, wallet, computed_at)\n"
+            f"WITH {sel['cte_block']}\n"
+            f"SELECT {{sk:String}} AS sel_key, w.wallet AS wallet, now() AS computed_at\n"
+            f"{sel['from_where_block']}",
+            parameters=p,
+        )
         _set_ensured[key] = now
-        return key
-    # Recompute: materialise the current passing set as a new (timestamped) batch.
-    p = dict(sel["params"])
-    p["sk"] = key
-    await ch.command(
-        f"INSERT INTO {_SET_CACHE_TABLE} (sel_key, wallet, computed_at)\n"
-        f"WITH {sel['cte_block']}\n"
-        f"SELECT {{sk:String}} AS sel_key, w.wallet AS wallet, now() AS computed_at\n"
-        f"{sel['from_where_block']}",
-        parameters=p,
-    )
-    _set_ensured[key] = now
     return key
 
 
@@ -1092,38 +1107,39 @@ async def _resolve_cutoff_passing(ch, request) -> tuple[str, int]:
         json.dumps(kf, sort_keys=True, default=str).encode()).hexdigest()
     display_lb = max(lookbacks)
 
-    now = time.time()
-    if (last := _set_ensured.get(union_key)) and now - last < _SET_CACHE_TTL:
-        return union_key, display_lb
-    await _ensure_set_table(ch)
-    r = await ch.query(
-        f"SELECT toUnixTimestamp(max(computed_at)) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
-        parameters={"k": union_key},
-    )
-    mx = r.result_rows[0][0] if (r and r.result_rows) else 0
-    if mx and now - float(mx) < _SET_CACHE_TTL:
-        _set_ensured[union_key] = now
-        return union_key, display_lb
+    async with _resolve_lock(union_key):
+        now = time.time()
+        if (last := _set_ensured.get(union_key)) and now - last < _SET_CACHE_TTL:
+            return union_key, display_lb
+        await _ensure_set_table(ch)
+        r = await ch.query(
+            f"SELECT toUnixTimestamp(max(computed_at)) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
+            parameters={"k": union_key},
+        )
+        mx = r.result_rows[0][0] if (r and r.result_rows) else 0
+        if mx and now - float(mx) < _SET_CACHE_TTL:
+            _set_ensured[union_key] = now
+            return union_key, display_lb
 
-    keys_list = "(" + ",".join("'" + k + "'" for k in per_keys) + ")"
-    # Intersection: wallet must appear in EVERY selected lookback's set (count of
-    # distinct source keys = number of lookbacks). Union: any (no HAVING).
-    having = (f"HAVING uniqExact(c.sel_key) = {len(lookbacks)}"
-              if combine == "intersection" else "")
-    await ch.command(
-        f"INSERT INTO {_SET_CACHE_TABLE} (sel_key, wallet, computed_at)\n"
-        f"WITH latest AS (\n"
-        f"    SELECT sel_key, max(computed_at) AS mc FROM {_SET_CACHE_TABLE}\n"
-        f"    WHERE sel_key IN {keys_list} GROUP BY sel_key\n"
-        f")\n"
-        f"SELECT {{uk:String}} AS sel_key, c.wallet AS wallet, now() AS computed_at\n"
-        f"FROM {_SET_CACHE_TABLE} c\n"
-        f"INNER JOIN latest ON latest.sel_key = c.sel_key AND latest.mc = c.computed_at\n"
-        f"GROUP BY c.wallet\n"
-        f"{having}",
-        parameters={"uk": union_key},
-    )
-    _set_ensured[union_key] = now
+        keys_list = "(" + ",".join("'" + k + "'" for k in per_keys) + ")"
+        # Intersection: wallet must appear in EVERY selected lookback's set (count
+        # of distinct source keys = number of lookbacks). Union: any (no HAVING).
+        having = (f"HAVING uniqExact(c.sel_key) = {len(lookbacks)}"
+                  if combine == "intersection" else "")
+        await ch.command(
+            f"INSERT INTO {_SET_CACHE_TABLE} (sel_key, wallet, computed_at)\n"
+            f"WITH latest AS (\n"
+            f"    SELECT sel_key, max(computed_at) AS mc FROM {_SET_CACHE_TABLE}\n"
+            f"    WHERE sel_key IN {keys_list} GROUP BY sel_key\n"
+            f")\n"
+            f"SELECT {{uk:String}} AS sel_key, c.wallet AS wallet, now() AS computed_at\n"
+            f"FROM {_SET_CACHE_TABLE} c\n"
+            f"INNER JOIN latest ON latest.sel_key = c.sel_key AND latest.mc = c.computed_at\n"
+            f"GROUP BY c.wallet\n"
+            f"{having}",
+            parameters={"uk": union_key},
+        )
+        _set_ensured[union_key] = now
     return union_key, display_lb
 
 
@@ -1149,25 +1165,26 @@ async def _resolve_group_passing(ch, request) -> str:
     )
     addrs = [r[0] for r in mem.result_rows]
     key = "grp-" + hashlib.md5((group_id + "|" + ",".join(addrs)).encode()).hexdigest()
-    now = time.time()
-    if (last := _set_ensured.get(key)) and now - last < _SET_CACHE_TTL:
-        return key
-    r = await ch.query(
-        f"SELECT toUnixTimestamp(max(computed_at)) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
-        parameters={"k": key},
-    )
-    mx = r.result_rows[0][0] if (r and r.result_rows) else 0
-    if mx and now - float(mx) < _SET_CACHE_TTL:
-        _set_ensured[key] = now
-        return key
-    # Empty group → no batch inserted; the queries then see 0 wallets (correct).
-    if addrs:
-        stamp = datetime.now(timezone.utc).replace(tzinfo=None)
-        await ch.insert(
-            _SET_CACHE_TABLE, [[key, a, stamp] for a in addrs],
-            column_names=["sel_key", "wallet", "computed_at"],
+    async with _resolve_lock(key):
+        now = time.time()
+        if (last := _set_ensured.get(key)) and now - last < _SET_CACHE_TTL:
+            return key
+        r = await ch.query(
+            f"SELECT toUnixTimestamp(max(computed_at)) FROM {_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
+            parameters={"k": key},
         )
-    _set_ensured[key] = now
+        mx = r.result_rows[0][0] if (r and r.result_rows) else 0
+        if mx and now - float(mx) < _SET_CACHE_TTL:
+            _set_ensured[key] = now
+            return key
+        # Empty group → no batch inserted; the queries then see 0 wallets (correct).
+        if addrs:
+            stamp = datetime.now(timezone.utc).replace(tzinfo=None)
+            await ch.insert(
+                _SET_CACHE_TABLE, [[key, a, stamp] for a in addrs],
+                column_names=["sel_key", "wallet", "computed_at"],
+            )
+        _set_ensured[key] = now
     return key
 
 
@@ -1776,39 +1793,40 @@ async def _resolve_rolling_passing(ch, sel: dict) -> str:
     toDate(bucket) = day. Mirrors `_resolve_passing` (freshness + TTL + recompute
     as a new timestamped batch)."""
     key = _rolling_key(sel)
-    now = time.time()
-    # The rolling per-(day,wallet) set for a fixed day-range is deterministic.
-    # A range ending BEFORE today is immutable, so reuse its cached rows for
-    # their whole lifetime (the table's 1-day TTL) — a token change / pan must
-    # never trigger the ~30s recompute. A range that INCLUDES today can still
-    # shift as today's day keeps ingesting, so it refreshes on a 30-min window
-    # (was a flat 5 min, which made any reload after 5 min pay the full
-    # recompute — the reported "token change is slow").
-    until_day = sel["echo"].get("until")
-    today_iso = datetime.now(timezone.utc).date().isoformat()
-    includes_today = (not until_day) or (str(until_day) >= today_iso)
-    fresh_window = 1800.0 if includes_today else 86400.0
-    if (last := _rolling_ensured.get(key)) and now - last < fresh_window:
-        return key
-    await _ensure_rolling_set_table(ch)
-    r = await ch.query(
-        f"SELECT toUnixTimestamp(max(computed_at)) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
-        parameters={"k": key},
-    )
-    mx = r.result_rows[0][0] if (r and r.result_rows) else 0
-    if mx and now - float(mx) < fresh_window:
+    async with _resolve_lock(key):
+        now = time.time()
+        # The rolling per-(day,wallet) set for a fixed day-range is deterministic.
+        # A range ending BEFORE today is immutable, so reuse its cached rows for
+        # their whole lifetime (the table's 1-day TTL) — a token change / pan must
+        # never trigger the ~30s recompute. A range that INCLUDES today can still
+        # shift as today's day keeps ingesting, so it refreshes on a 30-min window
+        # (was a flat 5 min, which made any reload after 5 min pay the full
+        # recompute — the reported "token change is slow").
+        until_day = sel["echo"].get("until")
+        today_iso = datetime.now(timezone.utc).date().isoformat()
+        includes_today = (not until_day) or (str(until_day) >= today_iso)
+        fresh_window = 1800.0 if includes_today else 86400.0
+        if (last := _rolling_ensured.get(key)) and now - last < fresh_window:
+            return key
+        await _ensure_rolling_set_table(ch)
+        r = await ch.query(
+            f"SELECT toUnixTimestamp(max(computed_at)) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = {{k:String}}",
+            parameters={"k": key},
+        )
+        mx = r.result_rows[0][0] if (r and r.result_rows) else 0
+        if mx and now - float(mx) < fresh_window:
+            _rolling_ensured[key] = now
+            return key
+        p = dict(sel["params"])
+        p["sk"] = key
+        await ch.command(
+            f"INSERT INTO {_ROLLING_SET_CACHE_TABLE} (sel_key, day, wallet, computed_at)\n"
+            f"WITH {sel['cte_block']}\n"
+            f"SELECT {{sk:String}} AS sel_key, day, wallet, now() AS computed_at\n"
+            f"FROM (\n{sel['passing_select']}\n)",
+            parameters=p,
+        )
         _rolling_ensured[key] = now
-        return key
-    p = dict(sel["params"])
-    p["sk"] = key
-    await ch.command(
-        f"INSERT INTO {_ROLLING_SET_CACHE_TABLE} (sel_key, day, wallet, computed_at)\n"
-        f"WITH {sel['cte_block']}\n"
-        f"SELECT {{sk:String}} AS sel_key, day, wallet, now() AS computed_at\n"
-        f"FROM (\n{sel['passing_select']}\n)",
-        parameters=p,
-    )
-    _rolling_ensured[key] = now
     return key
 
 

@@ -14,5 +14,9 @@ async def client():
             username=config.CLICKHOUSE_USER,
             password=config.CLICKHOUSE_PASSWORD,
             database=config.CLICKHOUSE_DB,
+            # Outermost layer of the timeout chain (frontend 180s < Sanic 240s <
+            # this 300s) so a slow cold query isn't killed by the client before
+            # it finishes and caches.
+            send_receive_timeout=300,
         )
     return _client

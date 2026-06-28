@@ -27,7 +27,10 @@ from clickhouse import client
 from wallets.cache import ensure_table as ensure_wallets_cache
 
 app = Sanic("tradernick_data_server")
-app.config.RESPONSE_TIMEOUT = 180
+# Above the frontend queuedFetch timeout (180s) and below the CH client timeout
+# (300s) so a slow cold smart-wallet selection completes without any layer
+# aborting it mid-flight (an abort left the set uncached → retry storm).
+app.config.RESPONSE_TIMEOUT = 240
 register_health_endpoint(app)
 
 app.blueprint(ohlcv_bp)

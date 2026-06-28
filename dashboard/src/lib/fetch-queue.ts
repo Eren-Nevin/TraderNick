@@ -21,7 +21,11 @@ const MAX_CONCURRENT = 4;
 // genuinely take ~30-60s under load. Set this comfortably above that so the
 // timeout is a "something is wedged" signal, not a "your honest slow query
 // got cut off" annoyance. The user always has the refresh button.
-const DEFAULT_TIMEOUT_MS = 120_000;
+// 180s: above the worst-case cold smart-wallet selection (~130s) so an honest
+// slow query completes and caches instead of being aborted mid-flight (which
+// left the set uncached and triggered an endless retry storm). Must stay BELOW
+// the data_server Sanic RESPONSE_TIMEOUT (240s) and CH client timeout (300s).
+const DEFAULT_TIMEOUT_MS = 180_000;
 
 let inflight = 0;
 const queue: Array<() => void> = [];
