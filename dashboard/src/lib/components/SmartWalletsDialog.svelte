@@ -89,8 +89,10 @@
     }
   }
 
-  function coinglassUrl(w: string): string {
-    return `https://www.coinglass.com/hyperliquid/${w}`;
+  // Middle-click / Ctrl-click opens the internal HL wallet page (as of the
+  // dialog's snapshot day when present), not Coinglass.
+  function walletUrl(w: string): string {
+    return `/wallet/hl/${w}` + (day ? `?snapshot=${day}` : '');
   }
 
   // Collapsed-view position label before each address: the signed notional of
@@ -320,7 +322,7 @@
       <div class="px-4 py-2 text-sm text-zinc-500 border-b border-zinc-800">
         <span class="text-zinc-400">Click</span> to copy address ·
         <span class="text-zinc-400">middle-click</span> (or Ctrl-click)
-        to open on Coinglass · <span class="text-zinc-400">chevron</span> for PnL.
+        to open the wallet page · <span class="text-zinc-400">chevron</span> for PnL.
       </div>
 
       <div class="flex-1 overflow-auto scrollbar-none">
@@ -355,21 +357,21 @@
                          Coinglass URL via the browser's default new-tab
                          behaviour. Left-click is intercepted and copies. -->
                     <a
-                      href={coinglassUrl(w)}
+                      href={walletUrl(w)}
                       target="_blank"
                       rel="noopener noreferrer"
                       class="text-zinc-100 hover:text-emerald-300 break-all cursor-pointer"
                       onclick={(e) => { e.preventDefault(); copyAddress(w); }}
-                      title="Click to copy · middle-click / Ctrl-click to open Coinglass"
+                      title="Click to copy · middle-click / Ctrl-click to open the wallet page"
                     >{w}</a>
                   </td>
                   <td class="px-2 py-1.5 text-right">
                     <a
-                      href={coinglassUrl(w)}
+                      href={walletUrl(w)}
                       target="_blank"
                       rel="noopener noreferrer"
                       class="text-zinc-500 hover:text-emerald-300 cursor-pointer"
-                      title="Open Coinglass in new tab"
+                      title="Open wallet page in new tab"
                     >↗</a>
                   </td>
                   <td class="pl-2 pr-5 py-1.5 text-right">
