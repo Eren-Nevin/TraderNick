@@ -2386,6 +2386,86 @@ async def smart_wallet_token_list(request):
     return response.json({"tokens": out, "wallet_set": sel_key})
 
 
+@bp.get("/hyperliquid/smart_wallet_top_oi")
+@throttled("heavy")
+async def smart_wallet_top_oi(request):
+    """Top-N wallets by OI (position notional) for ONE token at ONE snapshot,
+    among the widget's filtered set. Powers the chart-click / token-select dialog
+    across all Smart Wallets widgets. Same selection params as the chart; `time`
+    = unix seconds of the clicked bucket (default = latest); `rolling=1` for the
+    Dynamic widget (per-day cohort)."""
+    oi_token = request.args.get("oi_token")
+    if not oi_token:
+        return response.json({"error": "missing oi_token"}, status=400)
+    try:
+        n = max(1, min(int(request.args.get("n", "10")), 100))
+    except ValueError:
+        n = 10
+    ch = await client()
+
+    # Snap requested time to the hourly bucket; default to the latest bucket.
+    tdt = None
+    time_arg = request.args.get("time")
+    if time_arg:
+        try:
+            tdt = datetime.fromtimestamp(int(float(time_arg)), tz=timezone.utc).replace(
+                tzinfo=None, minute=0, second=0, microsecond=0)
+        except (ValueError, OSError):
+            tdt = None
+    if tdt is None:
+        r0 = await ch.query("SELECT max(bucket) FROM tradernick.hl_position_history_1h")
+        if not r0.result_rows or r0.result_rows[0][0] is None:
+            return response.json({"wallets": [], "positions": {}, "token": oi_token})
+        tdt = r0.result_rows[0][0]
+
+    group = request.args.get("group")
+    cutoff = request.args.get("cutoff") in ("1", "true", "yes")
+    rolling = request.args.get("rolling") in ("1", "true", "yes")
+    try:
+        if group:
+            member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
+        elif cutoff:
+            member = _cutoff_membership_sql((await _resolve_cutoff_passing(ch, request))[0], col="wallet")
+        elif rolling:
+            rsel = _build_rolling_selection(
+                request,
+                since_override=(tdt - timedelta(days=2)).strftime("%Y-%m-%dT%H:%M:%SZ"),
+                until_override=tdt.strftime("%Y-%m-%dT%H:%M:%SZ"))
+            rk = await _resolve_rolling_passing(ch, rsel)
+            member = (f"wallet IN (SELECT wallet FROM {_ROLLING_SET_CACHE_TABLE} "
+                      f"WHERE sel_key = '{rk}' AND day = toDate({{t:DateTime}}) AND computed_at = "
+                      f"(SELECT max(computed_at) FROM {_ROLLING_SET_CACHE_TABLE} WHERE sel_key = '{rk}'))")
+        else:
+            sel = _build_smart_wallet_selection(request)
+            member = _cutoff_membership_sql(await _resolve_passing(ch, sel), col="wallet")
+    except ValueError as e:
+        return response.json({"error": str(e)}, status=400)
+
+    rows = await ch.query(
+        f"""
+        SELECT wallet, any(side) AS side,
+               argMaxMerge(amount_state) AS amt, argMaxMerge(size_state) AS sz
+        FROM tradernick.hl_position_history_1h
+        WHERE token = {{tok:String}} AND bucket = {{t:DateTime}}
+          AND {member}
+        GROUP BY wallet
+        HAVING sz > 0
+        ORDER BY sz DESC
+        LIMIT {{n:UInt32}}
+        """,
+        parameters={"tok": oi_token, "t": tdt, "n": n},
+    )
+    wallets: list[str] = []
+    positions: dict = {}
+    for w, side, amt, sz in rows.result_rows:
+        wallets.append(w)
+        positions[w] = {"side": side, "amount": float(amt), "size_usd": float(sz), "unrealized": 0.0}
+    return response.json({
+        "wallets": wallets, "positions": positions,
+        "token": oi_token, "day": tdt.strftime("%Y-%m-%d"),
+    })
+
+
 @bp.get("/hyperliquid/smart_wallet_oi_rolling")
 @throttled("heavy")
 async def smart_wallet_oi_rolling(request):

@@ -23,12 +23,15 @@
     rows = [],
     loading = false,
     error = null,
-    unit = 'usd'
+    unit = 'usd',
+    onSelectToken = undefined
   }: {
     rows: Record<string, unknown>[] | Row[];
     loading?: boolean;
     error?: string | null;
     unit?: 'usd' | 'token';
+    /** Click a token row → open the top-OI wallets dialog for that token. */
+    onSelectToken?: (token: string) => void;
   } = $props();
 
   function fmtUsd(n: number): string {
@@ -236,7 +239,9 @@
       </thead>
       <tbody>
         {#each sortedRows as r, idx (r.token)}
-          <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
+          <tr class="border-b border-zinc-900 hover:bg-zinc-900/40 {onSelectToken ? 'cursor-pointer' : ''}"
+            onclick={onSelectToken ? () => onSelectToken(String(r.token)) : undefined}
+            title={onSelectToken ? 'Show top wallets by OI for this token' : undefined}>
             <td class="px-3 py-1 text-zinc-500">{idx + 1}</td>
             <td class="px-3 py-1 font-medium text-zinc-100">{r.token}</td>
             {#each cols as c (c.label)}

@@ -4982,6 +4982,9 @@
   let walletsDialogError = $state<string | null>(null);
   let walletsDialogList = $state<string[]>([]);
   let walletsDialogDay = $state('');
+  // The token the dialog is about (chart uses instance.token; the Token pane can
+  // open it for a different token row).
+  let walletsDialogToken = $state('');
   // As-of-day selector metrics: the values that admitted each wallet on the
   // clicked day (e.g. Sharpe annualized), shown in the dialog's stats area.
   let walletsDialogAsOf = $state<Array<{ key: string; label: string; scope: string; lookback: number }>>([]);
@@ -5022,6 +5025,47 @@
       walletsDialogAsOf = (body.as_of_metrics ?? []) as Array<{ key: string; label: string; scope: string; lookback: number }>;
       walletsDialogMetrics = (body.wallet_metrics ?? {}) as Record<string, Record<string, number | null>>;
       walletsDialogPositions = (body.wallet_positions ?? {}) as Record<string, { side: string; amount: number; size_usd: number; unrealized: number }>;
+    } catch (e) {
+      if ((e as DOMException)?.name !== 'AbortError') {
+        walletsDialogError = e instanceof Error ? e.message : String(e);
+      }
+    } finally {
+      walletsDialogLoading = false;
+    }
+  }
+
+  // Top-OI dialog (all Smart Wallets widgets): the top-N wallets by OI for a
+  // token at a snapshot, among the widget's filtered set. Triggered by clicking
+  // a chart point (Chart pane) or a token row (Token pane). Reuses the
+  // SmartWalletsDialog (copy / Coinglass / per-wallet PnL).
+  async function openTopOiDialog(timeSec: number | null, tokenOverride?: string) {
+    if (!isSwKind(instance.kind)) return;
+    const token = tokenOverride || instance.token;
+    if (!token) return;
+    const d = timeSec ? new Date(timeSec * 1000) : new Date();
+    walletsDialogToken = token;
+    walletsDialogDay = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
+    walletsDialogList = [];
+    walletsDialogAsOf = [];
+    walletsDialogMetrics = {};
+    walletsDialogPositions = {};
+    walletsDialogError = null;
+    walletsDialogLoading = true;
+    walletsDialogOpen = true;
+    if (walletsFetchCtl) walletsFetchCtl.abort();
+    walletsFetchCtl = new AbortController();
+    try {
+      const qs = swSelectionParams();
+      qs.set('oi_token', token);
+      qs.set('n', '10');
+      if (timeSec) qs.set('time', String(Math.floor(timeSec)));
+      if (instance.kind === 'smart_wallets_dynamic') qs.set('rolling', '1');
+      const res = await fetch(`/api/hyperliquid/smart_wallet_top_oi?${qs}`, { signal: walletsFetchCtl.signal });
+      if (!res.ok) throw new Error(`smart_wallet_top_oi ${res.status}`);
+      const body = await res.json();
+      walletsDialogList = (body.wallets ?? []) as string[];
+      walletsDialogPositions = (body.positions ?? {}) as Record<string, { side: string; amount: number; size_usd: number; unrealized: number }>;
+      if (typeof body.day === 'string') walletsDialogDay = body.day;
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') {
         walletsDialogError = e instanceof Error ? e.message : String(e);
@@ -7896,7 +7940,9 @@
                  : showWalletCount ? ((v: number) => Math.round(v).toString()) : undefined}
         formatTooltip2={showClose ? fmtPriceTooltip
                  : showWalletCount ? ((v: number) => `${Math.round(v)} wallets`) : undefined}
-        onClick={showWalletCount ? ((t: number) => openSmartWalletsDialog(t)) : undefined}
+        onClick={effectiveKind === 'hl_smart_oi'
+          ? ((t: number) => openTopOiDialog(t))
+          : undefined}
       />
     {:else if instance.kind === 'volume'}
       <!-- Traded volume per bucket. USD notional or token amount per the
@@ -8255,6 +8301,7 @@
         unit={instance.swtUnit ?? 'usd'}
         loading={loading}
         error={error}
+        onSelectToken={(tok) => openTopOiDialog(null, tok)}
       />
     {:else if isSwKind(instance.kind)}
       <SmartWalletMetricsTable
@@ -8564,7 +8611,7 @@
   loading={walletsDialogLoading}
   error={walletsDialogError}
   day={walletsDialogDay}
-  token={instance.token ?? ''}
+  token={walletsDialogToken || instance.token || ''}
   onClose={() => { walletsDialogOpen = false; if (walletsFetchCtl) walletsFetchCtl.abort(); }}
 />
 
