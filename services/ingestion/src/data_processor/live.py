@@ -64,8 +64,13 @@ def _sweep_partition_ids(spec: MaterializerSpec, now: datetime) -> list[str]:
     return partition_ids_in_window(spec, since, now + timedelta(seconds=1))
 
 
-async def _recent_loop(spec: MaterializerSpec, stream_name: str):
-    """Per-spec recent-tier loop."""
+async def _recent_loop(spec: MaterializerSpec, stream_name: str, offset: float = 0.0):
+    """Per-spec recent-tier loop. `offset` staggers the first fire so materializers
+    sharing a cadence don't all rebuild at the same instant (which stacked the
+    heavy day-grain rebuilds into one CPU/RAM spike). Since same-cadence loops
+    keep a constant phase, one initial offset separates them forever."""
+    if offset:
+        await asyncio.sleep(offset)
     while True:
         next_fire = time.monotonic() + spec.recent_cadence_s
         rows_total = 0
@@ -86,11 +91,12 @@ async def _recent_loop(spec: MaterializerSpec, stream_name: str):
         await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
 
-async def _sweep_loop(spec: MaterializerSpec, stream_name: str):
+async def _sweep_loop(spec: MaterializerSpec, stream_name: str, offset: float = 0.0):
     """Per-spec sweep-tier loop. Skips partitions the recent tier owns
     via the lock; the sleep is long enough that overlap is rare."""
-    # Stagger the first sweep so all materializers don't sweep in lockstep.
-    await asyncio.sleep(spec.sweep_cadence_s)
+    # Delay the first sweep past the cadence, plus a per-spec offset so
+    # same-cadence sweeps don't all fire in lockstep.
+    await asyncio.sleep(spec.sweep_cadence_s + offset)
     while True:
         next_fire = time.monotonic() + spec.sweep_cadence_s
         err: str | None = None
@@ -115,10 +121,16 @@ async def main(stream_name: str):
     # Cold-start stagger so a container-wide cold start doesn't put the
     # first wave of CH commands against fresh process / cache state.
     await asyncio.sleep(60)
+    # Stagger materializers by index so their (same-cadence) rebuilds don't stack
+    # into one spike. 30s spacing exceeds the longest single rebuild (~15s), so no
+    # two heavy day-grain rollups overlap; the total spread (~4min) stays well
+    # under the 30-min recent cadence.
+    _STAGGER_S = 30.0
     tasks = []
-    for spec in REGISTRY:
-        tasks.append(_recent_loop(spec, stream_name))
-        tasks.append(_sweep_loop(spec, stream_name))
+    for i, spec in enumerate(REGISTRY):
+        offset = i * _STAGGER_S
+        tasks.append(_recent_loop(spec, stream_name, offset))
+        tasks.append(_sweep_loop(spec, stream_name, offset))
     await asyncio.gather(*tasks)
 
 
