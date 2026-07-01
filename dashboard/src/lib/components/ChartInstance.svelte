@@ -133,6 +133,7 @@
   import { fetchOverlayData, type OverlayPoint } from '$lib/components/charts/overlay-fetch';
   import AddOverlayDialog from '$lib/components/AddOverlayDialog.svelte';
   import SmartWalletsDialog from '$lib/components/SmartWalletsDialog.svelte';
+  import BacktrackerDialog from '$lib/components/BacktrackerDialog.svelte';
   import { filtersStore } from '$lib/stores/filters.svelte';
   import { walletPinsStore } from '$lib/stores/walletPins.svelte';
   import { expandFilter, filterWireKey, type FilterWire } from '$lib/components/charts/filters';
@@ -1030,7 +1031,7 @@
         : (instance.chain ?? '');
       return `${effectiveKind}|${cPart}|${instance.interval}`;
     }
-    if (instance.kind === 'ohlcv' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'volume' || instance.kind === 'ls' || instance.kind === 'book_depth') {
+    if (instance.kind === 'ohlcv' || instance.kind === 'backtracker' || instance.kind === 'fr' || instance.kind === 'bs' || instance.kind === 'sz' || instance.kind === 'oi' || instance.kind === 'volume' || instance.kind === 'ls' || instance.kind === 'book_depth') {
       // Exchange selector busts the cache so flipping Binance ↔ HL re-fetches.
       // volumeUnit (usd/token) is display-only — both come in the /ohlcv
       // response — so it's intentionally NOT in the key.
@@ -2715,6 +2716,7 @@
         return;
       }
       switch (instance.kind) {
+        case 'backtracker':
         case 'ohlcv':
         case 'volume': {
           // OHLCV + Volume charts both read the per-bucket candle series
@@ -2723,7 +2725,7 @@
           // reads from tradernick.hl_ohlcv_1m server-side. The volume chart
           // just plots the volume / volume_usd field per the unit toggle.
           const ohlcvQs = new URLSearchParams(baseQS);
-          ohlcvQs.set('exchange', instance.exchange ?? 'binance');
+          ohlcvQs.set('exchange', instance.kind === 'backtracker' ? 'hl' : (instance.exchange ?? 'binance'));
           url = `/api/ohlcv?${ohlcvQs}`;
           pickArr = (b) => (b.candles ?? []) as AnyDatum[];
           break;
@@ -3473,7 +3475,7 @@
   // the raw token volume if the server didn't supply the USD field (older
   // payloads or stale caches).
   let ohlcvCandles = $derived.by(() => {
-    if (instance.kind !== 'ohlcv') return [] as Candle[];
+    if (instance.kind !== 'ohlcv' && instance.kind !== 'backtracker') return [] as Candle[];
     const src = data as Candle[];
     // Default to USD notional; token (raw coin volume) is the opt-in.
     if ((instance.volumeUnit ?? 'usd') !== 'usd') return src;
@@ -5107,6 +5109,67 @@
     }
   }
 
+  // ── Backtracker: click a bar → wallets whose position changed most in the
+  // lookback ending at that bar. Dedicated dialog (BacktrackerDialog).
+  type BtRow = { wallet: string; amt_old: number; amt_new: number; usd_old: number; usd_new: number; unrealized_old: number };
+  let btDialogOpen = $state(false);
+  let btLoading = $state(false);
+  let btError = $state<string | null>(null);
+  let btRows = $state<BtRow[]>([]);
+  let btPrice = $state(0);
+  let btToken = $state('');
+  let btLookbackLabel = $state('');
+  let btTimeLabel = $state('');
+  let btStartLabel = $state('');
+  let btEndLabel = $state('');
+  let btSnapshotDate = $state('');
+  let btFetchCtl: AbortController | null = null;
+  const _BT_LB_SECS: Record<string, number> = { '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400, '7d': 604800 };
+  function fmtBtTime(secs: number): string {
+    const d = new Date(secs * 1000);
+    const p = (n: number) => String(n).padStart(2, '0');
+    return `${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+  }
+
+  async function openBacktrackerDialog(barTimeSec: number) {
+    if (instance.kind !== 'backtracker' || !instance.token) return;
+    const lb = instance.btLookback ?? '1h';
+    const d = new Date(barTimeSec * 1000);
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    btSnapshotDate = `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`;
+    btToken = instance.token;
+    btLookbackLabel = lb;
+    btTimeLabel = `${btSnapshotDate} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
+    // Provisional window labels (refined from the server's snapped buckets below).
+    btEndLabel = fmtBtTime(Math.floor(barTimeSec));
+    btStartLabel = fmtBtTime(Math.floor(barTimeSec) - (_BT_LB_SECS[lb] ?? 3600));
+    btRows = [];
+    btError = null;
+    btLoading = true;
+    btDialogOpen = true;
+    if (btFetchCtl) btFetchCtl.abort();
+    btFetchCtl = new AbortController();
+    try {
+      const qs = new URLSearchParams({
+        token: instance.token, time: String(Math.floor(barTimeSec)), lookback: lb, n: '100'
+      });
+      const res = await fetch(`/api/hyperliquid/position_change_wallets?${qs}`, { signal: btFetchCtl.signal });
+      if (!res.ok) throw new Error(`position_change_wallets ${res.status}`);
+      const body = await res.json();
+      btRows = (body.rows ?? []) as BtRow[];
+      btPrice = Number(body.price ?? 0);
+      // Exact snapped 15-min buckets the server compared.
+      if (typeof body.time === 'number') btEndLabel = fmtBtTime(body.time);
+      if (typeof body.time_prev === 'number') btStartLabel = fmtBtTime(body.time_prev);
+    } catch (e) {
+      if ((e as DOMException)?.name !== 'AbortError') {
+        btError = e instanceof Error ? e.message : String(e);
+      }
+    } finally {
+      btLoading = false;
+    }
+  }
+
   let canHaveOverlays = $derived(
     instance.kind !== 'pc'
     && instance.kind !== 'hl_top_traders'
@@ -5434,7 +5497,7 @@
   let overlayLinesD = $derived.by((): LineLike[] => {
     if (!canHaveOverlays) return [];
     if ((instance.overlays ?? []).length === 0) return [];
-    if (instance.kind === 'ohlcv') {
+    if (instance.kind === 'ohlcv' || instance.kind === 'backtracker') {
       const range = computePrimaryRangeFromCandles(ohlcvCandles);
       return buildOverlayLines(range);
     }
@@ -6939,6 +7002,20 @@
           {/each}
         </select>
       {/if}
+      {#if instance.kind === 'backtracker'}
+        <!-- Position-change lookback: clicking a bar shows wallets whose position
+             changed over this window ending at the clicked bar. -->
+        <select
+          value={instance.btLookback ?? '1h'}
+          onchange={(e) => (instance.btLookback = e.currentTarget.value as '15m' | '1h' | '4h' | '1d' | '7d')}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Lookback window (before the clicked bar) for the position-change dialog"
+        >
+          {#each ['15m', '1h', '4h', '1d', '7d'] as lb (lb)}
+            <option value={lb}>Δ {lb}</option>
+          {/each}
+        </select>
+      {/if}
       <button
         type="button"
         onclick={reload}
@@ -8004,7 +8081,7 @@
           No data for {kindLabel}.
         {/if}
       </div>
-    {:else if instance.kind === 'ohlcv'}
+    {:else if instance.kind === 'ohlcv' || instance.kind === 'backtracker'}
       <CandlestickChart
         candles={ohlcvCandles}
         lines={ohlcvLinesM}
@@ -8019,6 +8096,7 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
+        onClick={instance.kind === 'backtracker' ? ((t: number) => openBacktrackerDialog(t)) : undefined}
       />
     {:else if instance.kind === 'pc'}
       <!-- Relative price: chart token / base token ratios (one line per base). -->
@@ -8751,6 +8829,21 @@
   day={walletsDialogDay}
   token={walletsDialogToken || instance.token || ''}
   onClose={() => { walletsDialogOpen = false; if (walletsFetchCtl) walletsFetchCtl.abort(); }}
+/>
+
+<BacktrackerDialog
+  open={btDialogOpen}
+  rows={btRows}
+  price={btPrice}
+  token={btToken}
+  lookback={btLookbackLabel}
+  timeLabel={btTimeLabel}
+  startLabel={btStartLabel}
+  endLabel={btEndLabel}
+  snapshotDate={btSnapshotDate}
+  loading={btLoading}
+  error={btError}
+  onClose={() => { btDialogOpen = false; if (btFetchCtl) btFetchCtl.abort(); }}
 />
 
 <style>

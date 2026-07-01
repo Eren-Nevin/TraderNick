@@ -440,6 +440,7 @@ export type ChartKind =
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
   | 'smart_wallets_group'
+  | 'backtracker'
   | 'transfer'
   | 'exchange_flow'
   | 'pc'
@@ -579,6 +580,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
   smart_wallets_cutoff: 'Smart Wallets (Cutoff)',
   smart_wallets_group: 'Smart Wallets (Group)',
+  backtracker: 'Backtracker',
   transfer: 'Token Flow',
   exchange_flow: 'Exchange Flow',
   pc: 'Relative Price',
@@ -1370,7 +1372,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Perp — GMX V2 + Hyperliquid family. smart_wallets_table is an HL-only
   // experimental tableview (no hl_ prefix so it stays out of the many
   // isHlKind() chart-control branches) — categorise it here explicitly.
-  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group') return 'Perp';
+  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group' || kind === 'backtracker') return 'Perp';
   // Staking — Lido (and future Stader/Frax).
   if (kind === 'lido') return 'Staking';
   return null;
@@ -1685,6 +1687,9 @@ export type ChartInstance = {
   /** spot_cvd only (cumulative mode): accumulation window — 'all' (default,
    *  from the first record) or a trailing N days. In the load key. */
   cvdLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14' | '30' | '90';
+  /** backtracker only: the position-change lookback window ending at the clicked
+   *  bar (dialog query). Display/dialog-only — not in the chart load key. */
+  btLookback?: '15m' | '1h' | '4h' | '1d' | '7d';
   /** spot_cvd_table only: lookback for the per-token CVD aggregate. In the key. */
   cvdtLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14';
   /** spot_cvd_table only: 'usd' (default) or 'token' for the Avg-Vol + CVD-Vol
@@ -2636,6 +2641,14 @@ export function newChartInstance(
   }
   if (kind === 'ohlcv') {
     base.pin = false;
+    base.volumeUnit = 'usd';
+  }
+  if (kind === 'backtracker') {
+    // HL-perp candles; click a bar → wallets whose position changed most in the
+    // lookback ending at that bar.
+    base.exchange = 'hl';
+    base.interval = '15m';
+    base.btLookback = '1h';
     base.volumeUnit = 'usd';
   }
   if (kind === 'fr') {

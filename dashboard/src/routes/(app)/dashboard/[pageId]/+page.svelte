@@ -27,6 +27,7 @@
     'hl_top_vaults', 'hl_top_vault_lps', 'hl_vault_detail',
     'hl_top_traders', 'hl_top_positions',
     'smart_wallets_table', 'smart_wallets_dynamic', 'smart_wallets_cutoff', 'smart_wallets_group',
+    'backtracker',
     'lido'
   ];
 

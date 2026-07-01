@@ -2669,6 +2669,103 @@ async def smart_wallet_top_oi(request):
     })
 
 
+_BACKTRACK_LB = {
+    "15m": timedelta(minutes=15), "1h": timedelta(hours=1),
+    "4h": timedelta(hours=4), "1d": timedelta(days=1), "7d": timedelta(days=7),
+}
+
+
+@bp.get("/hyperliquid/position_change_wallets")
+@throttled("heavy")
+async def position_change_wallets(request):
+    """Backtracker: top-N wallets by |position change| in ONE token over a lookback
+    ending at the clicked bar. Net change = each wallet's SIGNED open position at T
+    vs at T-lookback — two 15-min snapshots from hl_position_history_15m (token-first
+    ORDER BY), so it's O(wallets holding the token), independent of lookback length.
+    Params: token, time (unix secs of the clicked bar), lookback (15m|1h|4h|1d|7d),
+    n (default 100, cap 200). Returns signed amounts (long +, short −) + the old
+    position's unrealized PnL; the dialog derives change type / pct client-side."""
+    token = request.args.get("token")
+    if not token:
+        return response.json({"error": "missing token"}, status=400)
+    lb = request.args.get("lookback", "1h")
+    if lb not in _BACKTRACK_LB:
+        return response.json({"error": f"lookback must be one of {list(_BACKTRACK_LB)}"}, status=400)
+    try:
+        n = max(1, min(int(request.args.get("n", "100")), 200))
+    except ValueError:
+        n = 100
+    time_arg = request.args.get("time")
+    if not time_arg:
+        return response.json({"error": "missing time"}, status=400)
+    try:
+        secs = int(float(time_arg))
+    except ValueError:
+        return response.json({"error": "bad time"}, status=400)
+    # Snap the clicked bar time DOWN to the 15-min grid (the rollup's bucket grain).
+    t_end = datetime.fromtimestamp(secs, tz=timezone.utc).replace(
+        tzinfo=None, second=0, microsecond=0)
+    t_end = t_end.replace(minute=(t_end.minute // 15) * 15)
+    t_prev = t_end - _BACKTRACK_LB[lb]
+
+    ch = await client()
+    # UNION the two snapshots tagged e(nd)/s(tart), then per-wallet sum the signed
+    # position across sides & buckets. (UNION not FULL JOIN — CH fills a missing
+    # join key with '' not NULL, so coalesce on the key wouldn't work.)
+    rows = await ch.query(
+        """
+        SELECT wallet,
+               sum(if(tag = 'e', a, 0)) AS amt_new,
+               sum(if(tag = 's', a, 0)) AS amt_old,
+               sum(if(tag = 'e', u, 0)) AS usd_new,
+               sum(if(tag = 's', u, 0)) AS usd_old,
+               sum(if(tag = 's', p, 0)) AS unrealized_old
+        FROM (
+            SELECT wallet, 'e' AS tag,
+                   argMaxMerge(amount_state) * if(side = 'long', 1, -1) AS a,
+                   argMaxMerge(size_state)  * if(side = 'long', 1, -1) AS u,
+                   0.0 AS p
+            FROM tradernick.hl_position_history_15m
+            WHERE token = {tok:String} AND bucket = {te:DateTime}
+            GROUP BY wallet, side
+            UNION ALL
+            SELECT wallet, 's' AS tag,
+                   argMaxMerge(amount_state) * if(side = 'long', 1, -1) AS a,
+                   argMaxMerge(size_state)  * if(side = 'long', 1, -1) AS u,
+                   argMaxMerge(pnl_state)   AS p
+            FROM tradernick.hl_position_history_15m
+            WHERE token = {tok:String} AND bucket = {tp:DateTime}
+            GROUP BY wallet, side
+        )
+        GROUP BY wallet
+        HAVING abs(amt_new - amt_old) > 1e-9
+        ORDER BY abs(amt_new - amt_old) DESC
+        LIMIT {n:UInt32}
+        """,
+        parameters={"tok": token, "te": t_end, "tp": t_prev, "n": n},
+    )
+    # Mark price at T (last close ≤ T) to value the change in USD.
+    pr = await ch.query(
+        "SELECT argMaxIf(close, time, time <= {te:DateTime}) "
+        "FROM tradernick.hl_ohlcv_1m WHERE token = {tok:String}",
+        parameters={"tok": token, "te": t_end},
+    )
+    price = (float(pr.result_rows[0][0])
+             if (pr.result_rows and pr.result_rows[0][0] is not None) else 0.0)
+
+    out = [
+        {"wallet": w, "amt_old": float(ao), "amt_new": float(an),
+         "usd_old": float(uo), "usd_new": float(un), "unrealized_old": float(up)}
+        for (w, an, ao, un, uo, up) in rows.result_rows
+    ]
+    return response.json({
+        "token": token, "lookback": lb, "price": price,
+        "time": int(t_end.replace(tzinfo=timezone.utc).timestamp()),
+        "time_prev": int(t_prev.replace(tzinfo=timezone.utc).timestamp()),
+        "rows": out,
+    })
+
+
 @bp.get("/hyperliquid/smart_wallet_oi_rolling")
 @throttled("heavy")
 async def smart_wallet_oi_rolling(request):

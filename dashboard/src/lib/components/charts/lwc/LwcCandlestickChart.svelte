@@ -45,7 +45,8 @@
     view = null as View,
     onView,
     hoverTime = null,
-    onHover
+    onHover,
+    onClick
   }: {
     candles: Candle[];
     lines?: Line[];
@@ -58,6 +59,9 @@
     onView?: (v: View) => void;
     hoverTime?: number | null;
     onHover?: (t: number | null) => void;
+    /** Click a bar → the bar's time (unix seconds). Read at click time so it
+     *  binds even when the handler is enabled after mount (see LwcLineChart). */
+    onClick?: (t: number, evt: MouseEvent) => void;
   } = $props();
 
   let wrapper = $state<HTMLDivElement | null>(null);
@@ -104,6 +108,13 @@
     if (!wrapper) return;
     const c = createChart(wrapper, { ...lwcChartOptions(), height, autoSize: true });
     chart = c;
+    // Bar clicks → onClick(barTime). Read the prop at click time (not gated in
+    // onMount) so it works even if the handler is added after mount.
+    c.subscribeClick((p) => {
+      if (!p.time || !onClick) return;
+      const evt = (p.sourceEvent as unknown as MouseEvent) ?? new MouseEvent('click');
+      onClick(p.time as unknown as number, evt);
+    });
 
     candleSeries = c.addCandlestickSeries({
       upColor: '#22c55e',
