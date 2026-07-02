@@ -5140,6 +5140,14 @@
   // aboveBar) pressure by the selected wallet group, fetched from
   // group_fill_pressure over the loaded window. None → no markers.
   type CandleMarker = { time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string };
+  // Compact $ for marker labels — one decimal in K/M/B to cut clutter (36.5K, 1.3M).
+  const fmtMarkerUsd = (v: number) => {
+    const a = Math.abs(v), sg = v < 0 ? '-' : '';
+    if (a >= 1e9) return `${sg}$${(a / 1e9).toFixed(1)}B`;
+    if (a >= 1e6) return `${sg}$${(a / 1e6).toFixed(1)}M`;
+    if (a >= 1e3) return `${sg}$${(a / 1e3).toFixed(1)}K`;
+    return `${sg}$${Math.round(a)}`;
+  };
   let btMarkers = $state<CandleMarker[]>([]);
   // Cumulative realized-PnL per bar-time for the group (for the PnL line overlay).
   let btPnlByTime = $state<Map<number, number>>(new Map());
@@ -5189,8 +5197,8 @@
           // Group net open position at each bar start (circle icon; green long
           // below, red short above — same colour/placement convention as flows).
           for (const p of (body.net_pos ?? []) as Array<{ time: number; net: number }>) {
-            if (p.net > 0 && p.net >= minV) out.push({ time: p.time, position: 'belowBar', color: '#22c55e', shape: 'circle', text: fmtUsdCompact(p.net) });
-            else if (p.net < 0 && -p.net >= minV) out.push({ time: p.time, position: 'aboveBar', color: '#ef4444', shape: 'circle', text: fmtUsdCompact(-p.net) });
+            if (p.net > 0 && p.net >= minV) out.push({ time: p.time, position: 'belowBar', color: '#22c55e', shape: 'circle', text: fmtMarkerUsd(p.net) });
+            else if (p.net < 0 && -p.net >= minV) out.push({ time: p.time, position: 'aboveBar', color: '#ef4444', shape: 'circle', text: fmtMarkerUsd(-p.net) });
           }
           btMarkers = out;
           return;
@@ -5200,21 +5208,21 @@
             // One marker for the dominant side, labeled with net = buys − sells.
             // Hidden when |net| is below the min-value threshold.
             const d = b.buys - b.sells;
-            if (d > 0 && d >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(d) });
-            else if (d < 0 && -d >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(-d) });
+            if (d > 0 && d >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtMarkerUsd(d) });
+            else if (d < 0 && -d >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtMarkerUsd(-d) });
           } else {
             // belowBar buy first, then aboveBar sell — kept in time order. Each
             // side hidden when below the min-value threshold.
-            if (b.buys > 0 && b.buys >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(b.buys) });
-            if (b.sells > 0 && b.sells >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(b.sells) });
+            if (b.buys > 0 && b.buys >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtMarkerUsd(b.buys) });
+            if (b.sells > 0 && b.sells >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtMarkerUsd(b.sells) });
           }
         }
         if (mode === 'netflow_spotvd' || mode === 'bothflow_spotvd') {
           // Secondary marker: market-wide spot volume delta (buyer − seller taker,
           // $). Square icon to distinguish from the flow arrows; own floor.
           for (const p of (body.spot_vd ?? []) as Array<{ time: number; vd: number }>) {
-            if (p.vd > 0 && p.vd >= vdMin) out.push({ time: p.time, position: 'belowBar', color: '#22c55e', shape: 'square', text: fmtUsdCompact(p.vd) });
-            else if (p.vd < 0 && -p.vd >= vdMin) out.push({ time: p.time, position: 'aboveBar', color: '#ef4444', shape: 'square', text: fmtUsdCompact(-p.vd) });
+            if (p.vd > 0 && p.vd >= vdMin) out.push({ time: p.time, position: 'belowBar', color: '#22c55e', shape: 'square', text: fmtMarkerUsd(p.vd) });
+            else if (p.vd < 0 && -p.vd >= vdMin) out.push({ time: p.time, position: 'aboveBar', color: '#ef4444', shape: 'square', text: fmtMarkerUsd(-p.vd) });
           }
         }
         out.sort((a, b) => a.time - b.time); // LWC requires markers sorted by time
