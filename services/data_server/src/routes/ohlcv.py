@@ -309,6 +309,25 @@ async def ohlcv(request):
     table = _OHLCV_TABLE[exchange]
 
     ch = await client()
+    # Optional cap: don't return bars past the most recent bucket that BOTH this
+    # exchange and cap_exchange have data for (e.g. HL perp candles vs Binance
+    # spot for the Backtracker overlay). least(…) is NULL if cap_exchange lacks
+    # the token → no cap. Bounds the chart so the last bar is filled on both.
+    cap_exchange = request.args.get("cap_exchange")
+    if cap_exchange and cap_exchange in _OHLCV_TABLE and cap_exchange != exchange:
+        cap_table = _OHLCV_TABLE[cap_exchange]
+        cr = await ch.query(
+            f"SELECT least("
+            f"(SELECT max(toStartOfInterval(time, INTERVAL {{sec:UInt32}} SECOND)) FROM {table} FINAL "
+            f" WHERE token = {{token:String}} AND time < {{until:DateTime}}), "
+            f"(SELECT max(toStartOfInterval(time, INTERVAL {{sec:UInt32}} SECOND)) FROM {cap_table} FINAL "
+            f" WHERE token = {{token:String}} AND time < {{until:DateTime}}))",
+            parameters={"sec": seconds, "token": token, "until": until_dt},
+        )
+        cap_dt = (cr.result_rows[0][0]
+                  if (cr and cr.result_rows and cr.result_rows[0][0] is not None) else None)
+        if cap_dt is not None:
+            until_dt = min(until_dt, cap_dt + timedelta(seconds=seconds))
     # Subquery computes per-row USD products before the outer aggregates
     # alias columns to their own column names — ClickHouse otherwise
     # binds `volume` / `close` inside `sum(volume * close)` to the outer

@@ -2727,6 +2727,9 @@
           // just plots the volume / volume_usd field per the unit toggle.
           const ohlcvQs = new URLSearchParams(baseQS);
           ohlcvQs.set('exchange', instance.kind === 'backtracker' ? 'hl' : (instance.exchange ?? 'binance'));
+          // Backtracker: cap candles to the last bar filled on BOTH HL perp and
+          // Binance spot, so the marker overlays always have data for the last bar.
+          if (instance.kind === 'backtracker') ohlcvQs.set('cap_exchange', 'binance_spot');
           url = `/api/ohlcv?${ohlcvQs}`;
           pickArr = (b) => (b.candles ?? []) as AnyDatum[];
           break;
