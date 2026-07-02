@@ -23,7 +23,7 @@
   } from '$lib/daySlider';
   import { arkhamUrl, coinglassHlUrl } from '$lib/arkham';
   import WalletPinMenu from '$lib/components/WalletPinMenu.svelte';
-  import { walletPinsStore } from '$lib/stores/walletPins.svelte';
+  import { walletPinsStore, NEUTRAL_GROUP_COLOR } from '$lib/stores/walletPins.svelte';
   import { onMount } from 'svelte';
   import type { PageData } from './$types';
 
@@ -733,6 +733,17 @@
             <WalletPinMenu {address} onClose={() => (pinMenuOpen = false)} />
           {/if}
         </div>
+        {#if pinnedGroups.length}
+          <!-- Group capsules for this wallet (pills colored by group color). -->
+          <div class="flex flex-wrap items-center gap-1">
+            {#each pinnedGroups as g (g.id)}
+              <span
+                class="text-[10px] leading-none px-1.5 py-1 rounded-full text-zinc-100 border"
+                style="background-color: {(g.color ?? NEUTRAL_GROUP_COLOR) + '33'}; border-color: {g.color ?? NEUTRAL_GROUP_COLOR}"
+              >{g.name}</span>
+            {/each}
+          </div>
+        {/if}
       </div>
       <div class="text-sm text-zinc-500 mt-1 flex items-center gap-3">
         <span class="font-mono break-all">{address}</span>
