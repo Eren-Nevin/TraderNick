@@ -28,6 +28,9 @@
      *  overlay (a $ PnL curve) doesn't squash the candles' price scale. */
     priceScaleId?: string;
     lineWidth?: number;
+    /** Custom axis/label formatter for this line's own price scale (e.g. compact
+     *  $ K/M for a PnL line). Only meaningful with a dedicated priceScaleId. */
+    priceFmt?: (v: number) => string;
     /** Compound overlay lines call `compute` with a *remapped* value so the
      *  drawn path fits the primary chart's Y range. When set, the tooltip
      *  shows `rawValue` instead so the user sees the line's native unit. */
@@ -255,7 +258,8 @@
           priceLineVisible: false,
           lastValueVisible: false,
           crosshairMarkerVisible: false,
-          ...(ln.priceScaleId ? { priceScaleId: ln.priceScaleId } : {})
+          ...(ln.priceScaleId ? { priceScaleId: ln.priceScaleId } : {}),
+          ...(ln.priceFmt ? { priceFormat: { type: 'custom', formatter: ln.priceFmt, minMove: 1 } } : {})
         });
         lineSeries.set(ln.key, s);
       } else {

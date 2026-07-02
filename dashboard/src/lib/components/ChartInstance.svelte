@@ -5224,6 +5224,7 @@
       color: '#a855f7',
       priceScaleId: 'left',
       lineWidth: 2,
+      priceFmt: (v: number) => fmtUsdCompact(v),
       compute: (d: Candle) => (map.has(d.time) ? (map.get(d.time) as number) : NaN)
     };
     return [...ohlcvLinesM, pnlLine];
