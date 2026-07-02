@@ -1211,7 +1211,13 @@
     data = out as unknown as AnyDatum[];
   }
 
-  async function load(forceFresh = false) {
+  async function load(forceFresh = false, preserveView = false) {
+    // preserveView: keep the user's current zoom/pan across this load (a refresh
+    // of the same token/interval/window). We NEVER reassign localView below when
+    // set — reassigning to defaultView mid-load momentarily applies it to the
+    // chart, which re-emits a range change that races/clobbers any post-restore.
+    // `pv` is captured before any branch runs; `localView = pv ?? defaultView(…)`.
+    const pv = preserveView ? localView : null;
     // Cancel any prior load so it frees its queue slot immediately.
     if (currentLoad) currentLoad.abort();
     // A fresh primary load (token / interval / filter change) invalidates any
@@ -1358,7 +1364,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -1370,7 +1376,7 @@
           data = (body.series ?? []) as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -1427,7 +1433,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -1439,7 +1445,7 @@
           data = (body.series ?? []) as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -1522,7 +1528,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -1543,7 +1549,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -1571,7 +1577,7 @@
         data = (body.series ?? []) as unknown as AnyDatum[];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1590,7 +1596,7 @@
         data = [{ vaults: body.vaults ?? [] } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1607,7 +1613,7 @@
         data = [{ lps: body.lps ?? [] } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1626,7 +1632,7 @@
         data = [{ vaults: body.vaults ?? [] } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1648,7 +1654,7 @@
         data = (body.series ?? []) as unknown as AnyDatum[];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1674,7 +1680,7 @@
         data = (body.series ?? []) as unknown as AnyDatum[];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1702,7 +1708,7 @@
         data = (body.series ?? []) as unknown as AnyDatum[];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1735,7 +1741,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -1786,7 +1792,7 @@
           const untilU = unixSec(untilIso);
           localView = [untilU - DYN_SW_VIEW_DAYS * 86_400, untilU];
         } else {
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
         }
         dualDataView = instance.viewMode ?? 'table';
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
@@ -1804,7 +1810,7 @@
         data = [{ tokens: body.tokens ?? [] } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1823,7 +1829,7 @@
         data = [{ tokens: body.tokens ?? [] } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1846,7 +1852,7 @@
         data = [{ leaders: body.leaders ?? [] } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1863,7 +1869,7 @@
         data = [{ wallets: body.wallets ?? [], as_of: body.as_of } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1907,7 +1913,7 @@
         data = [{ leaders: body.leaders ?? [] } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -1964,7 +1970,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -1976,7 +1982,7 @@
           data = (body.series ?? []) as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2033,7 +2039,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2045,7 +2051,7 @@
           data = (body.series ?? []) as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2114,7 +2120,7 @@
         since = sinceIso;
         until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -2183,7 +2189,7 @@
           since = sinceIso;
           until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2199,7 +2205,7 @@
         since = sinceIso;
         until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -2212,7 +2218,7 @@
         if (!pool || !instance.chain) {
           data = []; since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2268,7 +2274,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2280,7 +2286,7 @@
         data = (body.series ?? []) as AnyDatum[];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -2292,7 +2298,7 @@
         if (!pool) {
           data = []; since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2359,7 +2365,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2371,7 +2377,7 @@
         data = (body.series ?? []) as AnyDatum[];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -2381,7 +2387,7 @@
         if (!pool) {
           data = []; since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2448,7 +2454,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2460,7 +2466,7 @@
         data = (body.series ?? []) as AnyDatum[];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -2473,7 +2479,7 @@
           data = [];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2539,7 +2545,7 @@
           data = out as unknown as AnyDatum[];
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2553,7 +2559,7 @@
         data = (body.series ?? []) as AnyDatum[];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -2571,7 +2577,7 @@
           since = sinceIso;
           until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2647,7 +2653,7 @@
           since = sinceIso;
           until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2682,7 +2688,7 @@
         since = sinceIso;
         until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -2713,7 +2719,7 @@
         since = sinceIso;
         until = untilIso;
         loadedKey = loadKey();
-        localView = defaultView(sinceIso, untilIso);
+        localView = pv ?? defaultView(sinceIso, untilIso);
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
@@ -2794,7 +2800,7 @@
           since = sinceIso;
           until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView, overlayData });
           return;
         }
@@ -2831,7 +2837,7 @@
           since = sinceIso;
           until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2845,7 +2851,7 @@
             data = await fetchHlOiWindow(sinceIso, untilIso, signal);
             since = sinceIso; until = untilIso;
             loadedKey = loadKey();
-            localView = defaultView(sinceIso, untilIso);
+            localView = pv ?? defaultView(sinceIso, untilIso);
             loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
             return;
           } else {
@@ -2867,14 +2873,14 @@
             data = [] as unknown as AnyDatum[];
             since = sinceIso; until = untilIso;
             loadedKey = loadKey();
-            localView = defaultView(sinceIso, untilIso);
+            localView = pv ?? defaultView(sinceIso, untilIso);
             loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
             return;
           }
           data = await fetchSmartOiWindow(wire, sinceIso, untilIso, signal);
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2936,7 +2942,7 @@
           // overlays. Skip the single-URL pickArr path below.
           await loadTransferMerged(sinceIso, untilIso, signal, forceFresh);
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           since = sinceIso;
           until = untilIso;
           loadCache.set(cacheId(), {
@@ -2955,7 +2961,7 @@
           data = await fetchExchangeFlowWindow(sinceIso, untilIso, signal);
           since = sinceIso; until = untilIso;
           loadedKey = loadKey();
-          localView = defaultView(sinceIso, untilIso);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -2967,7 +2973,7 @@
       since = sinceIso;
       until = untilIso;
       loadedKey = loadKey();
-      localView = defaultView(sinceIso, untilIso);
+      localView = pv ?? defaultView(sinceIso, untilIso);
       loadCache.set(cacheId(), {
         key: loadedKey,
         data,
@@ -3451,17 +3457,10 @@
     loadedKey = '';
     loadCache.delete(cacheId());
     // Preserve the user's zoom/pan across a refresh (same token/interval/window,
-    // just fresher data). load() resets localView to the default full range on
-    // every load; restore the pre-refresh view (and patch the cache) so the
-    // visible range doesn't jump. Synced (cross-chart) views use sharedView and
-    // aren't reset by load(), so this only matters in the non-synced case.
-    const keepView = localView;
-    await load(true);
-    if (keepView) {
-      localView = keepView;
-      const c = loadCache.get(cacheId());
-      if (c) loadCache.set(cacheId(), { ...c, localView: keepView });
-    }
+    // just fresher data): load(preserveView=true) leaves localView untouched, so
+    // the visible range never jumps. Synced (cross-chart) views use sharedView
+    // and aren't reset by load() anyway, so this only matters when not synced.
+    await load(true, true);
   }
 
   // ---- derived series / lines / extra computed data ----
