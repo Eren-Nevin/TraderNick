@@ -5141,6 +5141,8 @@
   // group_fill_pressure over the loaded window. None → no markers.
   type CandleMarker = { time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string };
   let btMarkers = $state<CandleMarker[]>([]);
+  // Cumulative realized-PnL per bar-time for the group (for the PnL line overlay).
+  let btPnlByTime = $state<Map<number, number>>(new Map());
   let btMarkerCtl: AbortController | null = null;
   $effect(() => {
     // Dependencies: token / group / interval / loaded window.
@@ -5149,21 +5151,29 @@
     const iv = instance.interval;
     const mode = instance.btMarkerMode ?? 'both'; // read sync so it's a dependency
     const minV = Math.max(0, instance.btMarkerMin ?? 0);
+    const wantPnl = instance.btPnlLine ?? false; // read sync so it's a dependency
     const s = since, u = until;
     if (instance.kind !== 'backtracker' || !grp || !tok || !s || !u) {
       btMarkers = [];
+      btPnlByTime = new Map();
       return;
     }
     if (btMarkerCtl) btMarkerCtl.abort();
     const ctl = new AbortController();
     btMarkerCtl = ctl;
     const qs = new URLSearchParams({ token: tok, group: grp, interval: iv, since: s, until: u });
+    if (wantPnl) qs.set('pnl', '1');
     fetch(`/api/hyperliquid/group_fill_pressure?${qs}`, { signal: ctl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((body) => {
-        const bars = (body.bars ?? []) as Array<{ time: number; buys: number; sells: number }>;
+        const bars = (body.bars ?? []) as Array<{ time: number; buys: number; sells: number; pnl: number }>;
         const net = mode === 'net';
         const out: CandleMarker[] = [];
+        // Cumulative realized PnL = base (before window) + running Σ per-bar pnl.
+        const pnlMap = new Map<number, number>();
+        let cum = Number(body.pnl_base ?? 0);
+        for (const b of bars) { cum += Number(b.pnl ?? 0); if (wantPnl) pnlMap.set(b.time, cum); }
+        btPnlByTime = pnlMap;
         for (const b of bars) {
           if (net) {
             // One marker for the dominant side, labeled with net = buys − sells.
@@ -5180,7 +5190,24 @@
         }
         btMarkers = out;
       })
-      .catch((e) => { if ((e as DOMException)?.name !== 'AbortError') btMarkers = []; });
+      .catch((e) => { if ((e as DOMException)?.name !== 'AbortError') { btMarkers = []; btPnlByTime = new Map(); } });
+  });
+
+  // Cumulative group-PnL line (left axis) for backtracker — a point at each bar
+  // where the group had fills; LWC connects them into an equity curve.
+  let btChartLines = $derived.by(() => {
+    if (instance.kind !== 'backtracker') return ohlcvLinesM;
+    if (!(instance.btPnlLine ?? false) || btPnlByTime.size === 0) return ohlcvLinesM;
+    const map = btPnlByTime;
+    const pnlLine = {
+      key: 'bt_group_pnl',
+      label: 'Group PnL',
+      color: '#a855f7',
+      priceScaleId: 'left',
+      lineWidth: 2,
+      compute: (d: Candle) => (map.has(d.time) ? (map.get(d.time) as number) : NaN)
+    };
+    return [...ohlcvLinesM, pnlLine];
   });
 
   async function openBacktrackerDialog(barTimeSec: number) {
@@ -7552,6 +7579,10 @@
             class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
           />
         </label>
+        <label class="flex items-center gap-1.5 text-zinc-300 cursor-pointer" title="Draw the selected group's cumulative realized-PnL line (Σ closing-fill PnL for this token) on a left axis. Requires a group.">
+          <input type="checkbox" bind:checked={instance.btPnlLine} class="accent-purple-500" />
+          PnL line
+        </label>
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
       {#if instance.kind === 'fr'}
@@ -8176,7 +8207,7 @@
     {:else if instance.kind === 'ohlcv' || instance.kind === 'backtracker'}
       <CandlestickChart
         candles={ohlcvCandles}
-        lines={ohlcvLinesM}
+        lines={btChartLines}
         showCandles={instance.showPoint}
         formatVolume={(instance.volumeUnit ?? 'usd') === 'usd'
           ? fmtUsdCompact

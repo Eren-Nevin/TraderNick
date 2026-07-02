@@ -1699,6 +1699,9 @@ export type ChartInstance = {
   /** backtracker only: hide markers whose USD value is below this (0 = show all).
    *  Applies per-side in Both mode and to |net| in Net mode. */
   btMarkerMin?: number;
+  /** backtracker only: draw the selected group's cumulative realized-PnL line
+   *  (Σ closing-fill closed_pnl for the token) on a left axis. Needs a group. */
+  btPnlLine?: boolean;
   /** spot_cvd_table only: lookback for the per-token CVD aggregate. In the key. */
   cvdtLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14';
   /** spot_cvd_table only: 'usd' (default) or 'token' for the Avg-Vol + CVD-Vol
@@ -2660,6 +2663,7 @@ export function newChartInstance(
     base.btLookback = '1h';
     base.btMarkerMode = 'both';
     base.btMarkerMin = 0;
+    base.btPnlLine = false;
     base.volumeUnit = 'usd';
   }
   if (kind === 'fr') {

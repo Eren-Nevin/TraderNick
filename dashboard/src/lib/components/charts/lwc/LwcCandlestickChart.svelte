@@ -24,6 +24,10 @@
     color: string;
     compute: (d: Candle, i: number, data: Candle[]) => number;
     dash?: string;
+    /** Put this line on its own price scale (e.g. 'left') so a different-unit
+     *  overlay (a $ PnL curve) doesn't squash the candles' price scale. */
+    priceScaleId?: string;
+    lineWidth?: number;
     /** Compound overlay lines call `compute` with a *remapped* value so the
      *  drawn path fits the primary chart's Y range. When set, the tooltip
      *  shows `rawValue` instead so the user sees the line's native unit. */
@@ -231,16 +235,22 @@
         lineSeries.delete(k);
       }
     }
+    // Show the left price scale iff some line is drawn against it (a PnL curve).
+    chart.priceScale('left').applyOptions({
+      visible: lines.some((l) => l.priceScaleId === 'left'),
+      scaleMargins: { top: 0.1, bottom: 0.2 }
+    });
     for (const ln of lines) {
       let s = lineSeries.get(ln.key);
       if (!s) {
         s = chart.addLineSeries({
           color: ln.color,
-          lineWidth: 1,
+          lineWidth: (ln.lineWidth ?? 1) as 1 | 2 | 3 | 4,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
           priceLineVisible: false,
           lastValueVisible: false,
-          crosshairMarkerVisible: false
+          crosshairMarkerVisible: false,
+          ...(ln.priceScaleId ? { priceScaleId: ln.priceScaleId } : {})
         });
         lineSeries.set(ln.key, s);
       } else {

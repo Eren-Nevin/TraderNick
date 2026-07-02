@@ -2797,23 +2797,36 @@ async def group_fill_pressure(request):
         member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
     except ValueError as e:
         return response.json({"error": str(e)}, status=400)
+    since_dt, until_dt = _parse_iso(since), _parse_iso(until)
     rows = await ch.query(
         """
         SELECT toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS bucket,
                sumIf(size * price, side = 'B') AS buys,
-               sumIf(size * price, side = 'A') AS sells
+               sumIf(size * price, side = 'A') AS sells,
+               sum(closed_pnl) AS pnl
         FROM tradernick.hl_fills
         WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
           AND """ + member + """
         GROUP BY bucket ORDER BY bucket
         """,
         parameters={"sec": INTERVAL_SECONDS[interval], "tok": token,
-                    "s": _parse_iso(since), "u": _parse_iso(until)},
+                    "s": since_dt, "u": until_dt},
     )
+    # For the cumulative-PnL line: realized PnL (Σ closing-fill closed_pnl) BEFORE
+    # the window, so the in-window running sum starts from the true total. Only
+    # computed when requested (pnl=1) — it scans all prior history for the group.
+    pnl_base = 0.0
+    if request.args.get("pnl") in ("1", "true", "yes"):
+        pr = await ch.query(
+            "SELECT sum(closed_pnl) FROM tradernick.hl_fills "
+            "WHERE token = {tok:String} AND time < {s:DateTime} AND " + member,
+            parameters={"tok": token, "s": since_dt},
+        )
+        pnl_base = float(pr.result_rows[0][0]) if (pr.result_rows and pr.result_rows[0][0] is not None) else 0.0
     return response.json({
-        "token": token, "interval": interval,
-        "bars": [{"time": int(b), "buys": float(bu), "sells": float(se)}
-                 for b, bu, se in rows.result_rows],
+        "token": token, "interval": interval, "pnl_base": pnl_base,
+        "bars": [{"time": int(b), "buys": float(bu), "sells": float(se), "pnl": float(pn)}
+                 for b, bu, se, pn in rows.result_rows],
     })
 
 
