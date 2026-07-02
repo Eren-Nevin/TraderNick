@@ -5183,7 +5183,7 @@
     const grp = instance.btGroupId;
     const tok = instance.token;
     const iv = instance.interval;
-    const mode = instance.btMarkerMode ?? 'both'; // read sync so it's a dependency
+    const mode = instance.btMarkerMode ?? 'netflow_spotvd'; // read sync so it's a dependency
     const minV = Math.max(0, instance.btMarkerMin ?? 1000);
     const vdMin = Math.max(0, instance.btSpotVdMin ?? 1000);
     const consensus = instance.btConsensus ?? false; // read sync (dependency)
@@ -7217,7 +7217,7 @@
           <!-- Both = separate buy/sell markers; Net = one marker (dominant side,
                buys−sells) per bar. -->
           <select
-            value={instance.btMarkerMode ?? 'both'}
+            value={instance.btMarkerMode ?? 'netflow_spotvd'}
             onchange={(e) => (instance.btMarkerMode = e.currentTarget.value as 'both' | 'net' | 'netflow_spotvd' | 'bothflow_spotvd' | 'netpos' | 'none')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
             title="Both Flows = buy + sell fill markers; Net Flows = one marker for buys − sells; + Spot VD adds a spot volume-delta square; Net Position = the group's net open position at each bar's start; None = hide"
