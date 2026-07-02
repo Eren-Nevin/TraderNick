@@ -13,6 +13,7 @@
     amt_old: number; amt_new: number;
     usd_old: number; usd_new: number;
     unrealized_old: number;
+    categories?: string[];
   };
 
   let {
@@ -170,7 +171,7 @@
                 <tr class="border-b border-zinc-900 hover:bg-zinc-900/50">
                   <td class="px-3 py-1.5 text-zinc-500 tabular-nums">{i + 1}</td>
                   <td class="px-3 py-1.5">
-                    <WalletAddress address={r.wallet} auxKind="wallet" snapshot={snapshotDate} />
+                    <WalletAddress address={r.wallet} auxKind="wallet" snapshot={snapshotDate} tags={r.categories ?? []} />
                   </td>
                   <td class="px-3 py-1.5">
                     <span class={dAmt(r) > 0 ? 'text-emerald-400' : 'text-rose-400'}>{changeType(r)}</span>

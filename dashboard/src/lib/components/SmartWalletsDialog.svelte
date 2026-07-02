@@ -44,6 +44,8 @@
     day?: string;
     /** Token context (shown for clarity). */
     token?: string;
+    /** address → wallet categories (Perp/Deposit/…) for the tag capsules. */
+    walletCategories?: Record<string, string[]>;
     /** Close handler. */
     onClose: () => void;
   };
@@ -58,6 +60,7 @@
     error: errMsg = null,
     day = '',
     token = '',
+    walletCategories = {},
     onClose
   }: Props = $props();
 
@@ -340,7 +343,7 @@
                     >{posText(w)}</span>
                     <!-- Shared cell: copy (click) / wallet page (middle-click) +
                          inline group-pin capsules (from the pins store). -->
-                    <WalletAddress address={w} auxKind="wallet" snapshot={day} />
+                    <WalletAddress address={w} auxKind="wallet" snapshot={day} tags={walletCategories[w] ?? []} />
                   </td>
                   <td class="px-2 py-1.5 text-right">
                     <a

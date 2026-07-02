@@ -5025,6 +5025,7 @@
   let walletsDialogMetrics = $state<Record<string, Record<string, number | null>>>({});
   // Per-wallet position in the chart token at the filter day (long/short/none).
   let walletsDialogPositions = $state<Record<string, { side: string; amount: number; size_usd: number; unrealized: number }>>({});
+  let walletsDialogCategories = $state<Record<string, string[]>>({});
   let walletsFetchCtl: AbortController | null = null;
 
   async function openSmartWalletsDialog(timeSec: number) {
@@ -5037,6 +5038,7 @@
     walletsDialogAsOf = [];
     walletsDialogMetrics = {};
     walletsDialogPositions = {};
+    walletsDialogCategories = {};
     walletsDialogError = null;
     walletsDialogLoading = true;
     walletsDialogOpen = true;
@@ -5083,6 +5085,7 @@
     walletsDialogAsOf = [];
     walletsDialogMetrics = {};
     walletsDialogPositions = {};
+    walletsDialogCategories = {};
     walletsDialogError = null;
     walletsDialogLoading = true;
     walletsDialogOpen = true;
@@ -5099,6 +5102,7 @@
       const body = await res.json();
       walletsDialogList = (body.wallets ?? []) as string[];
       walletsDialogPositions = (body.positions ?? {}) as Record<string, { side: string; amount: number; size_usd: number; unrealized: number }>;
+      walletsDialogCategories = (body.categories ?? {}) as Record<string, string[]>;
       if (typeof body.day === 'string') walletsDialogDay = body.day;
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') {
@@ -5111,7 +5115,7 @@
 
   // ── Backtracker: click a bar → wallets whose position changed most in the
   // lookback ending at that bar. Dedicated dialog (BacktrackerDialog).
-  type BtRow = { wallet: string; amt_old: number; amt_new: number; usd_old: number; usd_new: number; unrealized_old: number };
+  type BtRow = { wallet: string; amt_old: number; amt_new: number; usd_old: number; usd_new: number; unrealized_old: number; categories?: string[] };
   let btDialogOpen = $state(false);
   let btLoading = $state(false);
   let btError = $state<string | null>(null);
@@ -8824,6 +8828,7 @@
   asOfMetrics={walletsDialogAsOf}
   walletMetrics={walletsDialogMetrics}
   walletPositions={walletsDialogPositions}
+  walletCategories={walletsDialogCategories}
   loading={walletsDialogLoading}
   error={walletsDialogError}
   day={walletsDialogDay}

@@ -2647,7 +2647,8 @@ async def smart_wallet_top_oi(request):
     rows = await ch.query(
         f"""
         SELECT wallet, any(side) AS side,
-               argMaxMerge(amount_state) AS amt, argMaxMerge(size_state) AS sz
+               argMaxMerge(amount_state) AS amt, argMaxMerge(size_state) AS sz,
+               any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS categories
         FROM tradernick.hl_position_history_1h
         WHERE token = {{tok:String}} AND bucket = {{t:DateTime}}
           AND {member}
@@ -2660,11 +2661,13 @@ async def smart_wallet_top_oi(request):
     )
     wallets: list[str] = []
     positions: dict = {}
-    for w, side, amt, sz in rows.result_rows:
+    categories: dict = {}
+    for w, side, amt, sz, cats in rows.result_rows:
         wallets.append(w)
         positions[w] = {"side": side, "amount": float(amt), "size_usd": float(sz), "unrealized": 0.0}
+        categories[w] = list(cats) if cats else []
     return response.json({
-        "wallets": wallets, "positions": positions,
+        "wallets": wallets, "positions": positions, "categories": categories,
         "token": oi_token, "day": tdt.strftime("%Y-%m-%d"),
     })
 
@@ -2720,7 +2723,8 @@ async def position_change_wallets(request):
                sum(if(tag = 's', a, 0)) AS amt_old,
                sum(if(tag = 'e', u, 0)) AS usd_new,
                sum(if(tag = 's', u, 0)) AS usd_old,
-               sum(if(tag = 's', p, 0)) AS unrealized_old
+               sum(if(tag = 's', p, 0)) AS unrealized_old,
+               any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS categories
         FROM (
             SELECT wallet, 'e' AS tag,
                    argMaxMerge(amount_state) * if(side = 'long', 1, -1) AS a,
@@ -2756,8 +2760,9 @@ async def position_change_wallets(request):
 
     out = [
         {"wallet": w, "amt_old": float(ao), "amt_new": float(an),
-         "usd_old": float(uo), "usd_new": float(un), "unrealized_old": float(up)}
-        for (w, an, ao, un, uo, up) in rows.result_rows
+         "usd_old": float(uo), "usd_new": float(un), "unrealized_old": float(up),
+         "categories": list(cats) if cats else []}
+        for (w, an, ao, un, uo, up, cats) in rows.result_rows
     ]
     return response.json({
         "token": token, "lookback": lb, "price": price,
