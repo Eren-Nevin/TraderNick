@@ -208,10 +208,16 @@
   });
 
   // Per-bar markers (e.g. group buy/sell pressure). Caller supplies them sorted
-  // by time ascending.
+  // by time ascending. When markers are present, widen the price-scale margins so
+  // above/below markers — including two stacked on one side (a flow arrow + a
+  // spot-VD square, or when both a buy and sell land on the same bar) — stay
+  // within the chart bounds vertically. Reverts to the tight default when none.
   $effect(() => {
     if (!candleSeries) return;
     candleSeries.setMarkers(markers as unknown as Parameters<typeof candleSeries.setMarkers>[0]);
+    candleSeries.priceScale().applyOptions({
+      scaleMargins: markers.length > 0 ? { top: 0.22, bottom: 0.28 } : { top: 0.05, bottom: 0.25 }
+    });
   });
 
   $effect(() => {
