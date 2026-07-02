@@ -6,6 +6,7 @@
   // amount (token + $, with % for inc/dec), New position (token + $), Old
   // unrealized PnL. Headers are client-sortable. Close via ✕ / backdrop / Esc.
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
+  import WalletAddress from '$lib/components/WalletAddress.svelte';
 
   type Row = {
     wallet: string;
@@ -111,22 +112,8 @@
     return [...rows].sort((a, b) => (sortVal(a, sortKey) - sortVal(b, sortKey)) * dir);
   });
 
-  // Middle-click / Ctrl-click opens the HL wallet page as of the clicked bar.
-  function walletUrl(w: string): string {
-    return `/wallet/hl/${w}` + (snapshotDate ? `?snapshot=${snapshotDate}` : '');
-  }
-  let toast = $state<{ text: string } | null>(null);
-  let toastTimer: ReturnType<typeof setTimeout> | null = null;
-  async function copyAddress(w: string) {
-    try {
-      await navigator.clipboard.writeText(w);
-      toast = { text: `Copied ${w.slice(0, 6)}…${w.slice(-4)}` };
-    } catch {
-      toast = { text: 'Copy failed' };
-    }
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toast = null; }, 1200);
-  }
+  // Address cell (copy + middle-click → wallet page, and the group/tag capsules)
+  // is handled by the shared WalletAddress component.
   function onKey(e: KeyboardEvent) {
     if (open && e.key === 'Escape') onClose();
   }
@@ -183,11 +170,7 @@
                 <tr class="border-b border-zinc-900 hover:bg-zinc-900/50">
                   <td class="px-3 py-1.5 text-zinc-500 tabular-nums">{i + 1}</td>
                   <td class="px-3 py-1.5">
-                    <a href={walletUrl(r.wallet)} target="_blank" rel="noopener noreferrer"
-                      class="font-mono text-zinc-100 hover:text-emerald-300 break-all cursor-pointer"
-                      onclick={(e) => { e.preventDefault(); copyAddress(r.wallet); }}
-                      title="Click to copy · middle-click / Ctrl-click to open the wallet page"
-                    >{r.wallet.slice(0, 8)}…{r.wallet.slice(-6)}</a>
+                    <WalletAddress address={r.wallet} auxKind="wallet" snapshot={snapshotDate} />
                   </td>
                   <td class="px-3 py-1.5">
                     <span class={dAmt(r) > 0 ? 'text-emerald-400' : 'text-rose-400'}>{changeType(r)}</span>
@@ -226,10 +209,4 @@
       {/if}
     </div>
   </div>
-
-  {#if toast}
-    <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] bg-zinc-900 border border-zinc-700 rounded-md px-3 py-1.5 text-xs text-zinc-200 shadow-lg pointer-events-none">
-      {toast.text}
-    </div>
-  {/if}
 {/if}

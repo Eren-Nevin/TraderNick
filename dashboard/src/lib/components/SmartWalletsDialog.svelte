@@ -16,6 +16,7 @@
   //
   // Hide via the ✕, the backdrop, or Escape.
   import WalletPnlChart from '$lib/components/WalletPnlChart.svelte';
+  import WalletAddress from '$lib/components/WalletAddress.svelte';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import { fmtUsdTooltip, fmtAmountTooltip } from '$lib/components/charts/config';
   import { metricDef } from '$lib/components/charts/smartSelector';
@@ -71,26 +72,10 @@
     return Math.abs(v) >= 100 ? v.toFixed(1) : v.toFixed(2);
   }
 
-  let toast = $state<{ text: string; at: number } | null>(null);
-  let toastTimer: ReturnType<typeof setTimeout> | null = null;
-
-  function flashToast(text: string) {
-    toast = { text, at: Date.now() };
-    if (toastTimer) clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => { toast = null; }, 1200);
-  }
-
-  async function copyAddress(w: string) {
-    try {
-      await navigator.clipboard.writeText(w);
-      flashToast(`Copied ${w.slice(0, 6)}…${w.slice(-4)}`);
-    } catch {
-      flashToast('Copy failed');
-    }
-  }
-
   // Middle-click / Ctrl-click opens the internal HL wallet page (as of the
-  // dialog's snapshot day when present), not Coinglass.
+  // dialog's snapshot day when present), not Coinglass. (The address cell's copy
+  // + capsules are handled by the shared WalletAddress component; this URL is
+  // still used by the explicit ↗ open-in-new-tab link.)
   function walletUrl(w: string): string {
     return `/wallet/hl/${w}` + (day ? `?snapshot=${day}` : '');
   }
@@ -353,17 +338,9 @@
                       class="font-mono tabular-nums text-sm font-semibold mr-2 {posClass(w)}"
                       title={posTitle(w)}
                     >{posText(w)}</span>
-                    <!-- Anchor so middle-click + Ctrl-click open the wallet
-                         page via the browser's default new-tab behaviour.
-                         Left-click is intercepted and copies. -->
-                    <a
-                      href={walletUrl(w)}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      class="text-zinc-100 hover:text-emerald-300 break-all cursor-pointer"
-                      onclick={(e) => { e.preventDefault(); copyAddress(w); }}
-                      title="Click to copy · middle-click / Ctrl-click to open the wallet page"
-                    >{w}</a>
+                    <!-- Shared cell: copy (click) / wallet page (middle-click) +
+                         inline group-pin capsules (from the pins store). -->
+                    <WalletAddress address={w} auxKind="wallet" snapshot={day} />
                   </td>
                   <td class="px-2 py-1.5 text-right">
                     <a
@@ -567,10 +544,4 @@
       {/if}
     </div>
   </div>
-
-  {#if toast}
-    <div class="fixed bottom-6 left-1/2 -translate-x-1/2 z-[60] bg-zinc-900 border border-zinc-700 rounded-md px-3 py-1.5 text-xs text-zinc-200 shadow-lg pointer-events-none">
-      {toast.text}
-    </div>
-  {/if}
 {/if}
