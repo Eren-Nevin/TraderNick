@@ -2888,11 +2888,26 @@ async def group_fill_pressure(request):
             parameters={"tok": token, "s": since_dt, "u": until_dt, "sec": sec},
         )
         net_pos = [{"time": int(t), "net": float(n)} for t, n in npr.result_rows]
+    # Market-wide SPOT volume delta per bar (spotvd=1): Σ (buyer_taker −
+    # seller_taker) × close from Binance spot 1m. Not group-scoped.
+    spot_vd = []
+    if request.args.get("spotvd") in ("1", "true", "yes"):
+        vr = await ch.query(
+            """
+            SELECT toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS t,
+                   sum((buyer_taker_volume - seller_taker_volume) * close) AS vd
+            FROM tradernick.binance_spot_ohlcv_1m FINAL
+            WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
+            GROUP BY t ORDER BY t
+            """,
+            parameters={"sec": sec, "tok": token, "s": since_dt, "u": until_dt},
+        )
+        spot_vd = [{"time": int(t), "vd": float(v)} for t, v in vr.result_rows]
     return response.json({
         "token": token, "interval": interval, "pnl_line": pnl_line,
         "bars": [{"time": int(b), "buys": float(bu), "sells": float(se)}
                  for b, bu, se in rows.result_rows],
-        "net_pos": net_pos,
+        "net_pos": net_pos, "spot_vd": spot_vd,
     })
 
 

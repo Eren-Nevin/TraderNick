@@ -1694,9 +1694,12 @@ export type ChartInstance = {
    *  as markers. null/'' = None (no markers). */
   btGroupId?: string | null;
   /** backtracker only: 'both' (separate buy+sell flow markers, default), 'net'
-   *  (one flow marker for buys−sells), 'netpos' (group net position at bar start)
-   *  or 'none' (hide). */
-  btMarkerMode?: 'both' | 'net' | 'netpos' | 'none';
+   *  (one flow marker for buys−sells), 'netflow_spotvd' (net flows + a secondary
+   *  spot volume-delta marker), 'netpos' (group net position at bar start) or
+   *  'none' (hide). */
+  btMarkerMode?: 'both' | 'net' | 'netflow_spotvd' | 'netpos' | 'none';
+  /** backtracker only: hide the spot-VD secondary marker below this $ (0 = all). */
+  btSpotVdMin?: number;
   /** backtracker only: hide markers whose USD value is below this (0 = show all).
    *  Applies per-side in Both mode and to |net| in Net mode. */
   btMarkerMin?: number;
@@ -2666,7 +2669,8 @@ export function newChartInstance(
     base.interval = '15m';
     base.btLookback = '1h';
     base.btMarkerMode = 'both';
-    base.btMarkerMin = 0;
+    base.btMarkerMin = 1000;    // default flow-marker floor: $1K
+    base.btSpotVdMin = 0;
     base.btPnlLine = false;
     base.btPnlLookback = 'start';
     base.volumeUnit = 'usd';
