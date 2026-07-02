@@ -366,11 +366,7 @@
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
               <td class="px-3 py-1 text-zinc-500">{idx + 1}</td>
               <td class="px-3 py-1">
-                <WalletAddress address={r.wallet} auxKind="wallet" {snapshot} />
-                {#if r.categories && r.categories.length > 0}
-                  <span class="ml-1 inline-block text-[9px] uppercase tracking-wide px-1 py-0 rounded bg-zinc-900 border border-zinc-700 text-zinc-400"
-                        title={r.categories.join(', ')}>{r.categories[0]}</span>
-                {/if}
+                <WalletAddress address={r.wallet} auxKind="wallet" {snapshot} tags={r.categories ?? []} />
                 <span class="ml-1 text-[9px] text-zinc-600">{r.n_days}d</span>
               </td>
               <td class="px-3 py-1 text-right font-mono text-zinc-300">{fmtUsd(r.volume)}</td>
