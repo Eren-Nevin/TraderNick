@@ -5256,6 +5256,16 @@
       .catch((e) => { if ((e as DOMException)?.name !== 'AbortError') { btMarkers = []; btPnlByTime = new Map(); } });
   });
 
+  // Only keep markers whose time is an actual candle bucket. Spot (Binance) and
+  // fills can be fresher than the HL candle series, so a trailing bucket with no
+  // candle would otherwise be snapped by LWC onto the last bar (the "two squares
+  // on the last bar" bug). Reactive on candles → no refetch.
+  let btMarkersVisible = $derived.by(() => {
+    if (instance.kind !== 'backtracker' || btMarkers.length === 0) return btMarkers;
+    const times = new Set((ohlcvCandles as Candle[]).map((c) => c.time));
+    return btMarkers.filter((m) => times.has(m.time));
+  });
+
   // Cumulative group-PnL line (left axis) for backtracker — a point at each bar
   // where the group had fills; LWC connects them into an equity curve.
   let btChartLines = $derived.by(() => {
@@ -8333,7 +8343,7 @@
         onHover={handleHover}
         vRefLines={weekVRefLines}
         onClick={instance.kind === 'backtracker' ? ((t: number) => openBacktrackerDialog(t)) : undefined}
-        markers={instance.kind === 'backtracker' ? btMarkers : []}
+        markers={instance.kind === 'backtracker' ? btMarkersVisible : []}
         fontSize={instance.kind === 'backtracker' ? 16 : undefined}
         fontFamily={instance.kind === 'backtracker' ? '"Arial Black", "Arial Bold", Gadget, sans-serif' : undefined}
       />
