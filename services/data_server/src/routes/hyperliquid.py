@@ -2798,36 +2798,74 @@ async def group_fill_pressure(request):
     except ValueError as e:
         return response.json({"error": str(e)}, status=400)
     since_dt, until_dt = _parse_iso(since), _parse_iso(until)
-    # PnL-line reference start (t0): only closing fills at/after t0 count toward the
-    # cumulative PnL. Absent → epoch-ish (From Start = full history). Lets the PnL
-    # line show trailing-window PnL (e.g. 1w / 1m) without affecting buy/sell bars.
-    ps = request.args.get("pnl_since")
-    t0 = _parse_iso(ps) if ps else datetime(2000, 1, 1)
+    sec = INTERVAL_SECONDS[interval]
     rows = await ch.query(
         """
         SELECT toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS bucket,
                sumIf(size * price, side = 'B') AS buys,
-               sumIf(size * price, side = 'A') AS sells,
-               sumIf(closed_pnl, time >= {t0:DateTime}) AS pnl
+               sumIf(size * price, side = 'A') AS sells
         FROM tradernick.hl_fills
         WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
           AND """ + member + """
         GROUP BY bucket ORDER BY bucket
         """,
-        parameters={"sec": INTERVAL_SECONDS[interval], "tok": token,
-                    "s": since_dt, "u": until_dt, "t0": t0},
+        parameters={"sec": sec, "tok": token, "s": since_dt, "u": until_dt},
     )
-    # Cumulative-PnL baseline: realized PnL in [t0, since) so the in-window running
-    # sum starts from the true running total for the chosen lookback. Only computed
-    # when requested (pnl=1) — scans prior history for the group.
-    pnl_base = 0.0
+    # Cumulative realized-PnL LINE value per bar (pnl=1). From Start (no
+    # pnl_window): base (Σ closing-fill PnL before the window) + running cumulative
+    # within it. Rolling (pnl_window=W seconds): Σ closing-fill PnL over the
+    # trailing W ENDING AT EACH BAR — a sliding window re-cut per bar, computed
+    # over an extended [since−W, until] scan with a RANGE window frame.
+    pnl_line = []
     if request.args.get("pnl") in ("1", "true", "yes"):
-        pr = await ch.query(
-            "SELECT sum(closed_pnl) FROM tradernick.hl_fills "
-            "WHERE token = {tok:String} AND time >= {t0:DateTime} AND time < {s:DateTime} AND " + member,
-            parameters={"tok": token, "s": since_dt, "t0": t0},
-        )
-        pnl_base = float(pr.result_rows[0][0]) if (pr.result_rows and pr.result_rows[0][0] is not None) else 0.0
+        try:
+            win = int(request.args.get("pnl_window", "0"))
+        except ValueError:
+            win = 0
+        if win > 0:
+            # win is inlined (validated int) — CH doesn't substitute query params
+            # inside a RANGE window frame.
+            lr = await ch.query(
+                """
+                SELECT toUnixTimestamp(b) AS t,
+                       sum(p) OVER (ORDER BY toUnixTimestamp(b) ASC
+                            RANGE BETWEEN """ + str(win) + """ PRECEDING AND CURRENT ROW) AS v
+                FROM (
+                    SELECT toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND) AS b, sum(closed_pnl) AS p
+                    FROM tradernick.hl_fills
+                    WHERE token = {tok:String} AND time >= {rs:DateTime} AND time < {u:DateTime}
+                      AND """ + member + """
+                    GROUP BY b
+                )
+                WHERE b >= {s:DateTime} ORDER BY b
+                """,
+                parameters={"sec": sec, "tok": token,
+                            "rs": since_dt - timedelta(seconds=win), "s": since_dt, "u": until_dt},
+            )
+            pnl_line = [{"time": int(t), "value": float(v)} for t, v in lr.result_rows]
+        else:
+            pr = await ch.query(
+                "SELECT sum(closed_pnl) FROM tradernick.hl_fills "
+                "WHERE token = {tok:String} AND time < {s:DateTime} AND " + member,
+                parameters={"tok": token, "s": since_dt},
+            )
+            base = float(pr.result_rows[0][0]) if (pr.result_rows and pr.result_rows[0][0] is not None) else 0.0
+            lr = await ch.query(
+                """
+                SELECT toUnixTimestamp(b) AS t,
+                       sum(p) OVER (ORDER BY b ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS v
+                FROM (
+                    SELECT toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND) AS b, sum(closed_pnl) AS p
+                    FROM tradernick.hl_fills
+                    WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
+                      AND """ + member + """
+                    GROUP BY b
+                )
+                ORDER BY b
+                """,
+                parameters={"sec": sec, "tok": token, "s": since_dt, "u": until_dt},
+            )
+            pnl_line = [{"time": int(t), "value": base + float(v)} for t, v in lr.result_rows]
     # Net position of the group at each BAR START (netpos=1): signed OI (long +,
     # short −) summed over the group's wallets, from the position-history rollup
     # sampled at bar-boundary buckets. 15m interval → 15m rollup; else 1h.
@@ -2847,14 +2885,13 @@ async def group_fill_pressure(request):
             )
             GROUP BY t ORDER BY t
             """,
-            parameters={"tok": token, "s": since_dt, "u": until_dt,
-                        "sec": INTERVAL_SECONDS[interval]},
+            parameters={"tok": token, "s": since_dt, "u": until_dt, "sec": sec},
         )
         net_pos = [{"time": int(t), "net": float(n)} for t, n in npr.result_rows]
     return response.json({
-        "token": token, "interval": interval, "pnl_base": pnl_base,
-        "bars": [{"time": int(b), "buys": float(bu), "sells": float(se), "pnl": float(pn)}
-                 for b, bu, se, pn in rows.result_rows],
+        "token": token, "interval": interval, "pnl_line": pnl_line,
+        "bars": [{"time": int(b), "buys": float(bu), "sells": float(se)}
+                 for b, bu, se in rows.result_rows],
         "net_pos": net_pos,
     })
 

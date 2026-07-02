@@ -5165,22 +5165,22 @@
     const qs = new URLSearchParams({ token: tok, group: grp, interval: iv, since: s, until: u });
     if (wantPnl) {
       qs.set('pnl', '1');
-      // PnL-line reference start: trailing window or full history.
-      const nowMs = Date.now();
-      const t0ms = pnlLb === '1w' ? nowMs - 7 * 864e5 : pnlLb === '1m' ? nowMs - 30 * 864e5 : Date.parse('2000-01-01T00:00:00Z');
-      qs.set('pnl_since', new Date(t0ms).toISOString());
+      // Rolling trailing-window PnL: pass the window width (secs). From Start
+      // omits it → cumulative from data start.
+      if (pnlLb === '1w') qs.set('pnl_window', String(7 * 86400));
+      else if (pnlLb === '1m') qs.set('pnl_window', String(30 * 86400));
     }
     if (mode === 'netpos') qs.set('netpos', '1');
     fetch(`/api/hyperliquid/group_fill_pressure?${qs}`, { signal: ctl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((body) => {
-        const bars = (body.bars ?? []) as Array<{ time: number; buys: number; sells: number; pnl: number }>;
+        const bars = (body.bars ?? []) as Array<{ time: number; buys: number; sells: number }>;
         const net = mode === 'net';
         const out: CandleMarker[] = [];
-        // Cumulative realized PnL = base (before window) + running Σ per-bar pnl.
+        // Server computes the PnL-line value per bar (cumulative-from-start or
+        // rolling-window); just map time → value.
         const pnlMap = new Map<number, number>();
-        let cum = Number(body.pnl_base ?? 0);
-        for (const b of bars) { cum += Number(b.pnl ?? 0); if (wantPnl) pnlMap.set(b.time, cum); }
+        if (wantPnl) for (const p of (body.pnl_line ?? []) as Array<{ time: number; value: number }>) pnlMap.set(p.time, p.value);
         btPnlByTime = pnlMap;
         if (mode === 'none') { btMarkers = []; return; }
         if (mode === 'netpos') {
