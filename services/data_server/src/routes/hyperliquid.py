@@ -2895,19 +2895,41 @@ async def group_fill_pressure(request):
         vr = await ch.query(
             """
             SELECT toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS t,
-                   sum((buyer_taker_volume - seller_taker_volume) * close) AS vd
+                   sum((buyer_taker_volume - seller_taker_volume) * close) AS vd,
+                   sum((buyer_taker_volume + seller_taker_volume) * close) AS vol
             FROM tradernick.binance_spot_ohlcv_1m FINAL
             WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
             GROUP BY t ORDER BY t
             """,
             parameters={"sec": sec, "tok": token, "s": since_dt, "u": until_dt},
         )
-        spot_vd = [{"time": int(t), "vd": float(v)} for t, v in vr.result_rows]
+        spot_vd = [{"time": int(t), "vd": float(v), "vol": float(vo)} for t, v, vo in vr.result_rows]
+    # Consensus counts (consensus=1): per bar, # group wallets whose NET fill
+    # direction was buy vs sell (each wallet's signed notional summed then
+    # classified). Powers the "count wallets, not $" marker mode.
+    consensus = []
+    if request.args.get("consensus") in ("1", "true", "yes"):
+        cr = await ch.query(
+            """
+            SELECT bucket, countIf(wn > 0) AS buyers, countIf(wn < 0) AS sellers FROM (
+                SELECT toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS bucket,
+                       wallet, sum(if(side = 'B', size * price, -size * price)) AS wn
+                FROM tradernick.hl_fills
+                WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
+                  AND """ + member + """
+                GROUP BY bucket, wallet
+            )
+            GROUP BY bucket ORDER BY bucket
+            """,
+            parameters={"sec": sec, "tok": token, "s": since_dt, "u": until_dt},
+        )
+        consensus = [{"time": int(b), "buyers": int(nb), "sellers": int(ns)}
+                     for b, nb, ns in cr.result_rows]
     return response.json({
         "token": token, "interval": interval, "pnl_line": pnl_line,
         "bars": [{"time": int(b), "buys": float(bu), "sells": float(se)}
                  for b, bu, se in rows.result_rows],
-        "net_pos": net_pos, "spot_vd": spot_vd,
+        "net_pos": net_pos, "spot_vd": spot_vd, "consensus": consensus,
     })
 
 

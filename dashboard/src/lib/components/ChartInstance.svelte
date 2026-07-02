@@ -5148,6 +5148,10 @@
     if (a >= 1e3) return `${sg}$${(a / 1e3).toFixed(1)}K`;
     return `${sg}$${Math.round(a)}`;
   };
+  // Parenthesised share for markers: |num| / den as a 1-decimal %. Absolute so no
+  // negative % — flows use |net|/total flow; spot VD uses |vd|/total spot volume.
+  const fmtMarkerPct = (num: number, den: number) =>
+    den > 0 ? ` (${(Math.abs(num) / den * 100).toFixed(1)}%)` : '';
   let btMarkers = $state<CandleMarker[]>([]);
   // Cumulative realized-PnL per bar-time for the group (for the PnL line overlay).
   let btPnlByTime = $state<Map<number, number>>(new Map());
@@ -5160,6 +5164,7 @@
     const mode = instance.btMarkerMode ?? 'both'; // read sync so it's a dependency
     const minV = Math.max(0, instance.btMarkerMin ?? 0);
     const vdMin = Math.max(0, instance.btSpotVdMin ?? 0);
+    const consensus = instance.btConsensus ?? false; // read sync (dependency)
     const wantPnl = instance.btPnlLine ?? false; // read sync so it's a dependency
     const pnlLb = instance.btPnlLookback ?? 'start';
     const s = since, u = until;
@@ -5181,6 +5186,8 @@
     }
     if (mode === 'netpos') qs.set('netpos', '1');
     if (mode === 'netflow_spotvd' || mode === 'bothflow_spotvd') qs.set('spotvd', '1');
+    const flowMode = mode === 'both' || mode === 'net' || mode === 'netflow_spotvd' || mode === 'bothflow_spotvd';
+    if (consensus && flowMode) qs.set('consensus', '1');
     fetch(`/api/hyperliquid/group_fill_pressure?${qs}`, { signal: ctl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((body) => {
@@ -5203,26 +5210,44 @@
           btMarkers = out;
           return;
         }
+        if (consensus) {
+          // Count group wallets by net direction (not $). Value = net #wallets;
+          // parenthesis = (buyers/sellers). No $ floor in this mode.
+          for (const c of (body.consensus ?? []) as Array<{ time: number; buyers: number; sellers: number }>) {
+            const paren = ` (${c.buyers}/${c.sellers})`;
+            if (net) {
+              const d = c.buyers - c.sellers;
+              if (d > 0) out.push({ time: c.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: String(d) + paren });
+              else if (d < 0) out.push({ time: c.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: String(-d) + paren });
+            } else {
+              if (c.buyers > 0) out.push({ time: c.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: String(c.buyers) + paren });
+              if (c.sellers > 0) out.push({ time: c.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: String(c.sellers) + paren });
+            }
+          }
+        } else
         for (const b of bars) {
           if (net) {
             // One marker for the dominant side, labeled with net = buys − sells.
             // Hidden when |net| is below the min-value threshold.
             const d = b.buys - b.sells;
-            if (d > 0 && d >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtMarkerUsd(d) });
-            else if (d < 0 && -d >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtMarkerUsd(-d) });
+            const fp = fmtMarkerPct(d, b.buys + b.sells); // |net| / total flow
+            if (d > 0 && d >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtMarkerUsd(d) + fp });
+            else if (d < 0 && -d >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtMarkerUsd(-d) + fp });
           } else {
             // belowBar buy first, then aboveBar sell — kept in time order. Each
             // side hidden when below the min-value threshold.
-            if (b.buys > 0 && b.buys >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtMarkerUsd(b.buys) });
-            if (b.sells > 0 && b.sells >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtMarkerUsd(b.sells) });
+            const fp2 = fmtMarkerPct(b.buys - b.sells, b.buys + b.sells); // |net| / total flow
+            if (b.buys > 0 && b.buys >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtMarkerUsd(b.buys) + fp2 });
+            if (b.sells > 0 && b.sells >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtMarkerUsd(b.sells) + fp2 });
           }
         }
         if (mode === 'netflow_spotvd' || mode === 'bothflow_spotvd') {
           // Secondary marker: market-wide spot volume delta (buyer − seller taker,
           // $). Square icon to distinguish from the flow arrows; own floor.
-          for (const p of (body.spot_vd ?? []) as Array<{ time: number; vd: number }>) {
-            if (p.vd > 0 && p.vd >= vdMin) out.push({ time: p.time, position: 'belowBar', color: '#22c55e', shape: 'square', text: fmtMarkerUsd(p.vd) });
-            else if (p.vd < 0 && -p.vd >= vdMin) out.push({ time: p.time, position: 'aboveBar', color: '#ef4444', shape: 'square', text: fmtMarkerUsd(-p.vd) });
+          for (const p of (body.spot_vd ?? []) as Array<{ time: number; vd: number; vol: number }>) {
+            const vp = fmtMarkerPct(p.vd, p.vol); // |spot VD| / total spot volume
+            if (p.vd > 0 && p.vd >= vdMin) out.push({ time: p.time, position: 'belowBar', color: '#22c55e', shape: 'square', text: fmtMarkerUsd(p.vd) + vp });
+            else if (p.vd < 0 && -p.vd >= vdMin) out.push({ time: p.time, position: 'aboveBar', color: '#ef4444', shape: 'square', text: fmtMarkerUsd(-p.vd) + vp });
           }
         }
         out.sort((a, b) => a.time - b.time); // LWC requires markers sorted by time
@@ -7172,6 +7197,17 @@
             <option value="netpos">Markers: Net Position</option>
             <option value="none">Markers: None</option>
           </select>
+          {#if instance.btMarkerMode === 'both' || instance.btMarkerMode === 'net' || instance.btMarkerMode === 'netflow_spotvd' || instance.btMarkerMode === 'bothflow_spotvd'}
+            <!-- Consensus Flow: flow markers count wallets (by net direction) not $. -->
+            <button
+              type="button"
+              onclick={() => (instance.btConsensus = !instance.btConsensus)}
+              class="text-xs px-2 py-0.5 rounded border transition-colors {instance.btConsensus
+                ? 'bg-blue-600 border-blue-500 text-white'
+                : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
+              title="Consensus Flow: count group WALLETS (by each wallet's net buy/sell direction) instead of summing $. Marker value = net #wallets; parenthesis = (buyers/sellers)."
+            >Consensus Flow</button>
+          {/if}
         {/if}
       {/if}
       <button

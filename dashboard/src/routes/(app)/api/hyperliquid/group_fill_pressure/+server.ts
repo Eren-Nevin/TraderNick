@@ -4,7 +4,7 @@ import type { RequestHandler } from './$types';
 
 // Proxy for /hyperliquid/group_fill_pressure — Backtracker group overlay: per-bar
 // buy/sell USD pressure by a wallet group for one token.
-const PASSTHROUGH = ['token', 'group', 'interval', 'since', 'until', 'pnl', 'pnl_window', 'netpos', 'spotvd'];
+const PASSTHROUGH = ['token', 'group', 'interval', 'since', 'until', 'pnl', 'pnl_window', 'netpos', 'spotvd', 'consensus'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

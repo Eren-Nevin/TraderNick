@@ -1700,6 +1700,9 @@ export type ChartInstance = {
   btMarkerMode?: 'both' | 'net' | 'netflow_spotvd' | 'bothflow_spotvd' | 'netpos' | 'none';
   /** backtracker only: hide the spot-VD secondary marker below this $ (0 = all). */
   btSpotVdMin?: number;
+  /** backtracker only: Consensus Flow — flow markers count group WALLETS (by each
+   *  wallet's net buy/sell direction) instead of summing $. */
+  btConsensus?: boolean;
   /** backtracker only: hide markers whose USD value is below this (0 = show all).
    *  Applies per-side in Both mode and to |net| in Net mode. */
   btMarkerMin?: number;
@@ -2673,6 +2676,7 @@ export function newChartInstance(
     base.btSpotVdMin = 0;
     base.btPnlLine = false;
     base.btPnlLookback = 'start';
+    base.btConsensus = false;
     base.volumeUnit = 'usd';
   }
   if (kind === 'fr') {
