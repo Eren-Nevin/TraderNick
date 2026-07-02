@@ -110,6 +110,12 @@
   let closeSeries = $state<{ time: number; value: number }[]>([]);
   let closeCtl: AbortController | null = null;
 
+  // 'Token Curve' toggle: when on AND a token is selected, the PnL curve is the
+  // token-scoped PnL (wallet_pnl?token=…, computed as if the wallet traded only
+  // that token). Off (or no token) → the normal all-tokens curve.
+  let tokenCurve = $state(false);
+  const pnlToken = $derived(tokenCurve && selectedToken ? selectedToken : null);
+
   // 'Show Trades': per-day net buy/sell flow markers. Scoped to the selected
   // token when one is chosen, else summed across all tokens (one tag per day).
   let showTrades = $state(false);
@@ -421,8 +427,9 @@
     try {
       const since = backToIso(MAX_BACK);
       const until = backToIso(0);
+      const tokParam = pnlToken ? `&token=${encodeURIComponent(pnlToken)}` : '';
       const res = await fetch(
-        `/api/hyperliquid/wallet_pnl?wallet=${address}&since=${since}&until=${until}`
+        `/api/hyperliquid/wallet_pnl?wallet=${address}&since=${since}&until=${until}${tokParam}`
       );
       if (!res.ok) throw new Error(`PnL ${res.status}`);
       const body = await res.json();
@@ -477,7 +484,8 @@
 
   // PnL curve loads once (full history; slider doesn't move its right edge).
   $effect(() => {
-    address; // re-run if the route address ever changes
+    address;  // re-run if the route address changes …
+    pnlToken; // … or the effective PnL token scope (Token Curve toggle / selection)
     loadPnl();
   });
 
@@ -899,6 +907,11 @@
           ? 'bg-blue-600 border-blue-500 text-white'
           : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
         title="Show per-day net buy (green ▲) / sell (red ▼) markers. Scoped to the selected token, else summed across all tokens.">Show Trades</button>
+      <button type="button" onclick={() => (tokenCurve = !tokenCurve)}
+        class="text-xs px-2 py-0.5 rounded border transition-colors {tokenCurve
+          ? 'bg-blue-600 border-blue-500 text-white'
+          : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
+        title="Token Curve: when on AND a token is selected, plot that token's PnL (computed as if the wallet only ever traded it) instead of the all-tokens curve. With no token selected it stays on the normal curve.">Token Curve{tokenCurve && !selectedToken ? ' (pick a token)' : ''}</button>
       {#if showTrades}
         <div class="inline-flex items-center rounded-md border border-zinc-700 overflow-hidden">
           <button type="button" onclick={() => (tradeUnit = 'usd')}
