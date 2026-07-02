@@ -74,17 +74,25 @@
   let sortKey = $state<string>('');
   let sortDir = $state<1 | -1>(-1);
   function onSort(k: string) {
+    // First click: strings ascending (A→Z), numbers descending (biggest first).
     if (sortKey === k) sortDir = sortDir === 1 ? -1 : 1;
-    else { sortKey = k; sortDir = -1; }
+    else { sortKey = k; sortDir = STRING_KEYS.has(k) ? 1 : -1; }
   }
   function sortArrow(k: string): string {
     if (sortKey !== k) return '';
     return sortDir === 1 ? ' ↑' : ' ↓';
   }
+  // Token/Side are string columns → localeCompare; everything else is numeric.
+  const STRING_KEYS = new Set(['token', 'side']);
   let sortedRows = $derived.by(() => {
     if (!sortKey) return positions;
     const dir = sortDir;
     return [...positions].sort((a, b) => {
+      if (STRING_KEYS.has(sortKey)) {
+        const av = String((a as unknown as Record<string, unknown>)[sortKey] ?? '');
+        const bv = String((b as unknown as Record<string, unknown>)[sortKey] ?? '');
+        return av.localeCompare(bv) * dir;
+      }
       const an = (a as unknown as Record<string, number>)[sortKey] ?? 0;
       const bn = (b as unknown as Record<string, number>)[sortKey] ?? 0;
       return (an - bn) * dir;
@@ -123,8 +131,10 @@
         <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
           <tr>
             <th class="text-center px-2 py-1.5 font-normal" title="Overlay this token's close price on the PnL chart">Price</th>
-            <th class="text-left px-3 py-1.5 font-normal">Token</th>
-            <th class="text-left px-3 py-1.5 font-normal">Side</th>
+            <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
+                onclick={() => onSort('token')}>Token{sortArrow('token')}</th>
+            <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
+                onclick={() => onSort('side')}>Side{sortArrow('side')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
                 onclick={() => onSort('size_usd')}>Value($){sortArrow('size_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
