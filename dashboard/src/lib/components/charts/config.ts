@@ -1690,6 +1690,12 @@ export type ChartInstance = {
   /** backtracker only: the position-change lookback window ending at the clicked
    *  bar (dialog query). Display/dialog-only — not in the chart load key. */
   btLookback?: '15m' | '30m' | '1h' | '4h' | '1d' | '7d';
+  /** backtracker only: wallet group whose per-bar buy/sell pressure is overlaid
+   *  as markers. null/'' = None (no markers). */
+  btGroupId?: string | null;
+  /** backtracker only: 'both' (default — separate buy + sell markers) or 'net'
+   *  (one marker per bar for the dominant side, showing buys−sells). */
+  btMarkerMode?: 'both' | 'net';
   /** spot_cvd_table only: lookback for the per-token CVD aggregate. In the key. */
   cvdtLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14';
   /** spot_cvd_table only: 'usd' (default) or 'token' for the Avg-Vol + CVD-Vol
@@ -2649,6 +2655,7 @@ export function newChartInstance(
     base.exchange = 'hl';
     base.interval = '15m';
     base.btLookback = '1h';
+    base.btMarkerMode = 'both';
     base.volumeUnit = 'usd';
   }
   if (kind === 'fr') {

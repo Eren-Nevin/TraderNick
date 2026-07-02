@@ -46,7 +46,8 @@
     onView,
     hoverTime = null,
     onHover,
-    onClick
+    onClick,
+    markers = []
   }: {
     candles: Candle[];
     lines?: Line[];
@@ -62,6 +63,9 @@
     /** Click a bar → the bar's time (unix seconds). Read at click time so it
      *  binds even when the handler is enabled after mount (see LwcLineChart). */
     onClick?: (t: number, evt: MouseEvent) => void;
+    /** Series markers (must be sorted by time ascending) — e.g. per-bar buy/sell
+     *  pressure. Applied to the candle series via setMarkers. */
+    markers?: Array<{ time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string }>;
   } = $props();
 
   let wrapper = $state<HTMLDivElement | null>(null);
@@ -183,6 +187,13 @@
 
   $effect(() => {
     candleSeries?.applyOptions({ visible: showCandles });
+  });
+
+  // Per-bar markers (e.g. group buy/sell pressure). Caller supplies them sorted
+  // by time ascending.
+  $effect(() => {
+    if (!candleSeries) return;
+    candleSeries.setMarkers(markers as unknown as Parameters<typeof candleSeries.setMarkers>[0]);
   });
 
   $effect(() => {

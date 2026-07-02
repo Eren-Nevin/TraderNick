@@ -21,7 +21,7 @@ from datetime import datetime, timedelta, timezone
 from sanic import Blueprint, response
 
 from clickhouse import client
-from routes.ohlcv import INTERVAL_SECONDS
+from routes.ohlcv import INTERVAL_SECONDS, _parse_iso
 from throttle import throttled
 from wallets.smart_selector import SmartSelector, HIP3_EXCLUDE
 from wallets import cache as wallets_cache
@@ -2769,6 +2769,51 @@ async def position_change_wallets(request):
         "time": int(t_end.replace(tzinfo=timezone.utc).timestamp()),
         "time_prev": int(t_prev.replace(tzinfo=timezone.utc).timestamp()),
         "rows": out,
+    })
+
+
+@bp.get("/hyperliquid/group_fill_pressure")
+@throttled("heavy")
+async def group_fill_pressure(request):
+    """Backtracker group overlay: per-bar buy vs sell USD pressure by a wallet
+    GROUP for one token. A HL fill's side='B' is a buy = any position change TO
+    long (open/increase long, close/decrease short, flip to long); side='A' is a
+    sell = position change to short. So per bar we sum buy-fill and sell-fill
+    notional (size×price) over the group's wallets. Params: token, group,
+    interval, since, until."""
+    token = request.args.get("token")
+    group = request.args.get("group")
+    if not token or not group:
+        return response.json({"error": "missing token/group"}, status=400)
+    interval = request.args.get("interval", "15m")
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"invalid interval; allowed: {list(INTERVAL_SECONDS)}"}, status=400)
+    since = request.args.get("since")
+    until = request.args.get("until")
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    ch = await client()
+    try:
+        member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
+    except ValueError as e:
+        return response.json({"error": str(e)}, status=400)
+    rows = await ch.query(
+        """
+        SELECT toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS bucket,
+               sumIf(size * price, side = 'B') AS buys,
+               sumIf(size * price, side = 'A') AS sells
+        FROM tradernick.hl_fills
+        WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
+          AND """ + member + """
+        GROUP BY bucket ORDER BY bucket
+        """,
+        parameters={"sec": INTERVAL_SECONDS[interval], "tok": token,
+                    "s": _parse_iso(since), "u": _parse_iso(until)},
+    )
+    return response.json({
+        "token": token, "interval": interval,
+        "bars": [{"time": int(b), "buys": float(bu), "sells": float(se)}
+                 for b, bu, se in rows.result_rows],
     })
 
 

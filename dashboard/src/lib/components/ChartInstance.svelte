@@ -437,8 +437,9 @@
   let walletCategories = $state<WalletCategory[]>([]);
   let walletEntities = $state<WalletCategory[]>([]);
   onMount(async () => {
-    // Group widget: load the wallet groups so the group dropdown is populated.
-    if (isGroup) walletPinsStore.hydrate();
+    // Group widget + Backtracker: load the wallet groups so the group dropdown
+    // (and group-pin capsules) are populated.
+    if (isGroup || instance.kind === 'backtracker') walletPinsStore.hydrate();
     if (instance.kind !== 'transfer') return;
     try {
       const [catsRes, entsRes] = await Promise.all([
@@ -5135,6 +5136,50 @@
     return `${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
   }
 
+  // Backtracker group overlay: per-bar buy (green, belowBar) / sell (red,
+  // aboveBar) pressure by the selected wallet group, fetched from
+  // group_fill_pressure over the loaded window. None → no markers.
+  type CandleMarker = { time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string };
+  let btMarkers = $state<CandleMarker[]>([]);
+  let btMarkerCtl: AbortController | null = null;
+  $effect(() => {
+    // Dependencies: token / group / interval / loaded window.
+    const grp = instance.btGroupId;
+    const tok = instance.token;
+    const iv = instance.interval;
+    const mode = instance.btMarkerMode ?? 'both'; // read sync so it's a dependency
+    const s = since, u = until;
+    if (instance.kind !== 'backtracker' || !grp || !tok || !s || !u) {
+      btMarkers = [];
+      return;
+    }
+    if (btMarkerCtl) btMarkerCtl.abort();
+    const ctl = new AbortController();
+    btMarkerCtl = ctl;
+    const qs = new URLSearchParams({ token: tok, group: grp, interval: iv, since: s, until: u });
+    fetch(`/api/hyperliquid/group_fill_pressure?${qs}`, { signal: ctl.signal })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((body) => {
+        const bars = (body.bars ?? []) as Array<{ time: number; buys: number; sells: number }>;
+        const net = mode === 'net';
+        const out: CandleMarker[] = [];
+        for (const b of bars) {
+          if (net) {
+            // One marker for the dominant side, labeled with net = buys − sells.
+            const d = b.buys - b.sells;
+            if (d > 0) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(d) });
+            else if (d < 0) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(-d) });
+          } else {
+            // belowBar buy first, then aboveBar sell — kept in time order.
+            if (b.buys > 0) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(b.buys) });
+            if (b.sells > 0) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(b.sells) });
+          }
+        }
+        btMarkers = out;
+      })
+      .catch((e) => { if ((e as DOMException)?.name !== 'AbortError') btMarkers = []; });
+  });
+
   async function openBacktrackerDialog(barTimeSec: number) {
     if (instance.kind !== 'backtracker' || !instance.token) return;
     const lb = instance.btLookback ?? '1h';
@@ -7019,6 +7064,32 @@
             <option value={lb}>Δ {lb}</option>
           {/each}
         </select>
+        <!-- Wallet-group overlay: per-bar buy (green ▲ below) / sell (red ▼ above)
+             pressure by the group's wallets. None = no markers. -->
+        <select
+          value={instance.btGroupId ?? ''}
+          onchange={(e) => (instance.btGroupId = e.currentTarget.value || null)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Overlay a wallet group's per-bar buy/sell pressure as markers"
+        >
+          <option value="">Group: None</option>
+          {#each walletPinsStore.groups as g (g.id)}
+            <option value={g.id}>{g.name}</option>
+          {/each}
+        </select>
+        {#if instance.btGroupId}
+          <!-- Both = separate buy/sell markers; Net = one marker (dominant side,
+               buys−sells) per bar. -->
+          <select
+            value={instance.btMarkerMode ?? 'both'}
+            onchange={(e) => (instance.btMarkerMode = e.currentTarget.value as 'both' | 'net')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+            title="Both = show buy and sell markers; Net = one marker per bar for the net (buys − sells)"
+          >
+            <option value="both">Markers: Both</option>
+            <option value="net">Markers: Net</option>
+          </select>
+        {/if}
       {/if}
       <button
         type="button"
@@ -8101,6 +8172,7 @@
         onHover={handleHover}
         vRefLines={weekVRefLines}
         onClick={instance.kind === 'backtracker' ? ((t: number) => openBacktrackerDialog(t)) : undefined}
+        markers={instance.kind === 'backtracker' ? btMarkers : []}
       />
     {:else if instance.kind === 'pc'}
       <!-- Relative price: chart token / base token ratios (one line per base). -->
