@@ -2804,7 +2804,7 @@ async def group_fill_pressure(request):
         SELECT toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS bucket,
                sumIf(size * price, side = 'B') AS buys,
                sumIf(size * price, side = 'A') AS sells
-        FROM tradernick.hl_fills
+        FROM tradernick.hl_fills FINAL
         WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
           AND """ + member + """
         GROUP BY bucket ORDER BY bucket
@@ -2832,7 +2832,7 @@ async def group_fill_pressure(request):
                             RANGE BETWEEN """ + str(win) + """ PRECEDING AND CURRENT ROW) AS v
                 FROM (
                     SELECT toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND) AS b, sum(closed_pnl) AS p
-                    FROM tradernick.hl_fills
+                    FROM tradernick.hl_fills FINAL
                     WHERE token = {tok:String} AND time >= {rs:DateTime} AND time < {u:DateTime}
                       AND """ + member + """
                     GROUP BY b
@@ -2845,7 +2845,7 @@ async def group_fill_pressure(request):
             pnl_line = [{"time": int(t), "value": float(v)} for t, v in lr.result_rows]
         else:
             pr = await ch.query(
-                "SELECT sum(closed_pnl) FROM tradernick.hl_fills "
+                "SELECT sum(closed_pnl) FROM tradernick.hl_fills FINAL "
                 "WHERE token = {tok:String} AND time < {s:DateTime} AND " + member,
                 parameters={"tok": token, "s": since_dt},
             )
@@ -2856,7 +2856,7 @@ async def group_fill_pressure(request):
                        sum(p) OVER (ORDER BY b ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS v
                 FROM (
                     SELECT toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND) AS b, sum(closed_pnl) AS p
-                    FROM tradernick.hl_fills
+                    FROM tradernick.hl_fills FINAL
                     WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
                       AND """ + member + """
                     GROUP BY b
@@ -2914,7 +2914,7 @@ async def group_fill_pressure(request):
             SELECT bucket, countIf(wn > 0) AS buyers, countIf(wn < 0) AS sellers FROM (
                 SELECT toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS bucket,
                        wallet, sum(if(side = 'B', size * price, -size * price)) AS wn
-                FROM tradernick.hl_fills
+                FROM tradernick.hl_fills FINAL
                 WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
                   AND """ + member + """
                 GROUP BY bucket, wallet
