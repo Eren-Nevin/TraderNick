@@ -47,7 +47,8 @@
     hoverTime = null,
     onHover,
     onClick,
-    markers = []
+    markers = [],
+    fontSize
   }: {
     candles: Candle[];
     lines?: Line[];
@@ -66,6 +67,9 @@
     /** Series markers (must be sorted by time ascending) — e.g. per-bar buy/sell
      *  pressure. Applied to the candle series via setMarkers. */
     markers?: Array<{ time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string }>;
+    /** Override the chart layout font size (px). Also enlarges series-marker text,
+     *  which LWC ties to layout.fontSize. Undefined = theme default. */
+    fontSize?: number;
   } = $props();
 
   let wrapper = $state<HTMLDivElement | null>(null);
@@ -112,6 +116,7 @@
     if (!wrapper) return;
     const c = createChart(wrapper, { ...lwcChartOptions(), height, autoSize: true });
     chart = c;
+    if (fontSize) c.applyOptions({ layout: { fontSize } });
     // Bar clicks → onClick(barTime). Read the prop at click time (not gated in
     // onMount) so it works even if the handler is added after mount.
     c.subscribeClick((p) => {
@@ -183,6 +188,7 @@
   $effect(() => {
     void themeStore.theme;
     chart?.applyOptions(lwcChartOptions());
+    if (fontSize) chart?.applyOptions({ layout: { fontSize } });
   });
 
   $effect(() => {
