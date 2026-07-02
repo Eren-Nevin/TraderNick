@@ -110,7 +110,7 @@ async def run(stream_name: str, event: str) -> None:
             #   - asked DS for tiny stop-gap windows that don't compose well
             #     with their internal bucket aggregation (especially under load
             #     — the recurring HTTP 500 Code 241 incidents)
-            # Aligned, fixed-width [floor_now - 15m, floor_now) windows are:
+            # Aligned, fixed-width [floor_now - lookback, floor_now) windows are:
             #   - what DS's window aggregation is built for: one snapshot /
             #     event-bucket per response
             #   - idempotent across overlapping ticks (ReplacingMergeTree dedup
@@ -118,8 +118,19 @@ async def run(stream_name: str, event: str) -> None:
             #   - mismatched only for funding/vaults (30m cadence) which fire
             #     half as often as 15m and so capture every other slot; the
             #     sweep tier fills in the alternate slot
+            # fills advance `until` on a 5-min grid (not 15m) and the stream polls
+            # every 60s (_CADENCE), so the most-recent CLOSED 5-min slot is
+            # ingested within ~1m of DS having it. DS itself lags ~3m, so each tick
+            # re-fetches a 10m-wide trailing window ([floor_5(now)-10m, floor_5])
+            # — that spans the last TWO closed 5-min slots, and re-fetching every
+            # 60s means DS's late arrivals for the newest slot land within ~1m of
+            # publication. RMT dedups the heavy overlap. Verified DS serves fresh
+            # (~3m-lag), narrow/tiny fills windows at HTTP 200 (no Code 241) —
+            # fills are raw events, not a bucketed snapshot grid. Aggregated
+            # snapshot events (ohlcv / position_history) keep the 15m grid.
+            _live_grid = 5 if event == "fills" else 15
             floor_now = now.replace(
-                minute=(now.minute // 15) * 15,
+                minute=(now.minute // _live_grid) * _live_grid,
                 second=0, microsecond=0,
             )
             # position_history snapshots are published ~25m late upstream, so a
@@ -127,7 +138,7 @@ async def run(stream_name: str, event: str) -> None:
             # to rely on the slow hourly sweep. Re-fetch the last 45m of 15m
             # slots each tick so a late-published snapshot lands within ~30m.
             # Window stays on the 15m grid; RMT dedups the re-fetched overlap.
-            _live_lookback = 45 if event == "position_history" else 15
+            _live_lookback = 45 if event == "position_history" else (10 if event == "fills" else 15)
             since = floor_now - timedelta(minutes=_live_lookback)
             until = floor_now
             n = 0
