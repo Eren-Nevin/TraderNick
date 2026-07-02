@@ -36,6 +36,11 @@ _OHLCV_TABLE = {
     "binance_spot": "tradernick.binance_spot_ohlcv_1m",
 }
 
+# Sources usable as a `cap_exchange` (right-edge cap) — the OHLCV tables plus
+# hl_fills, so the Backtracker (Binance candles) can cap to where HL FILL data
+# actually exists (fresher than hl_ohlcv). Any table with a `time` + `token`.
+_CAP_TABLE = {**_OHLCV_TABLE, "hl_fills": "tradernick.hl_fills"}
+
 
 @bp.get("/tokens")
 async def tokens(_request):
@@ -314,15 +319,17 @@ async def ohlcv(request):
     # spot for the Backtracker overlay). least(…) is NULL if cap_exchange lacks
     # the token → no cap. Bounds the chart so the last bar is filled on both.
     cap_exchange = request.args.get("cap_exchange")
-    if cap_exchange and cap_exchange in _OHLCV_TABLE and cap_exchange != exchange:
-        cap_table = _OHLCV_TABLE[cap_exchange]
+    if cap_exchange and cap_exchange in _CAP_TABLE and cap_exchange != exchange:
+        cap_table = _CAP_TABLE[cap_exchange]
+        # No FINAL — we only need max(bucket), which dedup can't change; and it lets
+        # non-Replacing tables (hl_fills) be cap sources. Bounded to [since, until).
         cr = await ch.query(
             f"SELECT least("
-            f"(SELECT max(toStartOfInterval(time, INTERVAL {{sec:UInt32}} SECOND)) FROM {table} FINAL "
-            f" WHERE token = {{token:String}} AND time < {{until:DateTime}}), "
-            f"(SELECT max(toStartOfInterval(time, INTERVAL {{sec:UInt32}} SECOND)) FROM {cap_table} FINAL "
-            f" WHERE token = {{token:String}} AND time < {{until:DateTime}}))",
-            parameters={"sec": seconds, "token": token, "until": until_dt},
+            f"(SELECT max(toStartOfInterval(time, INTERVAL {{sec:UInt32}} SECOND)) FROM {table} "
+            f" WHERE token = {{token:String}} AND time >= {{since:DateTime}} AND time < {{until:DateTime}}), "
+            f"(SELECT max(toStartOfInterval(time, INTERVAL {{sec:UInt32}} SECOND)) FROM {cap_table} "
+            f" WHERE token = {{token:String}} AND time >= {{since:DateTime}} AND time < {{until:DateTime}}))",
+            parameters={"sec": seconds, "token": token, "since": since_dt, "until": until_dt},
         )
         cap_dt = (cr.result_rows[0][0]
                   if (cr and cr.result_rows and cr.result_rows[0][0] is not None) else None)

@@ -2726,10 +2726,12 @@
           // reads from tradernick.hl_ohlcv_1m server-side. The volume chart
           // just plots the volume / volume_usd field per the unit toggle.
           const ohlcvQs = new URLSearchParams(baseQS);
-          ohlcvQs.set('exchange', instance.kind === 'backtracker' ? 'hl' : (instance.exchange ?? 'binance'));
-          // Backtracker: cap candles to the last bar filled on BOTH HL perp and
-          // Binance spot, so the marker overlays always have data for the last bar.
-          if (instance.kind === 'backtracker') ohlcvQs.set('cap_exchange', 'binance_spot');
+          // Backtracker candles come from Binance perp (binance_ohlcv_1m) — it lands
+          // ~0.5m behind vs HL's ~15m tick, and perp price matches HL positions.
+          ohlcvQs.set('exchange', instance.kind === 'backtracker' ? 'binance' : (instance.exchange ?? 'binance'));
+          // Cap the right edge to where HL FILL data exists (the marker source), so
+          // the last bar always has HL fills; spot VD lags less so it's covered too.
+          if (instance.kind === 'backtracker') ohlcvQs.set('cap_exchange', 'hl_fills');
           url = `/api/ohlcv?${ohlcvQs}`;
           pickArr = (b) => (b.candles ?? []) as AnyDatum[];
           break;
