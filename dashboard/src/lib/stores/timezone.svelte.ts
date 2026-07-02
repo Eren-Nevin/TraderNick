@@ -41,6 +41,32 @@ export const timezoneStore = {
   }
 };
 
+const _p2 = (n: number) => String(n).padStart(2, '0');
+
+/** Display helper — "YYYY-MM-DD HH:MM" (24h, zero-padded) in the active zone.
+ *  Reads timezoneStore.isLocal so Svelte components re-render on toggle.
+ *  For DISPLAY only — never use for query params / cache keys (keep those UTC). */
+export function fmtTzDateTime(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  if (_mode === 'local') {
+    return `${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())} `
+      + `${_p2(d.getHours())}:${_p2(d.getMinutes())}`;
+  }
+  return `${d.getUTCFullYear()}-${_p2(d.getUTCMonth() + 1)}-${_p2(d.getUTCDate())} `
+    + `${_p2(d.getUTCHours())}:${_p2(d.getUTCMinutes())}`;
+}
+
+/** Display helper — "YYYY-MM-DD" in the active zone.
+ *  Reads timezoneStore.isLocal so Svelte components re-render on toggle.
+ *  For DISPLAY only — never use for query params / cache keys (keep those UTC). */
+export function fmtTzDate(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  if (_mode === 'local') {
+    return `${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())}`;
+  }
+  return `${d.getUTCFullYear()}-${_p2(d.getUTCMonth() + 1)}-${_p2(d.getUTCDate())}`;
+}
+
 /** Short label for the active zone, for UI chips/toggles.
  *  UTC → "UTC"; local → the browser's zone abbreviation (e.g. "PST", "GMT+2"). */
 export function tzShortLabel(): string {

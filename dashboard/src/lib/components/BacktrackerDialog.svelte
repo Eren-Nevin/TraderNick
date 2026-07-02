@@ -7,6 +7,7 @@
   // unrealized PnL. Headers are client-sortable. Close via ✕ / backdrop / Esc.
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import WalletAddress from '$lib/components/WalletAddress.svelte';
+  import { tzShortLabel } from '$lib/stores/timezone.svelte';
 
   type Row = {
     wallet: string;
@@ -136,7 +137,7 @@
           <span class="text-zinc-300 font-medium">Position changes</span>
           {#if token}<span class="text-zinc-500">·</span><span class="text-zinc-200">{token}</span>{/if}
           {#if lookback}<span class="text-zinc-500">· Δ</span><span class="text-zinc-400">{lookback}</span>{/if}
-          {#if timeLabel}<span class="text-zinc-500">to</span><span class="text-zinc-400">{timeLabel} UTC</span>{/if}
+          {#if timeLabel}<span class="text-zinc-500">to</span><span class="text-zinc-400">{timeLabel} {tzShortLabel()}</span>{/if}
         </div>
         <button type="button" class="text-zinc-500 hover:text-zinc-200 px-1.5 py-0.5 cursor-pointer" onclick={onClose} aria-label="Close">✕</button>
       </header>

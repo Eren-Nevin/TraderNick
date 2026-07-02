@@ -134,6 +134,7 @@
   import AddOverlayDialog from '$lib/components/AddOverlayDialog.svelte';
   import SmartWalletsDialog from '$lib/components/SmartWalletsDialog.svelte';
   import BacktrackerDialog from '$lib/components/BacktrackerDialog.svelte';
+  import { fmtTzDateTime } from '$lib/stores/timezone.svelte';
   import { filtersStore } from '$lib/stores/filters.svelte';
   import { walletPinsStore } from '$lib/stores/walletPins.svelte';
   import { expandFilter, filterWireKey, type FilterWire } from '$lib/components/charts/filters';
@@ -5140,17 +5141,23 @@
   let btPrice = $state(0);
   let btToken = $state('');
   let btLookbackLabel = $state('');
-  let btTimeLabel = $state('');
-  let btStartLabel = $state('');
-  let btEndLabel = $state('');
   let btSnapshotDate = $state('');
+  // Numeric anchors for the window labels; formatted reactively (btTimeLabel /
+  // btStartLabel / btEndLabel below) so a tz toggle re-labels them live.
+  let btTimeSec = $state(0);
+  let btStartSec = $state(0);
+  let btEndSec = $state(0);
   let btFetchCtl: AbortController | null = null;
   const _BT_LB_SECS: Record<string, number> = { '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400, '1d': 86400, '7d': 604800 };
+  // "MM-DD HH:MM" in the active display zone (strip the year from the shared helper).
   function fmtBtTime(secs: number): string {
-    const d = new Date(secs * 1000);
-    const p = (n: number) => String(n).padStart(2, '0');
-    return `${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+    return fmtTzDateTime(secs).slice(5);
   }
+  // Display labels — tz-aware, recomputed on toggle. btSnapshotDate stays UTC
+  // (it's also the `?snapshot=` param); these are DISPLAY only.
+  const btTimeLabel = $derived(btTimeSec ? fmtTzDateTime(btTimeSec) : '');
+  const btStartLabel = $derived(btStartSec ? fmtBtTime(btStartSec) : '');
+  const btEndLabel = $derived(btEndSec ? fmtBtTime(btEndSec) : '');
 
   // Backtracker group overlay: per-bar buy (green, belowBar) / sell (red,
   // aboveBar) pressure by the selected wallet group, fetched from
@@ -5318,10 +5325,10 @@
     btSnapshotDate = `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`;
     btToken = instance.token;
     btLookbackLabel = lb;
-    btTimeLabel = `${btSnapshotDate} ${p2(d.getUTCHours())}:${p2(d.getUTCMinutes())}`;
-    // Provisional window labels (refined from the server's snapped buckets below).
-    btEndLabel = fmtBtTime(Math.floor(barTimeSec));
-    btStartLabel = fmtBtTime(Math.floor(barTimeSec) - (_BT_LB_SECS[lb] ?? 3600));
+    btTimeSec = Math.floor(barTimeSec);
+    // Provisional window (refined from the server's snapped buckets below).
+    btEndSec = Math.floor(barTimeSec);
+    btStartSec = Math.floor(barTimeSec) - (_BT_LB_SECS[lb] ?? 3600);
     btRows = [];
     btError = null;
     btLoading = true;
@@ -5338,8 +5345,8 @@
       btRows = (body.rows ?? []) as BtRow[];
       btPrice = Number(body.price ?? 0);
       // Exact snapped 15-min buckets the server compared.
-      if (typeof body.time === 'number') btEndLabel = fmtBtTime(body.time);
-      if (typeof body.time_prev === 'number') btStartLabel = fmtBtTime(body.time_prev);
+      if (typeof body.time === 'number') btEndSec = body.time;
+      if (typeof body.time_prev === 'number') btStartSec = body.time_prev;
     } catch (e) {
       if ((e as DOMException)?.name !== 'AbortError') {
         btError = e instanceof Error ? e.message : String(e);

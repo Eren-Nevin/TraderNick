@@ -22,6 +22,7 @@
     isToday
   } from '$lib/daySlider';
   import { arkhamUrl, coinglassHlUrl } from '$lib/arkham';
+  import { fmtTzDate } from '$lib/stores/timezone.svelte';
   import WalletPinMenu from '$lib/components/WalletPinMenu.svelte';
   import { walletPinsStore, NEUTRAL_GROUP_COLOR } from '$lib/stores/walletPins.svelte';
   import { onMount } from 'svelte';
@@ -300,9 +301,7 @@
   const entryInRange = $derived(entryTime != null && entryTime >= floorUnix);
   const entryNote = $derived(
     selectedToken && entryTime != null && !entryInRange && selectedPos?.opened_at != null
-      ? `${selectedToken} opened ${new Date(selectedPos.opened_at * 1000)
-          .toISOString()
-          .slice(0, 10)} — before chart range`
+      ? `${selectedToken} opened ${fmtTzDate(selectedPos.opened_at)} — before chart range`
       : null
   );
 

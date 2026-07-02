@@ -4,6 +4,7 @@
   // first), with a deposits / withdrawals / net summary in the header.
 
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
+  import { fmtTzDateTime } from '$lib/stores/timezone.svelte';
 
   export type TransferRow = { time: number; direction: string; amount: number };
 
@@ -34,9 +35,7 @@
     return sign + '$' + abs.toFixed(2);
   }
   function fmtWhen(unix: number): string {
-    const d = new Date(unix * 1000);
-    const p = (n: number) => String(n).padStart(2, '0');
-    return `${d.getUTCFullYear()}-${p(d.getUTCMonth() + 1)}-${p(d.getUTCDate())} ${p(d.getUTCHours())}:${p(d.getUTCMinutes())}`;
+    return fmtTzDateTime(unix);
   }
 </script>
 

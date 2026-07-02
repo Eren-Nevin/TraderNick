@@ -69,8 +69,8 @@
   }
   function fmtTime(t: number): string {
     if (!t) return '—';
-    const d = new Date(t * 1000);
-    return d.toISOString().slice(5, 16).replace('T', ' ');
+    // "MM-DD HH:MM" in the active display zone (strip the year from the shared helper).
+    return fmtTzDateTime(t).slice(5);
   }
 
   let copied = $state(false);
@@ -84,6 +84,7 @@
   }
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import { onAuxClickArkham, onMouseDownSuppressMiddle } from '$lib/arkham';
+  import { fmtTzDateTime } from '$lib/stores/timezone.svelte';
 
   let copiedLp = $state('');
   async function copyAddr(addr: string) {
