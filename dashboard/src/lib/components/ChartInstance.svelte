@@ -2728,10 +2728,10 @@
           const ohlcvQs = new URLSearchParams(baseQS);
           // Backtracker candles come from Binance perp (binance_ohlcv_1m) — it lands
           // ~0.5m behind vs HL's ~15m tick, and perp price matches HL positions.
+          // No cap: candles are the freshest source, so completed bars show promptly
+          // and markers (fills/spot, which lag more) fill in as they arrive —
+          // btMarkersVisible drops any marker with no candle, so no snapping/dupes.
           ohlcvQs.set('exchange', instance.kind === 'backtracker' ? 'binance' : (instance.exchange ?? 'binance'));
-          // Cap the right edge to where HL FILL data exists (the marker source), so
-          // the last bar always has HL fills; spot VD lags less so it's covered too.
-          if (instance.kind === 'backtracker') ohlcvQs.set('cap_exchange', 'hl_fills');
           url = `/api/ohlcv?${ohlcvQs}`;
           pickArr = (b) => (b.candles ?? []) as AnyDatum[];
           break;
@@ -3449,7 +3449,18 @@
     }
     loadedKey = '';
     loadCache.delete(cacheId());
+    // Preserve the user's zoom/pan across a refresh (same token/interval/window,
+    // just fresher data). load() resets localView to the default full range on
+    // every load; restore the pre-refresh view (and patch the cache) so the
+    // visible range doesn't jump. Synced (cross-chart) views use sharedView and
+    // aren't reset by load(), so this only matters in the non-synced case.
+    const keepView = localView;
     await load(true);
+    if (keepView) {
+      localView = keepView;
+      const c = loadCache.get(cacheId());
+      if (c) loadCache.set(cacheId(), { ...c, localView: keepView });
+    }
   }
 
   // ---- derived series / lines / extra computed data ----
