@@ -8221,7 +8221,8 @@
         vRefLines={weekVRefLines}
         onClick={instance.kind === 'backtracker' ? ((t: number) => openBacktrackerDialog(t)) : undefined}
         markers={instance.kind === 'backtracker' ? btMarkers : []}
-        fontSize={instance.kind === 'backtracker' ? 15 : undefined}
+        fontSize={instance.kind === 'backtracker' ? 18 : undefined}
+        fontFamily={instance.kind === 'backtracker' ? '"Arial Black", "Arial Bold", Gadget, sans-serif' : undefined}
       />
     {:else if instance.kind === 'pc'}
       <!-- Relative price: chart token / base token ratios (one line per base). -->

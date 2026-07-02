@@ -52,7 +52,8 @@
     onHover,
     onClick,
     markers = [],
-    fontSize
+    fontSize,
+    fontFamily
   }: {
     candles: Candle[];
     lines?: Line[];
@@ -74,6 +75,10 @@
     /** Override the chart layout font size (px). Also enlarges series-marker text,
      *  which LWC ties to layout.fontSize. Undefined = theme default. */
     fontSize?: number;
+    /** Override the chart layout font family. LWC has no bold-weight option for
+     *  markers (font is `${size}px ${family}`), so a heavy family (e.g. Arial
+     *  Black) is the way to make marker text bolder. Undefined = theme default. */
+    fontFamily?: string;
   } = $props();
 
   let wrapper = $state<HTMLDivElement | null>(null);
@@ -120,7 +125,7 @@
     if (!wrapper) return;
     const c = createChart(wrapper, { ...lwcChartOptions(), height, autoSize: true });
     chart = c;
-    if (fontSize) c.applyOptions({ layout: { fontSize } });
+    if (fontSize || fontFamily) c.applyOptions({ layout: { ...(fontSize ? { fontSize } : {}), ...(fontFamily ? { fontFamily } : {}) } });
     // Bar clicks → onClick(barTime). Read the prop at click time (not gated in
     // onMount) so it works even if the handler is added after mount.
     c.subscribeClick((p) => {
@@ -192,7 +197,7 @@
   $effect(() => {
     void themeStore.theme;
     chart?.applyOptions(lwcChartOptions());
-    if (fontSize) chart?.applyOptions({ layout: { fontSize } });
+    if (fontSize || fontFamily) chart?.applyOptions({ layout: { ...(fontSize ? { fontSize } : {}), ...(fontFamily ? { fontFamily } : {}) } });
   });
 
   $effect(() => {
