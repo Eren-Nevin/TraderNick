@@ -71,7 +71,7 @@
     onClick?: (t: number, evt: MouseEvent) => void;
     /** Series markers (must be sorted by time ascending) — e.g. per-bar buy/sell
      *  pressure. Applied to the candle series via setMarkers. */
-    markers?: Array<{ time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string }>;
+    markers?: Array<{ time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string; size?: number }>;
     /** Override the chart layout font size (px). Also enlarges series-marker text,
      *  which LWC ties to layout.fontSize. Undefined = theme default. */
     fontSize?: number;

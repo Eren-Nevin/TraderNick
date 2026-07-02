@@ -5139,7 +5139,9 @@
   // Backtracker group overlay: per-bar buy (green, belowBar) / sell (red,
   // aboveBar) pressure by the selected wallet group, fetched from
   // group_fill_pressure over the loaded window. None → no markers.
-  type CandleMarker = { time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string };
+  type CandleMarker = { time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string; size?: number };
+  // Marker arrow size tiered by flow $: 0–100K small, 100K–1M medium, >1M big.
+  const btMarkerSize = (v: number) => (v >= 1_000_000 ? 3 : v >= 100_000 ? 1.6 : 0.8);
   let btMarkers = $state<CandleMarker[]>([]);
   // Cumulative realized-PnL per bar-time for the group (for the PnL line overlay).
   let btPnlByTime = $state<Map<number, number>>(new Map());
@@ -5179,13 +5181,13 @@
             // One marker for the dominant side, labeled with net = buys − sells.
             // Hidden when |net| is below the min-value threshold.
             const d = b.buys - b.sells;
-            if (d > 0 && d >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(d) });
-            else if (d < 0 && -d >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(-d) });
+            if (d > 0 && d >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(d), size: btMarkerSize(d) });
+            else if (d < 0 && -d >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(-d), size: btMarkerSize(-d) });
           } else {
             // belowBar buy first, then aboveBar sell — kept in time order. Each
             // side hidden when below the min-value threshold.
-            if (b.buys > 0 && b.buys >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(b.buys) });
-            if (b.sells > 0 && b.sells >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(b.sells) });
+            if (b.buys > 0 && b.buys >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(b.buys), size: btMarkerSize(b.buys) });
+            if (b.sells > 0 && b.sells >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(b.sells), size: btMarkerSize(b.sells) });
           }
         }
         btMarkers = out;
