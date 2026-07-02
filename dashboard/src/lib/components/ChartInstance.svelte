@@ -5165,8 +5165,8 @@
     const tok = instance.token;
     const iv = instance.interval;
     const mode = instance.btMarkerMode ?? 'both'; // read sync so it's a dependency
-    const minV = Math.max(0, instance.btMarkerMin ?? 0);
-    const vdMin = Math.max(0, instance.btSpotVdMin ?? 0);
+    const minV = Math.max(0, instance.btMarkerMin ?? 1000);
+    const vdMin = Math.max(0, instance.btSpotVdMin ?? 1000);
     const consensus = instance.btConsensus ?? false; // read sync (dependency)
     const wantPnl = instance.btPnlLine ?? false; // read sync so it's a dependency
     const pnlLb = instance.btPnlLookback ?? 'start';
@@ -7672,24 +7672,24 @@
       {#if instance.kind === 'backtracker'}
         <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Markers</span>
         <label class="flex items-center gap-1.5 text-zinc-300">
-          <span class="text-zinc-500">Min value ($)</span>
+          <span class="text-zinc-500">Min value ($K)</span>
           <input
-            type="number" min="0" step="1000"
-            value={instance.btMarkerMin ?? 0}
-            onchange={(e) => (instance.btMarkerMin = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
-            title="Hide group buy/sell markers whose value is below this (0 = show all). Applies to Both and Net."
-            class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+            type="number" min="0" step="1"
+            value={(instance.btMarkerMin ?? 1000) / 1000}
+            onchange={(e) => (instance.btMarkerMin = Math.max(0, (parseFloat(e.currentTarget.value) || 0) * 1000))}
+            title="Hide group buy/sell markers below this, in thousands of $ (enter 10 = $10K; 0 = show all). Applies to Both and Net."
+            class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
           />
         </label>
         {#if instance.btMarkerMode === 'netflow_spotvd' || instance.btMarkerMode === 'bothflow_spotvd'}
           <label class="flex items-center gap-1.5 text-zinc-300">
-            <span class="text-zinc-500">Spot VD min ($)</span>
+            <span class="text-zinc-500">Spot VD min ($K)</span>
             <input
-              type="number" min="0" step="1000"
-              value={instance.btSpotVdMin ?? 0}
-              onchange={(e) => (instance.btSpotVdMin = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
-              title="Hide the spot volume-delta (square) markers whose value is below this (0 = show all)."
-              class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+              type="number" min="0" step="1"
+              value={(instance.btSpotVdMin ?? 1000) / 1000}
+              onchange={(e) => (instance.btSpotVdMin = Math.max(0, (parseFloat(e.currentTarget.value) || 0) * 1000))}
+              title="Hide spot volume-delta (square) markers below this, in thousands of $ (enter 10 = $10K; 0 = show all)."
+              class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
             />
           </label>
         {/if}
@@ -8347,7 +8347,7 @@
         vRefLines={weekVRefLines}
         onClick={instance.kind === 'backtracker' ? ((t: number) => openBacktrackerDialog(t)) : undefined}
         markers={instance.kind === 'backtracker' ? btMarkersVisible : []}
-        fontSize={instance.kind === 'backtracker' ? 16 : undefined}
+        fontSize={instance.kind === 'backtracker' ? 15 : undefined}
         fontFamily={instance.kind === 'backtracker' ? '"Arial Black", "Arial Bold", Gadget, sans-serif' : undefined}
       />
     {:else if instance.kind === 'pc'}

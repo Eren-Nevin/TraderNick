@@ -2673,7 +2673,7 @@ export function newChartInstance(
     base.btLookback = '1h';
     base.btMarkerMode = 'both';
     base.btMarkerMin = 1000;    // default flow-marker floor: $1K
-    base.btSpotVdMin = 0;
+    base.btSpotVdMin = 1000;    // default spot-VD floor: $1K
     base.btPnlLine = false;
     base.btPnlLookback = 'start';
     base.btConsensus = false;
