@@ -5172,7 +5172,7 @@
       else if (pnlLb === '1m') qs.set('pnl_window', String(30 * 86400));
     }
     if (mode === 'netpos') qs.set('netpos', '1');
-    if (mode === 'netflow_spotvd') qs.set('spotvd', '1');
+    if (mode === 'netflow_spotvd' || mode === 'bothflow_spotvd') qs.set('spotvd', '1');
     fetch(`/api/hyperliquid/group_fill_pressure?${qs}`, { signal: ctl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((body) => {
@@ -5209,9 +5209,9 @@
             if (b.sells > 0 && b.sells >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(b.sells) });
           }
         }
-        if (mode === 'netflow_spotvd') {
+        if (mode === 'netflow_spotvd' || mode === 'bothflow_spotvd') {
           // Secondary marker: market-wide spot volume delta (buyer − seller taker,
-          // $). Square icon to distinguish from the net-flow arrows; own floor.
+          // $). Square icon to distinguish from the flow arrows; own floor.
           for (const p of (body.spot_vd ?? []) as Array<{ time: number; vd: number }>) {
             if (p.vd > 0 && p.vd >= vdMin) out.push({ time: p.time, position: 'belowBar', color: '#22c55e', shape: 'square', text: fmtUsdCompact(p.vd) });
             else if (p.vd < 0 && -p.vd >= vdMin) out.push({ time: p.time, position: 'aboveBar', color: '#ef4444', shape: 'square', text: fmtUsdCompact(-p.vd) });
@@ -7153,13 +7153,14 @@
                buys−sells) per bar. -->
           <select
             value={instance.btMarkerMode ?? 'both'}
-            onchange={(e) => (instance.btMarkerMode = e.currentTarget.value as 'both' | 'net' | 'netflow_spotvd' | 'netpos' | 'none')}
+            onchange={(e) => (instance.btMarkerMode = e.currentTarget.value as 'both' | 'net' | 'netflow_spotvd' | 'bothflow_spotvd' | 'netpos' | 'none')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-            title="Both Flows = buy + sell fill markers; Net Flows = one marker for buys − sells; Net Flows + Spot VD = net flows plus a spot volume-delta square; Net Position = the group's net open position at each bar's start; None = hide"
+            title="Both Flows = buy + sell fill markers; Net Flows = one marker for buys − sells; + Spot VD adds a spot volume-delta square; Net Position = the group's net open position at each bar's start; None = hide"
           >
             <option value="both">Markers: Both Flows</option>
             <option value="net">Markers: Net Flows</option>
             <option value="netflow_spotvd">Markers: Net Flows + Spot VD</option>
+            <option value="bothflow_spotvd">Markers: Both Flows + Spot VD</option>
             <option value="netpos">Markers: Net Position</option>
             <option value="none">Markers: None</option>
           </select>
@@ -7623,7 +7624,7 @@
             class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
           />
         </label>
-        {#if instance.btMarkerMode === 'netflow_spotvd'}
+        {#if instance.btMarkerMode === 'netflow_spotvd' || instance.btMarkerMode === 'bothflow_spotvd'}
           <label class="flex items-center gap-1.5 text-zinc-300">
             <span class="text-zinc-500">Spot VD min ($)</span>
             <input

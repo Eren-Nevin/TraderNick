@@ -1697,7 +1697,7 @@ export type ChartInstance = {
    *  (one flow marker for buys−sells), 'netflow_spotvd' (net flows + a secondary
    *  spot volume-delta marker), 'netpos' (group net position at bar start) or
    *  'none' (hide). */
-  btMarkerMode?: 'both' | 'net' | 'netflow_spotvd' | 'netpos' | 'none';
+  btMarkerMode?: 'both' | 'net' | 'netflow_spotvd' | 'bothflow_spotvd' | 'netpos' | 'none';
   /** backtracker only: hide the spot-VD secondary marker below this $ (0 = all). */
   btSpotVdMin?: number;
   /** backtracker only: hide markers whose USD value is below this (0 = show all).
