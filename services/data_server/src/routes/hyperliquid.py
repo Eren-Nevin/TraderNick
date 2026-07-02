@@ -2828,10 +2828,34 @@ async def group_fill_pressure(request):
             parameters={"tok": token, "s": since_dt, "t0": t0},
         )
         pnl_base = float(pr.result_rows[0][0]) if (pr.result_rows and pr.result_rows[0][0] is not None) else 0.0
+    # Net position of the group at each BAR START (netpos=1): signed OI (long +,
+    # short −) summed over the group's wallets, from the position-history rollup
+    # sampled at bar-boundary buckets. 15m interval → 15m rollup; else 1h.
+    net_pos = []
+    if request.args.get("netpos") in ("1", "true", "yes"):
+        roll = "hl_position_history_15m" if interval == "15m" else "hl_position_history_1h"
+        npr = await ch.query(
+            f"""
+            SELECT t, sum(v) AS net FROM (
+                SELECT toUnixTimestamp(bucket) AS t, wallet, side,
+                       argMaxMerge(size_state) * if(side = 'long', 1, -1) AS v
+                FROM tradernick.{roll}
+                WHERE token = {{tok:String}} AND bucket >= {{s:DateTime}} AND bucket < {{u:DateTime}}
+                  AND toUnixTimestamp(bucket) % {{sec:UInt32}} = 0
+                  AND """ + member + """
+                GROUP BY bucket, wallet, side
+            )
+            GROUP BY t ORDER BY t
+            """,
+            parameters={"tok": token, "s": since_dt, "u": until_dt,
+                        "sec": INTERVAL_SECONDS[interval]},
+        )
+        net_pos = [{"time": int(t), "net": float(n)} for t, n in npr.result_rows]
     return response.json({
         "token": token, "interval": interval, "pnl_base": pnl_base,
         "bars": [{"time": int(b), "buys": float(bu), "sells": float(se), "pnl": float(pn)}
                  for b, bu, se, pn in rows.result_rows],
+        "net_pos": net_pos,
     })
 
 

@@ -5170,6 +5170,7 @@
       const t0ms = pnlLb === '1w' ? nowMs - 7 * 864e5 : pnlLb === '1m' ? nowMs - 30 * 864e5 : Date.parse('2000-01-01T00:00:00Z');
       qs.set('pnl_since', new Date(t0ms).toISOString());
     }
+    if (mode === 'netpos') qs.set('netpos', '1');
     fetch(`/api/hyperliquid/group_fill_pressure?${qs}`, { signal: ctl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((body) => {
@@ -5182,6 +5183,16 @@
         for (const b of bars) { cum += Number(b.pnl ?? 0); if (wantPnl) pnlMap.set(b.time, cum); }
         btPnlByTime = pnlMap;
         if (mode === 'none') { btMarkers = []; return; }
+        if (mode === 'netpos') {
+          // Group net open position at each bar start (circle icon; green long
+          // below, red short above — same colour/placement convention as flows).
+          for (const p of (body.net_pos ?? []) as Array<{ time: number; net: number }>) {
+            if (p.net > 0 && p.net >= minV) out.push({ time: p.time, position: 'belowBar', color: '#22c55e', shape: 'circle', text: fmtUsdCompact(p.net) });
+            else if (p.net < 0 && -p.net >= minV) out.push({ time: p.time, position: 'aboveBar', color: '#ef4444', shape: 'circle', text: fmtUsdCompact(-p.net) });
+          }
+          btMarkers = out;
+          return;
+        }
         for (const b of bars) {
           if (net) {
             // One marker for the dominant side, labeled with net = buys − sells.
@@ -7120,12 +7131,13 @@
                buys−sells) per bar. -->
           <select
             value={instance.btMarkerMode ?? 'both'}
-            onchange={(e) => (instance.btMarkerMode = e.currentTarget.value as 'both' | 'net' | 'none')}
+            onchange={(e) => (instance.btMarkerMode = e.currentTarget.value as 'both' | 'net' | 'netpos' | 'none')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-            title="Both = show buy and sell markers; Net = one marker per bar for the net (buys − sells); None = hide markers"
+            title="Both Flows = buy + sell fill markers; Net Flows = one marker for buys − sells; Net Position = the group's net open position at each bar's start; None = hide"
           >
-            <option value="both">Markers: Both</option>
-            <option value="net">Markers: Net</option>
+            <option value="both">Markers: Both Flows</option>
+            <option value="net">Markers: Net Flows</option>
+            <option value="netpos">Markers: Net Position</option>
             <option value="none">Markers: None</option>
           </select>
         {/if}

@@ -1693,9 +1693,10 @@ export type ChartInstance = {
   /** backtracker only: wallet group whose per-bar buy/sell pressure is overlaid
    *  as markers. null/'' = None (no markers). */
   btGroupId?: string | null;
-  /** backtracker only: 'both' (default — separate buy + sell markers), 'net'
-   *  (one marker per bar for the dominant side, buys−sells), or 'none' (hide). */
-  btMarkerMode?: 'both' | 'net' | 'none';
+  /** backtracker only: 'both' (separate buy+sell flow markers, default), 'net'
+   *  (one flow marker for buys−sells), 'netpos' (group net position at bar start)
+   *  or 'none' (hide). */
+  btMarkerMode?: 'both' | 'net' | 'netpos' | 'none';
   /** backtracker only: hide markers whose USD value is below this (0 = show all).
    *  Applies per-side in Both mode and to |net| in Net mode. */
   btMarkerMin?: number;
