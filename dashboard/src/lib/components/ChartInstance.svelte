@@ -5318,6 +5318,10 @@
 
   async function openBacktrackerDialog(barTimeSec: number) {
     if (instance.kind !== 'backtracker' || !instance.token) return;
+    // Re-fetch wallet groups + memberships from the server each open so the
+    // group/tag capsules in the dialog reflect the latest state (they were
+    // otherwise only loaded once). Reactive — capsules update as it resolves.
+    walletPinsStore.reload();
     const lb = instance.btLookback ?? '1h';
     const d = new Date(barTimeSec * 1000);
     const p2 = (n: number) => String(n).padStart(2, '0');
