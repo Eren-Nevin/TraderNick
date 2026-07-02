@@ -2798,29 +2798,34 @@ async def group_fill_pressure(request):
     except ValueError as e:
         return response.json({"error": str(e)}, status=400)
     since_dt, until_dt = _parse_iso(since), _parse_iso(until)
+    # PnL-line reference start (t0): only closing fills at/after t0 count toward the
+    # cumulative PnL. Absent → epoch-ish (From Start = full history). Lets the PnL
+    # line show trailing-window PnL (e.g. 1w / 1m) without affecting buy/sell bars.
+    ps = request.args.get("pnl_since")
+    t0 = _parse_iso(ps) if ps else datetime(2000, 1, 1)
     rows = await ch.query(
         """
         SELECT toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS bucket,
                sumIf(size * price, side = 'B') AS buys,
                sumIf(size * price, side = 'A') AS sells,
-               sum(closed_pnl) AS pnl
+               sumIf(closed_pnl, time >= {t0:DateTime}) AS pnl
         FROM tradernick.hl_fills
         WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
           AND """ + member + """
         GROUP BY bucket ORDER BY bucket
         """,
         parameters={"sec": INTERVAL_SECONDS[interval], "tok": token,
-                    "s": since_dt, "u": until_dt},
+                    "s": since_dt, "u": until_dt, "t0": t0},
     )
-    # For the cumulative-PnL line: realized PnL (Σ closing-fill closed_pnl) BEFORE
-    # the window, so the in-window running sum starts from the true total. Only
-    # computed when requested (pnl=1) — it scans all prior history for the group.
+    # Cumulative-PnL baseline: realized PnL in [t0, since) so the in-window running
+    # sum starts from the true running total for the chosen lookback. Only computed
+    # when requested (pnl=1) — scans prior history for the group.
     pnl_base = 0.0
     if request.args.get("pnl") in ("1", "true", "yes"):
         pr = await ch.query(
             "SELECT sum(closed_pnl) FROM tradernick.hl_fills "
-            "WHERE token = {tok:String} AND time < {s:DateTime} AND " + member,
-            parameters={"tok": token, "s": since_dt},
+            "WHERE token = {tok:String} AND time >= {t0:DateTime} AND time < {s:DateTime} AND " + member,
+            parameters={"tok": token, "s": since_dt, "t0": t0},
         )
         pnl_base = float(pr.result_rows[0][0]) if (pr.result_rows and pr.result_rows[0][0] is not None) else 0.0
     return response.json({

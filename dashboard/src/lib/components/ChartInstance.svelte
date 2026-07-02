@@ -5139,9 +5139,7 @@
   // Backtracker group overlay: per-bar buy (green, belowBar) / sell (red,
   // aboveBar) pressure by the selected wallet group, fetched from
   // group_fill_pressure over the loaded window. None → no markers.
-  type CandleMarker = { time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string; size?: number };
-  // Marker arrow size tiered by flow $: 0–100K small, 100K–1M medium, >1M big.
-  const btMarkerSize = (v: number) => (v >= 1_000_000 ? 3 : v >= 100_000 ? 1.6 : 0.8);
+  type CandleMarker = { time: number; position: 'aboveBar' | 'belowBar' | 'inBar'; color: string; shape: 'arrowUp' | 'arrowDown' | 'circle' | 'square'; text?: string };
   let btMarkers = $state<CandleMarker[]>([]);
   // Cumulative realized-PnL per bar-time for the group (for the PnL line overlay).
   let btPnlByTime = $state<Map<number, number>>(new Map());
@@ -5154,6 +5152,7 @@
     const mode = instance.btMarkerMode ?? 'both'; // read sync so it's a dependency
     const minV = Math.max(0, instance.btMarkerMin ?? 0);
     const wantPnl = instance.btPnlLine ?? false; // read sync so it's a dependency
+    const pnlLb = instance.btPnlLookback ?? 'start';
     const s = since, u = until;
     if (instance.kind !== 'backtracker' || !grp || !tok || !s || !u) {
       btMarkers = [];
@@ -5164,7 +5163,13 @@
     const ctl = new AbortController();
     btMarkerCtl = ctl;
     const qs = new URLSearchParams({ token: tok, group: grp, interval: iv, since: s, until: u });
-    if (wantPnl) qs.set('pnl', '1');
+    if (wantPnl) {
+      qs.set('pnl', '1');
+      // PnL-line reference start: trailing window or full history.
+      const nowMs = Date.now();
+      const t0ms = pnlLb === '1w' ? nowMs - 7 * 864e5 : pnlLb === '1m' ? nowMs - 30 * 864e5 : Date.parse('2000-01-01T00:00:00Z');
+      qs.set('pnl_since', new Date(t0ms).toISOString());
+    }
     fetch(`/api/hyperliquid/group_fill_pressure?${qs}`, { signal: ctl.signal })
       .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
       .then((body) => {
@@ -5176,18 +5181,19 @@
         let cum = Number(body.pnl_base ?? 0);
         for (const b of bars) { cum += Number(b.pnl ?? 0); if (wantPnl) pnlMap.set(b.time, cum); }
         btPnlByTime = pnlMap;
+        if (mode === 'none') { btMarkers = []; return; }
         for (const b of bars) {
           if (net) {
             // One marker for the dominant side, labeled with net = buys − sells.
             // Hidden when |net| is below the min-value threshold.
             const d = b.buys - b.sells;
-            if (d > 0 && d >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(d), size: btMarkerSize(d) });
-            else if (d < 0 && -d >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(-d), size: btMarkerSize(-d) });
+            if (d > 0 && d >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(d) });
+            else if (d < 0 && -d >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(-d) });
           } else {
             // belowBar buy first, then aboveBar sell — kept in time order. Each
             // side hidden when below the min-value threshold.
-            if (b.buys > 0 && b.buys >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(b.buys), size: btMarkerSize(b.buys) });
-            if (b.sells > 0 && b.sells >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(b.sells), size: btMarkerSize(b.sells) });
+            if (b.buys > 0 && b.buys >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(b.buys) });
+            if (b.sells > 0 && b.sells >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(b.sells) });
           }
         }
         btMarkers = out;
@@ -7114,12 +7120,13 @@
                buys−sells) per bar. -->
           <select
             value={instance.btMarkerMode ?? 'both'}
-            onchange={(e) => (instance.btMarkerMode = e.currentTarget.value as 'both' | 'net')}
+            onchange={(e) => (instance.btMarkerMode = e.currentTarget.value as 'both' | 'net' | 'none')}
             class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-            title="Both = show buy and sell markers; Net = one marker per bar for the net (buys − sells)"
+            title="Both = show buy and sell markers; Net = one marker per bar for the net (buys − sells); None = hide markers"
           >
             <option value="both">Markers: Both</option>
             <option value="net">Markers: Net</option>
+            <option value="none">Markers: None</option>
           </select>
         {/if}
       {/if}
@@ -7585,6 +7592,18 @@
           <input type="checkbox" bind:checked={instance.btPnlLine} class="accent-purple-500" />
           PnL line
         </label>
+        {#if instance.btPnlLine}
+          <select
+            value={instance.btPnlLookback ?? 'start'}
+            onchange={(e) => (instance.btPnlLookback = e.currentTarget.value as 'start' | '1m' | '1w')}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+            title="How far back the cumulative PnL line accumulates"
+          >
+            <option value="start">PnL: From Start</option>
+            <option value="1m">PnL: 1 month</option>
+            <option value="1w">PnL: 1 Week</option>
+          </select>
+        {/if}
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
       {#if instance.kind === 'fr'}
@@ -8223,7 +8242,7 @@
         vRefLines={weekVRefLines}
         onClick={instance.kind === 'backtracker' ? ((t: number) => openBacktrackerDialog(t)) : undefined}
         markers={instance.kind === 'backtracker' ? btMarkers : []}
-        fontSize={instance.kind === 'backtracker' ? 17 : undefined}
+        fontSize={instance.kind === 'backtracker' ? 16 : undefined}
         fontFamily={instance.kind === 'backtracker' ? '"Arial Black", "Arial Bold", Gadget, sans-serif' : undefined}
       />
     {:else if instance.kind === 'pc'}

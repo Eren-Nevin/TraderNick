@@ -1693,15 +1693,18 @@ export type ChartInstance = {
   /** backtracker only: wallet group whose per-bar buy/sell pressure is overlaid
    *  as markers. null/'' = None (no markers). */
   btGroupId?: string | null;
-  /** backtracker only: 'both' (default — separate buy + sell markers) or 'net'
-   *  (one marker per bar for the dominant side, showing buys−sells). */
-  btMarkerMode?: 'both' | 'net';
+  /** backtracker only: 'both' (default — separate buy + sell markers), 'net'
+   *  (one marker per bar for the dominant side, buys−sells), or 'none' (hide). */
+  btMarkerMode?: 'both' | 'net' | 'none';
   /** backtracker only: hide markers whose USD value is below this (0 = show all).
    *  Applies per-side in Both mode and to |net| in Net mode. */
   btMarkerMin?: number;
   /** backtracker only: draw the selected group's cumulative realized-PnL line
    *  (Σ closing-fill closed_pnl for the token) on a left axis. Needs a group. */
   btPnlLine?: boolean;
+  /** backtracker only: PnL-line lookback — 'start' (default, from data start),
+   *  '1m' (trailing 30d) or '1w' (trailing 7d). */
+  btPnlLookback?: 'start' | '1m' | '1w';
   /** spot_cvd_table only: lookback for the per-token CVD aggregate. In the key. */
   cvdtLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14';
   /** spot_cvd_table only: 'usd' (default) or 'token' for the Avg-Vol + CVD-Vol
@@ -2664,6 +2667,7 @@ export function newChartInstance(
     base.btMarkerMode = 'both';
     base.btMarkerMin = 0;
     base.btPnlLine = false;
+    base.btPnlLookback = 'start';
     base.volumeUnit = 'usd';
   }
   if (kind === 'fr') {
