@@ -5124,7 +5124,7 @@
   let btEndLabel = $state('');
   let btSnapshotDate = $state('');
   let btFetchCtl: AbortController | null = null;
-  const _BT_LB_SECS: Record<string, number> = { '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400, '7d': 604800 };
+  const _BT_LB_SECS: Record<string, number> = { '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400, '1d': 86400, '7d': 604800 };
   function fmtBtTime(secs: number): string {
     const d = new Date(secs * 1000);
     const p = (n: number) => String(n).padStart(2, '0');
@@ -7007,11 +7007,11 @@
              changed over this window ending at the clicked bar. -->
         <select
           value={instance.btLookback ?? '1h'}
-          onchange={(e) => (instance.btLookback = e.currentTarget.value as '15m' | '1h' | '4h' | '1d' | '7d')}
+          onchange={(e) => (instance.btLookback = e.currentTarget.value as '15m' | '30m' | '1h' | '4h' | '1d' | '7d')}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
           title="Lookback window (before the clicked bar) for the position-change dialog"
         >
-          {#each ['15m', '1h', '4h', '1d', '7d'] as lb (lb)}
+          {#each ['15m', '30m', '1h', '4h', '1d', '7d'] as lb (lb)}
             <option value={lb}>Δ {lb}</option>
           {/each}
         </select>

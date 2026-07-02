@@ -1689,7 +1689,7 @@ export type ChartInstance = {
   cvdLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14' | '30' | '90';
   /** backtracker only: the position-change lookback window ending at the clicked
    *  bar (dialog query). Display/dialog-only — not in the chart load key. */
-  btLookback?: '15m' | '1h' | '4h' | '1d' | '7d';
+  btLookback?: '15m' | '30m' | '1h' | '4h' | '1d' | '7d';
   /** spot_cvd_table only: lookback for the per-token CVD aggregate. In the key. */
   cvdtLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14';
   /** spot_cvd_table only: 'usd' (default) or 'token' for the Avg-Vol + CVD-Vol

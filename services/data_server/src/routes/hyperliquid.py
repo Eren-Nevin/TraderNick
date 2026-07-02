@@ -2670,8 +2670,9 @@ async def smart_wallet_top_oi(request):
 
 
 _BACKTRACK_LB = {
-    "15m": timedelta(minutes=15), "1h": timedelta(hours=1),
-    "4h": timedelta(hours=4), "1d": timedelta(days=1), "7d": timedelta(days=7),
+    "15m": timedelta(minutes=15), "30m": timedelta(minutes=30),
+    "1h": timedelta(hours=1), "4h": timedelta(hours=4),
+    "1d": timedelta(days=1), "7d": timedelta(days=7),
 }
 
 
