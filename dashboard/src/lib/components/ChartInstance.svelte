@@ -5148,6 +5148,7 @@
     const tok = instance.token;
     const iv = instance.interval;
     const mode = instance.btMarkerMode ?? 'both'; // read sync so it's a dependency
+    const minV = Math.max(0, instance.btMarkerMin ?? 0);
     const s = since, u = until;
     if (instance.kind !== 'backtracker' || !grp || !tok || !s || !u) {
       btMarkers = [];
@@ -5166,13 +5167,15 @@
         for (const b of bars) {
           if (net) {
             // One marker for the dominant side, labeled with net = buys − sells.
+            // Hidden when |net| is below the min-value threshold.
             const d = b.buys - b.sells;
-            if (d > 0) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(d) });
-            else if (d < 0) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(-d) });
+            if (d > 0 && d >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(d) });
+            else if (d < 0 && -d >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(-d) });
           } else {
-            // belowBar buy first, then aboveBar sell — kept in time order.
-            if (b.buys > 0) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(b.buys) });
-            if (b.sells > 0) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(b.sells) });
+            // belowBar buy first, then aboveBar sell — kept in time order. Each
+            // side hidden when below the min-value threshold.
+            if (b.buys > 0 && b.buys >= minV) out.push({ time: b.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp', text: fmtUsdCompact(b.buys) });
+            if (b.sells > 0 && b.sells >= minV) out.push({ time: b.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown', text: fmtUsdCompact(b.sells) });
           }
         }
         btMarkers = out;
@@ -7535,6 +7538,20 @@
             title="Plot sum(per-1m volume × per-1m close) — comparable across assets"
           >USD</button>
         </div>
+        <span class="w-px h-4 bg-zinc-800"></span>
+      {/if}
+      {#if instance.kind === 'backtracker'}
+        <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Markers</span>
+        <label class="flex items-center gap-1.5 text-zinc-300">
+          <span class="text-zinc-500">Min value ($)</span>
+          <input
+            type="number" min="0" step="1000"
+            value={instance.btMarkerMin ?? 0}
+            onchange={(e) => (instance.btMarkerMin = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+            title="Hide group buy/sell markers whose value is below this (0 = show all). Applies to Both and Net."
+            class="w-28 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+          />
+        </label>
         <span class="w-px h-4 bg-zinc-800"></span>
       {/if}
       {#if instance.kind === 'fr'}

@@ -1696,6 +1696,9 @@ export type ChartInstance = {
   /** backtracker only: 'both' (default — separate buy + sell markers) or 'net'
    *  (one marker per bar for the dominant side, showing buys−sells). */
   btMarkerMode?: 'both' | 'net';
+  /** backtracker only: hide markers whose USD value is below this (0 = show all).
+   *  Applies per-side in Both mode and to |net| in Net mode. */
+  btMarkerMin?: number;
   /** spot_cvd_table only: lookback for the per-token CVD aggregate. In the key. */
   cvdtLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14';
   /** spot_cvd_table only: 'usd' (default) or 'token' for the Avg-Vol + CVD-Vol
@@ -2656,6 +2659,7 @@ export function newChartInstance(
     base.interval = '15m';
     base.btLookback = '1h';
     base.btMarkerMode = 'both';
+    base.btMarkerMin = 0;
     base.volumeUnit = 'usd';
   }
   if (kind === 'fr') {
