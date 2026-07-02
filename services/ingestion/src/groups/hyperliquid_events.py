@@ -54,7 +54,10 @@ _CADENCE: dict[str, tuple[int, int]] = {
     # govern the sweep tier and don't track the live cadence.
     "ohlcv":            (900,   6),
     "trades":           (900,   6),
-    "fills":            (900,   6),
+    # fills back to a 5m live tick (2026-07-02) to cut the Backtracker marker lag
+    # — a fill now lands within ~5-8m instead of ~15-18m. Gap-fill chunk (sweep
+    # tier) unchanged at 6h.
+    "fills":            (300,   6),
     "position_history": (900,   1),
     # trade_history moved to a DAILY tick (2026-06): DeFiStream deprecated the
     # `window` arg and now emits one absolute (cumulative-from-inception)
@@ -77,6 +80,7 @@ _CADENCE: dict[str, tuple[int, int]] = {
 # self-heals on the next live tick.
 _OVERLAP_MINUTES = {
     60:    3,
+    300:   15,    # 3× the 5m cadence (fills) — same shape as 900→45
     900:   45,    # 3× the new 15m cadence — same shape as the old 300→15
     1800:  1440,
     86400: 2880,  # daily tick (trade_history) re-fetches the last 2 days so a
