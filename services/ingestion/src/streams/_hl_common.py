@@ -177,9 +177,14 @@ async def run(stream_name: str, event: str) -> None:
     # ~30 days, and with the 30-day default the whole gap loads in ONE request
     # (~150M rows ≈ 70 GB RSS — the 2026-06-26 OOM). 6-hour chunks (~1M fills)
     # keep each fetch bounded regardless of how far the watermark has drifted.
+    # `trades` (like fills) is high-volume, but its DeFiStream endpoint also caps
+    # each request at 1 DAY — the 30-day default chunked past that and every
+    # sweep chunk 400'd ("Time range too large: 30.0 days. Maximum allowed: 1
+    # days."). 6h keeps chunks bounded and well under the 1-day cap.
     _SWEEP_CHUNK_OVERRIDES = {
         "position_history": timedelta(hours=1),
         "fills":            timedelta(hours=6),
+        "trades":           timedelta(hours=6),
     }
     MAX_SWEEP_CHUNK = _SWEEP_CHUNK_OVERRIDES.get(event, timedelta(days=30))
     CHUNK_PACING_S = 0.5
@@ -194,6 +199,7 @@ async def run(stream_name: str, event: str) -> None:
     # genuine gaps (long downtime, new-token history) use an explicit backfill.
     _SWEEP_MAX_LOOKBACK = {
         "fills":            timedelta(hours=24),
+        "trades":           timedelta(hours=24),
         "position_history": timedelta(hours=24),
     }
 
