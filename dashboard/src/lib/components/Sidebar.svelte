@@ -3,6 +3,7 @@
   import { goto } from '$app/navigation';
   import { page } from '$app/stores';
   import { themeStore } from '$lib/stores/theme.svelte';
+  import { timezoneStore, tzShortLabel } from '$lib/stores/timezone.svelte';
   import { pagesStore } from '$lib/stores/pages.svelte';
   import { walletPinsStore } from '$lib/stores/walletPins.svelte';
 
@@ -23,6 +24,7 @@
 
   onMount(() => {
     themeStore.hydrate();
+    timezoneStore.hydrate();
     pagesStore.hydrate();
     walletPinsStore.hydrate();
   });
@@ -275,7 +277,40 @@
     </a>
   </div>
 
-  <div class="px-2 py-3 border-t border-zinc-800">
+  <!-- Time-zone display toggle. Purely a rendering setting (persisted); all data
+       and backend comms stay UTC. -->
+  <div class="px-2 pt-3 border-t border-zinc-800">
+    {#if collapsed}
+      <button
+        type="button"
+        onclick={() => timezoneStore.toggle()}
+        title="Times shown in {timezoneStore.mode === 'utc' ? 'UTC' : `local time (${tzShortLabel()})`} — click to switch"
+        class="w-full flex items-center justify-center rounded text-[10px] font-semibold py-2 text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900"
+      >
+        {timezoneStore.mode === 'utc' ? 'UTC' : tzShortLabel()}
+      </button>
+    {:else}
+      <div class="flex items-center rounded bg-zinc-900 p-0.5 text-xs" title="How timestamps are displayed in charts and tables (data stays UTC)">
+        <button
+          type="button"
+          onclick={() => timezoneStore.set('utc')}
+          class="flex-1 rounded px-2 py-1 text-center transition-colors {timezoneStore.mode === 'utc'
+            ? 'bg-zinc-700 text-zinc-100'
+            : 'text-zinc-400 hover:text-zinc-200'}"
+        >UTC</button>
+        <button
+          type="button"
+          onclick={() => timezoneStore.set('local')}
+          title="Browser local time ({tzShortLabel()})"
+          class="flex-1 rounded px-2 py-1 text-center transition-colors {timezoneStore.mode === 'local'
+            ? 'bg-zinc-700 text-zinc-100'
+            : 'text-zinc-400 hover:text-zinc-200'}"
+        >Local</button>
+      </div>
+    {/if}
+  </div>
+
+  <div class="px-2 pb-3 pt-2">
     <button
       type="button"
       onclick={() => themeStore.toggle()}

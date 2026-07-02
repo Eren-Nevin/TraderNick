@@ -6,6 +6,7 @@ import type {
   VolumeBucket
 } from '$lib/api';
 import { sanitizeSmartSelectorState } from './smartSelector';
+import { timezoneStore } from '$lib/stores/timezone.svelte';
 
 export type MAType = 'sma' | 'ema' | 'wma';
 
@@ -199,16 +200,28 @@ export function weekBoundariesSec(sinceSec: number, untilSec: number): number[] 
  *  timestamps thousands of times; `toLocaleDateString` is a measurable
  *  fraction of hover self-time in profiles. Cap at 50k so the cache
  *  can't grow unbounded over a long session. */
-const _fmtUtcTimeCache = new Map<number, string>();
+const _fmtUtcTimeCache = new Map<string, string>();
+const _p2 = (n: number) => String(n).padStart(2, '0');
 export function fmtUtcTime(unixSec: number): string {
-  const hit = _fmtUtcTimeCache.get(unixSec);
+  // Honours the display-tz toggle (UTC default, or browser-local). Reads
+  // timezoneStore.mode so callers re-render when the toggle flips. Name kept for
+  // call-site stability. Cache keyed by mode+ts so the two zones don't collide.
+  const local = timezoneStore.isLocal;
+  const ck = (local ? 'l' : 'u') + unixSec;
+  const hit = _fmtUtcTimeCache.get(ck);
   if (hit !== undefined) return hit;
   const d = new Date(unixSec * 1000);
-  const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
-  const iso = d.toISOString().replace('T', ' ').slice(0, 19);
-  const out = `${weekday} ${iso} UTC`;
+  let out: string;
+  if (local) {
+    const weekday = d.toLocaleDateString('en-US', { weekday: 'short' });
+    out = `${weekday} ${d.getFullYear()}-${_p2(d.getMonth() + 1)}-${_p2(d.getDate())} `
+      + `${_p2(d.getHours())}:${_p2(d.getMinutes())}:${_p2(d.getSeconds())}`;
+  } else {
+    const weekday = d.toLocaleDateString('en-US', { weekday: 'short', timeZone: 'UTC' });
+    out = `${weekday} ${d.toISOString().replace('T', ' ').slice(0, 19)} UTC`;
+  }
   if (_fmtUtcTimeCache.size > 50_000) _fmtUtcTimeCache.clear();
-  _fmtUtcTimeCache.set(unixSec, out);
+  _fmtUtcTimeCache.set(ck, out);
   return out;
 }
 
