@@ -1038,7 +1038,10 @@
       // volumeUnit (usd/token) is display-only — both come in the /ohlcv
       // response — so it's intentionally NOT in the key.
       const ex = instance.exchange ?? 'binance';
-      return `${instance.kind}|${instance.token}|${ex}|${instance.interval}`;
+      // Backtracker pins the candle source via btOhlcvSource (spot/futures), not
+      // instance.exchange — fold it in so flipping the selector re-fetches.
+      const btPart = instance.kind === 'backtracker' ? `|src:${instance.btOhlcvSource ?? 'spot'}` : '';
+      return `${instance.kind}|${instance.token}|${ex}|${instance.interval}${btPart}`;
     }
     if (instance.kind === 'hl_smart_oi') {
       // One series per referenced filter — fold each filter's fully-expanded
@@ -2733,12 +2736,13 @@
           // reads from tradernick.hl_ohlcv_1m server-side. The volume chart
           // just plots the volume / volume_usd field per the unit toggle.
           const ohlcvQs = new URLSearchParams(baseQS);
-          // Backtracker candles come from Binance perp (binance_ohlcv_1m) — it lands
-          // ~0.5m behind vs HL's ~15m tick, and perp price matches HL positions.
+          // Backtracker candles come from Binance (spot by default, or perp via the
+          // Spot/Futures selector) — both land ~0.5-2m behind vs HL's ~15m tick.
           // No cap: candles are the freshest source, so completed bars show promptly
           // and markers (fills/spot, which lag more) fill in as they arrive —
           // btMarkersVisible drops any marker with no candle, so no snapping/dupes.
-          ohlcvQs.set('exchange', instance.kind === 'backtracker' ? 'binance' : (instance.exchange ?? 'binance'));
+          const btExchange = (instance.btOhlcvSource ?? 'spot') === 'futures' ? 'binance' : 'binance_spot';
+          ohlcvQs.set('exchange', instance.kind === 'backtracker' ? btExchange : (instance.exchange ?? 'binance'));
           url = `/api/ohlcv?${ohlcvQs}`;
           pickArr = (b) => (b.candles ?? []) as AnyDatum[];
           break;
@@ -7202,6 +7206,17 @@
         </select>
       {/if}
       {#if instance.kind === 'backtracker'}
+        <!-- OHLCV candle source: Binance Spot (default) or Futures (perp). Markers
+             / positions are always HL perp regardless. -->
+        <select
+          value={instance.btOhlcvSource ?? 'spot'}
+          onchange={(e) => (instance.btOhlcvSource = e.currentTarget.value as 'spot' | 'futures')}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="OHLCV candle source: Binance Spot or Futures (perp). Wallet flow/position markers are always HL perp."
+        >
+          <option value="spot">Spot</option>
+          <option value="futures">Futures</option>
+        </select>
         <!-- Position-change lookback: clicking a bar shows wallets whose position
              changed over this window ending at the clicked bar. -->
         <select

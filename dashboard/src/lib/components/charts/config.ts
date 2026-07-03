@@ -1716,6 +1716,9 @@ export type ChartInstance = {
   /** backtracker only: Consensus Flow — flow markers count group WALLETS (by each
    *  wallet's net buy/sell direction) instead of summing $. */
   btConsensus?: boolean;
+  /** backtracker only: OHLCV candle source — 'spot' (Binance spot, default) or
+   *  'futures' (Binance perp). Markers/positions are always HL perp regardless. */
+  btOhlcvSource?: 'spot' | 'futures';
   /** backtracker only: hide markers whose USD value is below this (0 = show all).
    *  Applies per-side in Both mode and to |net| in Net mode. */
   btMarkerMin?: number;
@@ -2690,6 +2693,7 @@ export function newChartInstance(
     base.btPnlLine = false;
     base.btPnlLookback = 'start';
     base.btConsensus = false;
+    base.btOhlcvSource = 'spot';
     base.volumeUnit = 'usd';
   }
   if (kind === 'fr') {
