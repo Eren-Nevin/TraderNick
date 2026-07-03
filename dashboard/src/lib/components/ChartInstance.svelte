@@ -5012,6 +5012,11 @@
   );
 
   let settingsOpen = $state(false);
+  // Resolved backtracker marker mode (applies the default when unset). Template
+  // conditions must use this — checking instance.btMarkerMode directly hides the
+  // Spot VD min / Consensus controls when the mode is undefined but the effect
+  // (which uses the same fallback) is already drawing spot-VD markers.
+  let btMarkerModeR = $derived(instance.btMarkerMode ?? 'netflow_spotvd');
 
   // ── Compound overlays ───────────────────────────────────────────────
   // Per-overlay fetched series, keyed by overlay.id. Re-fetched whenever
@@ -7236,7 +7241,7 @@
             <option value="netpos">Markers: Net Position</option>
             <option value="none">Markers: None</option>
           </select>
-          {#if instance.btMarkerMode === 'both' || instance.btMarkerMode === 'net' || instance.btMarkerMode === 'netflow_spotvd' || instance.btMarkerMode === 'bothflow_spotvd'}
+          {#if btMarkerModeR === 'both' || btMarkerModeR === 'net' || btMarkerModeR === 'netflow_spotvd' || btMarkerModeR === 'bothflow_spotvd'}
             <!-- Consensus Flow: flow markers count wallets (by net direction) not $. -->
             <button
               type="button"
@@ -7707,7 +7712,7 @@
             class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
           />
         </label>
-        {#if instance.btMarkerMode === 'netflow_spotvd' || instance.btMarkerMode === 'bothflow_spotvd'}
+        {#if btMarkerModeR === 'netflow_spotvd' || btMarkerModeR === 'bothflow_spotvd'}
           <label class="flex items-center gap-1.5 text-zinc-300">
             <span class="text-zinc-500">Spot VD min ($K)</span>
             <input
