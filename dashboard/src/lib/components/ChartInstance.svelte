@@ -7695,12 +7695,12 @@
       {#if instance.kind === 'backtracker'}
         <span class="text-zinc-500 text-[10px] uppercase tracking-widest">Markers</span>
         <label class="flex items-center gap-1.5 text-zinc-300">
-          <span class="text-zinc-500">Min value ($K)</span>
+          <span class="text-zinc-500">Flows min ($K)</span>
           <input
             type="number" min="0" step="1"
             value={(instance.btMarkerMin ?? 1000) / 1000}
             onchange={(e) => (instance.btMarkerMin = Math.max(0, (parseFloat(e.currentTarget.value) || 0) * 1000))}
-            title="Hide group buy/sell markers below this, in thousands of $ (enter 10 = $10K; 0 = show all). Applies to Both and Net."
+            title="Hide the group flow markers (buy/sell arrows) below this, in thousands of $ (enter 10 = $10K; 0 = show all). Applies to all flow modes; the spot-VD square has its own min."
             class="w-20 bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
           />
         </label>
