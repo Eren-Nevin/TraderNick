@@ -5233,9 +5233,11 @@
         if (mode === 'netpos') {
           // Group net open position at each bar start (circle icon; green long
           // below, red short above — same colour/placement convention as flows).
-          for (const p of (body.net_pos ?? []) as Array<{ time: number; net: number }>) {
-            if (p.net > 0 && p.net >= minV) out.push({ time: p.time, position: 'belowBar', color: '#22c55e', shape: 'circle', text: fmtMarkerUsd(p.net) });
-            else if (p.net < 0 && -p.net >= minV) out.push({ time: p.time, position: 'aboveBar', color: '#ef4444', shape: 'circle', text: fmtMarkerUsd(-p.net) });
+          // Consensus on → append (#wallets long / #wallets short).
+          for (const p of (body.net_pos ?? []) as Array<{ time: number; net: number; n_long: number; n_short: number }>) {
+            const paren = consensus ? ` (${p.n_long}/${p.n_short})` : '';
+            if (p.net > 0 && p.net >= minV) out.push({ time: p.time, position: 'belowBar', color: '#22c55e', shape: 'circle', text: fmtMarkerUsd(p.net) + paren });
+            else if (p.net < 0 && -p.net >= minV) out.push({ time: p.time, position: 'aboveBar', color: '#ef4444', shape: 'circle', text: fmtMarkerUsd(-p.net) + paren });
           }
           btMarkers = out;
           return;
@@ -7241,16 +7243,17 @@
             <option value="netpos">Markers: Net Position</option>
             <option value="none">Markers: None</option>
           </select>
-          {#if btMarkerModeR === 'both' || btMarkerModeR === 'net' || btMarkerModeR === 'netflow_spotvd' || btMarkerModeR === 'bothflow_spotvd'}
-            <!-- Consensus Flow: flow markers count wallets (by net direction) not $. -->
+          {#if btMarkerModeR === 'both' || btMarkerModeR === 'net' || btMarkerModeR === 'netflow_spotvd' || btMarkerModeR === 'bothflow_spotvd' || btMarkerModeR === 'netpos'}
+            <!-- Consensus: count WALLETS. Flow modes → value = net #wallets,
+                 paren = (buyers/sellers). Net Position → adds (long/short) paren. -->
             <button
               type="button"
               onclick={() => (instance.btConsensus = !instance.btConsensus)}
               class="text-xs px-2 py-0.5 rounded border transition-colors {instance.btConsensus
                 ? 'bg-blue-600 border-blue-500 text-white'
                 : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
-              title="Consensus Flow: count group WALLETS (by each wallet's net buy/sell direction) instead of summing $. Marker value = net #wallets; parenthesis = (buyers/sellers)."
-            >Consensus Flow</button>
+              title="Consensus: count group WALLETS. Flow modes show net #wallets by buy/sell direction with a (buyers/sellers) paren; Net Position adds a (#long/#short) wallet paren."
+            >Consensus</button>
           {/if}
         {/if}
       {/if}

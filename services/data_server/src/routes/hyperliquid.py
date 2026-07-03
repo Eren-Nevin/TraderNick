@@ -2872,22 +2872,29 @@ async def group_fill_pressure(request):
     net_pos = []
     if request.args.get("netpos") in ("1", "true", "yes"):
         roll = "hl_position_history_15m" if interval == "15m" else "hl_position_history_1h"
+        # net + per-bar count of wallets net-long vs net-short (each wallet's
+        # signed position summed over sides first, then classified). Counts power
+        # the Consensus parenthesis (#long/#short) on the Net Position marker.
         npr = await ch.query(
             f"""
-            SELECT t, sum(v) AS net FROM (
-                SELECT toUnixTimestamp(bucket) AS t, wallet, side,
-                       argMaxMerge(size_state) * if(side = 'long', 1, -1) AS v
-                FROM tradernick.{roll}
-                WHERE token = {{tok:String}} AND bucket >= {{s:DateTime}} AND bucket < {{u:DateTime}}
-                  AND toUnixTimestamp(bucket) % {{sec:UInt32}} = 0
-                  AND """ + member + """
-                GROUP BY bucket, wallet, side
+            SELECT t, sum(wv) AS net, countIf(wv > 0) AS n_long, countIf(wv < 0) AS n_short FROM (
+                SELECT t, wallet, sum(v) AS wv FROM (
+                    SELECT toUnixTimestamp(bucket) AS t, wallet, side,
+                           argMaxMerge(size_state) * if(side = 'long', 1, -1) AS v
+                    FROM tradernick.{roll}
+                    WHERE token = {{tok:String}} AND bucket >= {{s:DateTime}} AND bucket < {{u:DateTime}}
+                      AND toUnixTimestamp(bucket) % {{sec:UInt32}} = 0
+                      AND """ + member + """
+                    GROUP BY bucket, wallet, side
+                )
+                GROUP BY t, wallet
             )
             GROUP BY t ORDER BY t
             """,
             parameters={"tok": token, "s": since_dt, "u": until_dt, "sec": sec},
         )
-        net_pos = [{"time": int(t), "net": float(n)} for t, n in npr.result_rows]
+        net_pos = [{"time": int(t), "net": float(n), "n_long": int(nl), "n_short": int(ns)}
+                   for t, n, nl, ns in npr.result_rows]
     # Market-wide SPOT volume delta per bar (spotvd=1): Σ (buyer_taker −
     # seller_taker) × close from Binance spot 1m. Not group-scoped.
     spot_vd = []
