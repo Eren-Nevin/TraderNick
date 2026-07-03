@@ -36,9 +36,12 @@
     ...walletPinsStore.groups.filter((g) => g.id !== DEFAULT_GROUP_ID)
   ]);
 
+  // Groups start COLLAPSED by default: an unset entry means collapsed, so the
+  // page opens compact and the user expands what they want.
   let collapsed = $state<Record<string, boolean>>({});
+  const isCollapsed = (id: string) => collapsed[id] ?? true;
   function toggleCollapse(id: string) {
-    collapsed = { ...collapsed, [id]: !collapsed[id] };
+    collapsed = { ...collapsed, [id]: !isCollapsed(id) };
   }
 
   // Inline group editing (rename / color / delete) — non-default only.
@@ -128,7 +131,7 @@
         <div class="flex items-center gap-2 px-3 py-2 bg-zinc-950 border-b border-zinc-800">
           <button type="button" onclick={() => toggleCollapse(g.id)}
             class="text-zinc-500 hover:text-zinc-200 w-4 text-center" title="Collapse / expand">
-            {collapsed[g.id] ? '▸' : '▾'}
+            {isCollapsed(g.id) ? '▸' : '▾'}
           </button>
           <span class="inline-block w-2.5 h-2.5 rounded-full border border-zinc-600"
             style="background-color: {g.color ?? NEUTRAL_GROUP_COLOR}"></span>
@@ -158,14 +161,17 @@
             {/if}
           {/if}
         </div>
-        {#if !collapsed[g.id]}
+        {#if !isCollapsed(g.id)}
           <div class="divide-y divide-zinc-900">
             {#if wallets.length === 0}
               <div class="px-3 py-3 text-xs text-zinc-600">No wallets pinned to this group yet.</div>
             {:else}
-              {#each wallets as w (w.address)}
+              {#each wallets as w, i (w.address)}
                 <div class="flex items-center justify-between px-3 py-1.5 hover:bg-zinc-900/40">
-                  <WalletAddress address={w.address} auxKind="wallet" />
+                  <div class="flex items-center gap-2 min-w-0">
+                    <span class="text-[11px] text-zinc-600 tabular-nums w-6 text-right shrink-0">{i + 1}</span>
+                    <WalletAddress address={w.address} auxKind="wallet" />
+                  </div>
                   <button type="button" onclick={() => walletPinsStore.unpin(w.address, g.id)}
                     title="Remove from this group"
                     class="text-xs text-zinc-500 hover:text-red-400">unpin</button>
