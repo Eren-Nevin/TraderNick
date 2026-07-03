@@ -3454,12 +3454,15 @@
       loadedKey = '';
       return;
     }
-    loadedKey = '';
-    loadCache.delete(cacheId());
     // Preserve the user's zoom/pan across a refresh (same token/interval/window,
     // just fresher data): load(preserveView=true) leaves localView untouched, so
     // the visible range never jumps. Synced (cross-chart) views use sharedView
     // and aren't reset by load() anyway, so this only matters when not synced.
+    // NOTE: do NOT clear loadedKey here. load() is called directly (it has no
+    // loadedKey guard), so clearing it only spuriously triggers the reactive load
+    // $effect, which fires a second, plain load() (no preserveView) that races and
+    // resets the view — the "refresh resets zoom" bug (worse with multiple charts).
+    loadCache.delete(cacheId());
     await load(true, true);
   }
 
