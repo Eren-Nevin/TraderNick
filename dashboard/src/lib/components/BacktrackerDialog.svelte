@@ -145,7 +145,7 @@
     onkeydown={(e) => { if (e.key === 'Escape') onClose(); }}
     use:stopDragEvents
   >
-    <div class="w-[64rem] max-w-[96vw] max-h-[90vh] bg-zinc-950 border border-zinc-700 rounded-md shadow-2xl flex flex-col text-sm">
+    <div class="w-[92rem] max-w-[97vw] max-h-[90vh] bg-zinc-950 border border-zinc-700 rounded-md shadow-2xl flex flex-col text-sm">
       <header class="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800">
         <div class="flex items-center gap-2">
           <span class="text-zinc-300 font-medium">Position changes</span>
