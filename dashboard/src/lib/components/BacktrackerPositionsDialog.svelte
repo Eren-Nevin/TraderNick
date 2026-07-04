@@ -43,6 +43,8 @@
     onLimitChange,
     lastChangeSince = '',
     onLastChangeSinceChange,
+    changeLookback = '',
+    onChangeLookbackChange,
     onClose
   }: {
     open: boolean;
@@ -67,8 +69,14 @@
      *  whose most recent fill in the token is on/after this date. */
     lastChangeSince?: string;
     onLastChangeSinceChange: (d: string) => void;
+    /** Override for the Change column's window START ('' = the clicked bar's own
+     *  window; otherwise 1h/4h/1d/3d/7d/14d/30d ending at the bar). */
+    changeLookback?: string;
+    onChangeLookbackChange: (v: string) => void;
     onClose: () => void;
   } = $props();
+
+  const CHANGE_LB_OPTS = ['', '1h', '4h', '1d', '3d', '7d', '14d', '30d'];
 
   const ORDER_LABELS: Record<string, string> = {
     change: 'Net change', value: 'Position value', upnl: 'Unrealized PnL', roe: 'ROE',
@@ -186,6 +194,19 @@
             >
               <option value="20">Top 20</option>
               <option value="50">Top 50</option>
+            </select>
+          </label>
+          <label class="flex items-center gap-1 text-xs text-zinc-500"
+            title="Measure the Change column over this window ending at the bar (— = the clicked bar's own window)">
+            Change over
+            <select
+              value={changeLookback}
+              onchange={(e) => onChangeLookbackChange(e.currentTarget.value)}
+              class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500"
+            >
+              {#each CHANGE_LB_OPTS as o (o)}
+                <option value={o}>{o === '' ? '—' : o}</option>
+              {/each}
             </select>
           </label>
           <label class="flex items-center gap-1 text-xs text-zinc-500"

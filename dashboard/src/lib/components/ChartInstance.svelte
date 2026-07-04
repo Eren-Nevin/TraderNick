@@ -5194,6 +5194,7 @@
   let btpOrder = $state('change');
   let btpLimit = $state(20);
   let btpLastChangeSince = $state(''); // YYYY-MM-DD (UTC); '' = no filter
+  let btpChangeLookback = $state(''); // Change-column window override; '' = the bar's own window
   let btpTimeSec = $state(0);
   let btpStartSec = $state(0);
   let btpEndSec = $state(0);
@@ -5216,6 +5217,7 @@
         interval: instance.interval ?? '15m'
       });
       if (btpLastChangeSince) qs.set('last_change_since', btpLastChangeSince);
+      if (btpChangeLookback) qs.set('change_lookback', btpChangeLookback);
       const res = await fetch(`/api/hyperliquid/group_token_positions?${qs}`, { signal: btpFetchCtl.signal });
       if (!res.ok) throw new Error(`group_token_positions ${res.status}`);
       const body = await res.json();
@@ -9277,6 +9279,8 @@
   onLimitChange={(n) => { btpLimit = n; fetchBtpRows(); }}
   lastChangeSince={btpLastChangeSince}
   onLastChangeSinceChange={(d) => { btpLastChangeSince = d; fetchBtpRows(); }}
+  changeLookback={btpChangeLookback}
+  onChangeLookbackChange={(v) => { btpChangeLookback = v; fetchBtpRows(); }}
   onClose={() => { btpDialogOpen = false; if (btpFetchCtl) btpFetchCtl.abort(); }}
 />
 

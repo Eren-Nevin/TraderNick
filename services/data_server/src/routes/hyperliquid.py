@@ -2881,6 +2881,15 @@ _GTP_ORDER = {
     "last_change": "last_change",                                   # most recent fill ts
 }
 
+# Dialog-side override for the CHANGE column's window start (position snapshot stays
+# at the bar; only t_prev moves back). Absent → the bar's own window (t_prev as
+# derived from lookback/none).
+_GTP_CHANGE_LB = {
+    "1h": timedelta(hours=1), "4h": timedelta(hours=4), "1d": timedelta(days=1),
+    "3d": timedelta(days=3), "7d": timedelta(days=7), "14d": timedelta(days=14),
+    "30d": timedelta(days=30),
+}
+
 
 @bp.get("/hyperliquid/group_token_positions")
 @throttled("heavy")
@@ -2933,6 +2942,11 @@ async def group_token_positions(request):
         t_prev, t_end = t0, t0 + _BACKTRACK_LB[iv]   # the bar itself: [T, T+interval)
     else:
         t_end, t_prev = t0, t0 - _BACKTRACK_LB[lb]   # run-up to the bar: [T-lookback, T)
+    # Dialog override: measure the Change over a longer window ENDING at the bar
+    # (t_end fixed, only the start moves back). '-'/absent → keep the bar's window.
+    change_lb = request.args.get("change_lookback")
+    if change_lb in _GTP_CHANGE_LB:
+        t_prev = t_end - _GTP_CHANGE_LB[change_lb]
 
     ch = await client()
     try:
