@@ -40,8 +40,11 @@
   const COLS: Col[] = [
     { key: 'price_pct', label: 'Price Δ%', kind: 'pct' },
     { key: 'net_flow_group', label: 'Flow (grp)', kind: 'usd', title: "Selected group's net position flow ($) — buys − sells from fills" },
+    { key: 'flow_group_pct', label: 'Flow (grp) Δ%', kind: 'pct', title: "Group flow / total OI at end of window (scale-free)" },
     { key: 'net_flow_overall', label: 'Flow (all)', kind: 'usd', title: 'Market-wide net taker flow (CVD $) over the lookback' },
-    { key: 'net_oi_pct', label: 'Net OI Δ%', kind: 'pct', title: '(net_signed_OI end − start) / total OI end' },
+    { key: 'flow_overall_pct', label: 'Flow Δ%', kind: 'pct', title: 'Overall flow / total OI at end of window (scale-free)' },
+    { key: 'net_oi_now_pct', label: 'Net OI %', kind: 'pct', title: 'Current net signed OI / total OI at end (directional lean)' },
+    { key: 'net_oi_pct', label: 'Net OI Δ%', kind: 'pct', title: '(net_signed_OI end − start) / total OI end (the CHANGE)' },
     { key: 'long_pct', label: 'Long Δ%', kind: 'pct', title: 'Long OI vs its value at the start of the lookback' },
     { key: 'short_pct', label: 'Short Δ%', kind: 'pct', title: 'Short OI vs its value at the start of the lookback' },
     { key: 'vol_pct', label: 'Vol Δ%', kind: 'pct', title: 'Volume this window vs the immediately preceding equal window' },
@@ -81,8 +84,8 @@
       if (an && bn) return 0;
       if (an) return 1;
       if (bn) return -1;
-      // rank by magnitude for the signed $/% columns so biggest movers surface
-      return (Math.abs(av as number) - Math.abs(bv as number)) * dir;
+      // normal signed sort (negatives first when ascending)
+      return ((av as number) - (bv as number)) * dir;
     });
     return limit === 'all' ? s : s.slice(0, Number(limit));
   });

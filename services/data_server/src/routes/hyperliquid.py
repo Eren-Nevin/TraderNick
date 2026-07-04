@@ -3083,7 +3083,8 @@ async def backtracker_leaderboard(request):
             "price_pct": ((pn / ps - 1) * 100) if ps else None,
             "vol_pct": ((vl / vp - 1) * 100) if vp else None,
             "net_flow_overall": float(nfo), "net_flow_group": None,
-            "net_oi_pct": None, "long_pct": None, "short_pct": None,
+            "net_oi_pct": None, "net_oi_now_pct": None, "long_pct": None, "short_pct": None,
+            "flow_overall_pct": None, "flow_group_pct": None,
             "spot_vd": None, "spot_vd_pct": None,
         }
 
@@ -3176,8 +3177,14 @@ async def backtracker_leaderboard(request):
             le, se = end_oi.get(tok, {}).get("long", 0.0), end_oi.get(tok, {}).get("short", 0.0)
             total_end = le + se
             r["net_oi_pct"] = (((le - se) - (ls - ss)) / total_end * 100) if total_end else None
+            r["net_oi_now_pct"] = ((le - se) / total_end * 100) if total_end else None   # current lean
             r["long_pct"] = ((le / ls - 1) * 100) if ls else None
             r["short_pct"] = ((se / ss - 1) * 100) if ss else None
+            # Flow normalised by total OI at end — for cross-token comparison.
+            if total_end:
+                r["flow_overall_pct"] = r["net_flow_overall"] / total_end * 100
+                if r["net_flow_group"] is not None:
+                    r["flow_group_pct"] = r["net_flow_group"] / total_end * 100
 
     # ── 4. Spot volume-delta $ + % (Binance spot; null for HL tokens without spot) ──
     sv = await ch.query(
