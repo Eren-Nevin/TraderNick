@@ -1,6 +1,9 @@
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
+    # Auto-recover a transient/accidental stop instead of staying down (it was the
+    # only service without this — a stray SIGTERM on 2026-07-03 left it down ~12h).
+    restart: unless-stopped
     volumes:
       - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
       - /mnt/viper/tradernick/clickhouse:/var/lib/clickhouse
