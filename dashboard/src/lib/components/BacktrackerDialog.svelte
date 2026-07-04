@@ -187,7 +187,7 @@
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('change')}>Change{sortArrow('change')}</th>
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('new')}>New position{sortArrow('new')}</th>
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('upnl')}>Old uPnL{sortArrow('upnl')}</th>
-                <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('acct')} title="Total open position value across all tokens at the snapshot (equity isn't stored historically)">Account Value{sortArrow('acct')}</th>
+                <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('acct')} title="Total open interest — the wallet's total open position value (notional) across all tokens at the snapshot">Total OI{sortArrow('acct')}</th>
                 <th class="px-3 py-1.5 text-left font-normal" title="The two 15-min snapshots compared: start (T−lookback) → end (clicked bar)">Snapshots (UTC)</th>
               </tr>
             </thead>
