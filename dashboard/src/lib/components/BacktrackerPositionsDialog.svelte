@@ -41,6 +41,8 @@
     onOrderChange,
     limit = 20,
     onLimitChange,
+    lastChangeSince = '',
+    onLastChangeSinceChange,
     onClose
   }: {
     open: boolean;
@@ -61,6 +63,10 @@
     /** Server-side row limit (20/50). */
     limit?: number;
     onLimitChange: (n: number) => void;
+    /** "Last change since" filter (YYYY-MM-DD, UTC; '' = off) — keep only wallets
+     *  whose most recent fill in the token is on/after this date. */
+    lastChangeSince?: string;
+    onLastChangeSinceChange: (d: string) => void;
     onClose: () => void;
   } = $props();
 
@@ -181,6 +187,19 @@
               <option value="20">Top 20</option>
               <option value="50">Top 50</option>
             </select>
+          </label>
+          <label class="flex items-center gap-1 text-xs text-zinc-500"
+            title="Only wallets whose most recent fill in this token is on/after this date (UTC)">
+            Active since
+            <input
+              type="date"
+              value={lastChangeSince}
+              onchange={(e) => onLastChangeSinceChange(e.currentTarget.value)}
+              class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-100 focus:outline-none focus:border-zinc-500" />
+            {#if lastChangeSince}
+              <button type="button" onclick={() => onLastChangeSinceChange('')}
+                class="text-zinc-500 hover:text-zinc-200 text-xs leading-none" title="Clear date filter">✕</button>
+            {/if}
           </label>
           <button type="button" class="text-zinc-500 hover:text-zinc-200 px-1.5 py-0.5 cursor-pointer" onclick={onClose} aria-label="Close">✕</button>
         </div>

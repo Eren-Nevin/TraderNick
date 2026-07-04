@@ -5,7 +5,7 @@ import type { RequestHandler } from './$types';
 // Proxy for /hyperliquid/group_token_positions — Backtracker "Net Position" dialog:
 // the full group position book in one token at a bar + per-wallet position change,
 // ranked server-side by `order`.
-const PASSTHROUGH = ['token', 'group', 'time', 'interval', 'lookback', 'order', 'n'];
+const PASSTHROUGH = ['token', 'group', 'time', 'interval', 'lookback', 'order', 'n', 'last_change_since'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

@@ -2911,6 +2911,15 @@ async def group_token_positions(request):
         n = max(1, min(int(request.args.get("n", "20")), 50))
     except ValueError:
         n = 20
+    # Optional "last change since" filter (YYYY-MM-DD, UTC): keep only wallets whose
+    # most recent fill in the token is on/after this date. 0 = no filter.
+    lcs = 0
+    lcs_arg = request.args.get("last_change_since")
+    if lcs_arg:
+        try:
+            lcs = int(datetime.fromisoformat(lcs_arg).replace(tzinfo=timezone.utc).timestamp())
+        except ValueError:
+            lcs = 0
     time_arg = request.args.get("time")
     if not time_arg:
         return response.json({"error": "missing time"}, status=400)
@@ -2980,10 +2989,12 @@ async def group_token_positions(request):
                     GROUP BY wallet
                 ) l ON d.wallet = l.wallet
             )
+            WHERE last_change >= {lcs:UInt32}
             ORDER BY """ + _GTP_ORDER[order] + """ DESC
             LIMIT {n:UInt32}
             """,
-            parameters={"tok": token, "b": te_bucket, "tp": t_prev, "te": t_end, "n": n},
+            parameters={"tok": token, "b": te_bucket, "tp": t_prev, "te": t_end,
+                        "n": n, "lcs": lcs},
         )
         for (w, side, amt, sz, entry, upnl, fund, dch, lc, cats) in rows.result_rows:
             amt, entry, upnl = float(amt), float(entry), float(upnl)
