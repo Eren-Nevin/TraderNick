@@ -338,15 +338,9 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
 
   // Data process — derived-MV maintenance backfills. Single-shot rebuilds
   // FROM the current state of upstream tables; no time window.
-  {
-    type: 'exchange_flow_minute',
-    label: 'Exchange flow rebuild',
-    description: 'Rebuild tradernick.exchange_flow_minute over [since, until) ' +
-      'from transfers FINAL via REPLACE PARTITION (one hourly partition at a ' +
-      'time). Idempotent — re-running is safe. Pick a wide window to fix a ' +
-      'long-standing gap or a narrow window for a recent fix.',
-    fields: []
-  },
+  // NOTE: the standalone "Exchange flow rebuild" was removed — it only rebuilt
+  // exchange_flow_minute, which is already one of the materializers in the
+  // "Data processor rebuild" form below (select it there to rebuild just it).
   {
     type: 'transfers_rematerialize',
     label: 'Transfers rematerialize (post-wallet upload)',
