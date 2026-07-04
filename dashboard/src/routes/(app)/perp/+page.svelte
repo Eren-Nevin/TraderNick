@@ -14,7 +14,7 @@
   // swaps / LP via in-chart event selector) plus the Hyperliquid family
   // (OHLCV, bs/sz, funding, PnL, leaderboards, transfers, vault flow).
   // bs / sz / ohlcv / fr support both venues via the exchange selector.
-  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'volume', 'bs', 'sz', 'token_leaderboard', 'smart_wallets_table', 'smart_wallets_dynamic', 'smart_wallets_cutoff', 'smart_wallets_group', 'backtracker', 'gmx_v2', ...HL_CHART_KINDS];
+  const AVAILABLE_KINDS: ChartKind[] = ['ohlcv', 'volume', 'bs', 'sz', 'token_leaderboard', 'smart_wallets_table', 'smart_wallets_dynamic', 'smart_wallets_cutoff', 'smart_wallets_group', 'backtracker', 'backtracker_leaderboard', 'gmx_v2', ...HL_CHART_KINDS];
 
   const GMX_DEFAULT_MARKET = 'BTC/USD [WBTC-USDC]';
 

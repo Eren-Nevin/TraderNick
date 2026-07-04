@@ -449,6 +449,7 @@ export type ChartKind =
   | 'spot_cvd'
   | 'spot_cvd_table'
   | 'token_leaderboard'
+  | 'backtracker_leaderboard'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
@@ -588,6 +589,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   realized_price: 'Realized Price',
   spot_cvd: 'Spot CVD',
   spot_cvd_table: 'Spot CVD Table',
+  backtracker_leaderboard: 'Backtracker Leaderboard',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1385,7 +1387,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Perp — GMX V2 + Hyperliquid family. smart_wallets_table is an HL-only
   // experimental tableview (no hl_ prefix so it stays out of the many
   // isHlKind() chart-control branches) — categorise it here explicitly.
-  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group' || kind === 'backtracker') return 'Perp';
+  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group' || kind === 'backtracker' || kind === 'backtracker_leaderboard') return 'Perp';
   // Staking — Lido (and future Stader/Frax).
   if (kind === 'lido') return 'Staking';
   return null;
@@ -1734,6 +1736,11 @@ export type ChartInstance = {
   /** spot_cvd_table only: 'usd' (default) or 'token' for the Avg-Vol + CVD-Vol
    *  columns. Display-only (server returns both) → NOT in the load key. */
   cvdtUnit?: 'usd' | 'token';
+  /** backtracker_leaderboard only: lookback for the per-token aggregates. In the key. */
+  blLookback?: '1h' | '4h' | '12h' | '1d' | '7d';
+  /** backtracker_leaderboard only: OI freshness — 'recent' (freshest snapshot) or
+   *  'now' (reconstructed from fills). In the key. */
+  blAsOf?: 'now' | 'recent';
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2677,6 +2684,11 @@ export function newChartInstance(
     base.exchange = 'binance_spot';
     base.cvdtLookback = 'all';
     base.cvdtUnit = 'usd';
+  }
+  if (kind === 'backtracker_leaderboard') {
+    // Per-token HL activity leaderboard; 1d lookback, freshest snapshots by default.
+    base.blLookback = '1d';
+    base.blAsOf = 'recent';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

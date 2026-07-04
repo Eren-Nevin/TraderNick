@@ -2885,9 +2885,9 @@ _GTP_ORDER = {
 # at the bar; only t_prev moves back). Absent → the bar's own window (t_prev as
 # derived from lookback/none).
 _GTP_CHANGE_LB = {
-    "1h": timedelta(hours=1), "4h": timedelta(hours=4), "1d": timedelta(days=1),
-    "3d": timedelta(days=3), "7d": timedelta(days=7), "14d": timedelta(days=14),
-    "30d": timedelta(days=30),
+    "1h": timedelta(hours=1), "4h": timedelta(hours=4), "12h": timedelta(hours=12),
+    "1d": timedelta(days=1), "3d": timedelta(days=3), "7d": timedelta(days=7),
+    "14d": timedelta(days=14), "30d": timedelta(days=30),
 }
 
 
@@ -3029,6 +3029,176 @@ async def group_token_positions(request):
         "time_prev": int(t_prev.replace(tzinfo=timezone.utc).timestamp()),
         "rows": out,
     })
+
+
+_BL_LB = {"1h": 3600, "4h": 14400, "12h": 43200, "1d": 86400, "7d": 604800}
+
+
+@bp.get("/hyperliquid/backtracker_leaderboard")
+@throttled("heavy")
+async def backtracker_leaderboard(request):
+    """Backtracker Leaderboard tableview: one row per HL-perp token with activity over
+    a lookback — price Δ%, net flow (group + overall $), net-signed-OI Δ%, long/short
+    Δ%, volume Δ% (vs the preceding equal window), and spot volume-delta ($ + %). OI
+    columns end at the freshest snapshot (as_of=recent) or reconstructed to now from
+    fills (as_of=now). Params: lookback (1h|4h|12h|1d|7d), group (optional), as_of."""
+    lb = request.args.get("lookback", "1d")
+    if lb not in _BL_LB:
+        return response.json({"error": f"lookback must be one of {list(_BL_LB)}"}, status=400)
+    as_of = request.args.get("as_of", "recent")
+    if as_of not in ("now", "recent"):
+        return response.json({"error": "as_of must be now|recent"}, status=400)
+    lb_sec = _BL_LB[lb]
+    ch = await client()
+    member = None
+    if request.args.get("group"):
+        try:
+            member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
+        except ValueError:
+            member = None
+
+    # ── 1. Price Δ%, Volume Δ% (window vs preceding equal window), overall net flow
+    # (= market taker CVD $ over the lookback; hl_fills is balanced market-wide so a
+    # Σ(B−A) net would be structurally 0 — the taker split is the real directional flow).
+    pv = await ch.query(
+        """
+        SELECT token,
+               argMax(close, time)                                            AS price_now,
+               argMinIf(close, time, time >= now() - INTERVAL {s:UInt32} SECOND) AS price_start,
+               sumIf(volume * close, time >= now() - INTERVAL {s:UInt32} SECOND) AS vol_lb,
+               sumIf(volume * close, time <  now() - INTERVAL {s:UInt32} SECOND) AS vol_prev,
+               sumIf((buyer_taker_volume - seller_taker_volume) * close,
+                     time >= now() - INTERVAL {s:UInt32} SECOND)                AS nf_overall
+        FROM tradernick.hl_ohlcv_1m FINAL
+        WHERE token != '' AND time >= now() - INTERVAL {s2:UInt32} SECOND
+        GROUP BY token
+        """,
+        parameters={"s": lb_sec, "s2": lb_sec * 2},
+    )
+    agg: dict[str, dict] = {}
+    for tok, pn, ps, vl, vp, nfo in pv.result_rows:
+        pn, ps, vl, vp = float(pn), float(ps), float(vl), float(vp)
+        agg[tok] = {
+            "token": tok, "price": pn,
+            "price_pct": ((pn / ps - 1) * 100) if ps else None,
+            "vol_pct": ((vl / vp - 1) * 100) if vp else None,
+            "net_flow_overall": float(nfo), "net_flow_group": None,
+            "net_oi_pct": None, "long_pct": None, "short_pct": None,
+            "spot_vd": None, "spot_vd_pct": None,
+        }
+
+    # ── 2. Group net flow $ (the group's net position flow from fills) — only when a
+    # group is selected (the market-wide overall comes from taker CVD above). ──
+    if member:
+        nf = await ch.query(
+            """
+            SELECT token, sumIf(if(side='B', size*price, -size*price), """ + member + """) AS nf_group
+            FROM tradernick.hl_fills FINAL
+            WHERE token != '' AND time >= now() - INTERVAL {s:UInt32} SECOND
+            GROUP BY token
+            """,
+            parameters={"s": lb_sec},
+        )
+        for tok, nfg in nf.result_rows:
+            if tok in agg:
+                agg[tok]["net_flow_group"] = float(nfg)
+
+    # ── 3. OI: long/short/net at start vs end snapshots (+ reconstruct end for now) ──
+    er = await ch.query("SELECT max(time) FROM tradernick.hl_position_history WHERE time <= now()")
+    end_bucket = er.result_rows[0][0] if (er.result_rows and er.result_rows[0][0]) else None
+    if end_bucket is not None:
+        start_bucket = end_bucket - timedelta(seconds=lb_sec)
+        # start snapshot (signed magnitudes per token/side) — same for both modes
+        s_oi = await ch.query(
+            """
+            SELECT token, side, sum(v) AS oi FROM (
+                SELECT token, side, wallet, argMax(size, time) AS v
+                FROM tradernick.hl_position_history
+                WHERE token != '' AND time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND
+                GROUP BY token, side, wallet
+            ) GROUP BY token, side
+            """,
+            parameters={"b": start_bucket},
+        )
+        start_oi: dict[str, dict] = {}
+        for tok, side, oi in s_oi.result_rows:
+            start_oi.setdefault(tok, {}).update({side: float(oi)})
+
+        if as_of == "recent":
+            e_rows = await ch.query(
+                """
+                SELECT token, side, sum(v) AS oi FROM (
+                    SELECT token, side, wallet, argMax(size, time) AS v
+                    FROM tradernick.hl_position_history
+                    WHERE token != '' AND time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND
+                    GROUP BY token, side, wallet
+                ) GROUP BY token, side
+                """,
+                parameters={"b": end_bucket},
+            )
+            end_oi: dict[str, dict] = {}
+            for tok, side, oi in e_rows.result_rows:
+                end_oi.setdefault(tok, {}).update({side: float(oi)})
+        else:
+            # Reconstruct each wallet's now-position (snapshot@end_bucket + fills since),
+            # classify long/short by the signed amount, value at the token's mark price.
+            e_rows = await ch.query(
+                """
+                SELECT token,
+                       sumIf(amt, amt > 0)  AS long_amt,
+                       -sumIf(amt, amt < 0) AS short_amt
+                FROM (
+                    SELECT token, wallet, sum(v) AS amt FROM (
+                        SELECT token, wallet, argMax(amount, time) * if(side='long',1,-1) AS v
+                        FROM tradernick.hl_position_history
+                        WHERE token != '' AND time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND
+                        GROUP BY token, wallet, side
+                        UNION ALL
+                        SELECT token, wallet, sum(if(side='B', size, -size)) AS v
+                        FROM tradernick.hl_fills FINAL
+                        WHERE token != '' AND time >= {b:DateTime} AND time < now()
+                        GROUP BY token, wallet
+                    ) GROUP BY token, wallet
+                ) GROUP BY token
+                """,
+                parameters={"b": end_bucket},
+            )
+            end_oi = {}
+            for tok, la, sa in e_rows.result_rows:
+                price = agg.get(tok, {}).get("price", 0.0) or 0.0
+                end_oi[tok] = {"long": float(la) * price, "short": float(sa) * price}
+
+        for tok in set(start_oi) | set(end_oi):
+            r = agg.get(tok)
+            if not r:
+                continue
+            ls, ss = start_oi.get(tok, {}).get("long", 0.0), start_oi.get(tok, {}).get("short", 0.0)
+            le, se = end_oi.get(tok, {}).get("long", 0.0), end_oi.get(tok, {}).get("short", 0.0)
+            total_end = le + se
+            r["net_oi_pct"] = (((le - se) - (ls - ss)) / total_end * 100) if total_end else None
+            r["long_pct"] = ((le / ls - 1) * 100) if ls else None
+            r["short_pct"] = ((se / ss - 1) * 100) if ss else None
+
+    # ── 4. Spot volume-delta $ + % (Binance spot; null for HL tokens without spot) ──
+    sv = await ch.query(
+        """
+        SELECT token,
+               sum((buyer_taker_volume - seller_taker_volume) * close) AS vd,
+               sum((buyer_taker_volume + seller_taker_volume) * close) AS vol
+        FROM tradernick.binance_spot_ohlcv_1m FINAL
+        WHERE token != '' AND time >= now() - INTERVAL {s:UInt32} SECOND
+        GROUP BY token
+        """,
+        parameters={"s": lb_sec},
+    )
+    for tok, vd, vol in sv.result_rows:
+        r = agg.get(tok)
+        if not r:
+            continue
+        r["spot_vd"] = float(vd)
+        r["spot_vd_pct"] = (float(vd) / float(vol) * 100) if float(vol) else None
+
+    return response.json({"lookback": lb, "as_of": as_of, "rows": list(agg.values())})
 
 
 @bp.get("/hyperliquid/group_fill_pressure")

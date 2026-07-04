@@ -5,6 +5,7 @@
   import TableChart from '$lib/components/TableChart.svelte';
   import TokenLeaderboardTable from '$lib/components/TokenLeaderboardTable.svelte';
   import SpotCvdTable from '$lib/components/SpotCvdTable.svelte';
+  import BacktrackerLeaderboardTable from '$lib/components/BacktrackerLeaderboardTable.svelte';
   import SmartWalletMetricsTable from '$lib/components/SmartWalletMetricsTable.svelte';
   import SmartWalletTokenListTable from '$lib/components/SmartWalletTokenListTable.svelte';
   import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
@@ -895,6 +896,10 @@
       // lookback varies the per-token aggregate → in the key. unit is
       // display-only (server returns both $ and token), so it's NOT here.
       return `spot_cvd_table|lb:${instance.cvdtLookback ?? 'all'}`;
+    }
+    if (instance.kind === 'backtracker_leaderboard') {
+      // lookback + group + as_of all change the per-token aggregate → in the key.
+      return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}`;
     }
     if (instance.kind === 'sz') {
       const ex = instance.exchange ?? 'binance';
@@ -1831,6 +1836,23 @@
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
         const body = await res.json();
         data = [{ tokens: body.tokens ?? [] } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = pv ?? defaultView(sinceIso, untilIso);
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Backtracker Leaderboard: per-token HL activity over the lookback; server
+      // returns every token, the table sorts/limits client-side.
+      if (instance.kind === 'backtracker_leaderboard') {
+        const qs = new URLSearchParams({
+          lookback: instance.blLookback ?? '1d', as_of: instance.blAsOf ?? 'recent'
+        });
+        if (instance.btGroupId) qs.set('group', instance.btGroupId);
+        const res = await queuedFetch(`/api/hyperliquid/backtracker_leaderboard?${qs}`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = [{ tokens: body.rows ?? [] } as unknown as AnyDatum];
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = pv ?? defaultView(sinceIso, untilIso);
@@ -5168,7 +5190,7 @@
   let btStartSec = $state(0);
   let btEndSec = $state(0);
   let btFetchCtl: AbortController | null = null;
-  const _BT_LB_SECS: Record<string, number> = { '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400, '1d': 86400, '7d': 604800 };
+  const _BT_LB_SECS: Record<string, number> = { '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400, '12h': 43200, '1d': 86400, '7d': 604800 };
   // "MM-DD HH:MM" in the active display zone (strip the year from the shared helper).
   function fmtBtTime(secs: number): string {
     return fmtTzDateTime(secs).slice(5);
@@ -5195,6 +5217,11 @@
   let btpLimit = $state(20);
   let btpLastChangeSince = $state(''); // YYYY-MM-DD (UTC); '' = no filter
   let btpChangeLookback = $state(''); // Change-column window override; '' = the bar's own window
+  // Group used by the positions dialog. Defaults to the widget's btGroupId (netpos
+  // marker path); the leaderboard path can set it via the group picker.
+  let btpGroup = $state<string | null>(null);
+  let btpGroupPickerOpen = $state(false); // leaderboard: pick a group before opening
+  let btpPendingToken = $state('');       // token awaiting a group pick
   let btpTimeSec = $state(0);
   let btpStartSec = $state(0);
   let btpEndSec = $state(0);
@@ -5204,7 +5231,7 @@
   const btpEndLabel = $derived(btpEndSec ? fmtBtTime(btpEndSec) : '');
 
   async function fetchBtpRows() {
-    if (!btpToken || !instance.btGroupId) return;
+    if (!btpToken || !btpGroup) return;
     btpRows = [];
     btpError = null;
     btpLoading = true;
@@ -5212,7 +5239,7 @@
     btpFetchCtl = new AbortController();
     try {
       const qs = new URLSearchParams({
-        token: btpToken, group: instance.btGroupId, time: String(btpTimeSec),
+        token: btpToken, group: btpGroup, time: String(btpTimeSec),
         lookback: btpLookbackLabel, order: btpOrder, n: String(btpLimit),
         interval: instance.interval ?? '15m'
       });
@@ -5230,6 +5257,33 @@
     } finally {
       btpLoading = false;
     }
+  }
+
+  // Leaderboard: clicking a token opens the SAME position-book dialog, anchored at
+  // NOW with the change window = the leaderboard lookback. Needs a group — use the
+  // toolbar one, else prompt with a picker.
+  function openBacktrackerLeaderboardToken(token: string) {
+    walletPinsStore.reload();
+    btpPendingToken = token;
+    if (instance.btGroupId) openBtpForToken(token, instance.btGroupId);
+    else btpGroupPickerOpen = true;
+  }
+  function openBtpForToken(token: string, group: string) {
+    btpGroupPickerOpen = false;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const cl = instance.blLookback ?? '1d';
+    const d = new Date(nowSec * 1000);
+    const p2 = (n: number) => String(n).padStart(2, '0');
+    btpSnapshotDate = `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`;
+    btpToken = token;
+    btpGroup = group;
+    btpTimeSec = nowSec;
+    btpLookbackLabel = '1h';         // arbitrary; change_lookback below overrides t_prev
+    btpChangeLookback = cl;          // change window = the leaderboard lookback
+    btpEndSec = nowSec;
+    btpStartSec = nowSec - (_BT_LB_SECS[cl] ?? 86400);
+    btpDialogOpen = true;
+    fetchBtpRows();
   }
 
   // Backtracker group overlay: per-bar buy (green, belowBar) / sell (red,
@@ -5406,6 +5460,7 @@
       const p2n = (n: number) => String(n).padStart(2, '0');
       btpSnapshotDate = `${dn.getUTCFullYear()}-${p2n(dn.getUTCMonth() + 1)}-${p2n(dn.getUTCDate())}`;
       btpToken = instance.token;
+      btpGroup = instance.btGroupId;
       btpLookbackLabel = lb;
       btpTimeSec = Math.floor(barTimeSec);
       if (lb === 'none') {
@@ -5490,6 +5545,7 @@
     && instance.kind !== 'hl_vault_detail'
     && instance.kind !== 'token_leaderboard'
     && instance.kind !== 'spot_cvd_table'
+    && instance.kind !== 'backtracker_leaderboard'
     && instance.kind !== 'smart_wallets_table'
     && !isLeaderboardKind(instance.kind)
   );
@@ -5500,6 +5556,7 @@
   let isTableviewKind = $derived(
     instance.kind === 'token_leaderboard'
     || instance.kind === 'spot_cvd_table'
+    || instance.kind === 'backtracker_leaderboard'
     // Dual-view chart mode renders a real LineChart, so the chart-only settings
     // (Point / Week lines / MA / zoom-sync) DO apply there — only the table view
     // counts as a tableview kind.
@@ -6978,6 +7035,42 @@
           <option value="usd">$</option>
           <option value="token">Token</option>
         </select>
+      {:else if instance.kind === 'backtracker_leaderboard'}
+        <!-- Backtracker Leaderboard: global per-token, no token dimension. Lookback +
+             As-of + group live here; sort/filter/limit live in the table. -->
+        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL perp · all tokens</span>
+        <select
+          value={instance.blLookback ?? '1d'}
+          onchange={(e) => (instance.blLookback = e.currentTarget.value as '1h' | '4h' | '12h' | '1d' | '7d')}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Lookback window for every column"
+        >
+          <option value="1h">1h</option>
+          <option value="4h">4h</option>
+          <option value="12h">12h</option>
+          <option value="1d">1d</option>
+          <option value="7d">7d</option>
+        </select>
+        <select
+          value={instance.blAsOf ?? 'recent'}
+          onchange={(e) => (instance.blAsOf = e.currentTarget.value as 'now' | 'recent')}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="OI columns as-of: Recent = freshest published snapshot; Now = reconstructed from fills"
+        >
+          <option value="recent">As of: Recent</option>
+          <option value="now">As of: Now</option>
+        </select>
+        <select
+          value={instance.btGroupId ?? ''}
+          onchange={(e) => (instance.btGroupId = e.currentTarget.value || null)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Wallet group for the group Net Flow column + the click dialog"
+        >
+          <option value="">Group: None</option>
+          {#each walletPinsStore.groups as g (g.id)}
+            <option value={g.id}>{g.name}</option>
+          {/each}
+        </select>
       {:else if isSwKind(instance.kind) && instance.viewMode !== 'chart'}
         <!-- Smart Wallets finder (TABLE view): HL-only. Every control (metric /
              lookback / token selectors + the snapshot slider) lives inside the
@@ -7303,7 +7396,7 @@
           {/each}
         </select>
       {/if}
-      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'spot_cvd_table' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
+      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'spot_cvd_table' && instance.kind !== 'backtracker_leaderboard' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
         <select
           bind:value={instance.interval}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -8989,6 +9082,14 @@
             ? (instance.cvdtLookback as string)
             : `${instance.cvdtLookback}d`)}
       />
+    {:else if instance.kind === 'backtracker_leaderboard'}
+      <BacktrackerLeaderboardTable
+        rows={data.length > 0 ? ((data[0] as unknown as {tokens?: Record<string, unknown>[]}).tokens ?? []) : []}
+        loading={loading}
+        error={error}
+        hasGroup={!!instance.btGroupId}
+        onTokenClick={openBacktrackerLeaderboardToken}
+      />
     {:else if instance.kind === 'hl_top_traders'}
       <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />
     {:else if isLeaderboardKind(instance.kind)}
@@ -9283,6 +9384,31 @@
   onChangeLookbackChange={(v) => { btpChangeLookback = v; fetchBtpRows(); }}
   onClose={() => { btpDialogOpen = false; if (btpFetchCtl) btpFetchCtl.abort(); }}
 />
+
+{#if btpGroupPickerOpen}
+  <!-- Leaderboard: a wallet group is needed before opening the position book. -->
+  <div class="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm cursor-default"
+    role="dialog" aria-modal="true" tabindex="-1"
+    onclick={(e) => { if (e.target === e.currentTarget) btpGroupPickerOpen = false; }}
+    onkeydown={(e) => { if (e.key === 'Escape') btpGroupPickerOpen = false; }}>
+    <div class="w-80 max-w-[90vw] bg-zinc-950 border border-zinc-700 rounded-md shadow-2xl flex flex-col text-sm">
+      <header class="flex items-center justify-between px-4 py-2.5 border-b border-zinc-800">
+        <span class="text-zinc-300 font-medium">Pick a wallet group · {btpPendingToken}</span>
+        <button type="button" class="text-zinc-500 hover:text-zinc-200 px-1.5 py-0.5" onclick={() => (btpGroupPickerOpen = false)} aria-label="Close">✕</button>
+      </header>
+      <div class="max-h-80 overflow-auto p-2">
+        {#if walletPinsStore.groups.length === 0}
+          <div class="px-3 py-4 text-zinc-500 text-center text-xs">No wallet groups yet — create one on the /wallets page.</div>
+        {:else}
+          {#each walletPinsStore.groups as g (g.id)}
+            <button type="button" onclick={() => openBtpForToken(btpPendingToken, g.id)}
+              class="w-full text-left px-3 py-1.5 rounded hover:bg-zinc-900 text-zinc-200">{g.name}</button>
+          {/each}
+        {/if}
+      </div>
+    </div>
+  </div>
+{/if}
 
 <style>
   /* hl_smart_oi backfill pill — a small translucent badge in the bottom-left
