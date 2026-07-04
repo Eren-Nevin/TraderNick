@@ -74,6 +74,7 @@
   );
 
   let positions = $state<PositionRow[]>([]);
+  let posFetchedAt = $state<number | null>(null); // when the live book was fetched (unix s)
   let posLoading = $state(false);
   let posError = $state<string | null>(null);
   let accountValue = $state<number | null>(null);
@@ -451,12 +452,14 @@
     try {
       let nextPositions: PositionRow[];
       let nextAccount: number | null = null;
+      let nextFetchedAt: number | null = null;
       if (isToday(iso)) {
         const res = await fetch(`/api/hyperliquid/live_positions?wallet=${address}`);
         if (!res.ok) throw new Error(`positions ${res.status}`);
         const body = await res.json();
         nextAccount = body.margin_summary?.account_value ?? null;
         nextPositions = (body.positions ?? []).map(mapLive);
+        nextFetchedAt = Math.floor(Date.now() / 1000); // "snapshot time" of the live book
       } else {
         const res = await fetch(`/api/hyperliquid/wallet_positions?wallet=${address}&day=${iso}`);
         if (!res.ok) throw new Error(`positions ${res.status}`);
@@ -466,6 +469,7 @@
       if (seq !== posSeq) return; // superseded by a newer request — drop this
       positions = nextPositions;
       accountValue = nextAccount;
+      posFetchedAt = nextFetchedAt;
       // Drop the close overlay if the newly-loaded day no longer holds that
       // token (the $effect on selectedToken then clears the chart series).
       if (selectedToken && !nextPositions.some((p) => p.token === selectedToken)) {
@@ -983,6 +987,7 @@
   <div class="h-[420px]">
     <WalletPositionsTable
       {positions} {live} loading={posLoading} error={posError}
+      snapshotTime={posFetchedAt}
       {selectedToken}
       onToggleToken={(t) => (selectedToken = selectedToken === t ? null : t)}
     />

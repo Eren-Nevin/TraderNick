@@ -6,6 +6,7 @@
   // actually store (notional / size / unrealized). Client-sortable headers.
 
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
+  import { fmtTzTime } from '$lib/stores/timezone.svelte';
 
   export type PositionRow = {
     token: string;
@@ -30,7 +31,9 @@
     // Token whose close-price is overlaid on the PnL chart (max one). The row
     // toggle is single-select: picking a token replaces any prior one.
     selectedToken = null,
-    onToggleToken = undefined
+    onToggleToken = undefined,
+    // Unix seconds the live book was fetched — shown in the badge as "Live (HH:MM)".
+    snapshotTime = null
   }: {
     positions: PositionRow[];
     live?: boolean;
@@ -38,6 +41,7 @@
     error?: string | null;
     selectedToken?: string | null;
     onToggleToken?: (token: string) => void;
+    snapshotTime?: number | null;
   } = $props();
 
   function fmtUsd(n: number): string {
@@ -116,7 +120,9 @@
     <span class="text-zinc-200 font-medium">Positions</span>
     <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border {live
       ? 'bg-emerald-950/40 border-emerald-800 text-emerald-400'
-      : 'bg-zinc-900 border-zinc-700 text-zinc-400'}">{live ? 'Live' : 'Snapshot'}</span>
+      : 'bg-zinc-900 border-zinc-700 text-zinc-400'}">{live
+        ? (snapshotTime ? `Live (${fmtTzTime(snapshotTime)})` : 'Live')
+        : 'Snapshot'}</span>
     {#if loading}
       <span class="inline-block w-3 h-3 rounded-full border-2 border-zinc-600 border-t-blue-400 animate-spin" title="Loading…"></span>
     {/if}

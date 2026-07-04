@@ -67,6 +67,16 @@ export function fmtTzDate(unixSec: number): string {
   return `${d.getUTCFullYear()}-${_p2(d.getUTCMonth() + 1)}-${_p2(d.getUTCDate())}`;
 }
 
+/** Display helper — "HH:MM" (24h, zero-padded) in the active zone.
+ *  Reads _mode so Svelte components re-render on toggle. DISPLAY only. */
+export function fmtTzTime(unixSec: number): string {
+  const d = new Date(unixSec * 1000);
+  if (_mode === 'local') {
+    return `${_p2(d.getHours())}:${_p2(d.getMinutes())}`;
+  }
+  return `${_p2(d.getUTCHours())}:${_p2(d.getUTCMinutes())}`;
+}
+
 /** Short label for the active zone, for UI chips/toggles.
  *  UTC → "UTC"; local → the browser's zone abbreviation (e.g. "PST", "GMT+2"). */
 export function tzShortLabel(): string {
