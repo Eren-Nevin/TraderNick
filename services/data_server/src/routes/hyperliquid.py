@@ -3928,7 +3928,7 @@ async def wallet_token_last_day(request):
                   AND time >= {until:DateTime} - INTERVAL 2 DAY
             )
             SELECT sum(abs(amount)) AS amt
-            FROM tradernick.hl_position_history
+            FROM tradernick.hl_position_history FINAL
             WHERE token = {token:String} AND wallet = {wallet:String}
               AND time = (SELECT t FROM latest)
               AND time >= {until:DateTime} - INTERVAL 2 DAY
