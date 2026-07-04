@@ -768,6 +768,13 @@
         {snapshotIso}{#if live && posFetchedAt}<span class="text-zinc-400"> {fmtTzTime(posFetchedAt)}</span>{/if}
         {#if live}
           <span class="text-emerald-400 text-sm">· live</span>
+          <button
+            type="button"
+            onclick={() => loadPositions(snapshotIso)}
+            disabled={posLoading}
+            class="text-[11px] font-sans px-2 py-0.5 rounded border border-zinc-700 bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700/50 disabled:opacity-40 disabled:cursor-default whitespace-nowrap"
+            title="Refresh the live snapshot"
+          >↻ Refresh</button>
         {:else}
           <!-- Jump straight back to today/live without dragging the slider to
                the exact current day. Exits range mode too. -->
