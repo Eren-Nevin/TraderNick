@@ -5144,7 +5144,7 @@
 
   // ── Backtracker: click a bar → wallets whose position changed most in the
   // lookback ending at that bar. Dedicated dialog (BacktrackerDialog).
-  type BtRow = { wallet: string; amt_old: number; amt_new: number; usd_old: number; usd_new: number; unrealized_old: number; account_value?: number; categories?: string[] };
+  type BtRow = { wallet: string; amt_old: number; amt_new: number; usd_old: number; usd_new: number; unrealized_old: number; account_value?: number; gross_buy?: number; gross_sell?: number; categories?: string[] };
   let btDialogOpen = $state(false);
   // "Only <group>" toggle: filter the dialog to the backtracker's selected wallet
   // group. Persists across bar-clicks within this widget.

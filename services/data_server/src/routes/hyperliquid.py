@@ -2791,10 +2791,30 @@ async def position_change_wallets(request):
         )
         acct = {w: float(v) for w, v in ar.result_rows}
 
+    # Gross fills per wallet over the SAME window [t_prev, t_end) — actual buy/sell
+    # trade volume ($, execution price). Round-trips show both legs (vs the net
+    # position-change columns); lets the dialog reconcile with the flow marker.
+    gross: dict[str, tuple[float, float]] = {}
+    if wallets:
+        gr = await ch.query(
+            """
+            SELECT wallet,
+                   sumIf(size * price, side = 'B') AS gbuy,
+                   sumIf(size * price, side = 'A') AS gsell
+            FROM tradernick.hl_fills FINAL
+            WHERE token = {tok:String} AND time >= {tp:DateTime} AND time < {te:DateTime}
+              AND wallet IN {ws:Array(String)}
+            GROUP BY wallet
+            """,
+            parameters={"tok": token, "tp": t_prev, "te": t_end, "ws": wallets},
+        )
+        gross = {w: (float(gb), float(gs)) for w, gb, gs in gr.result_rows}
+
     out = [
         {"wallet": w, "amt_old": float(ao), "amt_new": float(an),
          "usd_old": float(uo), "usd_new": float(un), "unrealized_old": float(up),
          "account_value": acct.get(w, 0.0),
+         "gross_buy": gross.get(w, (0.0, 0.0))[0], "gross_sell": gross.get(w, (0.0, 0.0))[1],
          "categories": list(cats) if cats else []}
         for (w, an, ao, un, uo, up, cats) in rows.result_rows
     ]

@@ -15,6 +15,7 @@
     usd_old: number; usd_new: number;
     unrealized_old: number;
     account_value?: number;
+    gross_buy?: number; gross_sell?: number;
     categories?: string[];
   };
 
@@ -116,6 +117,7 @@
     if (k === 'new') return Math.abs(r.usd_new);
     if (k === 'upnl') return r.unrealized_old;
     if (k === 'acct') return r.account_value ?? 0;
+    if (k === 'gross') return (r.gross_buy ?? 0) + (r.gross_sell ?? 0);
     return 0;
   }
   let sortedRows = $derived.by(() => {
@@ -188,6 +190,7 @@
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('new')}>New position{sortArrow('new')}</th>
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('upnl')}>Old uPnL{sortArrow('upnl')}</th>
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('acct')} title="Total open interest — the wallet's total open position value (notional) across all tokens at the snapshot">Total OI{sortArrow('acct')}</th>
+                <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('gross')} title="Gross buy / sell fill volume ($, execution price) in this token over the window — both legs of round-trips, so it reconciles with the chart's flow marker (unlike the net Change column)">Bought / Sold{sortArrow('gross')}</th>
                 <th class="px-3 py-1.5 text-left font-normal" title="The two 15-min snapshots compared: start (T−lookback) → end (clicked bar)">Snapshots (UTC)</th>
               </tr>
             </thead>
@@ -220,6 +223,13 @@
                   </td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-300">
                     {r.account_value ? fmtUsd(r.account_value) : '—'}
+                  </td>
+                  <td class="px-3 py-1.5 text-right font-mono tabular-nums whitespace-nowrap">
+                    {#if (r.gross_buy ?? 0) === 0 && (r.gross_sell ?? 0) === 0}
+                      <span class="text-zinc-600">—</span>
+                    {:else}
+                      <span class="text-emerald-400">{fmtUsd(r.gross_buy ?? 0)}</span><span class="text-zinc-600">/</span><span class="text-rose-400">{fmtUsd(r.gross_sell ?? 0)}</span>
+                    {/if}
                   </td>
                   <td class="px-3 py-1.5 font-mono text-[11px] text-zinc-400 whitespace-nowrap">
                     {startLabel}<span class="text-zinc-600"> → </span>{endLabel}
