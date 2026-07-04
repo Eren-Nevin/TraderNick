@@ -83,7 +83,7 @@
   let instances = $state<ChartInstanceT[]>(defaultLayout());
   let hydrated = $state(false);
 
-  let syncZoom = $state(true);
+  let syncZoom = $state(false); // off by default — each chart zooms/pans independently
   let syncToken = $state(false);
   // Master "Sync Weekend lines" toggle — flipping it propagates the value
   // to every chart's instance.showWeekLines so the page-level switch is
