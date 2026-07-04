@@ -14,6 +14,7 @@
     amt_old: number; amt_new: number;
     usd_old: number; usd_new: number;
     unrealized_old: number;
+    account_value?: number;
     categories?: string[];
   };
 
@@ -29,6 +30,9 @@
     snapshotDate = '',
     loading = false,
     error: errMsg = null,
+    groupName = null,
+    groupOnly = false,
+    onToggleGroupOnly = undefined,
     onClose
   }: {
     open: boolean;
@@ -43,6 +47,11 @@
     snapshotDate?: string;
     loading?: boolean;
     error?: string | null;
+    /** When the backtracker has a wallet group selected, its name — enables the
+     *  "Only <group>" filter toggle. null = no group → toggle hidden. */
+    groupName?: string | null;
+    groupOnly?: boolean;
+    onToggleGroupOnly?: (() => void) | undefined;
     onClose: () => void;
   } = $props();
 
@@ -106,6 +115,7 @@
     if (k === 'change') return Math.abs(dAmt(r));
     if (k === 'new') return Math.abs(r.usd_new);
     if (k === 'upnl') return r.unrealized_old;
+    if (k === 'acct') return r.account_value ?? 0;
     return 0;
   }
   let sortedRows = $derived.by(() => {
@@ -139,7 +149,20 @@
           {#if lookback}<span class="text-zinc-500">· Δ</span><span class="text-zinc-400">{lookback}</span>{/if}
           {#if timeLabel}<span class="text-zinc-500">to</span><span class="text-zinc-400">{timeLabel} {tzShortLabel()}</span>{/if}
         </div>
-        <button type="button" class="text-zinc-500 hover:text-zinc-200 px-1.5 py-0.5 cursor-pointer" onclick={onClose} aria-label="Close">✕</button>
+        <div class="flex items-center gap-2">
+          {#if groupName && onToggleGroupOnly}
+            <!-- Filter to the backtracker's selected wallet group (vs all wallets). -->
+            <button
+              type="button"
+              onclick={onToggleGroupOnly}
+              class="text-xs px-2 py-0.5 rounded border transition-colors {groupOnly
+                ? 'bg-blue-600 border-blue-500 text-white'
+                : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'}"
+              title="Show only wallets in the '{groupName}' group (the backtracker's selected group)"
+            >Only {groupName}</button>
+          {/if}
+          <button type="button" class="text-zinc-500 hover:text-zinc-200 px-1.5 py-0.5 cursor-pointer" onclick={onClose} aria-label="Close">✕</button>
+        </div>
       </header>
       <div class="px-4 py-2 text-xs text-zinc-500 border-b border-zinc-800">
         <span class="text-zinc-400">Click</span> address to copy ·
@@ -164,6 +187,7 @@
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('change')}>Change{sortArrow('change')}</th>
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('new')}>New position{sortArrow('new')}</th>
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('upnl')}>Old uPnL{sortArrow('upnl')}</th>
+                <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('acct')} title="Total open position value across all tokens at the snapshot (equity isn't stored historically)">Account Value{sortArrow('acct')}</th>
                 <th class="px-3 py-1.5 text-left font-normal" title="The two 15-min snapshots compared: start (T−lookback) → end (clicked bar)">Snapshots (UTC)</th>
               </tr>
             </thead>
@@ -193,6 +217,9 @@
                   </td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums {r.unrealized_old >= 0 ? 'text-emerald-400' : 'text-rose-400'}">
                     {fmtUsd(r.unrealized_old)}
+                  </td>
+                  <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-300">
+                    {r.account_value ? fmtUsd(r.account_value) : '—'}
                   </td>
                   <td class="px-3 py-1.5 font-mono text-[11px] text-zinc-400 whitespace-nowrap">
                     {startLabel}<span class="text-zinc-600"> → </span>{endLabel}

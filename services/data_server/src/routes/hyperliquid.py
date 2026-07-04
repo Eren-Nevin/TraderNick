@@ -2713,6 +2713,16 @@ async def position_change_wallets(request):
     t_prev = t_end - _BACKTRACK_LB[lb]
 
     ch = await client()
+    # Optional group filter (group=<id>): restrict to that wallet group's members
+    # — the "only selected group" toggle in the Backtracker dialog. Same membership
+    # resolution as group_fill_pressure. Empty/absent → all wallets.
+    mem = ""
+    if request.args.get("group"):
+        try:
+            mem = " AND " + _cutoff_membership_sql(
+                await _resolve_group_passing(ch, request), col="wallet")
+        except ValueError:
+            mem = ""
     # UNION the two snapshots tagged e(nd)/s(tart), then per-wallet sum the signed
     # position across sides & buckets. (UNION not FULL JOIN — CH fills a missing
     # join key with '' not NULL, so coalesce on the key wouldn't work.)
@@ -2731,7 +2741,7 @@ async def position_change_wallets(request):
                    argMaxMerge(size_state)  * if(side = 'long', 1, -1) AS u,
                    0.0 AS p
             FROM tradernick.hl_position_history_15m
-            WHERE token = {tok:String} AND bucket = {te:DateTime}
+            WHERE token = {tok:String} AND bucket = {te:DateTime}""" + mem + """
             GROUP BY wallet, side
             UNION ALL
             SELECT wallet, 's' AS tag,
@@ -2739,7 +2749,7 @@ async def position_change_wallets(request):
                    argMaxMerge(size_state)  * if(side = 'long', 1, -1) AS u,
                    argMaxMerge(pnl_state)   AS p
             FROM tradernick.hl_position_history_15m
-            WHERE token = {tok:String} AND bucket = {tp:DateTime}
+            WHERE token = {tok:String} AND bucket = {tp:DateTime}""" + mem + """
             GROUP BY wallet, side
         )
         GROUP BY wallet
@@ -2758,9 +2768,29 @@ async def position_change_wallets(request):
     price = (float(pr.result_rows[0][0])
              if (pr.result_rows and pr.result_rows[0][0] is not None) else 0.0)
 
+    # Account value per wallet ≈ total open position notional across ALL tokens at
+    # T (equity isn't stored — only per-position size — so this is the closest
+    # historical figure). One extra query over the T bucket for the shown wallets.
+    wallets = [r[0] for r in rows.result_rows]
+    acct: dict[str, float] = {}
+    if wallets:
+        ar = await ch.query(
+            """
+            SELECT wallet, sum(v) AS av FROM (
+                SELECT wallet, argMaxMerge(size_state) AS v
+                FROM tradernick.hl_position_history_15m
+                WHERE bucket = {te:DateTime} AND wallet IN {ws:Array(String)}
+                GROUP BY wallet, token, side
+            ) GROUP BY wallet
+            """,
+            parameters={"te": t_end, "ws": wallets},
+        )
+        acct = {w: float(v) for w, v in ar.result_rows}
+
     out = [
         {"wallet": w, "amt_old": float(ao), "amt_new": float(an),
          "usd_old": float(uo), "usd_new": float(un), "unrealized_old": float(up),
+         "account_value": acct.get(w, 0.0),
          "categories": list(cats) if cats else []}
         for (w, an, ao, un, uo, up, cats) in rows.result_rows
     ]

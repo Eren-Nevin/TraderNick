@@ -4,7 +4,7 @@ import type { RequestHandler } from './$types';
 
 // Proxy for /hyperliquid/position_change_wallets — Backtracker dialog: top-N
 // wallets by position change in one token over a lookback ending at the clicked bar.
-const PASSTHROUGH = ['token', 'time', 'lookback', 'n'];
+const PASSTHROUGH = ['token', 'time', 'lookback', 'n', 'group'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

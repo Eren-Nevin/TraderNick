@@ -5144,8 +5144,16 @@
 
   // ── Backtracker: click a bar → wallets whose position changed most in the
   // lookback ending at that bar. Dedicated dialog (BacktrackerDialog).
-  type BtRow = { wallet: string; amt_old: number; amt_new: number; usd_old: number; usd_new: number; unrealized_old: number; categories?: string[] };
+  type BtRow = { wallet: string; amt_old: number; amt_new: number; usd_old: number; usd_new: number; unrealized_old: number; account_value?: number; categories?: string[] };
   let btDialogOpen = $state(false);
+  // "Only <group>" toggle: filter the dialog to the backtracker's selected wallet
+  // group. Persists across bar-clicks within this widget.
+  let btGroupOnly = $state(false);
+  let btDialogGroupName = $derived(
+    instance.kind === 'backtracker' && instance.btGroupId
+      ? (walletPinsStore.groups.find((g) => g.id === instance.btGroupId)?.name ?? null)
+      : null
+  );
   let btLoading = $state(false);
   let btError = $state<string | null>(null);
   let btRows = $state<BtRow[]>([]);
@@ -5346,16 +5354,24 @@
     // Provisional window (refined from the server's snapped buckets below).
     btEndSec = Math.floor(barTimeSec);
     btStartSec = Math.floor(barTimeSec) - (_BT_LB_SECS[lb] ?? 3600);
+    btDialogOpen = true;
+    await fetchBtRows();
+  }
+
+  // Fetch the position-change rows for the current dialog state. Re-runnable so
+  // the "Only <group>" toggle can re-query without re-opening.
+  async function fetchBtRows() {
+    if (!btToken) return;
     btRows = [];
     btError = null;
     btLoading = true;
-    btDialogOpen = true;
     if (btFetchCtl) btFetchCtl.abort();
     btFetchCtl = new AbortController();
     try {
       const qs = new URLSearchParams({
-        token: instance.token, time: String(Math.floor(barTimeSec)), lookback: lb, n: '100'
+        token: btToken, time: String(btTimeSec), lookback: btLookbackLabel, n: '100'
       });
+      if (btGroupOnly && instance.btGroupId) qs.set('group', instance.btGroupId);
       const res = await fetch(`/api/hyperliquid/position_change_wallets?${qs}`, { signal: btFetchCtl.signal });
       if (!res.ok) throw new Error(`position_change_wallets ${res.status}`);
       const body = await res.json();
@@ -5371,6 +5387,11 @@
     } finally {
       btLoading = false;
     }
+  }
+
+  function toggleBtGroupOnly() {
+    btGroupOnly = !btGroupOnly;
+    fetchBtRows();
   }
 
   let canHaveOverlays = $derived(
@@ -9145,6 +9166,9 @@
   snapshotDate={btSnapshotDate}
   loading={btLoading}
   error={btError}
+  groupName={btDialogGroupName}
+  groupOnly={btGroupOnly}
+  onToggleGroupOnly={btDialogGroupName ? toggleBtGroupOnly : undefined}
   onClose={() => { btDialogOpen = false; if (btFetchCtl) btFetchCtl.abort(); }}
 />
 
