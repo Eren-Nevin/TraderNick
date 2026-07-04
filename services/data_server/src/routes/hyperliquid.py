@@ -2955,25 +2955,28 @@ async def group_fill_pressure(request):
             )
             pnl_line = [{"time": int(t), "value": base + float(v)} for t, v in lr.result_rows]
     # Net position of the group at each BAR START (netpos=1): signed OI (long +,
-    # short −) summed over the group's wallets, from the position-history rollup
-    # sampled at bar-boundary buckets. 15m interval → 15m rollup; else 1h.
+    # short −) summed over the group's wallets, sampled at bar-boundary snapshots.
+    # Base bars come from the RAW hl_position_history (authoritative; argMax dedups,
+    # token-first ORDER BY keeps it cheap). The most-recent bars the raw hasn't
+    # published yet (~25m DeFiStream lag) are reconstructed from fills via
+    # positions.positions_at — same as the Backtracker dialog — so the marker shows
+    # on the last few bars instead of dropping off.
     net_pos = []
     if request.args.get("netpos") in ("1", "true", "yes"):
-        roll = "hl_position_history_15m" if interval == "15m" else "hl_position_history_1h"
-        # net + per-bar count of wallets net-long vs net-short (each wallet's
-        # signed position summed over sides first, then classified). Counts power
-        # the Consensus parenthesis (#long/#short) on the Net Position marker.
+        # net + per-bar count of wallets net-long vs net-short (each wallet's signed
+        # position summed over sides first, then classified). Counts power the
+        # Consensus parenthesis (#long/#short) on the Net Position marker.
         npr = await ch.query(
-            f"""
+            """
             SELECT t, sum(wv) AS net, countIf(wv > 0) AS n_long, countIf(wv < 0) AS n_short FROM (
                 SELECT t, wallet, sum(v) AS wv FROM (
-                    SELECT toUnixTimestamp(bucket) AS t, wallet, side,
-                           argMaxMerge(size_state) * if(side = 'long', 1, -1) AS v
-                    FROM tradernick.{roll}
-                    WHERE token = {{tok:String}} AND bucket >= {{s:DateTime}} AND bucket < {{u:DateTime}}
-                      AND toUnixTimestamp(bucket) % {{sec:UInt32}} = 0
+                    SELECT toUnixTimestamp(time) AS t, wallet, side,
+                           argMax(size, time) * if(side = 'long', 1, -1) AS v
+                    FROM tradernick.hl_position_history
+                    WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
+                      AND toUnixTimestamp(time) % {sec:UInt32} = 0
                       AND """ + member + """
-                    GROUP BY bucket, wallet, side
+                    GROUP BY time, wallet, side
                 )
                 GROUP BY t, wallet
             )
@@ -2983,6 +2986,30 @@ async def group_fill_pressure(request):
         )
         net_pos = [{"time": int(t), "net": float(n), "n_long": int(nl), "n_short": int(ns)}
                    for t, n, nl, ns in npr.result_rows]
+        # Reconstruct the recent bars past the raw's latest snapshot.
+        def _naive(ts: int) -> datetime:
+            return datetime.fromtimestamp(ts, timezone.utc).replace(tzinfo=None)
+        last_bar = int(until_dt.timestamp()) // sec * sec
+        if net_pos:
+            anchor, start_ts = _naive(net_pos[-1]["time"]), net_pos[-1]["time"] + sec
+        else:
+            anchor = await latest_snapshot_bucket(ch, token, until_dt)
+            start_ts = (int(anchor.timestamp()) // sec * sec + sec) if anchor else None
+        if anchor is not None and start_ts is not None:
+            recon_times = list(range(start_ts, last_bar + 1, sec))[:12]  # cap the fan-out
+            mem_and = " AND " + member
+
+            async def _recon(ts: int) -> dict:
+                pos = await positions_at(ch, token=token, at_time=_naive(ts),
+                                         base_bucket=anchor, member=mem_and)
+                vals = pos.values()
+                return {"time": ts,
+                        "net": sum(p["size_usd"] for p in vals),
+                        "n_long": sum(1 for p in vals if p["amount"] > 1e-9),
+                        "n_short": sum(1 for p in vals if p["amount"] < -1e-9)}
+
+            if recon_times:
+                net_pos.extend(await asyncio.gather(*[_recon(ts) for ts in recon_times]))
     # Market-wide SPOT volume delta per bar (spotvd=1): Σ (buyer_taker −
     # seller_taker) × close from Binance spot 1m. Not group-scoped.
     spot_vd = []
