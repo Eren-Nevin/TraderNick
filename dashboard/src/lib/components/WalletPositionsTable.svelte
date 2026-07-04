@@ -70,6 +70,14 @@
     return (r >= 0 ? '+' : '') + (r * 100).toFixed(1) + '%';
   }
 
+  // ── Token filter (substring, case-insensitive) — for wallets holding many
+  // positions at once. Applied before sort; header stats reflect the filtered set. ──
+  let tokenFilter = $state('');
+  const filtered = $derived.by(() => {
+    const q = tokenFilter.trim().toLowerCase();
+    return q ? positions.filter((p) => p.token.toLowerCase().includes(q)) : positions;
+  });
+
   // ── Client-side sort. '' = incoming order (server already sorts by notional). ──
   let sortKey = $state<string>('');
   let sortDir = $state<1 | -1>(-1);
@@ -85,9 +93,9 @@
   // Token/Side are string columns → localeCompare; everything else is numeric.
   const STRING_KEYS = new Set(['token', 'side']);
   let sortedRows = $derived.by(() => {
-    if (!sortKey) return positions;
+    if (!sortKey) return filtered;
     const dir = sortDir;
-    return [...positions].sort((a, b) => {
+    return [...filtered].sort((a, b) => {
       if (STRING_KEYS.has(sortKey)) {
         const av = String((a as unknown as Record<string, unknown>)[sortKey] ?? '');
         const bv = String((b as unknown as Record<string, unknown>)[sortKey] ?? '');
@@ -99,8 +107,8 @@
     });
   });
 
-  const totalNotional = $derived(positions.reduce((s, p) => s + Math.abs(p.size_usd), 0));
-  const totalUnreal = $derived(positions.reduce((s, p) => s + p.unrealized_pnl, 0));
+  const totalNotional = $derived(filtered.reduce((s, p) => s + Math.abs(p.size_usd), 0));
+  const totalUnreal = $derived(filtered.reduce((s, p) => s + p.unrealized_pnl, 0));
 </script>
 
 <div class="h-full flex flex-col text-sm border border-zinc-800 rounded-lg overflow-hidden" use:stopDragEvents>
@@ -113,8 +121,20 @@
       <span class="inline-block w-3 h-3 rounded-full border-2 border-zinc-600 border-t-blue-400 animate-spin" title="Loading…"></span>
     {/if}
     {#if positions.length > 0}
+      <div class="relative">
+        <input
+          type="text"
+          bind:value={tokenFilter}
+          placeholder="Filter token…"
+          class="w-28 pl-2 pr-5 py-0.5 rounded border border-zinc-700 bg-zinc-900 text-zinc-200 text-xs placeholder-zinc-600 focus:outline-none focus:border-blue-500"
+          aria-label="Filter positions by token" />
+        {#if tokenFilter}
+          <button type="button" onclick={() => (tokenFilter = '')} title="Clear filter"
+            class="absolute right-1 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-zinc-200 text-xs leading-none">✕</button>
+        {/if}
+      </div>
       <span class="text-zinc-500 ml-auto">
-        {positions.length} open · {fmtUsd(totalNotional)} notional ·
+        {filtered.length}{tokenFilter.trim() ? ` / ${positions.length}` : ''} open · {fmtUsd(totalNotional)} notional ·
         <span class={totalUnreal > 0 ? 'text-emerald-400' : totalUnreal < 0 ? 'text-rose-400' : ''}>{fmtUsd(totalUnreal)}</span> uPnL
       </span>
     {/if}
@@ -125,6 +145,10 @@
     {:else if !loading && positions.length === 0}
       <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4 py-8">
         No open positions{live ? '' : ' in our snapshot for this day'}.
+      </div>
+    {:else if !loading && filtered.length === 0}
+      <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4 py-8">
+        No positions match “{tokenFilter.trim()}”.
       </div>
     {:else}
       <table class="w-full">
