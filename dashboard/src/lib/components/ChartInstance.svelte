@@ -5345,15 +5345,21 @@
     // otherwise only loaded once). Reactive — capsules update as it resolves.
     walletPinsStore.reload();
     const lb = instance.btLookback ?? '1h';
-    const d = new Date(barTimeSec * 1000);
+    // Align the dialog with the CLICKED BAR's flow window. A bar labelled T covers
+    // [T, T+interval) (that's what its net-flow marker sums), so the position-change
+    // window must END at the bar's CLOSE (T+interval), not its start — otherwise the
+    // dialog shows the PREVIOUS bar's change and won't reconcile with the marker.
+    const ivSecs = _BT_LB_SECS[instance.interval ?? '15m'] ?? 900;
+    const barEnd = Math.floor(barTimeSec) + ivSecs;
+    const d = new Date(barEnd * 1000);
     const p2 = (n: number) => String(n).padStart(2, '0');
     btSnapshotDate = `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`;
     btToken = instance.token;
     btLookbackLabel = lb;
-    btTimeSec = Math.floor(barTimeSec);
+    btTimeSec = barEnd;
     // Provisional window (refined from the server's snapped buckets below).
-    btEndSec = Math.floor(barTimeSec);
-    btStartSec = Math.floor(barTimeSec) - (_BT_LB_SECS[lb] ?? 3600);
+    btEndSec = barEnd;
+    btStartSec = barEnd - (_BT_LB_SECS[lb] ?? 3600);
     btDialogOpen = true;
     await fetchBtRows();
   }
