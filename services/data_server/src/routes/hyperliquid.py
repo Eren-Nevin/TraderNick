@@ -2684,8 +2684,9 @@ _BACKTRACK_LB = {
 async def position_change_wallets(request):
     """Backtracker: top-N wallets by |position change| in ONE token over a lookback
     ending at the clicked bar. Net change = each wallet's SIGNED open position at T
-    vs at T-lookback — two 15-min snapshots from hl_position_history_15m (token-first
-    ORDER BY), so it's O(wallets holding the token), independent of lookback length.
+    vs at T-lookback — two 15-min snapshots from the RAW hl_position_history (not the
+    _15m rollup: the raw is ~30m fresher, so recent bars actually have data — the
+    rollup lags 30-60m). O(wallets holding the token), independent of lookback.
     Params: token, time (unix secs of the clicked bar), lookback (15m|1h|4h|1d|7d),
     n (default 100, cap 200). Returns signed amounts (long +, short −) + the old
     position's unrealized PnL; the dialog derives change type / pct client-side."""
@@ -2737,19 +2738,21 @@ async def position_change_wallets(request):
                any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS categories
         FROM (
             SELECT wallet, 'e' AS tag,
-                   argMaxMerge(amount_state) * if(side = 'long', 1, -1) AS a,
-                   argMaxMerge(size_state)  * if(side = 'long', 1, -1) AS u,
+                   argMax(amount, time) * if(side = 'long', 1, -1) AS a,
+                   argMax(size,   time) * if(side = 'long', 1, -1) AS u,
                    0.0 AS p
-            FROM tradernick.hl_position_history_15m
-            WHERE token = {tok:String} AND bucket = {te:DateTime}""" + mem + """
+            FROM tradernick.hl_position_history
+            WHERE token = {tok:String}
+              AND time >= {te:DateTime} AND time < {te:DateTime} + INTERVAL 900 SECOND""" + mem + """
             GROUP BY wallet, side
             UNION ALL
             SELECT wallet, 's' AS tag,
-                   argMaxMerge(amount_state) * if(side = 'long', 1, -1) AS a,
-                   argMaxMerge(size_state)  * if(side = 'long', 1, -1) AS u,
-                   argMaxMerge(pnl_state)   AS p
-            FROM tradernick.hl_position_history_15m
-            WHERE token = {tok:String} AND bucket = {tp:DateTime}""" + mem + """
+                   argMax(amount, time) * if(side = 'long', 1, -1) AS a,
+                   argMax(size,   time) * if(side = 'long', 1, -1) AS u,
+                   argMax(unrealized_pnl, time) AS p
+            FROM tradernick.hl_position_history
+            WHERE token = {tok:String}
+              AND time >= {tp:DateTime} AND time < {tp:DateTime} + INTERVAL 900 SECOND""" + mem + """
             GROUP BY wallet, side
         )
         GROUP BY wallet
@@ -2768,18 +2771,19 @@ async def position_change_wallets(request):
     price = (float(pr.result_rows[0][0])
              if (pr.result_rows and pr.result_rows[0][0] is not None) else 0.0)
 
-    # Account value per wallet ≈ total open position notional across ALL tokens at
-    # T (equity isn't stored — only per-position size — so this is the closest
-    # historical figure). One extra query over the T bucket for the shown wallets.
+    # Total OI per wallet = total open position notional (size) across ALL tokens at
+    # T. One extra query over the T bucket for the shown wallets (raw table, same
+    # freshness as the main query).
     wallets = [r[0] for r in rows.result_rows]
     acct: dict[str, float] = {}
     if wallets:
         ar = await ch.query(
             """
             SELECT wallet, sum(v) AS av FROM (
-                SELECT wallet, argMaxMerge(size_state) AS v
-                FROM tradernick.hl_position_history_15m
-                WHERE bucket = {te:DateTime} AND wallet IN {ws:Array(String)}
+                SELECT wallet, argMax(size, time) AS v
+                FROM tradernick.hl_position_history
+                WHERE time >= {te:DateTime} AND time < {te:DateTime} + INTERVAL 900 SECOND
+                  AND wallet IN {ws:Array(String)}
                 GROUP BY wallet, token, side
             ) GROUP BY wallet
             """,
