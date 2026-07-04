@@ -2695,8 +2695,15 @@ async def position_change_wallets(request):
     if not token:
         return response.json({"error": "missing token"}, status=400)
     lb = request.args.get("lookback", "1h")
-    if lb not in _BACKTRACK_LB:
-        return response.json({"error": f"lookback must be one of {list(_BACKTRACK_LB)}"}, status=400)
+    none_mode = lb == "none"
+    if none_mode:
+        # 'None' → ignore the lookback and use the clicked bar's OWN window
+        # [T, T+interval) instead of [T-lookback, T). Needs the chart interval.
+        iv = request.args.get("interval", "15m")
+        if iv not in _BACKTRACK_LB:
+            return response.json({"error": f"interval must be one of {list(_BACKTRACK_LB)}"}, status=400)
+    elif lb not in _BACKTRACK_LB:
+        return response.json({"error": f"lookback must be one of {list(_BACKTRACK_LB)} or 'none'"}, status=400)
     try:
         n = max(1, min(int(request.args.get("n", "100")), 200))
     except ValueError:
@@ -2708,11 +2715,14 @@ async def position_change_wallets(request):
         secs = int(float(time_arg))
     except ValueError:
         return response.json({"error": "bad time"}, status=400)
-    # Snap the clicked bar time DOWN to the 15-min grid (the rollup's bucket grain).
-    t_end = datetime.fromtimestamp(secs, tz=timezone.utc).replace(
+    # Snap the clicked bar time DOWN to the 15-min grid.
+    t0 = datetime.fromtimestamp(secs, tz=timezone.utc).replace(
         tzinfo=None, second=0, microsecond=0)
-    t_end = t_end.replace(minute=(t_end.minute // 15) * 15)
-    t_prev = t_end - _BACKTRACK_LB[lb]
+    t0 = t0.replace(minute=(t0.minute // 15) * 15)
+    if none_mode:
+        t_prev, t_end = t0, t0 + _BACKTRACK_LB[iv]   # the bar itself: [T, T+interval)
+    else:
+        t_end, t_prev = t0, t0 - _BACKTRACK_LB[lb]   # run-up to the bar: [T-lookback, T)
 
     ch = await client()
     # Optional group filter (group=<id>): restrict to that wallet group's members

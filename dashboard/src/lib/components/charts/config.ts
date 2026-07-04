@@ -1701,8 +1701,9 @@ export type ChartInstance = {
    *  from the first record) or a trailing N days. In the load key. */
   cvdLookback?: 'all' | '1h' | '4h' | '1' | '7' | '14' | '30' | '90';
   /** backtracker only: the position-change lookback window ending at the clicked
-   *  bar (dialog query). Display/dialog-only — not in the chart load key. */
-  btLookback?: '15m' | '30m' | '1h' | '4h' | '1d' | '7d';
+   *  bar (dialog query). 'none' → use the bar's OWN window [T, T+interval) instead.
+   *  Display/dialog-only — not in the chart load key. */
+  btLookback?: 'none' | '15m' | '30m' | '1h' | '4h' | '1d' | '7d';
   /** backtracker only: wallet group whose per-bar buy/sell pressure is overlaid
    *  as markers. null/'' = None (no markers). */
   btGroupId?: string | null;

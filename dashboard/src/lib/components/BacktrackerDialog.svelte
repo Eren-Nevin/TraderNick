@@ -150,8 +150,12 @@
         <div class="flex items-center gap-2">
           <span class="text-zinc-300 font-medium">Position changes</span>
           {#if token}<span class="text-zinc-500">·</span><span class="text-zinc-200">{token}</span>{/if}
-          {#if lookback}<span class="text-zinc-500">· Δ</span><span class="text-zinc-400">{lookback}</span>{/if}
-          {#if timeLabel}<span class="text-zinc-500">to</span><span class="text-zinc-400">{timeLabel} {tzShortLabel()}</span>{/if}
+          {#if lookback === 'none'}
+            <span class="text-zinc-500">· current bar</span>
+          {:else}
+            {#if lookback}<span class="text-zinc-500">· Δ</span><span class="text-zinc-400">{lookback}</span>{/if}
+            {#if timeLabel}<span class="text-zinc-500">to</span><span class="text-zinc-400">{timeLabel} {tzShortLabel()}</span>{/if}
+          {/if}
         </div>
         <div class="flex items-center gap-2">
           {#if groupName && onToggleGroupOnly}

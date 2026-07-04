@@ -5345,9 +5345,10 @@
     // otherwise only loaded once). Reactive — capsules update as it resolves.
     walletPinsStore.reload();
     const lb = instance.btLookback ?? '1h';
-    // Window is [T-lookback, T) — the run-up TO the clicked bar (T = bar start), by
-    // design. The bar's own net-flow marker covers [T, T+interval), so the flow of
-    // bar T reconciles with the dialog of the NEXT bar (T+interval), not this one.
+    // Default window is [T-lookback, T) — the run-up TO the clicked bar (T = bar
+    // start); the bar's own flow marker covers [T, T+interval), so flow(T) reconciles
+    // with the dialog of the NEXT bar. 'none' instead uses the bar's OWN window
+    // [T, T+interval) so the dialog matches THIS bar's marker.
     const d = new Date(barTimeSec * 1000);
     const p2 = (n: number) => String(n).padStart(2, '0');
     btSnapshotDate = `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`;
@@ -5355,8 +5356,14 @@
     btLookbackLabel = lb;
     btTimeSec = Math.floor(barTimeSec);
     // Provisional window (refined from the server's snapped buckets below).
-    btEndSec = Math.floor(barTimeSec);
-    btStartSec = Math.floor(barTimeSec) - (_BT_LB_SECS[lb] ?? 3600);
+    if (lb === 'none') {
+      const ivSecs = _BT_LB_SECS[instance.interval ?? '15m'] ?? 900;
+      btStartSec = Math.floor(barTimeSec);            // T (bar start)
+      btEndSec = Math.floor(barTimeSec) + ivSecs;     // T + interval (bar end)
+    } else {
+      btEndSec = Math.floor(barTimeSec);
+      btStartSec = Math.floor(barTimeSec) - (_BT_LB_SECS[lb] ?? 3600);
+    }
     btDialogOpen = true;
     await fetchBtRows();
   }
@@ -5374,6 +5381,8 @@
       const qs = new URLSearchParams({
         token: btToken, time: String(btTimeSec), lookback: btLookbackLabel, n: '100'
       });
+      // 'none' → server needs the chart interval to build the bar's own [T, T+interval).
+      if (btLookbackLabel === 'none') qs.set('interval', instance.interval ?? '15m');
       if (btGroupOnly && instance.btGroupId) qs.set('group', instance.btGroupId);
       const res = await fetch(`/api/hyperliquid/position_change_wallets?${qs}`, { signal: btFetchCtl.signal });
       if (!res.ok) throw new Error(`position_change_wallets ${res.status}`);
@@ -7245,10 +7254,11 @@
              changed over this window ending at the clicked bar. -->
         <select
           value={instance.btLookback ?? '1h'}
-          onchange={(e) => (instance.btLookback = e.currentTarget.value as '15m' | '30m' | '1h' | '4h' | '1d' | '7d')}
+          onchange={(e) => (instance.btLookback = e.currentTarget.value as 'none' | '15m' | '30m' | '1h' | '4h' | '1d' | '7d')}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          title="Lookback window (before the clicked bar) for the position-change dialog"
+          title="Position-change window for the dialog: Δ = the lookback BEFORE the clicked bar; None = the clicked bar itself [T, T+interval)"
         >
+          <option value="none">None (bar)</option>
           {#each ['15m', '30m', '1h', '4h', '1d', '7d'] as lb (lb)}
             <option value={lb}>Δ {lb}</option>
           {/each}
