@@ -134,6 +134,7 @@
   import AddOverlayDialog from '$lib/components/AddOverlayDialog.svelte';
   import SmartWalletsDialog from '$lib/components/SmartWalletsDialog.svelte';
   import BacktrackerDialog from '$lib/components/BacktrackerDialog.svelte';
+  import BacktrackerPositionsDialog from '$lib/components/BacktrackerPositionsDialog.svelte';
   import { fmtTzDateTime } from '$lib/stores/timezone.svelte';
   import { filtersStore } from '$lib/stores/filters.svelte';
   import { walletPinsStore } from '$lib/stores/walletPins.svelte';
@@ -5178,6 +5179,55 @@
   const btStartLabel = $derived(btStartSec ? fmtBtTime(btStartSec) : '');
   const btEndLabel = $derived(btEndSec ? fmtBtTime(btEndSec) : '');
 
+  // ── Backtracker "Net Position" dialog: clicking a bar in netpos marker mode opens
+  // the FULL group position book in the token (all holders) + per-wallet change,
+  // ranked SERVER-side by a query column (BacktrackerPositionsDialog). ──
+  type BtpRow = { wallet: string; side: 'long' | 'short'; amount: number; size_usd: number; entry_px: number | null; unrealized_pnl: number; roe: number | null; funding: number; change_amount: number; change_usd: number; categories?: string[] };
+  let btpDialogOpen = $state(false);
+  let btpLoading = $state(false);
+  let btpError = $state<string | null>(null);
+  let btpRows = $state<BtpRow[]>([]);
+  let btpPrice = $state(0);
+  let btpToken = $state('');
+  let btpLookbackLabel = $state('');
+  let btpSnapshotDate = $state('');
+  let btpOrder = $state('change');
+  let btpLimit = $state(20);
+  let btpTimeSec = $state(0);
+  let btpStartSec = $state(0);
+  let btpEndSec = $state(0);
+  let btpFetchCtl: AbortController | null = null;
+  const btpTimeLabel = $derived(btpTimeSec ? fmtTzDateTime(btpTimeSec) : '');
+  const btpStartLabel = $derived(btpStartSec ? fmtBtTime(btpStartSec) : '');
+  const btpEndLabel = $derived(btpEndSec ? fmtBtTime(btpEndSec) : '');
+
+  async function fetchBtpRows() {
+    if (!btpToken || !instance.btGroupId) return;
+    btpRows = [];
+    btpError = null;
+    btpLoading = true;
+    if (btpFetchCtl) btpFetchCtl.abort();
+    btpFetchCtl = new AbortController();
+    try {
+      const qs = new URLSearchParams({
+        token: btpToken, group: instance.btGroupId, time: String(btpTimeSec),
+        lookback: btpLookbackLabel, order: btpOrder, n: String(btpLimit),
+        interval: instance.interval ?? '15m'
+      });
+      const res = await fetch(`/api/hyperliquid/group_token_positions?${qs}`, { signal: btpFetchCtl.signal });
+      if (!res.ok) throw new Error(`group_token_positions ${res.status}`);
+      const body = await res.json();
+      btpRows = (body.rows ?? []) as BtpRow[];
+      btpPrice = Number(body.price ?? 0);
+      if (typeof body.time === 'number') btpEndSec = body.time;
+      if (typeof body.time_prev === 'number') btpStartSec = body.time_prev;
+    } catch (e) {
+      if ((e as DOMException)?.name !== 'AbortError') btpError = e instanceof Error ? e.message : String(e);
+    } finally {
+      btpLoading = false;
+    }
+  }
+
   // Backtracker group overlay: per-bar buy (green, belowBar) / sell (red,
   // aboveBar) pressure by the selected wallet group, fetched from
   // group_fill_pressure over the loaded window. None → no markers.
@@ -5345,6 +5395,27 @@
     // otherwise only loaded once). Reactive — capsules update as it resolves.
     walletPinsStore.reload();
     const lb = instance.btLookback ?? '1h';
+    // Net Position marker mode → the full group position book dialog (all holders +
+    // per-wallet change), not the flow/position-change table. Needs a group.
+    if (btMarkerModeR === 'netpos' && instance.btGroupId) {
+      const dn = new Date(barTimeSec * 1000);
+      const p2n = (n: number) => String(n).padStart(2, '0');
+      btpSnapshotDate = `${dn.getUTCFullYear()}-${p2n(dn.getUTCMonth() + 1)}-${p2n(dn.getUTCDate())}`;
+      btpToken = instance.token;
+      btpLookbackLabel = lb;
+      btpTimeSec = Math.floor(barTimeSec);
+      if (lb === 'none') {
+        const ivSecs = _BT_LB_SECS[instance.interval ?? '15m'] ?? 900;
+        btpStartSec = Math.floor(barTimeSec);
+        btpEndSec = Math.floor(barTimeSec) + ivSecs;
+      } else {
+        btpEndSec = Math.floor(barTimeSec);
+        btpStartSec = Math.floor(barTimeSec) - (_BT_LB_SECS[lb] ?? 3600);
+      }
+      btpDialogOpen = true;
+      await fetchBtpRows();
+      return;
+    }
     // Default window is [T-lookback, T) — the run-up TO the clicked bar (T = bar
     // start); the bar's own flow marker covers [T, T+interval), so flow(T) reconciles
     // with the dialog of the NEXT bar. 'none' instead uses the bar's OWN window
@@ -9183,6 +9254,26 @@
   groupOnly={btGroupOnly}
   onToggleGroupOnly={btDialogGroupName ? toggleBtGroupOnly : undefined}
   onClose={() => { btDialogOpen = false; if (btFetchCtl) btFetchCtl.abort(); }}
+/>
+
+<BacktrackerPositionsDialog
+  open={btpDialogOpen}
+  rows={btpRows}
+  price={btpPrice}
+  token={btpToken}
+  lookback={btpLookbackLabel}
+  timeLabel={btpTimeLabel}
+  startLabel={btpStartLabel}
+  endLabel={btpEndLabel}
+  snapshotDate={btpSnapshotDate}
+  loading={btpLoading}
+  error={btpError}
+  groupName={btDialogGroupName}
+  order={btpOrder}
+  onOrderChange={(o) => { btpOrder = o; fetchBtpRows(); }}
+  limit={btpLimit}
+  onLimitChange={(n) => { btpLimit = n; fetchBtpRows(); }}
+  onClose={() => { btpDialogOpen = false; if (btpFetchCtl) btpFetchCtl.abort(); }}
 />
 
 <style>

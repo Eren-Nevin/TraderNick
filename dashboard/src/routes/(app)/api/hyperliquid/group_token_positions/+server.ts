@@ -2,9 +2,10 @@ import { INTERNAL_DATA_SERVER_URL } from '$lib/server/env';
 import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
-// Proxy for /hyperliquid/position_change_wallets — Backtracker dialog: top-N
-// wallets by position change in one token over a lookback ending at the clicked bar.
-const PASSTHROUGH = ['token', 'time', 'lookback', 'interval', 'n', 'group'];
+// Proxy for /hyperliquid/group_token_positions — Backtracker "Net Position" dialog:
+// the full group position book in one token at a bar + per-wallet position change,
+// ranked server-side by `order`.
+const PASSTHROUGH = ['token', 'group', 'time', 'interval', 'lookback', 'order', 'n'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();
@@ -12,7 +13,7 @@ export const GET: RequestHandler = async ({ url, fetch }) => {
     const v = url.searchParams.get(k);
     if (v !== null) params.set(k, v);
   }
-  const res = await fetch(`${INTERNAL_DATA_SERVER_URL}/hyperliquid/position_change_wallets?${params}`);
+  const res = await fetch(`${INTERNAL_DATA_SERVER_URL}/hyperliquid/group_token_positions?${params}`);
   if (!res.ok) throw error(res.status, await res.text());
   return new Response(await res.text(), { status: 200, headers: { 'content-type': 'application/json' } });
 };

@@ -2870,6 +2870,131 @@ async def position_change_wallets(request):
     })
 
 
+# Server-side ranking column for the Net Position dialog. Keys map to the SELECT
+# aliases below (amount/size_usd are positive magnitudes; change_amount is signed).
+_GTP_ORDER = {
+    "change": "abs(change_amount)",                                  # |Δ position| (default)
+    "value":  "size_usd",                                           # position notional $
+    "upnl":   "abs(unrealized_pnl)",                                # |unrealized PnL|
+    "roe":    "abs(unrealized_pnl / nullif(amount * entry_px, 0))",  # |return on entry notional|
+    "entry":  "entry_px",                                           # entry price
+}
+
+
+@bp.get("/hyperliquid/group_token_positions")
+@throttled("heavy")
+async def group_token_positions(request):
+    """Backtracker 'Net Position' dialog: the FULL position book in ONE token for a
+    wallet GROUP at the clicked bar — every group member HOLDING the token (not just
+    those who changed), with the wallets-page columns (side / value / amount / entry
+    / uPnL / ROE / funding) plus the position CHANGE over the bar window. Ranked
+    SERVER-SIDE by `order` (the query column) so the top-N is a real cut, not a
+    client re-sort. Params: token, group, time, interval, lookback (15m|…|7d|none),
+    order (change|value|upnl|roe|entry), n (default 20, cap 50)."""
+    token = request.args.get("token")
+    group = request.args.get("group")
+    if not token or not group:
+        return response.json({"error": "missing token/group"}, status=400)
+    order = request.args.get("order", "change")
+    if order not in _GTP_ORDER:
+        return response.json({"error": f"order must be one of {list(_GTP_ORDER)}"}, status=400)
+    lb = request.args.get("lookback", "1h")
+    none_mode = lb == "none"
+    if none_mode:
+        iv = request.args.get("interval", "15m")
+        if iv not in _BACKTRACK_LB:
+            return response.json({"error": f"interval must be one of {list(_BACKTRACK_LB)}"}, status=400)
+    elif lb not in _BACKTRACK_LB:
+        return response.json({"error": f"lookback must be one of {list(_BACKTRACK_LB)} or 'none'"}, status=400)
+    try:
+        n = max(1, min(int(request.args.get("n", "20")), 50))
+    except ValueError:
+        n = 20
+    time_arg = request.args.get("time")
+    if not time_arg:
+        return response.json({"error": "missing time"}, status=400)
+    try:
+        secs = int(float(time_arg))
+    except ValueError:
+        return response.json({"error": "bad time"}, status=400)
+    t0 = datetime.fromtimestamp(secs, tz=timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
+    t0 = t0.replace(minute=(t0.minute // 15) * 15)
+    if none_mode:
+        t_prev, t_end = t0, t0 + _BACKTRACK_LB[iv]   # the bar itself: [T, T+interval)
+    else:
+        t_end, t_prev = t0, t0 - _BACKTRACK_LB[lb]   # run-up to the bar: [T-lookback, T)
+
+    ch = await client()
+    try:
+        member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
+    except ValueError as e:
+        return response.json({"error": str(e)}, status=400)
+
+    price = await mark_price(ch, token, t_end)
+    # Position detail from the freshest published snapshot ≤ t_end (the raw is
+    # authoritative; entry/uPnL/funding can't be reconstructed from fills). The
+    # CHANGE comes from fills over [t_prev, t_end) so it stays fresh + matches the
+    # Net Position marker on recent bars. LEFT JOIN keeps unchanged holders (Δ=0).
+    te_bucket = await latest_snapshot_bucket(ch, token, t_end)
+    out = []
+    if te_bucket is not None:
+        rows = await ch.query(
+            """
+            SELECT wallet, side, amount, size_usd, entry_px, unrealized_pnl, funding,
+                   change_amount, categories
+            FROM (
+                SELECT d.wallet AS wallet, d.side AS side, d.amt AS amount,
+                       d.sz AS size_usd, d.entry AS entry_px, d.upnl AS unrealized_pnl,
+                       d.fund AS funding, ifNull(c.d_amt, 0) AS change_amount,
+                       d.cats AS categories
+                FROM (
+                    SELECT wallet,
+                           argMax(side, time)          AS side,
+                           argMax(amount, time)        AS amt,
+                           argMax(size, time)          AS sz,
+                           argMax(avg_entry, time)     AS entry,
+                           argMax(unrealized_pnl, time) AS upnl,
+                           argMax(funding, time)       AS fund,
+                           any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS cats
+                    FROM tradernick.hl_position_history
+                    WHERE token = {tok:String}
+                      AND time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND
+                      AND """ + member + """
+                    GROUP BY wallet
+                ) d
+                LEFT JOIN (
+                    SELECT wallet, sum(if(side = 'B', size, -size)) AS d_amt
+                    FROM tradernick.hl_fills FINAL
+                    WHERE token = {tok:String} AND time >= {tp:DateTime} AND time < {te:DateTime}
+                      AND """ + member + """
+                    GROUP BY wallet
+                ) c ON d.wallet = c.wallet
+            )
+            ORDER BY """ + _GTP_ORDER[order] + """ DESC
+            LIMIT {n:UInt32}
+            """,
+            parameters={"tok": token, "b": te_bucket, "tp": t_prev, "te": t_end, "n": n},
+        )
+        for (w, side, amt, sz, entry, upnl, fund, dch, cats) in rows.result_rows:
+            amt, entry, upnl = float(amt), float(entry), float(upnl)
+            entry_notional = abs(amt) * entry
+            out.append({
+                "wallet": w, "side": side,
+                "amount": amt, "size_usd": float(sz),          # positive magnitudes + side
+                "entry_px": entry or None, "unrealized_pnl": upnl,
+                "roe": (upnl / entry_notional) if entry_notional else None,
+                "funding": float(fund),
+                "change_amount": float(dch), "change_usd": float(dch) * price,
+                "categories": list(cats) if cats else [],
+            })
+    return response.json({
+        "token": token, "order": order, "price": price,
+        "time": int(t_end.replace(tzinfo=timezone.utc).timestamp()),
+        "time_prev": int(t_prev.replace(tzinfo=timezone.utc).timestamp()),
+        "rows": out,
+    })
+
+
 @bp.get("/hyperliquid/group_fill_pressure")
 @throttled("heavy")
 async def group_fill_pressure(request):
