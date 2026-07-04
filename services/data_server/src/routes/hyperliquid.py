@@ -2878,6 +2878,7 @@ _GTP_ORDER = {
     "upnl":   "abs(unrealized_pnl)",                                # |unrealized PnL|
     "roe":    "abs(unrealized_pnl / nullif(amount * entry_px, 0))",  # |return on entry notional|
     "entry":  "entry_px",                                           # entry price
+    "last_change": "last_change",                                   # most recent fill ts
 }
 
 
@@ -2941,12 +2942,12 @@ async def group_token_positions(request):
         rows = await ch.query(
             """
             SELECT wallet, side, amount, size_usd, entry_px, unrealized_pnl, funding,
-                   change_amount, categories
+                   change_amount, last_change, categories
             FROM (
                 SELECT d.wallet AS wallet, d.side AS side, d.amt AS amount,
                        d.sz AS size_usd, d.entry AS entry_px, d.upnl AS unrealized_pnl,
                        d.fund AS funding, ifNull(c.d_amt, 0) AS change_amount,
-                       d.cats AS categories
+                       ifNull(l.lc, 0) AS last_change, d.cats AS categories
                 FROM (
                     SELECT wallet,
                            argMax(side, time)          AS side,
@@ -2969,13 +2970,22 @@ async def group_token_positions(request):
                       AND """ + member + """
                     GROUP BY wallet
                 ) c ON d.wallet = c.wallet
+                LEFT JOIN (
+                    -- most recent fill for this token per wallet, as of the bar
+                    -- (max is dedup-safe → no FINAL). 0 when the wallet never traded it.
+                    SELECT wallet, toUnixTimestamp(max(time)) AS lc
+                    FROM tradernick.hl_fills
+                    WHERE token = {tok:String} AND time < {te:DateTime}
+                      AND """ + member + """
+                    GROUP BY wallet
+                ) l ON d.wallet = l.wallet
             )
             ORDER BY """ + _GTP_ORDER[order] + """ DESC
             LIMIT {n:UInt32}
             """,
             parameters={"tok": token, "b": te_bucket, "tp": t_prev, "te": t_end, "n": n},
         )
-        for (w, side, amt, sz, entry, upnl, fund, dch, cats) in rows.result_rows:
+        for (w, side, amt, sz, entry, upnl, fund, dch, lc, cats) in rows.result_rows:
             amt, entry, upnl = float(amt), float(entry), float(upnl)
             entry_notional = abs(amt) * entry
             out.append({
@@ -2985,6 +2995,7 @@ async def group_token_positions(request):
                 "roe": (upnl / entry_notional) if entry_notional else None,
                 "funding": float(fund),
                 "change_amount": float(dch), "change_usd": float(dch) * price,
+                "last_change": int(lc),
                 "categories": list(cats) if cats else [],
             })
     return response.json({

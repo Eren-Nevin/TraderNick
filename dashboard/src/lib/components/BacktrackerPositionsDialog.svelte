@@ -7,7 +7,7 @@
   // (20/50). Column-header clicks re-sort the returned rows CLIENT-side only.
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import WalletAddress from '$lib/components/WalletAddress.svelte';
-  import { tzShortLabel } from '$lib/stores/timezone.svelte';
+  import { tzShortLabel, fmtTzDateTime } from '$lib/stores/timezone.svelte';
 
   type Row = {
     wallet: string;
@@ -20,6 +20,7 @@
     funding: number;
     change_amount: number;  // signed: + net bought, − net sold
     change_usd: number;     // signed
+    last_change: number;    // unix s of the wallet's most recent fill in this token (0 = never)
     categories?: string[];
   };
 
@@ -64,7 +65,8 @@
   } = $props();
 
   const ORDER_LABELS: Record<string, string> = {
-    change: 'Net change', value: 'Position value', upnl: 'Unrealized PnL', roe: 'ROE', entry: 'Entry'
+    change: 'Net change', value: 'Position value', upnl: 'Unrealized PnL', roe: 'ROE',
+    entry: 'Entry', last_change: 'Last change'
   };
 
   function fmtUsd(n: number): string {
@@ -93,6 +95,10 @@
     if (r === null || r === undefined || !isFinite(r)) return '—';
     return (r >= 0 ? '+' : '') + (r * 100).toFixed(1) + '%';
   }
+  // Latest fill time in the token, "MM-DD HH:MM" in the active zone (0 = never traded).
+  function fmtLastChange(ts: number): string {
+    return ts ? fmtTzDateTime(ts).slice(5) : '—';
+  }
 
   // ── client-side sort. '' = server order (already ranked by `order`). ──
   let sortKey = $state<string>('');
@@ -113,6 +119,7 @@
     if (k === 'roe') return r.roe ?? 0;
     if (k === 'funding') return r.funding;
     if (k === 'change') return Math.abs(r.change_amount);
+    if (k === 'last_change') return r.last_change;
     return 0;
   }
   let sortedRows = $derived.by(() => {
@@ -204,6 +211,7 @@
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('roe')} title="Return on entry notional (unleveraged) — margin isn't stored for past snapshots">ROE{sortArrow('roe')}</th>
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('funding')}>Funding{sortArrow('funding')}</th>
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('change')} title="Net position change over the bar window (fills-based)">Change{sortArrow('change')}</th>
+                <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('last_change')} title="The wallet's most recent fill in this token, as of the bar">Last change{sortArrow('last_change')}</th>
               </tr>
             </thead>
             <tbody>
@@ -234,6 +242,7 @@
                       <div class="text-[11px] text-zinc-500">{fmtAmt(Math.abs(r.change_amount))} {token}</div>
                     {/if}
                   </td>
+                  <td class="px-3 py-1.5 text-right font-mono tabular-nums text-[11px] whitespace-nowrap {r.last_change ? 'text-zinc-400' : 'text-zinc-600'}">{fmtLastChange(r.last_change)}</td>
                 </tr>
               {/each}
             </tbody>
