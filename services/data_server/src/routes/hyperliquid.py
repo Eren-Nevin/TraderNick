@@ -2791,16 +2791,18 @@ async def position_change_wallets(request):
         )
         acct = {w: float(v) for w, v in ar.result_rows}
 
-    # Gross fills per wallet over the SAME window [t_prev, t_end) — actual buy/sell
-    # trade volume ($, execution price). Round-trips show both legs (vs the net
-    # position-change columns); lets the dialog reconcile with the flow marker.
-    gross: dict[str, tuple[float, float]] = {}
+    # Gross fills + realized PnL per wallet over the SAME window [t_prev, t_end):
+    # buy/sell trade volume ($, execution price; both legs of round-trips) and
+    # realized PnL = Σ closing-fill closed_pnl (0 for opens/increases, non-zero on
+    # decreases/closes). Lets the dialog reconcile per-side with the flow marker.
+    gross: dict[str, tuple[float, float, float]] = {}
     if wallets:
         gr = await ch.query(
             """
             SELECT wallet,
                    sumIf(size * price, side = 'B') AS gbuy,
-                   sumIf(size * price, side = 'A') AS gsell
+                   sumIf(size * price, side = 'A') AS gsell,
+                   sum(closed_pnl)                 AS pnl
             FROM tradernick.hl_fills FINAL
             WHERE token = {tok:String} AND time >= {tp:DateTime} AND time < {te:DateTime}
               AND wallet IN {ws:Array(String)}
@@ -2808,13 +2810,14 @@ async def position_change_wallets(request):
             """,
             parameters={"tok": token, "tp": t_prev, "te": t_end, "ws": wallets},
         )
-        gross = {w: (float(gb), float(gs)) for w, gb, gs in gr.result_rows}
+        gross = {w: (float(gb), float(gs), float(pn)) for w, gb, gs, pn in gr.result_rows}
 
     out = [
         {"wallet": w, "amt_old": float(ao), "amt_new": float(an),
          "usd_old": float(uo), "usd_new": float(un), "unrealized_old": float(up),
          "account_value": acct.get(w, 0.0),
-         "gross_buy": gross.get(w, (0.0, 0.0))[0], "gross_sell": gross.get(w, (0.0, 0.0))[1],
+         "gross_buy": gross.get(w, (0.0, 0.0, 0.0))[0], "gross_sell": gross.get(w, (0.0, 0.0, 0.0))[1],
+         "realized_pnl": gross.get(w, (0.0, 0.0, 0.0))[2],
          "categories": list(cats) if cats else []}
         for (w, an, ao, un, uo, up, cats) in rows.result_rows
     ]
