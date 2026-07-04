@@ -3057,23 +3057,40 @@ async def backtracker_leaderboard(request):
         except ValueError:
             member = None
 
+    # Anchor the window END on the freshest data we actually have, not now() — so a
+    # short lookback still shows data when a feed lags (e.g. DeFiStream behind on HL
+    # ohlcv/fills → a 1h window ending at now() would be entirely in the gap = all 0).
+    # HL columns share end_ts = min(latest ohlcv, latest fills); spot uses its own.
+    mx = await ch.query(
+        """
+        SELECT (SELECT max(time) FROM tradernick.hl_ohlcv_1m WHERE time <= now())         AS oh,
+               (SELECT max(time) FROM tradernick.hl_fills WHERE time <= now())            AS fi,
+               (SELECT max(time) FROM tradernick.binance_spot_ohlcv_1m WHERE time <= now()) AS sp
+        """
+    )
+    oh, fi, sp = (mx.result_rows[0] if mx.result_rows else (None, None, None))
+    now_naive = datetime.now(timezone.utc).replace(tzinfo=None, microsecond=0)
+    hl_ends = [t for t in (oh, fi) if t is not None]
+    end_ts = min(hl_ends) if hl_ends else now_naive
+    spot_end = sp if sp is not None else now_naive
+
     # ── 1. Price Δ%, Volume Δ% (window vs preceding equal window), overall net flow
     # (= market taker CVD $ over the lookback; hl_fills is balanced market-wide so a
     # Σ(B−A) net would be structurally 0 — the taker split is the real directional flow).
     pv = await ch.query(
         """
         SELECT token,
-               argMax(close, time)                                            AS price_now,
-               argMinIf(close, time, time >= now() - INTERVAL {s:UInt32} SECOND) AS price_start,
-               sumIf(volume * close, time >= now() - INTERVAL {s:UInt32} SECOND) AS vol_lb,
-               sumIf(volume * close, time <  now() - INTERVAL {s:UInt32} SECOND) AS vol_prev,
+               argMax(close, time)                                                     AS price_now,
+               argMinIf(close, time, time > {end:DateTime} - INTERVAL {s:UInt32} SECOND) AS price_start,
+               sumIf(volume * close, time > {end:DateTime} - INTERVAL {s:UInt32} SECOND) AS vol_lb,
+               sumIf(volume * close, time <= {end:DateTime} - INTERVAL {s:UInt32} SECOND) AS vol_prev,
                sumIf((buyer_taker_volume - seller_taker_volume) * close,
-                     time >= now() - INTERVAL {s:UInt32} SECOND)                AS nf_overall
+                     time > {end:DateTime} - INTERVAL {s:UInt32} SECOND)                 AS nf_overall
         FROM tradernick.hl_ohlcv_1m FINAL
-        WHERE token != '' AND time >= now() - INTERVAL {s2:UInt32} SECOND
+        WHERE token != '' AND time > {end:DateTime} - INTERVAL {s2:UInt32} SECOND AND time <= {end:DateTime}
         GROUP BY token
         """,
-        parameters={"s": lb_sec, "s2": lb_sec * 2},
+        parameters={"end": end_ts, "s": lb_sec, "s2": lb_sec * 2},
     )
     agg: dict[str, dict] = {}
     for tok, pn, ps, vl, vp, nfo in pv.result_rows:
@@ -3095,10 +3112,10 @@ async def backtracker_leaderboard(request):
             """
             SELECT token, sumIf(if(side='B', size*price, -size*price), """ + member + """) AS nf_group
             FROM tradernick.hl_fills FINAL
-            WHERE token != '' AND time >= now() - INTERVAL {s:UInt32} SECOND
+            WHERE token != '' AND time > {end:DateTime} - INTERVAL {s:UInt32} SECOND AND time <= {end:DateTime}
             GROUP BY token
             """,
-            parameters={"s": lb_sec},
+            parameters={"end": end_ts, "s": lb_sec},
         )
         for tok, nfg in nf.result_rows:
             if tok in agg:
@@ -3193,10 +3210,10 @@ async def backtracker_leaderboard(request):
                sum((buyer_taker_volume - seller_taker_volume) * close) AS vd,
                sum((buyer_taker_volume + seller_taker_volume) * close) AS vol
         FROM tradernick.binance_spot_ohlcv_1m FINAL
-        WHERE token != '' AND time >= now() - INTERVAL {s:UInt32} SECOND
+        WHERE token != '' AND time > {end:DateTime} - INTERVAL {s:UInt32} SECOND AND time <= {end:DateTime}
         GROUP BY token
         """,
-        parameters={"s": lb_sec},
+        parameters={"end": spot_end, "s": lb_sec},
     )
     for tok, vd, vol in sv.result_rows:
         r = agg.get(tok)
