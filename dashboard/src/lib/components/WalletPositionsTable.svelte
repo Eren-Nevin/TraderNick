@@ -33,7 +33,9 @@
     selectedToken = null,
     onToggleToken = undefined,
     // Unix seconds the live book was fetched — shown in the badge as "Live (HH:MM)".
-    snapshotTime = null
+    snapshotTime = null,
+    // Re-fetch the live book (shown as a ↻ button next to the badge when Live).
+    onRefresh = undefined
   }: {
     positions: PositionRow[];
     live?: boolean;
@@ -42,6 +44,7 @@
     selectedToken?: string | null;
     onToggleToken?: (token: string) => void;
     snapshotTime?: number | null;
+    onRefresh?: (() => void) | undefined;
   } = $props();
 
   function fmtUsd(n: number): string {
@@ -123,6 +126,12 @@
       : 'bg-zinc-900 border-zinc-700 text-zinc-400'}">{live
         ? (snapshotTime ? `Live (${fmtTzTime(snapshotTime)})` : 'Live')
         : 'Snapshot'}</span>
+    {#if live && onRefresh}
+      <button type="button" onclick={() => onRefresh?.()} disabled={loading}
+        title="Refresh live positions"
+        class="text-zinc-400 hover:text-emerald-400 disabled:opacity-40 disabled:cursor-default leading-none text-[13px]"
+        aria-label="Refresh live positions">↻</button>
+    {/if}
     {#if loading}
       <span class="inline-block w-3 h-3 rounded-full border-2 border-zinc-600 border-t-blue-400 animate-spin" title="Loading…"></span>
     {/if}

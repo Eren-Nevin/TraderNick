@@ -22,7 +22,7 @@
     isToday
   } from '$lib/daySlider';
   import { arkhamUrl, coinglassHlUrl } from '$lib/arkham';
-  import { fmtTzDate } from '$lib/stores/timezone.svelte';
+  import { fmtTzDate, fmtTzTime } from '$lib/stores/timezone.svelte';
   import WalletPinMenu from '$lib/components/WalletPinMenu.svelte';
   import { walletPinsStore, NEUTRAL_GROUP_COLOR } from '$lib/stores/walletPins.svelte';
   import { onMount } from 'svelte';
@@ -765,7 +765,7 @@
         {/if}
       </div>
       <div class="font-mono text-xl text-zinc-100 tabular-nums flex items-center justify-end gap-2">
-        {snapshotIso}
+        {snapshotIso}{#if live && posFetchedAt}<span class="text-zinc-400"> {fmtTzTime(posFetchedAt)}</span>{/if}
         {#if live}
           <span class="text-emerald-400 text-sm">· live</span>
         {:else}
@@ -988,6 +988,7 @@
     <WalletPositionsTable
       {positions} {live} loading={posLoading} error={posError}
       snapshotTime={posFetchedAt}
+      onRefresh={() => loadPositions(snapshotIso)}
       {selectedToken}
       onToggleToken={(t) => (selectedToken = selectedToken === t ? null : t)}
     />
