@@ -3322,6 +3322,189 @@ async def backtracker_leaderboard(request):
     return response.json({"lookback": lb, "as_of": as_of, "rows": list(agg.values())})
 
 
+@bp.get("/hyperliquid/early_movers")
+@throttled("heavy")
+async def early_movers(request):
+    """Early Movers: detect sharp price 'moves' in one token's bars, then rank wallets
+    by how well they predicted them (opened the right position at/just-before each move).
+
+    Move detection: per tf-bar (open O), scanning L=1..max_len bars, long_len = min L with
+    (maxHigh-O)/O >= long_thr; short_len = min L with (O-minLow)/O >= short_thr. Shorter
+    length wins; equal-both → skip. Reaction per mode over [T-lead·tf, T+tf) (or the
+    position state at T): flow = net signed fill $; open_flip = net Open/Flip $ (hl_fills
+    `dir`); position_state = signed position $ at T's snapshot. Cols: Long/Short as
+    correct/incorrect/missed (missed = total_dir - correct - incorrect). Params: token,
+    interval, since, until, long_thr, short_thr, max_len, lead, mode, min_size, n,
+    moves_only."""
+    token = request.args.get("token")
+    if not token:
+        return response.json({"error": "missing token"}, status=400)
+    interval = request.args.get("interval", "1h")
+    if interval not in INTERVAL_SECONDS:
+        return response.json({"error": f"interval must be one of {list(INTERVAL_SECONDS)}"}, status=400)
+    sec = INTERVAL_SECONDS[interval]
+    since = request.args.get("since")
+    until = request.args.get("until")
+    if not since or not until:
+        return response.json({"error": "missing since/until"}, status=400)
+    since_dt, until_dt = _parse_iso(since), _parse_iso(until)
+
+    def _f(name, default):
+        try:
+            return float(request.args.get(name, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    long_thr = _f("long_thr", 5) / 100.0
+    short_thr = _f("short_thr", 5) / 100.0
+    min_size = _f("min_size", 0)
+    try:
+        max_len = max(1, min(int(request.args.get("max_len", "3")), 20))
+    except ValueError:
+        max_len = 3
+    try:
+        lead = max(0, min(int(request.args.get("lead", "1")), 20))
+    except ValueError:
+        lead = 1
+    try:
+        n = max(1, min(int(request.args.get("n", "50")), 200))
+    except ValueError:
+        n = 50
+    mode = request.args.get("mode", "flow")
+    if mode not in ("flow", "open_flip", "position_state"):
+        return response.json({"error": "mode must be flow|open_flip|position_state"}, status=400)
+    moves_only = request.args.get("moves_only") in ("1", "true", "yes")
+
+    ch = await client()
+
+    # ── 1. tf-bars → moves (detection in Python; cheap) ──
+    br = await ch.query(
+        """
+        SELECT toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS bkt,
+               argMin(open, time) AS o, max(high) AS h, min(low) AS l, argMax(close, time) AS c
+        FROM tradernick.hl_ohlcv_1m FINAL
+        WHERE token = {tok:String} AND time >= {s:DateTime} AND time < {u:DateTime}
+        GROUP BY bkt ORDER BY bkt
+        """,
+        parameters={"sec": sec, "tok": token, "s": since_dt, "u": until_dt},
+    )
+    bars = [(int(bkt), float(o), float(h), float(l)) for bkt, o, h, l, c in br.result_rows]
+    moves = []  # (trigger_unix, dir, length)
+    for i, (bkt, o, _h, _l) in enumerate(bars):
+        if o <= 0:
+            continue
+        long_len = short_len = None
+        run_hi, run_lo = -1e30, 1e30
+        for L in range(1, max_len + 1):
+            j = i + L - 1
+            if j >= len(bars):
+                break
+            run_hi, run_lo = max(run_hi, bars[j][2]), min(run_lo, bars[j][3])
+            if long_len is None and (run_hi - o) / o >= long_thr:
+                long_len = L
+            if short_len is None and (o - run_lo) / o >= short_thr:
+                short_len = L
+            if long_len is not None and short_len is not None:
+                break
+        if long_len is not None and short_len is not None:
+            if long_len < short_len:
+                moves.append((bkt, "long", long_len))
+            elif short_len < long_len:
+                moves.append((bkt, "short", short_len))
+            # equal → skip (ambiguous)
+        elif long_len is not None:
+            moves.append((bkt, "long", long_len))
+        elif short_len is not None:
+            moves.append((bkt, "short", short_len))
+
+    moves_out = [{"time": t, "dir": d, "len": L} for t, d, L in moves]
+    total_long = sum(1 for _, d, _ in moves if d == "long")
+    total_short = sum(1 for _, d, _ in moves if d == "short")
+    base = {"token": token, "interval": interval, "total_long": total_long,
+            "total_short": total_short, "moves": moves_out}
+    if moves_only or not moves:
+        return response.json({**base, "rows": []})
+
+    # ── 2. move → (window/snapshot) bucket table for the equi-join ──
+    wbkts, mids, mdirs = [], [], []
+    if mode == "position_state":
+        for j, (t, d, _) in enumerate(moves):
+            wbkts.append((t // 900) * 900)   # position state at T's 15-min snapshot
+            mids.append(j)
+            mdirs.append(d)
+    else:
+        for j, (t, d, _) in enumerate(moves):
+            for i in range(lead + 1):         # window buckets {T-lead·tf … T}
+                wbkts.append(t - i * sec)
+                mids.append(j)
+                mdirs.append(d)
+
+    # ── 3. per-(wallet,bucket) signal (wb) → join to moves → classify → aggregate ──
+    if mode == "flow":
+        wb_sql = """
+            SELECT wallet, toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS bkt,
+                   sum(if(side = 'B', size * price, -size * price)) AS val
+            FROM tradernick.hl_fills FINAL
+            WHERE token = {tok:String} AND time >= {s2:DateTime} AND time < {u:DateTime}
+            GROUP BY wallet, bkt """
+        wb_params = {"sec": sec, "tok": token, "s2": since_dt - timedelta(seconds=lead * sec), "u": until_dt}
+    elif mode == "open_flip":
+        wb_sql = """
+            SELECT wallet, toUnixTimestamp(toStartOfInterval(time, INTERVAL {sec:UInt32} SECOND)) AS bkt,
+                   sum(multiIf(dir = 'Open Long', size*price, dir = 'Short > Long', size*price,
+                               dir = 'Open Short', -size*price, dir = 'Long > Short', -size*price, 0)) AS val
+            FROM tradernick.hl_fills FINAL
+            WHERE token = {tok:String} AND time >= {s2:DateTime} AND time < {u:DateTime}
+            GROUP BY wallet, bkt """
+        wb_params = {"sec": sec, "tok": token, "s2": since_dt - timedelta(seconds=lead * sec), "u": until_dt}
+    else:  # position_state — signed position $ at the move snapshot buckets
+        wb_sql = """
+            SELECT wallet, bkt, sum(v) AS val FROM (
+                SELECT wallet, toUnixTimestamp(time) AS bkt, side,
+                       argMax(size, time) * if(side = 'long', 1, -1) AS v
+                FROM tradernick.hl_position_history
+                WHERE token = {tok:String} AND toUnixTimestamp(time) IN {snaps:Array(UInt32)}
+                GROUP BY wallet, time, side
+            ) GROUP BY wallet, bkt """
+        wb_params = {"tok": token, "snaps": sorted(set(wbkts))}
+
+    rows = await ch.query(
+        "SELECT wallet,"
+        " countIf(mdir = 'long'  AND react = 'long')  AS cl,"
+        " countIf(mdir = 'long'  AND react = 'short') AS il,"
+        " countIf(mdir = 'short' AND react = 'short') AS cs,"
+        " countIf(mdir = 'short' AND react = 'long')  AS ish,"
+        " any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS cats"
+        " FROM ("
+        "   SELECT wallet, mid, mdir,"
+        "          multiIf(v >= {ms:Float64}, 'long', v <= -{ms:Float64}, 'short', 'none') AS react"
+        "   FROM ("
+        "     SELECT wb.wallet AS wallet, m.mid AS mid, m.mdir AS mdir, sum(wb.val) AS v"
+        "     FROM (" + wb_sql + ") wb"
+        "     INNER JOIN ("
+        "       SELECT t.1 AS wbkt, t.2 AS mid, t.3 AS mdir"
+        "       FROM (SELECT arrayJoin(arrayZip({wbkts:Array(UInt32)}, {mids:Array(UInt32)}, {mdirs:Array(String)})) AS t)"
+        "     ) m ON wb.bkt = m.wbkt"
+        "     GROUP BY wallet, mid, mdir"
+        "   )"
+        "   WHERE react != 'none'"
+        " ) GROUP BY wallet"
+        " ORDER BY (cl + cs) DESC"
+        " LIMIT {n:UInt32}",
+        parameters={**wb_params, "ms": min_size, "wbkts": wbkts, "mids": mids, "mdirs": mdirs, "n": n},
+    )
+    out = []
+    for w, cl, il, cs, ish, cats in rows.result_rows:
+        cl, il, cs, ish = int(cl), int(il), int(cs), int(ish)
+        out.append({
+            "wallet": w,
+            "correct_long": cl, "incorrect_long": il, "missed_long": max(0, total_long - cl - il),
+            "correct_short": cs, "incorrect_short": ish, "missed_short": max(0, total_short - cs - ish),
+            "categories": list(cats) if cats else [],
+        })
+    return response.json({**base, "rows": out})
+
+
 @bp.get("/hyperliquid/group_fill_pressure")
 @throttled("heavy")
 async def group_fill_pressure(request):
