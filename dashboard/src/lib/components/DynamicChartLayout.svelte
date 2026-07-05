@@ -845,6 +845,22 @@
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
         inst.frDisplay = r.frDisplay === 'apr' ? 'apr' : 'rate8h';
       }
+      if (inst.kind === 'early_movers') {
+        // Dual-view (table/chart) + move criteria. Restore each field from the save
+        // so toolbar edits survive a reload; missing fields fall back to the
+        // documented defaults (AAVE, 30d, 2%/2%, len 5, lead 1, flow, $1k).
+        inst.viewMode = r.viewMode === 'chart' ? 'chart' : 'table';
+        const emLb = r.emLookback;
+        inst.emLookback =
+          emLb === '1d' || emLb === '3d' || emLb === '7d' || emLb === '14d' || emLb === '30d' ? emLb : '30d';
+        inst.emLongThr = typeof r.emLongThr === 'number' ? r.emLongThr : 2;
+        inst.emShortThr = typeof r.emShortThr === 'number' ? r.emShortThr : 2;
+        inst.emMaxLen = typeof r.emMaxLen === 'number' && r.emMaxLen >= 1 ? Math.floor(r.emMaxLen) : 5;
+        inst.emLead = typeof r.emLead === 'number' && r.emLead >= 0 ? Math.floor(r.emLead) : 1;
+        inst.emMode =
+          r.emMode === 'flow' || r.emMode === 'open_flip' || r.emMode === 'position_state' ? r.emMode : 'flow';
+        inst.emMinSize = typeof r.emMinSize === 'number' && r.emMinSize >= 0 ? r.emMinSize : 1000;
+      }
       if (inst.kind === 'book_depth') {
         // Binance-only; the mode selector flips the same dataset between the
         // totals / per_level_imbalance / imbalance / stacked / *_share views.

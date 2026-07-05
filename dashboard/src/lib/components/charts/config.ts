@@ -2717,12 +2717,12 @@ export function newChartInstance(
   if (kind === 'early_movers') {
     // HL-perp candles + wallet move-prediction table; dual-view (table default).
     base.viewMode = 'table';
-    base.token = 'BTC';
+    base.token = 'AAVE';
     base.interval = '1h';
-    base.emLookback = '3d';
-    base.emLongThr = 5;
-    base.emShortThr = 5;
-    base.emMaxLen = 3;
+    base.emLookback = '30d';
+    base.emLongThr = 2;
+    base.emShortThr = 2;
+    base.emMaxLen = 5;
     base.emLead = 1;
     base.emMode = 'flow';
     base.emMinSize = 1000;
