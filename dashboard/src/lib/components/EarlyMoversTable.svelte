@@ -17,7 +17,6 @@
     rows = [],
     loading = false,
     error = null,
-    token = '',
     snapshotDate = '',
     totalLong = 0,
     totalShort = 0,
@@ -26,7 +25,6 @@
     rows: Row[];
     loading?: boolean;
     error?: string | null;
-    token?: string;
     snapshotDate?: string;
     totalLong?: number;
     totalShort?: number;
@@ -116,7 +114,7 @@
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
               <td class="px-3 py-1 text-zinc-500">{idx + 1}</td>
               <td class="px-3 py-1">
-                <WalletAddress address={r.wallet} auxKind="wallet" snapshot={snapshotDate} token={token} tags={r.categories ?? []} />
+                <WalletAddress address={r.wallet} auxKind="wallet" snapshot={snapshotDate} tags={r.categories ?? []} />
               </td>
               <td class="px-3 py-1 text-right font-mono whitespace-nowrap">
                 <span class="text-emerald-400">{r.correct_long}</span><span class="text-zinc-600">/</span><span class="text-rose-400">{r.incorrect_long}</span><span class="text-zinc-600">/</span><span class="text-zinc-500">{r.missed_long}</span>
