@@ -1884,7 +1884,7 @@
       // Early Movers TABLE view: detect moves + rank wallets. (Chart view falls to
       // the candle switch below for HL candles; move markers load separately.)
       if (instance.kind === 'early_movers' && instance.viewMode !== 'chart') {
-        const res = await queuedFetch(`/api/hyperliquid/early_movers?${_emQs(instance)}&n=100`, { signal });
+        const res = await queuedFetch(`/api/hyperliquid/early_movers?${_emQs(instance)}&n=500`, { signal });
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
         const body = await res.json();
         data = [{ em: body } as unknown as AnyDatum];

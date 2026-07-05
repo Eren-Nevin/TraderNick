@@ -3367,7 +3367,7 @@ async def early_movers(request):
     except ValueError:
         lead = 1
     try:
-        n = max(1, min(int(request.args.get("n", "50")), 200))
+        n = max(1, min(int(request.args.get("n", "50")), 500))
     except ValueError:
         n = 50
     mode = request.args.get("mode", "flow")
