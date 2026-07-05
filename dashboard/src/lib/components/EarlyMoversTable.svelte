@@ -49,6 +49,10 @@
   let sortDir = $state<1 | -1>(-1);
   let limit = $state<'25' | '50' | 'all'>('50');
   let search = $state('');
+  // Min-value filters (client-side, on the returned top-N).
+  let minLong = $state(0);
+  let minShort = $state(0);
+  let minSize = $state(0);
 
   function fuzzy(q: string, t: string): boolean {
     q = q.trim().toLowerCase();
@@ -75,7 +79,13 @@
     return sortDir === 1 ? ' ↑' : ' ↓';
   }
   let sortedRows = $derived.by(() => {
-    const arr = rows.filter((r) => fuzzy(search, r.wallet));
+    const arr = rows.filter(
+      (r) =>
+        fuzzy(search, r.wallet) &&
+        r.correct_long >= (minLong || 0) &&
+        r.correct_short >= (minShort || 0) &&
+        (r.avg_size ?? 0) >= (minSize || 0)
+    );
     const dir = sortDir, k = sortKey;
     const s = [...arr].sort((a, b) => (sortVal(a, k) - sortVal(b, k)) * dir);
     return limit === 'all' ? s : s.slice(0, Number(limit));
@@ -93,6 +103,12 @@
       of {totalBars} bars · correct/incorrect/missed
     </span>
     <input class={selClass + ' w-24'} placeholder="Wallet…" bind:value={search} title="Fuzzy filter by wallet" />
+    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct long">≥L
+      <input type="number" min="0" class={selClass + ' w-11'} bind:value={minLong} /></label>
+    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct short">≥S
+      <input type="number" min="0" class={selClass + ' w-11'} bind:value={minShort} /></label>
+    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min {avgLabel.toLowerCase()} size ($)">≥$
+      <input type="number" min="0" step="1000" class={selClass + ' w-16'} bind:value={minSize} /></label>
     <span class="ml-auto text-[11px]">Show</span>
     <select class={selClass} bind:value={limit} title="Number of rows to show">
       <option value="25">25</option>
