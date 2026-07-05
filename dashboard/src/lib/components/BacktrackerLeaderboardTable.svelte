@@ -39,6 +39,7 @@
   type Col = { key: string; label: string; kind: 'pct' | 'usd'; title?: string };
   const COLS: Col[] = [
     { key: 'price_pct', label: 'Price Δ%', kind: 'pct' },
+    { key: 'price_vs_btc_pct', label: 'Δ vs BTC', kind: 'pct', title: 'Price change relative to BTC over the lookback (token/BTC ratio change). + = outperformed BTC; BTC = 0.' },
     { key: 'net_flow_group', label: 'Flow (grp)', kind: 'usd', title: "Selected group's net position flow ($) — buys − sells from fills" },
     { key: 'flow_group_pct', label: 'Flow (grp) Δ%', kind: 'pct', title: "Group flow / total OI at end of window (scale-free)" },
     { key: 'net_flow_overall', label: 'Flow (all)', kind: 'usd', title: 'Market-wide net taker flow (CVD $) over the lookback' },

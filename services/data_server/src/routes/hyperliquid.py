@@ -3124,12 +3124,23 @@ async def backtracker_leaderboard(request):
         agg[tok] = {
             "token": tok, "price": pn,
             "price_pct": ((pn / ps - 1) * 100) if ps else None,
+            "price_vs_btc_pct": None,
             "vol_pct": ((vl / vp - 1) * 100) if vp else None,
             "net_flow_overall": float(nfo), "net_flow_group": None,
             "net_oi_pct": None, "net_oi_now_pct": None, "long_pct": None, "short_pct": None,
             "flow_overall_pct": None, "flow_group_pct": None,
             "spot_vd": None, "spot_vd_pct": None,
         }
+
+    # Relative price performance vs BTC: the token/BTC ratio change over the lookback
+    # (= (1+token_ret)/(1+btc_ret) − 1). + = appreciated vs BTC; BTC itself = 0.
+    btc_pct = agg.get("BTC", {}).get("price_pct")
+    if btc_pct is not None and (1 + btc_pct / 100) != 0:
+        btc_ratio = 1 + btc_pct / 100
+        for r in agg.values():
+            tp = r.get("price_pct")
+            if tp is not None:
+                r["price_vs_btc_pct"] = ((1 + tp / 100) / btc_ratio - 1) * 100
 
     # ── 2. Group net flow $ (the group's net position flow from fills) — only when a
     # group is selected (the market-wide overall comes from taker CVD above). ──
