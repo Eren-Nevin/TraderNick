@@ -3478,9 +3478,10 @@ async def early_movers(request):
         " countIf(mdir = 'long'  AND react = 'short') AS il,"
         " countIf(mdir = 'short' AND react = 'short') AS cs,"
         " countIf(mdir = 'short' AND react = 'long')  AS ish,"
+        " avg(av) AS avg_size,"
         " any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS cats"
         " FROM ("
-        "   SELECT wallet, mid, mdir,"
+        "   SELECT wallet, mid, mdir, abs(v) AS av,"
         "          multiIf(v >= {ms:Float64}, 'long', v <= -{ms:Float64}, 'short', 'none') AS react"
         "   FROM ("
         "     SELECT wb.wallet AS wallet, m.mid AS mid, m.mdir AS mdir, sum(wb.val) AS v"
@@ -3498,12 +3499,13 @@ async def early_movers(request):
         parameters={**wb_params, "ms": min_size, "wbkts": wbkts, "mids": mids, "mdirs": mdirs, "n": n},
     )
     out = []
-    for w, cl, il, cs, ish, cats in rows.result_rows:
+    for w, cl, il, cs, ish, avg_size, cats in rows.result_rows:
         cl, il, cs, ish = int(cl), int(il), int(cs), int(ish)
         out.append({
             "wallet": w,
             "correct_long": cl, "incorrect_long": il, "missed_long": max(0, total_long - cl - il),
             "correct_short": cs, "incorrect_short": ish, "missed_short": max(0, total_short - cs - ish),
+            "avg_size": float(avg_size or 0),
             "categories": list(cats) if cats else [],
         })
     return response.json({**base, "rows": out})

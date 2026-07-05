@@ -9240,6 +9240,7 @@
         rows={(emBody.rows ?? []) as never}
         loading={loading}
         error={error}
+        mode={instance.emMode ?? 'flow'}
         totalLong={Number(emBody.total_long ?? 0)}
         totalShort={Number(emBody.total_short ?? 0)}
         totalBars={Number(emBody.total_bars ?? 0)}
