@@ -50,22 +50,26 @@ export function onAuxClickCoinglassHl(addr: string) {
 // Internal HL wallet detail page (/wallet/hl/<addr>). Middle-clicking a wallet
 // across the app opens this in a new tab — repointed from the old Coinglass
 // middle-click so the wallet stays inside the dashboard.
-export function walletHlUrl(addr: string, snapshot?: string | null): string {
+export function walletHlUrl(addr: string, snapshot?: string | null, token?: string | null): string {
   const base = '/wallet/hl/' + addr;
-  // Optional ?snapshot=YYYY-MM-DD pre-selects that as-of day on the wallet page
-  // (e.g. open a smart wallet at the lookback period's end). Today/empty → omit
-  // so the page opens live as usual.
-  return snapshot ? `${base}?snapshot=${encodeURIComponent(snapshot)}` : base;
+  // Optional ?snapshot=YYYY-MM-DD pre-selects that as-of day; ?token=<SYM>
+  // pre-filters/selects that token in the positions table. Empty → omit.
+  const params = new URLSearchParams();
+  if (snapshot) params.set('snapshot', snapshot);
+  if (token) params.set('token', token);
+  const qs = params.toString();
+  return qs ? `${base}?${qs}` : base;
 }
 
 /** auxclick handler: open the internal HL wallet page in a new tab on
  *  middle-click; ignore other buttons. Pair with onMouseDownSuppressMiddle.
- *  Optional `snapshot` (YYYY-MM-DD) pre-selects that as-of day. */
-export function onAuxClickWalletHl(addr: string, snapshot?: string | null) {
+ *  Optional `snapshot` (YYYY-MM-DD) pre-selects that as-of day; `token` pre-selects
+ *  that token in the positions table. */
+export function onAuxClickWalletHl(addr: string, snapshot?: string | null, token?: string | null) {
   return (e: MouseEvent) => {
     if (e.button !== 1 || !addr) return;
     e.preventDefault();
-    window.open(walletHlUrl(addr, snapshot), '_blank', 'noopener,noreferrer');
+    window.open(walletHlUrl(addr, snapshot, token), '_blank', 'noopener,noreferrer');
   };
 }
 

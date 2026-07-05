@@ -22,6 +22,7 @@
     address,
     auxKind = 'arkham',
     snapshot = null,
+    token = null,
     tags = [],
     class: extraClass = ''
   }: {
@@ -30,6 +31,9 @@
     // For auxKind 'wallet': pre-select this as-of day (YYYY-MM-DD) on the wallet
     // page opened by middle-click. Ignored for 'arkham'.
     snapshot?: string | null;
+    // For auxKind 'wallet': pre-select this token in the positions table on the
+    // opened wallet page (?token=). Ignored for 'arkham'. Optional.
+    token?: string | null;
     // Wallet categories/labels from the (separate) wallets-table tagging system
     // — shown as square chips to differentiate from group pins. Optional.
     tags?: string[];
@@ -37,7 +41,7 @@
   } = $props();
 
   let copied = $state(false);
-  const aux = $derived(auxKind === 'wallet' ? onAuxClickWalletHl(address, snapshot) : onAuxClickArkham(address));
+  const aux = $derived(auxKind === 'wallet' ? onAuxClickWalletHl(address, snapshot, token) : onAuxClickArkham(address));
   const pins = $derived(walletPinsStore.groupsForWallet(address));
   const MAX_INLINE = 3;
 

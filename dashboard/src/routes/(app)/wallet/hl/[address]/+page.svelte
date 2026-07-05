@@ -107,8 +107,9 @@
   const pinnedGroups = $derived(walletPinsStore.groupsForWallet(address));
 
   // Single token (max one) whose daily close price is overlaid on the PnL
-  // chart, toggled from the positions table.
-  let selectedToken = $state<string | null>(null);
+  // chart, toggled from the positions table. Seeded from ?token= so a link
+  // (e.g. the Backtracker Leaderboard dialog) opens with that token selected.
+  let selectedToken = $state<string | null>(data.initialToken ?? null);
   let closeSeries = $state<{ time: number; value: number }[]>([]);
   let closeCtl: AbortController | null = null;
 
@@ -996,6 +997,7 @@
       {positions} {live} loading={posLoading} error={posError}
       snapshotTime={posFetchedAt}
       onRefresh={() => loadPositions(snapshotIso)}
+      presetToken={data.initialToken}
       {selectedToken}
       onToggleToken={(t) => (selectedToken = selectedToken === t ? null : t)}
     />

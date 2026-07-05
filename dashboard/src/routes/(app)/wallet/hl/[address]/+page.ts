@@ -9,5 +9,9 @@ export const load: PageLoad = ({ params, url }) => {
   // honoured; anything else falls through to the default (today / live).
   const snap = url.searchParams.get('snapshot');
   const initialSnapshot = snap && /^\d{4}-\d{2}-\d{2}$/.test(snap) ? snap : null;
-  return { address: (params.address ?? '').toLowerCase(), initialSnapshot };
+  // Optional ?token=<SYM> pre-selects that token in the positions table (e.g. opened
+  // from the Backtracker Leaderboard dialog for a specific token).
+  const tok = url.searchParams.get('token');
+  const initialToken = tok && /^[A-Za-z0-9._-]{1,20}$/.test(tok) ? tok.toUpperCase() : null;
+  return { address: (params.address ?? '').toLowerCase(), initialSnapshot, initialToken };
 };

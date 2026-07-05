@@ -35,7 +35,10 @@
     // Unix seconds the live book was fetched — shown in the badge as "Live (HH:MM)".
     snapshotTime = null,
     // Re-fetch the live book (shown as a ↻ button next to the badge when Live).
-    onRefresh = undefined
+    onRefresh = undefined,
+    // Optional token to seed the filter with (e.g. from ?token= on the page) so the
+    // table opens narrowed to that token.
+    presetToken = null
   }: {
     positions: PositionRow[];
     live?: boolean;
@@ -45,6 +48,7 @@
     onToggleToken?: (token: string) => void;
     snapshotTime?: number | null;
     onRefresh?: (() => void) | undefined;
+    presetToken?: string | null;
   } = $props();
 
   function fmtUsd(n: number): string {
@@ -79,7 +83,7 @@
 
   // ── Token filter (substring, case-insensitive) — for wallets holding many
   // positions at once. Applied before sort; header stats reflect the filtered set. ──
-  let tokenFilter = $state('');
+  let tokenFilter = $state(presetToken ?? '');
   const filtered = $derived.by(() => {
     const q = tokenFilter.trim().toLowerCase();
     return q ? positions.filter((p) => p.token.toLowerCase().includes(q)) : positions;
