@@ -186,10 +186,12 @@
         class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
       />
     </label>
-    <label class="flex items-center text-xs gap-2 text-zinc-300">
-      <input type="checkbox" bind:checked={fForce} />
-      Force (delete existing rows in window)
-    </label>
+    {#if !form.hideForce}
+      <label class="flex items-center text-xs gap-2 text-zinc-300">
+        <input type="checkbox" bind:checked={fForce} />
+        Force (delete existing rows in window)
+      </label>
+    {/if}
   </div>
 
   {#if form.description}

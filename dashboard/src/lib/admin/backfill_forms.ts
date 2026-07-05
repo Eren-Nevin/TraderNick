@@ -36,6 +36,7 @@ export type BackfillFormSpec = {
   type: string;            // /jobs/backfill/<type>
   label: string;           // UI label
   description?: string;
+  hideForce?: boolean;     // hide the Force toggle (no-op for this backfill type)
   fields: FieldSpec[];
 };
 
@@ -362,7 +363,8 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
     description: 'Rebuild selected derived-table partitions from the source ' +
       'FINAL via REPLACE PARTITION. Idempotent — partitions outside the ' +
       'window are untouched. Window narrows to the partitions overlapping ' +
-      'since/until. Force has no effect (REPLACE PARTITION is always full).',
+      'since/until. (REPLACE PARTITION is always a full rebuild.)',
+    hideForce: true,
     fields: [
       { name: 'materializers', label: 'Materializers', kind: 'multiselect',
         options: [
