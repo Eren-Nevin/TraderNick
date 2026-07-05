@@ -41,6 +41,23 @@
     const l = posLong(r), s = posShort(r);
     return l > s ? 'text-emerald-400' : l < s ? 'text-rose-400' : 'text-zinc-500';
   }
+  // Positions Δ: change vs T−lookback (now − then), same count/OI toggle.
+  function posDLong(r: Row): number { return (posMode === 'oi' ? r.pos_d_oi_long : r.pos_d_n_long) ?? 0; }
+  function posDShort(r: Row): number { return (posMode === 'oi' ? r.pos_d_oi_short : r.pos_d_n_short) ?? 0; }
+  function posDMissing(r: Row): boolean { return r.pos_d_n_long == null && r.pos_d_n_short == null; }
+  const sgnUsd = (n: number) => (n > 0 ? '+' : '') + fmtUsd(n);
+  const sgnInt = (n: number) => (n > 0 ? '+' : '') + Math.round(n);
+  function posDText(r: Row): string {
+    if (posDMissing(r)) return '—';
+    return posMode === 'oi'
+      ? `${sgnUsd(r.pos_d_oi_long ?? 0)}/${sgnUsd(r.pos_d_oi_short ?? 0)}`
+      : `${sgnInt(r.pos_d_n_long ?? 0)}/${sgnInt(r.pos_d_n_short ?? 0)}`;
+  }
+  function posDClass(r: Row): string {
+    if (posDMissing(r)) return 'text-zinc-600';
+    const l = posDLong(r), s = posDShort(r);
+    return l > s ? 'text-emerald-400' : l < s ? 'text-rose-400' : 'text-zinc-500';
+  }
 
   function fmtUsd(n: number | null): string {
     if (n === null || n === undefined || !isFinite(n)) return '—';
@@ -55,13 +72,14 @@
     return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
   }
 
-  type Col = { key: string; label: string; kind: 'pct' | 'usd' | 'positions'; title?: string };
+  type Col = { key: string; label: string; kind: 'pct' | 'usd' | 'positions' | 'positions_delta'; title?: string };
   const COLS: Col[] = [
     { key: 'price_pct', label: 'Price Δ%', kind: 'pct' },
     { key: 'price_vs_btc_pct', label: 'Δ vs BTC', kind: 'pct', title: 'Price change relative to BTC over the lookback (token/BTC ratio change). + = outperformed BTC; BTC = 0.' },
     { key: 'net_flow_group', label: 'Flow (grp)', kind: 'usd', title: "Selected group's net position flow ($) — buys − sells from fills" },
     { key: 'flow_group_pct', label: 'Flow (grp) Δ%', kind: 'pct', title: "Group flow / total OI at end of window (scale-free)" },
     { key: 'positions', label: 'Positions', kind: 'positions', title: "Group long/short positions at the snapshot (staleness-filtered) as Long/Short — count or OI value per the settings toggle" },
+    { key: 'positions_delta', label: 'Positions Δ', kind: 'positions_delta', title: "Change in group Long/Short vs T−lookback (now − then). E.g. 20/12 now, 18/13 then → +2/−1. Same count/OI toggle." },
     { key: 'net_flow_overall', label: 'Flow (all)', kind: 'usd', title: 'Market-wide net taker flow (CVD $) over the lookback' },
     { key: 'flow_overall_pct', label: 'Flow Δ%', kind: 'pct', title: 'Overall flow / total OI at end of window (scale-free)' },
     { key: 'net_oi_now_pct', label: 'Net OI %', kind: 'pct', title: 'Current net signed OI / total OI at end (directional lean)' },
@@ -98,10 +116,15 @@
     const arr = (rows as Row[]).filter((r) => fuzzy(search, String(r.token)));
     const dir = sortDir, k = sortKey;
     const posNet = (r: Row) => posLong(r) - posShort(r); // sort Positions by net lean
+    const posDNet = (r: Row) => posDLong(r) - posDShort(r); // sort Positions Δ by net change
+    const sv = (r: Row): number | null => {
+      if (k === 'positions') return posMissing(r) ? null : posNet(r);
+      if (k === 'positions_delta') return posDMissing(r) ? null : posDNet(r);
+      return r[k] as number | null;
+    };
     const s = [...arr].sort((a, b) => {
       if (k === 'token') return String(a.token).localeCompare(String(b.token)) * dir;
-      const av = k === 'positions' ? (posMissing(a) ? null : posNet(a)) : (a[k] as number | null);
-      const bv = k === 'positions' ? (posMissing(b) ? null : posNet(b)) : (b[k] as number | null);
+      const av = sv(a), bv = sv(b);
       const an = av === null || av === undefined || !isFinite(av as number);
       const bn = bv === null || bv === undefined || !isFinite(bv as number);
       if (an && bn) return 0;
@@ -115,11 +138,13 @@
 
   function cellText(r: Row, c: Col): string {
     if (c.kind === 'positions') return posText(r);
+    if (c.kind === 'positions_delta') return posDText(r);
     const v = r[c.key] as number | null;
     return c.kind === 'pct' ? fmtPct(v) : fmtUsd(v);
   }
   function signClass(r: Row, c: Col): string {
     if (c.kind === 'positions') return posClass(r);
+    if (c.kind === 'positions_delta') return posDClass(r);
     const v = r[c.key] as number | null;
     if (v === null || v === undefined || !isFinite(v) || v === 0) return 'text-zinc-500';
     return v > 0 ? 'text-emerald-400' : 'text-rose-400';

@@ -3138,6 +3138,7 @@ async def backtracker_leaderboard(request):
             "flow_overall_pct": None, "flow_group_pct": None,
             "spot_vd": None, "spot_vd_pct": None,
             "pos_n_long": None, "pos_n_short": None, "pos_oi_long": None, "pos_oi_short": None,
+            "pos_d_n_long": None, "pos_d_n_short": None, "pos_d_oi_long": None, "pos_d_oi_short": None,
         }
 
     # Relative price performance vs BTC: the token/BTC ratio change over the lookback
@@ -3248,42 +3249,56 @@ async def backtracker_leaderboard(request):
                 if r["net_flow_group"] is not None:
                     r["flow_group_pct"] = r["net_flow_group"] / total_end * 100
 
-        # ── Group Positions column: per token, the group's long/short positions at the
-        # snapshot, filtered to wallets with a fill in that token within pos_staleness
-        # (drops stale positions). Returns counts + OI (front-end picks which to show).
+        # ── Group Positions column + delta: per token, the group's long/short
+        # positions at a snapshot, filtered to wallets with a fill in that token within
+        # pos_staleness of the snapshot (drops stale positions). Computed at the end
+        # snapshot AND at T-lookback (start_bucket) → the delta is end − start.
         if member:
-            posr = await ch.query(
-                """
-                SELECT token,
-                       countIf(signed > 0) AS n_long,
-                       countIf(signed < 0) AS n_short,
-                       sumIf(oi, signed > 0) AS oi_long,
-                       sumIf(oi, signed < 0) AS oi_short
-                FROM (
-                    SELECT token, wallet, sum(sa) AS signed, sum(sz) AS oi FROM (
-                        SELECT token, wallet,
-                               argMax(amount, time) * if(side = 'long', 1, -1) AS sa,
-                               argMax(size, time) AS sz
-                        FROM tradernick.hl_position_history
-                        WHERE token != '' AND time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND
+            async def _positions(snap_bucket):
+                pr = await ch.query(
+                    """
+                    SELECT token,
+                           countIf(signed > 0) AS n_long,
+                           countIf(signed < 0) AS n_short,
+                           sumIf(oi, signed > 0) AS oi_long,
+                           sumIf(oi, signed < 0) AS oi_short
+                    FROM (
+                        SELECT token, wallet, sum(sa) AS signed, sum(sz) AS oi FROM (
+                            SELECT token, wallet,
+                                   argMax(amount, time) * if(side = 'long', 1, -1) AS sa,
+                                   argMax(size, time) AS sz
+                            FROM tradernick.hl_position_history
+                            WHERE token != '' AND time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND
+                              AND """ + member + """
+                            GROUP BY token, wallet, side
+                        ) GROUP BY token, wallet
+                    ) p
+                    INNER JOIN (
+                        SELECT DISTINCT token, wallet FROM tradernick.hl_fills
+                        WHERE time > {b:DateTime} - INTERVAL {st:UInt32} SECOND AND time <= {b:DateTime}
                           AND """ + member + """
-                        GROUP BY token, wallet, side
-                    ) GROUP BY token, wallet
-                ) p
-                INNER JOIN (
-                    SELECT DISTINCT token, wallet FROM tradernick.hl_fills
-                    WHERE time > now() - INTERVAL {st:UInt32} SECOND AND """ + member + """
-                ) f USING (token, wallet)
-                WHERE abs(signed) > 1e-9
-                GROUP BY token
-                """,
-                parameters={"b": end_bucket, "st": stale_sec},
-            )
-            for tok, nl, ns, ol, os_ in posr.result_rows:
+                    ) f USING (token, wallet)
+                    WHERE abs(signed) > 1e-9
+                    GROUP BY token
+                    """,
+                    parameters={"b": snap_bucket, "st": stale_sec},
+                )
+                return {tok: (int(nl), int(ns), float(ol), float(os_))
+                        for tok, nl, ns, ol, os_ in pr.result_rows}
+
+            end_pos = await _positions(end_bucket)
+            start_pos = await _positions(start_bucket)
+            for tok in set(end_pos) | set(start_pos):
                 r = agg.get(tok)
-                if r:
-                    r["pos_n_long"], r["pos_n_short"] = int(nl), int(ns)
-                    r["pos_oi_long"], r["pos_oi_short"] = float(ol), float(os_)
+                if not r:
+                    continue
+                e = end_pos.get(tok)
+                s = start_pos.get(tok, (0, 0, 0.0, 0.0))
+                if e is not None:
+                    r["pos_n_long"], r["pos_n_short"], r["pos_oi_long"], r["pos_oi_short"] = e
+                ee = e if e is not None else (0, 0, 0.0, 0.0)
+                r["pos_d_n_long"], r["pos_d_n_short"] = ee[0] - s[0], ee[1] - s[1]
+                r["pos_d_oi_long"], r["pos_d_oi_short"] = ee[2] - s[2], ee[3] - s[3]
 
     # ── 4. Spot volume-delta $ + % (Binance spot; null for HL tokens without spot) ──
     sv = await ch.query(
