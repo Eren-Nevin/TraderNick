@@ -7110,8 +7110,10 @@
         </select>
       {:else if instance.kind === 'early_movers'}
         {@const emc = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}
-        <input class={emc + ' w-16'} value={instance.token ?? ''} placeholder="Token"
-          onchange={(e) => (instance.token = e.currentTarget.value.trim().toUpperCase())} title="Token" />
+        <select class={emc} value={instance.token ?? ''} onchange={(e) => (instance.token = e.currentTarget.value)} title="Token">
+          {#each tokens as t (t)}<option value={t}>{t}</option>{/each}
+          {#if instance.token && !tokens.includes(instance.token)}<option value={instance.token}>{instance.token}</option>{/if}
+        </select>
         <select class={emc} value={instance.interval ?? '1h'} onchange={(e) => (instance.interval = e.currentTarget.value as '15m' | '30m' | '1h' | '4h' | '1d')} title="Timeframe (bar size)">
           {#each ['15m', '30m', '1h', '4h', '1d'] as iv (iv)}<option value={iv}>{iv}</option>{/each}
         </select>
