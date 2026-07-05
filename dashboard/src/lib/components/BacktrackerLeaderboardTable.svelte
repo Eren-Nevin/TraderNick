@@ -53,11 +53,10 @@
       ? `${sgnUsd(r.pos_d_oi_long ?? 0)}/${sgnUsd(r.pos_d_oi_short ?? 0)}`
       : `${sgnInt(r.pos_d_n_long ?? 0)}/${sgnInt(r.pos_d_n_short ?? 0)}`;
   }
-  function posDClass(r: Row): string {
-    if (posDMissing(r)) return 'text-zinc-600';
-    const l = posDLong(r), s = posDShort(r);
-    return l > s ? 'text-emerald-400' : l < s ? 'text-rose-400' : 'text-zinc-500';
-  }
+  // Each Δ part is coloured by its OWN sign (positive = green, negative = red).
+  const dSignClass = (n: number) => (n > 0 ? 'text-emerald-400' : n < 0 ? 'text-rose-400' : 'text-zinc-500');
+  const dLongText = (r: Row) => (posMode === 'oi' ? sgnUsd(r.pos_d_oi_long ?? 0) : sgnInt(r.pos_d_n_long ?? 0));
+  const dShortText = (r: Row) => (posMode === 'oi' ? sgnUsd(r.pos_d_oi_short ?? 0) : sgnInt(r.pos_d_n_short ?? 0));
 
   function fmtUsd(n: number | null): string {
     if (n === null || n === undefined || !isFinite(n)) return '—';
@@ -144,7 +143,6 @@
   }
   function signClass(r: Row, c: Col): string {
     if (c.kind === 'positions') return posClass(r);
-    if (c.kind === 'positions_delta') return posDClass(r);
     const v = r[c.key] as number | null;
     if (v === null || v === undefined || !isFinite(v) || v === 0) return 'text-zinc-500';
     return v > 0 ? 'text-emerald-400' : 'text-rose-400';
@@ -196,7 +194,17 @@
               <td class="px-3 py-1 text-zinc-500">{idx + 1}</td>
               <td class="px-3 py-1 font-medium text-zinc-100">{r.token}</td>
               {#each COLS as c (c.key)}
-                <td class="px-3 py-1 text-right font-mono {signClass(r, c)}">{cellText(r, c)}</td>
+                {#if c.kind === 'positions_delta'}
+                  <td class="px-3 py-1 text-right font-mono whitespace-nowrap">
+                    {#if posDMissing(r)}
+                      <span class="text-zinc-600">—</span>
+                    {:else}
+                      <span class={dSignClass(posDLong(r))}>{dLongText(r)}</span><span class="text-zinc-600">/</span><span class={dSignClass(posDShort(r))}>{dShortText(r)}</span>
+                    {/if}
+                  </td>
+                {:else}
+                  <td class="px-3 py-1 text-right font-mono {signClass(r, c)}">{cellText(r, c)}</td>
+                {/if}
               {/each}
             </tr>
           {/each}
