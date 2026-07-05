@@ -6,6 +6,20 @@
   import TokenLeaderboardTable from '$lib/components/TokenLeaderboardTable.svelte';
   import SpotCvdTable from '$lib/components/SpotCvdTable.svelte';
   import BacktrackerLeaderboardTable from '$lib/components/BacktrackerLeaderboardTable.svelte';
+  import EarlyMoversTable from '$lib/components/EarlyMoversTable.svelte';
+  // Early Movers analysis range (lookback → seconds), ending now.
+  const _EM_LB_SECS: Record<string, number> = { '1d': 86400, '3d': 259200, '7d': 604800, '14d': 1209600, '30d': 2592000 };
+  function _emQs(instance: ChartInstanceT): URLSearchParams {
+    const lbSec = _EM_LB_SECS[instance.emLookback ?? '3d'] ?? 259200;
+    const nowMs = Date.now();
+    return new URLSearchParams({
+      token: instance.token || 'BTC', interval: instance.interval || '1h',
+      since: new Date(nowMs - lbSec * 1000).toISOString(), until: new Date(nowMs).toISOString(),
+      long_thr: String(instance.emLongThr ?? 5), short_thr: String(instance.emShortThr ?? 5),
+      max_len: String(instance.emMaxLen ?? 3), lead: String(instance.emLead ?? 1),
+      mode: instance.emMode ?? 'flow', min_size: String(instance.emMinSize ?? 1000)
+    });
+  }
   import SmartWalletMetricsTable from '$lib/components/SmartWalletMetricsTable.svelte';
   import SmartWalletTokenListTable from '$lib/components/SmartWalletTokenListTable.svelte';
   import HlTopPositionsChart from '$lib/components/HlTopPositionsChart.svelte';
@@ -900,6 +914,12 @@
     if (instance.kind === 'backtracker_leaderboard') {
       // lookback + group + as_of all change the per-token aggregate → in the key.
       return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}|ps:${instance.blPosStaleness ?? '7d'}`;
+    }
+    if (instance.kind === 'early_movers') {
+      const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 1000}`;
+      // Chart view = candles (token+interval+range); table view = the full scoring.
+      if (instance.viewMode === 'chart') return `early_movers|chart|${instance.token}|${instance.interval}|${instance.emLookback ?? '3d'}`;
+      return `early_movers|table|${instance.token}|${instance.interval}|${crit}`;
     }
     if (instance.kind === 'sz') {
       const ex = instance.exchange ?? 'binance';
@@ -1860,6 +1880,19 @@
         loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
         return;
       }
+      // Early Movers TABLE view: detect moves + rank wallets. (Chart view falls to
+      // the candle switch below for HL candles; move markers load separately.)
+      if (instance.kind === 'early_movers' && instance.viewMode !== 'chart') {
+        const res = await queuedFetch(`/api/hyperliquid/early_movers?${_emQs(instance)}&n=100`, { signal });
+        if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+        const body = await res.json();
+        data = [{ em: body } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = pv ?? defaultView(sinceIso, untilIso);
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
+        return;
+      }
       // Hyperliquid top-traders: leaderboard endpoint returns ranked rows
       // (wallet, net_pnl, volume, …, categories). We stash the full response
       // on a side-channel and render via TableChart instead of LineChart.
@@ -2751,6 +2784,7 @@
         return;
       }
       switch (instance.kind) {
+        case 'early_movers':
         case 'backtracker':
         case 'ohlcv':
         case 'volume': {
@@ -2766,7 +2800,13 @@
           // and markers (fills/spot, which lag more) fill in as they arrive —
           // btMarkersVisible drops any marker with no candle, so no snapping/dupes.
           const btExchange = (instance.btOhlcvSource ?? 'spot') === 'futures' ? 'binance' : 'binance_spot';
-          ohlcvQs.set('exchange', instance.kind === 'backtracker' ? btExchange : (instance.exchange ?? 'binance'));
+          ohlcvQs.set('exchange', instance.kind === 'early_movers' ? 'hl'
+            : instance.kind === 'backtracker' ? btExchange : (instance.exchange ?? 'binance'));
+          if (instance.kind === 'early_movers') {
+            // Candles cover the analysis lookback so the move markers line up.
+            const em = _emQs(instance);
+            ohlcvQs.set('since', em.get('since')!); ohlcvQs.set('until', em.get('until')!);
+          }
           url = `/api/ohlcv?${ohlcvQs}`;
           pickArr = (b) => (b.candles ?? []) as AnyDatum[];
           break;
@@ -3523,7 +3563,8 @@
   // the raw token volume if the server didn't supply the USD field (older
   // payloads or stale caches).
   let ohlcvCandles = $derived.by(() => {
-    if (instance.kind !== 'ohlcv' && instance.kind !== 'backtracker') return [] as Candle[];
+    if (instance.kind !== 'ohlcv' && instance.kind !== 'backtracker'
+        && !(instance.kind === 'early_movers' && instance.viewMode === 'chart')) return [] as Candle[];
     const src = data as Candle[];
     // Default to USD notional; token (raw coin volume) is the opt-in.
     if ((instance.volumeUnit ?? 'usd') !== 'usd') return src;
@@ -5419,6 +5460,36 @@
     return btMarkers.filter((m) => times.has(m.time));
   });
 
+  // Early Movers chart: green ▲ (below) on long-move bars, red ▼ (above) on short-move
+  // bars, from a moves-only fetch that reacts to the criteria.
+  let emMarkers = $state<CandleMarker[]>([]);
+  $effect(() => {
+    if (instance.kind !== 'early_movers' || instance.viewMode !== 'chart') { emMarkers = []; return; }
+    const qs = _emQs(instance); qs.set('moves_only', '1'); // reads criteria → dependencies
+    const ctl = new AbortController();
+    (async () => {
+      try {
+        const res = await fetch(`/api/hyperliquid/early_movers?${qs}`, { signal: ctl.signal });
+        if (!res.ok) return;
+        const body = await res.json();
+        const out: CandleMarker[] = [];
+        for (const m of (body.moves ?? []) as Array<{ time: number; dir: string }>) {
+          out.push(m.dir === 'long'
+            ? { time: m.time, position: 'belowBar', color: '#22c55e', shape: 'arrowUp' }
+            : { time: m.time, position: 'aboveBar', color: '#ef4444', shape: 'arrowDown' });
+        }
+        out.sort((a, b) => a.time - b.time);
+        emMarkers = out;
+      } catch { /* aborted */ }
+    })();
+    return () => ctl.abort();
+  });
+  let emMarkersVisible = $derived.by(() => {
+    if (instance.kind !== 'early_movers' || emMarkers.length === 0) return emMarkers;
+    const times = new Set((ohlcvCandles as Candle[]).map((c) => c.time));
+    return emMarkers.filter((m) => times.has(m.time));
+  });
+
   // Cumulative group-PnL line (left axis) for backtracker — a point at each bar
   // where the group had fills; LWC connects them into an equity curve.
   let btChartLines = $derived.by(() => {
@@ -5562,6 +5633,7 @@
     // (Point / Week lines / MA / zoom-sync) DO apply there — only the table view
     // counts as a tableview kind.
     || (isSwKind(instance.kind) && instance.viewMode !== 'chart')
+    || (instance.kind === 'early_movers' && instance.viewMode !== 'chart')
     || instance.kind === 'hl_top_traders'
     || instance.kind === 'hl_top_positions'
     || instance.kind === 'hl_top_vaults'
@@ -7036,6 +7108,41 @@
           <option value="usd">$</option>
           <option value="token">Token</option>
         </select>
+      {:else if instance.kind === 'early_movers'}
+        {@const emc = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}
+        <input class={emc + ' w-16'} value={instance.token ?? ''} placeholder="Token"
+          onchange={(e) => (instance.token = e.currentTarget.value.trim().toUpperCase())} title="Token" />
+        <select class={emc} value={instance.interval ?? '1h'} onchange={(e) => (instance.interval = e.currentTarget.value as '15m' | '30m' | '1h' | '4h' | '1d')} title="Timeframe (bar size)">
+          {#each ['15m', '30m', '1h', '4h', '1d'] as iv (iv)}<option value={iv}>{iv}</option>{/each}
+        </select>
+        <select class={emc} value={instance.emLookback ?? '3d'}
+          onchange={(e) => (instance.emLookback = e.currentTarget.value as '1d' | '3d' | '7d' | '14d' | '30d')} title="Analysis range (ending now)">
+          {#each ['1d', '3d', '7d', '14d', '30d'] as lb (lb)}<option value={lb}>{lb}</option>{/each}
+        </select>
+        <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Long move threshold (%)">L%
+          <input type="number" min="0" step="0.5" class={emc + ' w-12'} value={instance.emLongThr ?? 5}
+            onchange={(e) => (instance.emLongThr = Number(e.currentTarget.value) || 0)} /></label>
+        <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Short move threshold (%)">S%
+          <input type="number" min="0" step="0.5" class={emc + ' w-12'} value={instance.emShortThr ?? 5}
+            onchange={(e) => (instance.emShortThr = Number(e.currentTarget.value) || 0)} /></label>
+        <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Max move length (bars)">Len
+          <input type="number" min="1" step="1" class={emc + ' w-10'} value={instance.emMaxLen ?? 3}
+            onchange={(e) => (instance.emMaxLen = Math.max(1, parseInt(e.currentTarget.value, 10) || 1))} /></label>
+        <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Lead bars before the trigger the wallet may act in">Lead
+          <input type="number" min="0" step="1" class={emc + ' w-10'} value={instance.emLead ?? 1}
+            onchange={(e) => (instance.emLead = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))} /></label>
+        <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min size ($) to register as identification">Min$
+          <input type="number" min="0" step="100" class={emc + ' w-16'} value={instance.emMinSize ?? 1000}
+            onchange={(e) => (instance.emMinSize = Number(e.currentTarget.value) || 0)} /></label>
+        <select class={emc} value={instance.emMode ?? 'flow'}
+          onchange={(e) => (instance.emMode = e.currentTarget.value as 'flow' | 'open_flip' | 'position_state')}
+          title="What counts as reacting: Flow = net trade direction; Open/Flip = opened or flipped a position; State = an open position exists">
+          <option value="flow">Flow</option>
+          <option value="open_flip">Open/Flip</option>
+          <option value="position_state">State</option>
+        </select>
+        <button type="button" onclick={() => load(true, true)}
+          class="text-xs px-2 py-1 rounded border border-zinc-700 bg-zinc-800/50 text-zinc-200 hover:bg-zinc-700/50" title="Re-run detection + scoring">↻ Refresh</button>
       {:else if instance.kind === 'backtracker_leaderboard'}
         <!-- Backtracker Leaderboard: global per-token, no token dimension. Lookback +
              As-of + group live here; sort/filter/limit live in the table. -->
@@ -8605,7 +8712,7 @@
           No data for {kindLabel}.
         {/if}
       </div>
-    {:else if instance.kind === 'ohlcv' || instance.kind === 'backtracker'}
+    {:else if instance.kind === 'ohlcv' || instance.kind === 'backtracker' || (instance.kind === 'early_movers' && instance.viewMode === 'chart')}
       <CandlestickChart
         candles={ohlcvCandles}
         lines={btChartLines}
@@ -8621,7 +8728,7 @@
         onHover={handleHover}
         vRefLines={weekVRefLines}
         onClick={instance.kind === 'backtracker' ? ((t: number) => openBacktrackerDialog(t)) : undefined}
-        markers={instance.kind === 'backtracker' ? btMarkersVisible : []}
+        markers={instance.kind === 'early_movers' ? emMarkersVisible : instance.kind === 'backtracker' ? btMarkersVisible : []}
         fontSize={instance.kind === 'backtracker' ? 15 : undefined}
         fontFamily={instance.kind === 'backtracker' ? '"Arial Black", "Arial Bold", Gadget, sans-serif' : undefined}
       />
@@ -9114,6 +9221,16 @@
         hasGroup={!!instance.btGroupId}
         posMode={instance.blPosMode ?? 'consensus'}
         onTokenClick={openBacktrackerLeaderboardToken}
+      />
+    {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
+      {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}
+      <EarlyMoversTable
+        rows={(emBody.rows ?? []) as never}
+        loading={loading}
+        error={error}
+        token={instance.token ?? ''}
+        totalLong={Number(emBody.total_long ?? 0)}
+        totalShort={Number(emBody.total_short ?? 0)}
       />
     {:else if instance.kind === 'hl_top_traders'}
       <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />

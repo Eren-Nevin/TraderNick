@@ -450,6 +450,7 @@ export type ChartKind =
   | 'spot_cvd_table'
   | 'token_leaderboard'
   | 'backtracker_leaderboard'
+  | 'early_movers'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
@@ -590,6 +591,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   spot_cvd: 'Spot CVD',
   spot_cvd_table: 'Spot CVD Table',
   backtracker_leaderboard: 'Backtracker Leaderboard',
+  early_movers: 'Early Movers',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -842,7 +844,8 @@ export const DUAL_VIEW_KINDS: Partial<Record<ChartKind, { chartKind: ChartKind }
   smart_wallets_table: { chartKind: 'hl_smart_oi' },
   smart_wallets_dynamic: { chartKind: 'hl_smart_oi' },
   smart_wallets_cutoff: { chartKind: 'hl_smart_oi' },
-  smart_wallets_group: { chartKind: 'hl_smart_oi' }
+  smart_wallets_group: { chartKind: 'hl_smart_oi' },
+  early_movers: { chartKind: 'backtracker' }
 };
 
 export function isDualViewKind(kind: ChartKind): boolean {
@@ -1387,7 +1390,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Perp — GMX V2 + Hyperliquid family. smart_wallets_table is an HL-only
   // experimental tableview (no hl_ prefix so it stays out of the many
   // isHlKind() chart-control branches) — categorise it here explicitly.
-  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group' || kind === 'backtracker' || kind === 'backtracker_leaderboard') return 'Perp';
+  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group' || kind === 'backtracker' || kind === 'backtracker_leaderboard' || kind === 'early_movers') return 'Perp';
   // Staking — Lido (and future Stader/Frax).
   if (kind === 'lido') return 'Staking';
   return null;
@@ -1747,6 +1750,19 @@ export type ChartInstance = {
   /** backtracker_leaderboard only: Positions column shows wallet COUNTS (consensus)
    *  or OI value. Display-only (server returns both) → NOT in the key. */
   blPosMode?: 'consensus' | 'oi';
+  // ── early_movers only (token=timeframe token, interval=timeframe) ──
+  /** analysis range ending now. In the key. */
+  emLookback?: '1d' | '3d' | '7d' | '14d' | '30d';
+  /** long / short move thresholds (%). In the key. */
+  emLongThr?: number;
+  emShortThr?: number;
+  /** max move length (bars) + lead bars before the trigger. In the key. */
+  emMaxLen?: number;
+  emLead?: number;
+  /** what counts as reacting to a move. In the key. */
+  emMode?: 'flow' | 'open_flip' | 'position_state';
+  /** min position/flow size ($) to register as identification. In the key. */
+  emMinSize?: number;
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2697,6 +2713,19 @@ export function newChartInstance(
     base.blAsOf = 'recent';
     base.blPosStaleness = '7d';
     base.blPosMode = 'consensus';
+  }
+  if (kind === 'early_movers') {
+    // HL-perp candles + wallet move-prediction table; dual-view (table default).
+    base.viewMode = 'table';
+    base.token = 'BTC';
+    base.interval = '1h';
+    base.emLookback = '3d';
+    base.emLongThr = 5;
+    base.emShortThr = 5;
+    base.emMaxLen = 3;
+    base.emLead = 1;
+    base.emMode = 'flow';
+    base.emMinSize = 1000;
   }
   if (kind === 'ohlcv') {
     base.pin = false;
