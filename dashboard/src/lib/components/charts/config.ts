@@ -1766,6 +1766,9 @@ export type ChartInstance = {
   /** exclude the trigger bar from the reaction window (require action strictly
    *  before the move). Only meaningful when emLead ≥ 1. In the key. */
   emSkipIntra?: boolean;
+  /** server-side floor on a wallet's avg identifying size, in $K (10 = $10k).
+   *  Filters wallets before the top-N ranking. In the key. */
+  emMinAvgSizeK?: number;
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2730,6 +2733,7 @@ export function newChartInstance(
     base.emMode = 'flow';
     base.emMinSize = 1000;
     base.emSkipIntra = false;
+    base.emMinAvgSizeK = 0;
   }
   if (kind === 'ohlcv') {
     base.pin = false;

@@ -3358,6 +3358,7 @@ async def early_movers(request):
     long_thr = _f("long_thr", 5) / 100.0
     short_thr = _f("short_thr", 5) / 100.0
     min_size = _f("min_size", 0)
+    min_avg_size = _f("min_avg_size", 0)  # $ floor on a wallet's avg identifying size
     try:
         max_len = max(1, min(int(request.args.get("max_len", "3")), 20))
     except ValueError:
@@ -3494,9 +3495,11 @@ async def early_movers(request):
         "   )"
         "   WHERE react != 'none'"
         " ) GROUP BY wallet"
+        " HAVING avg_size >= {min_avg:Float64}"
         " ORDER BY (cl + cs) DESC"
         " LIMIT {n:UInt32}",
-        parameters={**wb_params, "ms": min_size, "wbkts": wbkts, "mids": mids, "mdirs": mdirs, "n": n},
+        parameters={**wb_params, "ms": min_size, "min_avg": min_avg_size,
+                    "wbkts": wbkts, "mids": mids, "mdirs": mdirs, "n": n},
     )
     out = []
     for w, cl, il, cs, ish, avg_size, cats in rows.result_rows:
