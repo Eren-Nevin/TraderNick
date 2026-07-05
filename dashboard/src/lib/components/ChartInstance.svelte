@@ -17,7 +17,8 @@
       since: new Date(nowMs - lbSec * 1000).toISOString(), until: new Date(nowMs).toISOString(),
       long_thr: String(instance.emLongThr ?? 5), short_thr: String(instance.emShortThr ?? 5),
       max_len: String(instance.emMaxLen ?? 3), lead: String(instance.emLead ?? 1),
-      mode: instance.emMode ?? 'flow', min_size: String(instance.emMinSize ?? 1000)
+      mode: instance.emMode ?? 'flow', min_size: String(instance.emMinSize ?? 1000),
+      skip_intra: instance.emSkipIntra ? '1' : '0'
     });
   }
   import SmartWalletMetricsTable from '$lib/components/SmartWalletMetricsTable.svelte';
@@ -916,7 +917,7 @@
       return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}|ps:${instance.blPosStaleness ?? '7d'}`;
     }
     if (instance.kind === 'early_movers') {
-      const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 1000}`;
+      const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 1000}|${instance.emSkipIntra ? 1 : 0}`;
       // Chart view = candles (token+interval+range); table view = the full scoring.
       if (instance.viewMode === 'chart') return `early_movers|chart|${instance.token}|${instance.interval}|${instance.emLookback ?? '3d'}`;
       return `early_movers|table|${instance.token}|${instance.interval}|${crit}`;
@@ -7135,7 +7136,7 @@
             onchange={(e) => (instance.emMaxLen = Math.max(1, parseInt(e.currentTarget.value, 10) || 1))} /></label>
         <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Lead bars before the trigger the wallet may act in">Lead
           <input type="number" min="0" step="1" class={emc + ' w-10'} value={instance.emLead ?? 1}
-            onchange={(e) => (instance.emLead = Math.max(0, parseInt(e.currentTarget.value, 10) || 0))} /></label>
+            onchange={(e) => { instance.emLead = Math.max(0, parseInt(e.currentTarget.value, 10) || 0); if (instance.emLead < 1) instance.emSkipIntra = false; }} /></label>
         <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min size ($) to register as identification">Min$
           <input type="number" min="0" step="100" class={emc + ' w-16'} value={instance.emMinSize ?? 1000}
             onchange={(e) => (instance.emMinSize = Number(e.currentTarget.value) || 0)} /></label>
@@ -7146,6 +7147,12 @@
           <option value="open_flip">Open/Flip</option>
           <option value="position_state">State</option>
         </select>
+        <label class="flex items-center gap-1 text-[10px] {(instance.emLead ?? 1) >= 1 ? 'text-zinc-400' : 'text-zinc-700'}"
+          title="Exclude the trigger bar: require the wallet to have acted in the lead bars strictly BEFORE the move. Needs Lead ≥ 1.">
+          <input type="checkbox" checked={instance.emSkipIntra ?? false} disabled={(instance.emLead ?? 1) < 1}
+            onchange={(e) => (instance.emSkipIntra = e.currentTarget.checked)} />
+          Skip Intra-bar
+        </label>
         <button type="button" onclick={() => load(true, true)}
           class="text-xs px-2 py-1 rounded border border-zinc-700 bg-zinc-800/50 text-zinc-200 hover:bg-zinc-700/50" title="Re-run detection + scoring">↻ Refresh</button>
       {:else if instance.kind === 'backtracker_leaderboard'}

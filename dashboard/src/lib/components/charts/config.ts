@@ -1763,6 +1763,9 @@ export type ChartInstance = {
   emMode?: 'flow' | 'open_flip' | 'position_state';
   /** min position/flow size ($) to register as identification. In the key. */
   emMinSize?: number;
+  /** exclude the trigger bar from the reaction window (require action strictly
+   *  before the move). Only meaningful when emLead ≥ 1. In the key. */
+  emSkipIntra?: boolean;
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2726,6 +2729,7 @@ export function newChartInstance(
     base.emLead = 1;
     base.emMode = 'flow';
     base.emMinSize = 1000;
+    base.emSkipIntra = false;
   }
   if (kind === 'ohlcv') {
     base.pin = false;

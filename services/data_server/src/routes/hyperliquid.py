@@ -3374,6 +3374,9 @@ async def early_movers(request):
     if mode not in ("flow", "open_flip", "position_state"):
         return response.json({"error": "mode must be flow|open_flip|position_state"}, status=400)
     moves_only = request.args.get("moves_only") in ("1", "true", "yes")
+    # Skip Intra-bar: exclude the trigger bar itself → require the action in the lead
+    # bars strictly BEFORE the move. Needs lead ≥ 1 (else the window is empty).
+    skip_intra = request.args.get("skip_intra") in ("1", "true", "yes") and lead >= 1
 
     ch = await client()
 
@@ -3433,8 +3436,9 @@ async def early_movers(request):
             mids.append(j)
             mdirs.append(d)
     else:
+        # window buckets {T-lead·tf … T}; skip_intra drops the trigger bucket (i=0).
         for j, (t, d, _) in enumerate(moves):
-            for i in range(lead + 1):         # window buckets {T-lead·tf … T}
+            for i in range(1 if skip_intra else 0, lead + 1):
                 wbkts.append(t - i * sec)
                 mids.append(j)
                 mdirs.append(d)
