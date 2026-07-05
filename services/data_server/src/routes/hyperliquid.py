@@ -2885,9 +2885,9 @@ _GTP_ORDER = {
 # at the bar; only t_prev moves back). Absent → the bar's own window (t_prev as
 # derived from lookback/none).
 _GTP_CHANGE_LB = {
-    "1h": timedelta(hours=1), "4h": timedelta(hours=4), "12h": timedelta(hours=12),
-    "1d": timedelta(days=1), "3d": timedelta(days=3), "7d": timedelta(days=7),
-    "14d": timedelta(days=14), "30d": timedelta(days=30),
+    "15m": timedelta(minutes=15), "1h": timedelta(hours=1), "4h": timedelta(hours=4),
+    "12h": timedelta(hours=12), "1d": timedelta(days=1), "3d": timedelta(days=3),
+    "7d": timedelta(days=7), "14d": timedelta(days=14), "30d": timedelta(days=30),
 }
 
 
@@ -3057,7 +3057,7 @@ async def group_token_positions(request):
     })
 
 
-_BL_LB = {"1h": 3600, "4h": 14400, "12h": 43200, "1d": 86400, "7d": 604800}
+_BL_LB = {"15m": 900, "1h": 3600, "4h": 14400, "12h": 43200, "1d": 86400, "7d": 604800}
 # Position-staleness lookback: a group position counts toward the Positions column
 # only if the wallet had a fill in that token within this window (filters out stale,
 # long-untouched positions).

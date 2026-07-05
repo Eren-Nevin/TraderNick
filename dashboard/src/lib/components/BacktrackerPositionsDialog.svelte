@@ -76,7 +76,7 @@
     onClose: () => void;
   } = $props();
 
-  const CHANGE_LB_OPTS = ['', '1h', '4h', '1d', '3d', '7d', '14d', '30d'];
+  const CHANGE_LB_OPTS = ['', '15m', '1h', '4h', '12h', '1d', '3d', '7d', '14d', '30d'];
 
   const ORDER_LABELS: Record<string, string> = {
     change: 'Net change', value: 'Position value', upnl: 'Unrealized PnL', roe: 'ROE',

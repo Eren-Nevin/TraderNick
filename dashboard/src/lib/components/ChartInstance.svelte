@@ -7042,10 +7042,11 @@
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL perp · all tokens</span>
         <select
           value={instance.blLookback ?? '1d'}
-          onchange={(e) => (instance.blLookback = e.currentTarget.value as '1h' | '4h' | '12h' | '1d' | '7d')}
+          onchange={(e) => (instance.blLookback = e.currentTarget.value as '15m' | '1h' | '4h' | '12h' | '1d' | '7d')}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
           title="Lookback window for every column"
         >
+          <option value="15m">15m</option>
           <option value="1h">1h</option>
           <option value="4h">4h</option>
           <option value="12h">12h</option>
