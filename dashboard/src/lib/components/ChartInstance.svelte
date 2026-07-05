@@ -5204,7 +5204,7 @@
   // ── Backtracker "Net Position" dialog: clicking a bar in netpos marker mode opens
   // the FULL group position book in the token (all holders) + per-wallet change,
   // ranked SERVER-side by a query column (BacktrackerPositionsDialog). ──
-  type BtpRow = { wallet: string; side: 'long' | 'short'; amount: number; size_usd: number; entry_px: number | null; unrealized_pnl: number; roe: number | null; funding: number; change_amount: number; change_usd: number; last_change: number; categories?: string[] };
+  type BtpRow = { wallet: string; side: 'long' | 'short'; amount: number; size_usd: number; entry_px: number | null; unrealized_pnl: number | null; roe: number | null; funding: number | null; change_amount: number; change_usd: number; last_change: number; categories?: string[] };
   let btpDialogOpen = $state(false);
   let btpLoading = $state(false);
   let btpError = $state<string | null>(null);

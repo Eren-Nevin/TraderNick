@@ -2937,7 +2937,8 @@ async def group_token_positions(request):
     except ValueError:
         return response.json({"error": "bad time"}, status=400)
     t0 = datetime.fromtimestamp(secs, tz=timezone.utc).replace(tzinfo=None, second=0, microsecond=0)
-    t0 = t0.replace(minute=(t0.minute // 15) * 15)
+    # NOT floored to 15m: the detail is reconstructed to t_end with fills, so t_end can
+    # be an exact time (leaderboard → now). Bar clicks already pass grid-aligned times.
     if none_mode:
         t_prev, t_end = t0, t0 + _BACKTRACK_LB[iv]   # the bar itself: [T, T+interval)
     else:
@@ -2955,22 +2956,23 @@ async def group_token_positions(request):
         return response.json({"error": str(e)}, status=400)
 
     price = await mark_price(ch, token, t_end)
-    # Position detail from the freshest published snapshot ≤ t_end (the raw is
-    # authoritative; entry/uPnL/funding can't be reconstructed from fills). The
-    # CHANGE comes from fills over [t_prev, t_end) so it stays fresh + matches the
-    # Net Position marker on recent bars. LEFT JOIN keeps unchanged holders (Δ=0).
+    # Position detail from the freshest published snapshot ≤ t_end, then CARRIED
+    # FORWARD to t_end with fills (recon_amt) so the shown side/amount is current
+    # even when the snapshot lags and the wallet flipped since (entry/uPnL/funding
+    # can't be reconstructed → nulled on a flip). CHANGE = fills over [t_prev, t_end).
     te_bucket = await latest_snapshot_bucket(ch, token, t_end)
     out = []
     if te_bucket is not None:
         rows = await ch.query(
             """
             SELECT wallet, side, amount, size_usd, entry_px, unrealized_pnl, funding,
-                   change_amount, last_change, categories
+                   change_amount, last_change, recon_amt, categories
             FROM (
                 SELECT d.wallet AS wallet, d.side AS side, d.amt AS amount,
                        d.sz AS size_usd, d.entry AS entry_px, d.upnl AS unrealized_pnl,
                        d.fund AS funding, ifNull(c.d_amt, 0) AS change_amount,
-                       ifNull(l.lc, 0) AS last_change, d.cats AS categories
+                       ifNull(l.lc, 0) AS last_change, ifNull(rc.ra, 0) AS recon_amt,
+                       d.cats AS categories
                 FROM (
                     SELECT wallet,
                            argMax(side, time)          AS side,
@@ -3002,6 +3004,15 @@ async def group_token_positions(request):
                       AND """ + member + """
                     GROUP BY wallet
                 ) l ON d.wallet = l.wallet
+                LEFT JOIN (
+                    -- net signed fills since the snapshot → carry the position forward
+                    -- to t_end (fixes a stale side when the wallet flipped since).
+                    SELECT wallet, sum(if(side = 'B', size, -size)) AS ra
+                    FROM tradernick.hl_fills FINAL
+                    WHERE token = {tok:String} AND time > {b:DateTime} AND time < {te:DateTime}
+                      AND """ + member + """
+                    GROUP BY wallet
+                ) rc ON d.wallet = rc.wallet
             )
             WHERE last_change >= {lcs:UInt32}
             ORDER BY """ + _GTP_ORDER[order] + """ DESC
@@ -3010,15 +3021,30 @@ async def group_token_positions(request):
             parameters={"tok": token, "b": te_bucket, "tp": t_prev, "te": t_end,
                         "n": n, "lcs": lcs},
         )
-        for (w, side, amt, sz, entry, upnl, fund, dch, lc, cats) in rows.result_rows:
-            amt, entry, upnl = float(amt), float(entry), float(upnl)
-            entry_notional = abs(amt) * entry
+        for (w, side, amt, entry, fund, dch, lc, ra, cats) in (
+                (r[0], r[1], float(r[2]), float(r[4]), float(r[6]), float(r[7]),
+                 int(r[8]), float(r[9]), r[10]) for r in rows.result_rows):
+            # Carry the snapshot forward: signed position at t_end = snapshot + fills.
+            snap_signed = amt * (1.0 if side == "long" else -1.0)
+            now_signed = snap_signed + ra
+            side_now = "long" if now_signed >= 0 else "short"
+            amt_now = abs(now_signed)
+            # entry/uPnL/funding are for the snapshot position; keep them (revalued at
+            # the current mark) only when the side didn't flip and there WAS a position.
+            flipped = abs(snap_signed) > 1e-9 and (now_signed > 0) != (snap_signed > 0)
+            if flipped or abs(snap_signed) < 1e-9:
+                entry_out = upnl_out = roe_out = fund_out = None
+            else:
+                entry_out = entry or None
+                notional = amt_now * entry
+                upnl_out = (now_signed * (price - entry)) if entry else None
+                roe_out = (upnl_out / notional) if (upnl_out is not None and notional) else None
+                fund_out = fund
             out.append({
-                "wallet": w, "side": side,
-                "amount": amt, "size_usd": float(sz),          # positive magnitudes + side
-                "entry_px": entry or None, "unrealized_pnl": upnl,
-                "roe": (upnl / entry_notional) if entry_notional else None,
-                "funding": float(fund),
+                "wallet": w, "side": side_now,
+                "amount": amt_now, "size_usd": amt_now * price,   # positive magnitudes + side
+                "entry_px": entry_out, "unrealized_pnl": upnl_out,
+                "roe": roe_out, "funding": fund_out,
                 "change_amount": float(dch), "change_usd": float(dch) * price,
                 "last_change": int(lc),
                 "categories": list(cats) if cats else [],

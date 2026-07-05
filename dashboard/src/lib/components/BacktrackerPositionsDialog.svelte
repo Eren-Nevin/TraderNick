@@ -15,9 +15,9 @@
     amount: number;         // positive magnitude (side is separate)
     size_usd: number;       // positive magnitude
     entry_px: number | null;
-    unrealized_pnl: number;
+    unrealized_pnl: number | null; // null when the position flipped since the snapshot
     roe: number | null;     // return on entry notional (fraction)
-    funding: number;
+    funding: number | null;
     change_amount: number;  // signed: + net bought, − net sold
     change_usd: number;     // signed
     last_change: number;    // unix s of the wallet's most recent fill in this token (0 = never)
@@ -83,8 +83,8 @@
     entry: 'Entry', last_change: 'Last change'
   };
 
-  function fmtUsd(n: number): string {
-    if (!isFinite(n)) return '—';
+  function fmtUsd(n: number | null): string {
+    if (n === null || n === undefined || !isFinite(n)) return '—';
     const abs = Math.abs(n), sign = n < 0 ? '-' : '';
     if (abs >= 1e9) return sign + '$' + (abs / 1e9).toFixed(2) + 'B';
     if (abs >= 1e6) return sign + '$' + (abs / 1e6).toFixed(2) + 'M';
@@ -129,9 +129,9 @@
     if (k === 'value') return r.size_usd;
     if (k === 'amount') return r.amount;
     if (k === 'entry') return r.entry_px ?? 0;
-    if (k === 'upnl') return r.unrealized_pnl;
+    if (k === 'upnl') return r.unrealized_pnl ?? 0;
     if (k === 'roe') return r.roe ?? 0;
-    if (k === 'funding') return r.funding;
+    if (k === 'funding') return r.funding ?? 0;
     if (k === 'change') return Math.abs(r.change_amount);
     if (k === 'last_change') return r.last_change;
     return 0;
@@ -269,7 +269,7 @@
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-300">{fmtUsd(r.size_usd)}</td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtAmt(r.amount)}</td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtPrice(r.entry_px)}</td>
-                  <td class="px-3 py-1.5 text-right font-mono tabular-nums {r.unrealized_pnl > 0 ? 'text-emerald-400' : r.unrealized_pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(r.unrealized_pnl)}</td>
+                  <td class="px-3 py-1.5 text-right font-mono tabular-nums {(r.unrealized_pnl ?? 0) > 0 ? 'text-emerald-400' : (r.unrealized_pnl ?? 0) < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(r.unrealized_pnl)}</td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums {(r.roe ?? 0) > 0 ? 'text-emerald-400' : (r.roe ?? 0) < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtRoe(r.roe)}</td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-500">{fmtUsd(r.funding)}</td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums whitespace-nowrap">
