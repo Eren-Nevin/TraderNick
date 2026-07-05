@@ -5463,8 +5463,9 @@
   // Early Movers chart: green ▲ (below) on long-move bars, red ▼ (above) on short-move
   // bars, from a moves-only fetch that reacts to the criteria.
   let emMarkers = $state<CandleMarker[]>([]);
+  let emStats = $state<{ long: number; short: number; bars: number }>({ long: 0, short: 0, bars: 0 });
   $effect(() => {
-    if (instance.kind !== 'early_movers' || instance.viewMode !== 'chart') { emMarkers = []; return; }
+    if (instance.kind !== 'early_movers' || instance.viewMode !== 'chart') { emMarkers = []; emStats = { long: 0, short: 0, bars: 0 }; return; }
     const qs = _emQs(instance); qs.set('moves_only', '1'); // reads criteria → dependencies
     const ctl = new AbortController();
     (async () => {
@@ -5480,10 +5481,12 @@
         }
         out.sort((a, b) => a.time - b.time);
         emMarkers = out;
+        emStats = { long: Number(body.total_long ?? 0), short: Number(body.total_short ?? 0), bars: Number(body.total_bars ?? 0) };
       } catch { /* aborted */ }
     })();
     return () => ctl.abort();
   });
+  const emPct = (n: number) => (emStats.bars > 0 ? ((n / emStats.bars) * 100).toFixed(1) : '0.0');
   let emMarkersVisible = $derived.by(() => {
     if (instance.kind !== 'early_movers' || emMarkers.length === 0) return emMarkers;
     const times = new Set((ohlcvCandles as Candle[]).map((c) => c.time));
@@ -9233,6 +9236,7 @@
         token={instance.token ?? ''}
         totalLong={Number(emBody.total_long ?? 0)}
         totalShort={Number(emBody.total_short ?? 0)}
+        totalBars={Number(emBody.total_bars ?? 0)}
       />
     {:else if instance.kind === 'hl_top_traders'}
       <TableChart leaders={data.length > 0 ? ((data[0] as unknown as {leaders?: Record<string, unknown>[]}).leaders ?? []) : []} />
@@ -9404,6 +9408,16 @@
          with the loading badge (top-right) or backfill pill (bottom-left). -->
     <div class="pointer-events-none absolute top-1 left-1 z-10 rounded border border-zinc-700 bg-zinc-900/90 px-2 py-1 text-sm font-semibold text-zinc-200 shadow">
       {swFoundTotal.toLocaleString()} wallets
+    </div>
+  {/if}
+
+  {#if instance.kind === 'early_movers' && instance.viewMode === 'chart' && emStats.bars > 0}
+    <!-- Found move counts + share of bars in range (top-left, mirrors the sw badge). -->
+    <div class="pointer-events-none absolute top-1 left-1 z-10 rounded border border-zinc-700 bg-zinc-900/90 px-2 py-1 text-xs font-semibold shadow">
+      <span class="text-emerald-400">{emStats.long} long ({emPct(emStats.long)}%)</span>
+      <span class="text-zinc-600"> · </span>
+      <span class="text-rose-400">{emStats.short} short ({emPct(emStats.short)}%)</span>
+      <span class="text-zinc-500"> / {emStats.bars} bars</span>
     </div>
   {/if}
 

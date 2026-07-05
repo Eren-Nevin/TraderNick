@@ -20,7 +20,8 @@
     token = '',
     snapshotDate = '',
     totalLong = 0,
-    totalShort = 0
+    totalShort = 0,
+    totalBars = 0
   }: {
     rows: Row[];
     loading?: boolean;
@@ -29,7 +30,10 @@
     snapshotDate?: string;
     totalLong?: number;
     totalShort?: number;
+    totalBars?: number;
   } = $props();
+
+  const pct = (n: number) => (totalBars > 0 ? ((n / totalBars) * 100).toFixed(1) : '0.0');
 
   let sortKey = $state<string>('correct_total');
   let sortDir = $state<1 | -1>(-1);
@@ -72,7 +76,11 @@
 
 <div class="h-full flex flex-col text-xs" use:stopDragEvents>
   <div class="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 text-zinc-400">
-    <span class="text-[11px]">{totalLong} long / {totalShort} short moves · correct/incorrect/missed</span>
+    <span class="text-[11px]">
+      <span class="text-emerald-400">{totalLong} long ({pct(totalLong)}%)</span>
+      / <span class="text-rose-400">{totalShort} short ({pct(totalShort)}%)</span>
+      of {totalBars} bars · correct/incorrect/missed
+    </span>
     <input class={selClass + ' w-24'} placeholder="Wallet…" bind:value={search} title="Fuzzy filter by wallet" />
     <span class="ml-auto text-[11px]">Show</span>
     <select class={selClass} bind:value={limit} title="Number of rows to show">

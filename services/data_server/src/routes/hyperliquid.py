@@ -3421,7 +3421,7 @@ async def early_movers(request):
     total_long = sum(1 for _, d, _ in moves if d == "long")
     total_short = sum(1 for _, d, _ in moves if d == "short")
     base = {"token": token, "interval": interval, "total_long": total_long,
-            "total_short": total_short, "moves": moves_out}
+            "total_short": total_short, "total_bars": len(bars), "moves": moves_out}
     if moves_only or not moves:
         return response.json({**base, "rows": []})
 
