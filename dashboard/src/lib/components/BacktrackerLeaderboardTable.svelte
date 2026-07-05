@@ -14,14 +14,33 @@
     loading = false,
     error = null,
     hasGroup = false,
-    onTokenClick
+    onTokenClick,
+    posMode = 'consensus',
   }: {
     rows: Record<string, unknown>[] | Row[];
     loading?: boolean;
     error?: string | null;
     hasGroup?: boolean;
     onTokenClick: (token: string) => void;
+    posMode?: string;
   } = $props();
+
+  // Positions column: group long/short at the snapshot (staleness-filtered). Count
+  // (consensus) or OI value, per posMode. Green if longs dominate, red if shorts.
+  function posLong(r: Row): number { return (posMode === 'oi' ? r.pos_oi_long : r.pos_n_long) ?? 0; }
+  function posShort(r: Row): number { return (posMode === 'oi' ? r.pos_oi_short : r.pos_n_short) ?? 0; }
+  function posMissing(r: Row): boolean { return r.pos_n_long == null && r.pos_n_short == null; }
+  function posText(r: Row): string {
+    if (posMissing(r)) return '—';
+    return posMode === 'oi'
+      ? `${fmtUsd(r.pos_oi_long ?? 0)}/${fmtUsd(r.pos_oi_short ?? 0)}`
+      : `${r.pos_n_long ?? 0}/${r.pos_n_short ?? 0}`;
+  }
+  function posClass(r: Row): string {
+    if (posMissing(r)) return 'text-zinc-600';
+    const l = posLong(r), s = posShort(r);
+    return l > s ? 'text-emerald-400' : l < s ? 'text-rose-400' : 'text-zinc-500';
+  }
 
   function fmtUsd(n: number | null): string {
     if (n === null || n === undefined || !isFinite(n)) return '—';
@@ -36,12 +55,13 @@
     return (n > 0 ? '+' : '') + n.toFixed(2) + '%';
   }
 
-  type Col = { key: string; label: string; kind: 'pct' | 'usd'; title?: string };
+  type Col = { key: string; label: string; kind: 'pct' | 'usd' | 'positions'; title?: string };
   const COLS: Col[] = [
     { key: 'price_pct', label: 'Price Δ%', kind: 'pct' },
     { key: 'price_vs_btc_pct', label: 'Δ vs BTC', kind: 'pct', title: 'Price change relative to BTC over the lookback (token/BTC ratio change). + = outperformed BTC; BTC = 0.' },
     { key: 'net_flow_group', label: 'Flow (grp)', kind: 'usd', title: "Selected group's net position flow ($) — buys − sells from fills" },
     { key: 'flow_group_pct', label: 'Flow (grp) Δ%', kind: 'pct', title: "Group flow / total OI at end of window (scale-free)" },
+    { key: 'positions', label: 'Positions', kind: 'positions', title: "Group long/short positions at the snapshot (staleness-filtered) as Long/Short — count or OI value per the settings toggle" },
     { key: 'net_flow_overall', label: 'Flow (all)', kind: 'usd', title: 'Market-wide net taker flow (CVD $) over the lookback' },
     { key: 'flow_overall_pct', label: 'Flow Δ%', kind: 'pct', title: 'Overall flow / total OI at end of window (scale-free)' },
     { key: 'net_oi_now_pct', label: 'Net OI %', kind: 'pct', title: 'Current net signed OI / total OI at end (directional lean)' },
@@ -77,9 +97,11 @@
   let sortedRows = $derived.by(() => {
     const arr = (rows as Row[]).filter((r) => fuzzy(search, String(r.token)));
     const dir = sortDir, k = sortKey;
+    const posNet = (r: Row) => posLong(r) - posShort(r); // sort Positions by net lean
     const s = [...arr].sort((a, b) => {
       if (k === 'token') return String(a.token).localeCompare(String(b.token)) * dir;
-      const av = a[k] as number | null, bv = b[k] as number | null;
+      const av = k === 'positions' ? (posMissing(a) ? null : posNet(a)) : (a[k] as number | null);
+      const bv = k === 'positions' ? (posMissing(b) ? null : posNet(b)) : (b[k] as number | null);
       const an = av === null || av === undefined || !isFinite(av as number);
       const bn = bv === null || bv === undefined || !isFinite(bv as number);
       if (an && bn) return 0;
@@ -92,10 +114,12 @@
   });
 
   function cellText(r: Row, c: Col): string {
+    if (c.kind === 'positions') return posText(r);
     const v = r[c.key] as number | null;
     return c.kind === 'pct' ? fmtPct(v) : fmtUsd(v);
   }
   function signClass(r: Row, c: Col): string {
+    if (c.kind === 'positions') return posClass(r);
     const v = r[c.key] as number | null;
     if (v === null || v === undefined || !isFinite(v) || v === 0) return 'text-zinc-500';
     return v > 0 ? 'text-emerald-400' : 'text-rose-400';

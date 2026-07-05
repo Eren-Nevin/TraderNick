@@ -1741,6 +1741,12 @@ export type ChartInstance = {
   /** backtracker_leaderboard only: OI freshness — 'recent' (freshest snapshot) or
    *  'now' (reconstructed from fills). In the key. */
   blAsOf?: 'now' | 'recent';
+  /** backtracker_leaderboard only: Positions column staleness filter — only count a
+   *  group position if the wallet had a fill in the token within this window. In the key. */
+  blPosStaleness?: '4h' | '1d' | '3d' | '7d' | '14d' | '30d';
+  /** backtracker_leaderboard only: Positions column shows wallet COUNTS (consensus)
+   *  or OI value. Display-only (server returns both) → NOT in the key. */
+  blPosMode?: 'consensus' | 'oi';
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2689,6 +2695,8 @@ export function newChartInstance(
     // Per-token HL activity leaderboard; 1d lookback, freshest snapshots by default.
     base.blLookback = '1d';
     base.blAsOf = 'recent';
+    base.blPosStaleness = '7d';
+    base.blPosMode = 'consensus';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

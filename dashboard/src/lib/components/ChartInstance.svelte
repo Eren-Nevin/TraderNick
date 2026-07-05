@@ -899,7 +899,7 @@
     }
     if (instance.kind === 'backtracker_leaderboard') {
       // lookback + group + as_of all change the per-token aggregate → in the key.
-      return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}`;
+      return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}|ps:${instance.blPosStaleness ?? '7d'}`;
     }
     if (instance.kind === 'sz') {
       const ex = instance.exchange ?? 'binance';
@@ -1846,7 +1846,8 @@
       // returns every token, the table sorts/limits client-side.
       if (instance.kind === 'backtracker_leaderboard') {
         const qs = new URLSearchParams({
-          lookback: instance.blLookback ?? '1d', as_of: instance.blAsOf ?? 'recent'
+          lookback: instance.blLookback ?? '1d', as_of: instance.blAsOf ?? 'recent',
+          pos_staleness: instance.blPosStaleness ?? '7d'
         });
         if (instance.btGroupId) qs.set('group', instance.btGroupId);
         const res = await queuedFetch(`/api/hyperliquid/backtracker_leaderboard?${qs}`, { signal });
@@ -7561,6 +7562,28 @@
   {#if settingsOpen}
     <div class="absolute inset-0 z-20 bg-zinc-950/95 overflow-y-auto">
     <div class="px-4 py-2.5 border-b border-zinc-800 bg-zinc-900/30 flex items-center gap-3 flex-wrap text-xs">
+      {#if instance.kind === 'backtracker_leaderboard'}
+        {@const blSel = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none'}
+        <label class="flex items-center gap-1.5 text-zinc-300"
+          title="A group position counts in the Positions column only if the wallet had a fill in that token within this window (filters out stale positions)">
+          Position staleness
+          <select value={instance.blPosStaleness ?? '7d'}
+            onchange={(e) => (instance.blPosStaleness = e.currentTarget.value as '4h' | '1d' | '3d' | '7d' | '14d' | '30d')}
+            class={blSel}>
+            {#each ['4h', '1d', '3d', '7d', '14d', '30d'] as s (s)}<option value={s}>{s}</option>{/each}
+          </select>
+        </label>
+        <label class="flex items-center gap-1.5 text-zinc-300"
+          title="Positions column: wallet COUNT (consensus) or OI value ($)">
+          Positions show
+          <select value={instance.blPosMode ?? 'consensus'}
+            onchange={(e) => (instance.blPosMode = e.currentTarget.value as 'consensus' | 'oi')}
+            class={blSel}>
+            <option value="consensus">Count</option>
+            <option value="oi">OI value</option>
+          </select>
+        </label>
+      {/if}
       {#if isSwKind(instance.kind) && !isGroup && (instance.kind === 'smart_wallets_dynamic' || isCutoff || instance.viewMode !== 'chart')}
         <!-- Smart-wallet finder filters. For Fixed they show in TABLE view only
              (chart mode shows chart-appearance settings); for Dynamic they
@@ -9088,6 +9111,7 @@
         loading={loading}
         error={error}
         hasGroup={!!instance.btGroupId}
+        posMode={instance.blPosMode ?? 'consensus'}
         onTokenClick={openBacktrackerLeaderboardToken}
       />
     {:else if instance.kind === 'hl_top_traders'}

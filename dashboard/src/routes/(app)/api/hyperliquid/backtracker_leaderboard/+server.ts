@@ -4,7 +4,7 @@ import type { RequestHandler } from './$types';
 
 // Proxy for /hyperliquid/backtracker_leaderboard — per-token HL activity leaderboard
 // (price/flow/OI/volume/spot-VD over a lookback).
-const PASSTHROUGH = ['lookback', 'group', 'as_of'];
+const PASSTHROUGH = ['lookback', 'group', 'as_of', 'pos_staleness'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

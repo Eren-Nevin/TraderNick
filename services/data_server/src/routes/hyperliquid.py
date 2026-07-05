@@ -3058,6 +3058,11 @@ async def group_token_positions(request):
 
 
 _BL_LB = {"1h": 3600, "4h": 14400, "12h": 43200, "1d": 86400, "7d": 604800}
+# Position-staleness lookback: a group position counts toward the Positions column
+# only if the wallet had a fill in that token within this window (filters out stale,
+# long-untouched positions).
+_BL_STALE = {"4h": 14400, "1d": 86400, "3d": 259200, "7d": 604800,
+             "14d": 1209600, "30d": 2592000}
 
 
 @bp.get("/hyperliquid/backtracker_leaderboard")
@@ -3074,6 +3079,8 @@ async def backtracker_leaderboard(request):
     as_of = request.args.get("as_of", "recent")
     if as_of not in ("now", "recent"):
         return response.json({"error": "as_of must be now|recent"}, status=400)
+    stale = request.args.get("pos_staleness", "7d")
+    stale_sec = _BL_STALE.get(stale, _BL_STALE["7d"])
     lb_sec = _BL_LB[lb]
     ch = await client()
     member = None
@@ -3130,6 +3137,7 @@ async def backtracker_leaderboard(request):
             "net_oi_pct": None, "net_oi_now_pct": None, "long_pct": None, "short_pct": None,
             "flow_overall_pct": None, "flow_group_pct": None,
             "spot_vd": None, "spot_vd_pct": None,
+            "pos_n_long": None, "pos_n_short": None, "pos_oi_long": None, "pos_oi_short": None,
         }
 
     # Relative price performance vs BTC: the token/BTC ratio change over the lookback
@@ -3239,6 +3247,43 @@ async def backtracker_leaderboard(request):
                 r["flow_overall_pct"] = r["net_flow_overall"] / total_end * 100
                 if r["net_flow_group"] is not None:
                     r["flow_group_pct"] = r["net_flow_group"] / total_end * 100
+
+        # ── Group Positions column: per token, the group's long/short positions at the
+        # snapshot, filtered to wallets with a fill in that token within pos_staleness
+        # (drops stale positions). Returns counts + OI (front-end picks which to show).
+        if member:
+            posr = await ch.query(
+                """
+                SELECT token,
+                       countIf(signed > 0) AS n_long,
+                       countIf(signed < 0) AS n_short,
+                       sumIf(oi, signed > 0) AS oi_long,
+                       sumIf(oi, signed < 0) AS oi_short
+                FROM (
+                    SELECT token, wallet, sum(sa) AS signed, sum(sz) AS oi FROM (
+                        SELECT token, wallet,
+                               argMax(amount, time) * if(side = 'long', 1, -1) AS sa,
+                               argMax(size, time) AS sz
+                        FROM tradernick.hl_position_history
+                        WHERE token != '' AND time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND
+                          AND """ + member + """
+                        GROUP BY token, wallet, side
+                    ) GROUP BY token, wallet
+                ) p
+                INNER JOIN (
+                    SELECT DISTINCT token, wallet FROM tradernick.hl_fills
+                    WHERE time > now() - INTERVAL {st:UInt32} SECOND AND """ + member + """
+                ) f USING (token, wallet)
+                WHERE abs(signed) > 1e-9
+                GROUP BY token
+                """,
+                parameters={"b": end_bucket, "st": stale_sec},
+            )
+            for tok, nl, ns, ol, os_ in posr.result_rows:
+                r = agg.get(tok)
+                if r:
+                    r["pos_n_long"], r["pos_n_short"] = int(nl), int(ns)
+                    r["pos_oi_long"], r["pos_oi_short"] = float(ol), float(os_)
 
     # ── 4. Spot volume-delta $ + % (Binance spot; null for HL tokens without spot) ──
     sv = await ch.query(
