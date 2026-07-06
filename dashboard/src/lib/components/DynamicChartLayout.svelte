@@ -859,7 +859,7 @@
         inst.emLead = typeof r.emLead === 'number' && r.emLead >= 0 ? Math.floor(r.emLead) : 1;
         inst.emMode =
           r.emMode === 'flow' || r.emMode === 'open_flip' || r.emMode === 'position_state' ? r.emMode : 'flow';
-        inst.emMinSize = typeof r.emMinSize === 'number' && r.emMinSize >= 0 ? r.emMinSize : 1000;
+        inst.emMinSize = typeof r.emMinSize === 'number' && r.emMinSize >= 0 ? r.emMinSize : 0;
         inst.emSkipIntra = r.emSkipIntra === true;
         const num0 = (v: unknown) => (typeof v === 'number' && v >= 0 ? v : 0);
         inst.emMinAvgSizeK = num0(r.emMinAvgSizeK);

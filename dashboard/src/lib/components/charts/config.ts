@@ -2740,7 +2740,7 @@ export function newChartInstance(
     base.emMaxLen = 5;
     base.emLead = 1;
     base.emMode = 'flow';
-    base.emMinSize = 1000;
+    base.emMinSize = 0; // no per-reaction floor by default; use the ≥$K table filter for size
     base.emSkipIntra = false;
     base.emMinAvgSizeK = 0;
     base.emMinCorrectLong = 0;

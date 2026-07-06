@@ -46,6 +46,8 @@
   } = $props();
 
   const pct = (n: number) => (totalBars > 0 ? ((n / totalBars) * 100).toFixed(1) : '0.0');
+  // Accuracy over reacted moves (the same basis as the ≥L% / ≥S% filters).
+  const accTxt = (c: number, i: number) => (c + i > 0 ? Math.round((c / (c + i)) * 100) + '%' : '–');
   const avgLabel = $derived(mode === 'position_state' ? 'Avg Position' : 'Avg Flow');
   function fmtUsd(n: number | null | undefined): string {
     if (n == null || !isFinite(n)) return '—';
@@ -168,9 +170,11 @@
               </td>
               <td class="px-3 py-1 text-right font-mono whitespace-nowrap">
                 <span class="text-emerald-400">{r.correct_long}</span><span class="text-zinc-600">/</span><span class="text-rose-400">{r.incorrect_long}</span><span class="text-zinc-600">/</span><span class="text-zinc-500">{r.missed_long}</span>
+                <span class="text-zinc-400"> ({accTxt(r.correct_long, r.incorrect_long)})</span>
               </td>
               <td class="px-3 py-1 text-right font-mono whitespace-nowrap">
                 <span class="text-emerald-400">{r.correct_short}</span><span class="text-zinc-600">/</span><span class="text-rose-400">{r.incorrect_short}</span><span class="text-zinc-600">/</span><span class="text-zinc-500">{r.missed_short}</span>
+                <span class="text-zinc-400"> ({accTxt(r.correct_short, r.incorrect_short)})</span>
               </td>
               <td class="px-3 py-1 text-right font-mono text-zinc-200">{r.correct_long + r.correct_short}</td>
               <td class="px-3 py-1 text-right font-mono text-zinc-300">{fmtUsd(r.avg_size)}</td>
