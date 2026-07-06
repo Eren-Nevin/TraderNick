@@ -17,7 +17,7 @@
       since: new Date(nowMs - lbSec * 1000).toISOString(), until: new Date(nowMs).toISOString(),
       long_thr: String(instance.emLongThr ?? 5), short_thr: String(instance.emShortThr ?? 5),
       max_len: String(instance.emMaxLen ?? 3), lead: String(instance.emLead ?? 1),
-      mode: instance.emMode ?? 'flow', min_size: String(instance.emMinSize ?? 1000),
+      mode: instance.emMode ?? 'flow', min_size: String(instance.emMinSize ?? 0),
       skip_intra: instance.emSkipIntra ? '1' : '0',
       min_avg_size: String((instance.emMinAvgSizeK ?? 0) * 1000), // K → $
       min_correct_long: String(instance.emMinCorrectLong ?? 0),
@@ -922,7 +922,7 @@
       return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}|ps:${instance.blPosStaleness ?? '7d'}`;
     }
     if (instance.kind === 'early_movers') {
-      const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 1000}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}`;
+      const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 0}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}`;
       // Chart view = candles (token+interval+range); table view = the full scoring.
       if (instance.viewMode === 'chart') return `early_movers|chart|${instance.token}|${instance.interval}|${instance.emLookback ?? '3d'}`;
       return `early_movers|table|${instance.token}|${instance.interval}|${crit}`;
@@ -7143,7 +7143,7 @@
           <input type="number" min="0" step="1" class={emc + ' w-10'} value={instance.emLead ?? 1}
             onchange={(e) => { instance.emLead = Math.max(0, parseInt(e.currentTarget.value, 10) || 0); if (instance.emLead < 1) instance.emSkipIntra = false; }} /></label>
         <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min size ($) to register as identification">Min$
-          <input type="number" min="0" step="100" class={emc + ' w-16'} value={instance.emMinSize ?? 1000}
+          <input type="number" min="0" step="100" class={emc + ' w-16'} value={instance.emMinSize ?? 0}
             onchange={(e) => (instance.emMinSize = Number(e.currentTarget.value) || 0)} /></label>
         <select class={emc} value={instance.emMode ?? 'flow'}
           onchange={(e) => (instance.emMode = e.currentTarget.value as 'flow' | 'open_flip' | 'position_state')}
