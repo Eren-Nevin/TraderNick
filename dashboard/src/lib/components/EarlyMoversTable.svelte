@@ -116,19 +116,19 @@
     </span>
     <input class={selClass + ' w-24'} placeholder="Wallet…" bind:value={search} title="Fuzzy filter by wallet" />
     <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min correct long (count). Server-side.">≥L
-      <input type="number" min="0" step="1" class={selClass + ' w-11'} value={filters.minLong}
+      <input type="number" min="0" step="1" class={selClass + ' w-16'} value={filters.minLong}
         onchange={(e) => onFilter({ minLong: num0(e) })} /></label>
     <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min correct short (count). Server-side.">≥S
-      <input type="number" min="0" step="1" class={selClass + ' w-11'} value={filters.minShort}
+      <input type="number" min="0" step="1" class={selClass + ' w-16'} value={filters.minShort}
         onchange={(e) => onFilter({ minShort: num0(e) })} /></label>
     <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min long accuracy: correct / (correct + incorrect) %, over the long moves the wallet reacted to. Server-side.">≥L%
-      <input type="number" min="0" max="100" step="1" class={selClass + ' w-11'} value={filters.minLongPct}
+      <input type="number" min="0" max="100" step="1" class={selClass + ' w-16'} value={filters.minLongPct}
         onchange={(e) => onFilter({ minLongPct: num0(e) })} /></label>
     <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min short accuracy: correct / (correct + incorrect) %, over the short moves the wallet reacted to. Server-side.">≥S%
-      <input type="number" min="0" max="100" step="1" class={selClass + ' w-11'} value={filters.minShortPct}
+      <input type="number" min="0" max="100" step="1" class={selClass + ' w-16'} value={filters.minShortPct}
         onchange={(e) => onFilter({ minShortPct: num0(e) })} /></label>
     <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min {avgLabel.toLowerCase()} size in $K (10 = $10,000). Server-side.">≥$K
-      <input type="number" min="0" step="1" class={selClass + ' w-14'} value={filters.minSizeK}
+      <input type="number" min="0" step="1" class={selClass + ' w-20'} value={filters.minSizeK}
         onchange={(e) => onFilter({ minSizeK: num0(e) })} /></label>
     <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Hide wallets already in any wallet group (find ungrouped movers)">
       <input type="checkbox" checked={hideGrouped} onchange={(e) => onHideGrouped(e.currentTarget.checked)} />
