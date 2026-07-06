@@ -92,6 +92,14 @@
     if (sortKey !== k) return '';
     return sortDir === 1 ? ' ↑' : ' ↓';
   }
+  // Cross-tab pins: when the table reloads (e.g. a token change) with Hide-grouped
+  // on, force a fresh pin load so wallets grouped elsewhere — e.g. in the wallet
+  // detail tab opened via middle-click — are recognised as grouped and hidden.
+  $effect(() => {
+    rows; // re-run whenever new data arrives
+    if (hideGrouped) walletPinsStore.reload();
+  });
+
   let sortedRows = $derived.by(() => {
     const arr = rows.filter(
       (r) =>
