@@ -3079,8 +3079,8 @@ async def backtracker_leaderboard(request):
     as_of = request.args.get("as_of", "recent")
     if as_of not in ("now", "recent"):
         return response.json({"error": "as_of must be now|recent"}, status=400)
-    stale = request.args.get("pos_staleness", "7d")
-    stale_sec = _BL_STALE.get(stale, _BL_STALE["7d"])
+    stale = request.args.get("pos_staleness", "3d")
+    stale_sec = _BL_STALE.get(stale, _BL_STALE["3d"])
     lb_sec = _BL_LB[lb]
     ch = await client()
     member = None

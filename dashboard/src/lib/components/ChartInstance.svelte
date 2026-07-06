@@ -922,7 +922,7 @@
     }
     if (instance.kind === 'backtracker_leaderboard') {
       // lookback + group + as_of all change the per-token aggregate → in the key.
-      return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}|ps:${instance.blPosStaleness ?? '7d'}`;
+      return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}|ps:${instance.blPosStaleness ?? '3d'}`;
     }
     if (instance.kind === 'early_movers') {
       const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 0}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}|${instance.emMinRealizedPnlK ?? 'x'}`;
@@ -1876,7 +1876,7 @@
       if (instance.kind === 'backtracker_leaderboard') {
         const qs = new URLSearchParams({
           lookback: instance.blLookback ?? '1d', as_of: instance.blAsOf ?? 'recent',
-          pos_staleness: instance.blPosStaleness ?? '7d'
+          pos_staleness: instance.blPosStaleness ?? '3d'
         });
         if (instance.btGroupId) qs.set('group', instance.btGroupId);
         const res = await queuedFetch(`/api/hyperliquid/backtracker_leaderboard?${qs}`, { signal });
@@ -7695,7 +7695,7 @@
         <label class="flex items-center gap-1.5 text-zinc-300"
           title="A group position counts in the Positions column only if the wallet had a fill in that token within this window (filters out stale positions)">
           Position staleness
-          <select value={instance.blPosStaleness ?? '7d'}
+          <select value={instance.blPosStaleness ?? '3d'}
             onchange={(e) => (instance.blPosStaleness = e.currentTarget.value as '4h' | '1d' | '3d' | '7d' | '14d' | '30d')}
             class={blSel}>
             {#each ['4h', '1d', '3d', '7d', '14d', '30d'] as s (s)}<option value={s}>{s}</option>{/each}

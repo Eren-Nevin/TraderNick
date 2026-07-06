@@ -2729,7 +2729,7 @@ export function newChartInstance(
     // Per-token HL activity leaderboard; 1d lookback, freshest snapshots by default.
     base.blLookback = '1d';
     base.blAsOf = 'recent';
-    base.blPosStaleness = '7d';
+    base.blPosStaleness = '3d';
     base.blPosMode = 'consensus';
   }
   if (kind === 'early_movers') {
