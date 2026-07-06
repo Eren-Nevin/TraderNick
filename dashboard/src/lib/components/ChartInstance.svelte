@@ -19,7 +19,11 @@
       max_len: String(instance.emMaxLen ?? 3), lead: String(instance.emLead ?? 1),
       mode: instance.emMode ?? 'flow', min_size: String(instance.emMinSize ?? 1000),
       skip_intra: instance.emSkipIntra ? '1' : '0',
-      min_avg_size: String((instance.emMinAvgSizeK ?? 0) * 1000) // K → $
+      min_avg_size: String((instance.emMinAvgSizeK ?? 0) * 1000), // K → $
+      min_correct_long: String(instance.emMinCorrectLong ?? 0),
+      min_correct_short: String(instance.emMinCorrectShort ?? 0),
+      min_correct_long_pct: String(instance.emMinCorrectLongPct ?? 0),
+      min_correct_short_pct: String(instance.emMinCorrectShortPct ?? 0)
     });
   }
   import SmartWalletMetricsTable from '$lib/components/SmartWalletMetricsTable.svelte';
@@ -918,7 +922,7 @@
       return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}|ps:${instance.blPosStaleness ?? '7d'}`;
     }
     if (instance.kind === 'early_movers') {
-      const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 1000}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}`;
+      const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 1000}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}`;
       // Chart view = candles (token+interval+range); table view = the full scoring.
       if (instance.viewMode === 'chart') return `early_movers|chart|${instance.token}|${instance.interval}|${instance.emLookback ?? '3d'}`;
       return `early_movers|table|${instance.token}|${instance.interval}|${crit}`;
@@ -9242,8 +9246,20 @@
         loading={loading}
         error={error}
         mode={instance.emMode ?? 'flow'}
-        minAvgSizeK={instance.emMinAvgSizeK ?? 0}
-        onMinAvgSizeK={(v) => (instance.emMinAvgSizeK = v)}
+        filters={{
+          minLong: instance.emMinCorrectLong ?? 0,
+          minShort: instance.emMinCorrectShort ?? 0,
+          minLongPct: instance.emMinCorrectLongPct ?? 0,
+          minShortPct: instance.emMinCorrectShortPct ?? 0,
+          minSizeK: instance.emMinAvgSizeK ?? 0
+        }}
+        onFilter={(p) => {
+          if (p.minLong !== undefined) instance.emMinCorrectLong = p.minLong;
+          if (p.minShort !== undefined) instance.emMinCorrectShort = p.minShort;
+          if (p.minLongPct !== undefined) instance.emMinCorrectLongPct = p.minLongPct;
+          if (p.minShortPct !== undefined) instance.emMinCorrectShortPct = p.minShortPct;
+          if (p.minSizeK !== undefined) instance.emMinAvgSizeK = p.minSizeK;
+        }}
         totalLong={Number(emBody.total_long ?? 0)}
         totalShort={Number(emBody.total_short ?? 0)}
         totalBars={Number(emBody.total_bars ?? 0)}

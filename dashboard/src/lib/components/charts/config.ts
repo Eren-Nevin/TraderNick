@@ -1769,6 +1769,12 @@ export type ChartInstance = {
   /** server-side floor on a wallet's avg identifying size, in $K (10 = $10k).
    *  Filters wallets before the top-N ranking. In the key. */
   emMinAvgSizeK?: number;
+  /** server-side per-wallet inclusion floors: min correct long/short as a count
+   *  and as a % of all long/short moves. In the key. */
+  emMinCorrectLong?: number;
+  emMinCorrectShort?: number;
+  emMinCorrectLongPct?: number;
+  emMinCorrectShortPct?: number;
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2734,6 +2740,10 @@ export function newChartInstance(
     base.emMinSize = 1000;
     base.emSkipIntra = false;
     base.emMinAvgSizeK = 0;
+    base.emMinCorrectLong = 0;
+    base.emMinCorrectShort = 0;
+    base.emMinCorrectLongPct = 0;
+    base.emMinCorrectShortPct = 0;
   }
   if (kind === 'ohlcv') {
     base.pin = false;

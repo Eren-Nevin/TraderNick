@@ -5,7 +5,8 @@ import type { RequestHandler } from './$types';
 // Proxy for /hyperliquid/early_movers — detect price moves + rank wallets that
 // predicted them.
 const PASSTHROUGH = ['token', 'interval', 'since', 'until', 'long_thr', 'short_thr',
-  'max_len', 'lead', 'mode', 'min_size', 'min_avg_size', 'n', 'moves_only', 'skip_intra'];
+  'max_len', 'lead', 'mode', 'min_size', 'min_avg_size', 'n', 'moves_only', 'skip_intra',
+  'min_correct_long', 'min_correct_short', 'min_correct_long_pct', 'min_correct_short_pct'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

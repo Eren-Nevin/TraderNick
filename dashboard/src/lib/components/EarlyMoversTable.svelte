@@ -13,6 +13,8 @@
     avg_size?: number;
     categories?: string[];
   };
+  // Server-side inclusion filters (re-run the query on change).
+  type Filters = { minLong: number; minShort: number; minLongPct: number; minShortPct: number; minSizeK: number };
 
   let {
     rows = [],
@@ -20,8 +22,8 @@
     error = null,
     snapshotDate = '',
     mode = 'flow',
-    minAvgSizeK = 0,
-    onMinAvgSizeK = (_v: number) => {},
+    filters = { minLong: 0, minShort: 0, minLongPct: 0, minShortPct: 0, minSizeK: 0 },
+    onFilter = (_p: Partial<Filters>) => {},
     totalLong = 0,
     totalShort = 0,
     totalBars = 0
@@ -31,8 +33,8 @@
     error?: string | null;
     snapshotDate?: string;
     mode?: 'flow' | 'open_flip' | 'position_state';
-    minAvgSizeK?: number;
-    onMinAvgSizeK?: (v: number) => void;
+    filters?: Filters;
+    onFilter?: (p: Partial<Filters>) => void;
     totalLong?: number;
     totalShort?: number;
     totalBars?: number;
@@ -53,9 +55,7 @@
   let sortDir = $state<1 | -1>(-1);
   let limit = $state<'25' | '50' | 'all'>('50');
   let search = $state('');
-  // Min correct filters are client-side; the size filter is server-side (minAvgSizeK).
-  let minLong = $state(0);
-  let minShort = $state(0);
+  const num0 = (e: Event) => Math.max(0, Number((e.currentTarget as HTMLInputElement).value) || 0);
 
   function fuzzy(q: string, t: string): boolean {
     q = q.trim().toLowerCase();
@@ -82,12 +82,7 @@
     return sortDir === 1 ? ' ↑' : ' ↓';
   }
   let sortedRows = $derived.by(() => {
-    const arr = rows.filter(
-      (r) =>
-        fuzzy(search, r.wallet) &&
-        r.correct_long >= (minLong || 0) &&
-        r.correct_short >= (minShort || 0)
-    );
+    const arr = rows.filter((r) => fuzzy(search, r.wallet)); // count/size filters are server-side
     const dir = sortDir, k = sortKey;
     const s = [...arr].sort((a, b) => (sortVal(a, k) - sortVal(b, k)) * dir);
     return limit === 'all' ? s : s.slice(0, Number(limit));
@@ -105,13 +100,21 @@
       of {totalBars} bars · correct/incorrect/missed
     </span>
     <input class={selClass + ' w-24'} placeholder="Wallet…" bind:value={search} title="Fuzzy filter by wallet" />
-    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct long">≥L
-      <input type="number" min="0" class={selClass + ' w-11'} bind:value={minLong} /></label>
-    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct short">≥S
-      <input type="number" min="0" class={selClass + ' w-11'} bind:value={minShort} /></label>
-    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min {avgLabel.toLowerCase()} size, server-side, in $K (10 = $10,000). Re-runs the query.">≥$K
-      <input type="number" min="0" step="1" class={selClass + ' w-14'} value={minAvgSizeK}
-        onchange={(e) => onMinAvgSizeK(Math.max(0, Number(e.currentTarget.value) || 0))} /></label>
+    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct long (count). Server-side.">≥L
+      <input type="number" min="0" step="1" class={selClass + ' w-11'} value={filters.minLong}
+        onchange={(e) => onFilter({ minLong: num0(e) })} /></label>
+    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct short (count). Server-side.">≥S
+      <input type="number" min="0" step="1" class={selClass + ' w-11'} value={filters.minShort}
+        onchange={(e) => onFilter({ minShort: num0(e) })} /></label>
+    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct long as % of all long moves. Server-side.">≥L%
+      <input type="number" min="0" max="100" step="1" class={selClass + ' w-11'} value={filters.minLongPct}
+        onchange={(e) => onFilter({ minLongPct: num0(e) })} /></label>
+    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct short as % of all short moves. Server-side.">≥S%
+      <input type="number" min="0" max="100" step="1" class={selClass + ' w-11'} value={filters.minShortPct}
+        onchange={(e) => onFilter({ minShortPct: num0(e) })} /></label>
+    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min {avgLabel.toLowerCase()} size in $K (10 = $10,000). Server-side.">≥$K
+      <input type="number" min="0" step="1" class={selClass + ' w-14'} value={filters.minSizeK}
+        onchange={(e) => onFilter({ minSizeK: num0(e) })} /></label>
     <span class="ml-auto text-[11px]">Show</span>
     <select class={selClass} bind:value={limit} title="Number of rows to show">
       <option value="25">25</option>

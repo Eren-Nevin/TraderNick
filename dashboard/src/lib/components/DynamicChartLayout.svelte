@@ -861,7 +861,12 @@
           r.emMode === 'flow' || r.emMode === 'open_flip' || r.emMode === 'position_state' ? r.emMode : 'flow';
         inst.emMinSize = typeof r.emMinSize === 'number' && r.emMinSize >= 0 ? r.emMinSize : 1000;
         inst.emSkipIntra = r.emSkipIntra === true;
-        inst.emMinAvgSizeK = typeof r.emMinAvgSizeK === 'number' && r.emMinAvgSizeK >= 0 ? r.emMinAvgSizeK : 0;
+        const num0 = (v: unknown) => (typeof v === 'number' && v >= 0 ? v : 0);
+        inst.emMinAvgSizeK = num0(r.emMinAvgSizeK);
+        inst.emMinCorrectLong = num0(r.emMinCorrectLong);
+        inst.emMinCorrectShort = num0(r.emMinCorrectShort);
+        inst.emMinCorrectLongPct = num0(r.emMinCorrectLongPct);
+        inst.emMinCorrectShortPct = num0(r.emMinCorrectShortPct);
       }
       if (inst.kind === 'book_depth') {
         // Binance-only; the mode selector flips the same dataset between the

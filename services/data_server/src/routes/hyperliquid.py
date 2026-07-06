@@ -3359,6 +3359,12 @@ async def early_movers(request):
     short_thr = _f("short_thr", 5) / 100.0
     min_size = _f("min_size", 0)
     min_avg_size = _f("min_avg_size", 0)  # $ floor on a wallet's avg identifying size
+    # Per-wallet inclusion floors (server-side HAVING): correct-long/short as a count
+    # AND as a % of all long/short moves.
+    min_cl = _f("min_correct_long", 0)
+    min_cs = _f("min_correct_short", 0)
+    min_cl_pct = _f("min_correct_long_pct", 0)
+    min_cs_pct = _f("min_correct_short_pct", 0)
     try:
         max_len = max(1, min(int(request.args.get("max_len", "3")), 20))
     except ValueError:
@@ -3495,10 +3501,12 @@ async def early_movers(request):
         "   )"
         "   WHERE react != 'none'"
         " ) GROUP BY wallet"
-        " HAVING avg_size >= {min_avg:Float64}"
+        " HAVING cl >= {cl_thr:Float64} AND cs >= {cs_thr:Float64} AND avg_size >= {min_avg:Float64}"
         " ORDER BY (cl + cs) DESC"
         " LIMIT {n:UInt32}",
         parameters={**wb_params, "ms": min_size, "min_avg": min_avg_size,
+                    "cl_thr": max(min_cl, min_cl_pct / 100.0 * total_long),
+                    "cs_thr": max(min_cs, min_cs_pct / 100.0 * total_short),
                     "wbkts": wbkts, "mids": mids, "mdirs": mdirs, "n": n},
     )
     out = []
