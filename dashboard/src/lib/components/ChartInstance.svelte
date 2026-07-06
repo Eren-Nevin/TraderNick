@@ -12,7 +12,7 @@
   function _emQs(instance: ChartInstanceT): URLSearchParams {
     const lbSec = _EM_LB_SECS[instance.emLookback ?? '3d'] ?? 259200;
     const nowMs = Date.now();
-    return new URLSearchParams({
+    const qs = new URLSearchParams({
       token: instance.token || 'BTC', interval: instance.interval || '1h',
       since: new Date(nowMs - lbSec * 1000).toISOString(), until: new Date(nowMs).toISOString(),
       long_thr: String(instance.emLongThr ?? 5), short_thr: String(instance.emShortThr ?? 5),
@@ -25,6 +25,9 @@
       min_correct_long_pct: String(instance.emMinCorrectLongPct ?? 0),
       min_correct_short_pct: String(instance.emMinCorrectShortPct ?? 0)
     });
+    // Realized-PnL floor: only sent when set (null = off; K → $).
+    if (instance.emMinRealizedPnlK != null) qs.set('min_realized_pnl', String(instance.emMinRealizedPnlK * 1000));
+    return qs;
   }
   import SmartWalletMetricsTable from '$lib/components/SmartWalletMetricsTable.svelte';
   import SmartWalletTokenListTable from '$lib/components/SmartWalletTokenListTable.svelte';
@@ -922,7 +925,7 @@
       return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}|ps:${instance.blPosStaleness ?? '7d'}`;
     }
     if (instance.kind === 'early_movers') {
-      const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 0}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}`;
+      const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 0}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}|${instance.emMinRealizedPnlK ?? 'x'}`;
       // Chart view = candles (token+interval+range); table view = the full scoring.
       if (instance.viewMode === 'chart') return `early_movers|chart|${instance.token}|${instance.interval}|${instance.emLookback ?? '3d'}`;
       return `early_movers|table|${instance.token}|${instance.interval}|${crit}`;
@@ -9251,7 +9254,8 @@
           minShort: instance.emMinCorrectShort ?? 0,
           minLongPct: instance.emMinCorrectLongPct ?? 0,
           minShortPct: instance.emMinCorrectShortPct ?? 0,
-          minSizeK: instance.emMinAvgSizeK ?? 0
+          minSizeK: instance.emMinAvgSizeK ?? 0,
+          minPnlK: instance.emMinRealizedPnlK ?? null
         }}
         onFilter={(p) => {
           if (p.minLong !== undefined) instance.emMinCorrectLong = p.minLong;
@@ -9259,6 +9263,7 @@
           if (p.minLongPct !== undefined) instance.emMinCorrectLongPct = p.minLongPct;
           if (p.minShortPct !== undefined) instance.emMinCorrectShortPct = p.minShortPct;
           if (p.minSizeK !== undefined) instance.emMinAvgSizeK = p.minSizeK;
+          if (p.minPnlK !== undefined) instance.emMinRealizedPnlK = p.minPnlK;
         }}
         hideGrouped={instance.emHideGrouped ?? false}
         onHideGrouped={(v) => (instance.emHideGrouped = v)}

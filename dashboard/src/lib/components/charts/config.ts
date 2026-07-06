@@ -1778,6 +1778,9 @@ export type ChartInstance = {
   /** hide wallets already in any wallet group (client-side display filter, not in
    *  the key — doesn't refetch). */
   emHideGrouped?: boolean;
+  /** server-side floor on realized PnL over the range, in $K (10 = $10k). null/undefined
+   *  = off (PnL can be negative, so 0 is a real threshold). In the key. */
+  emMinRealizedPnlK?: number | null;
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to

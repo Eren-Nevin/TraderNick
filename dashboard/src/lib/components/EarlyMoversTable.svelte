@@ -12,10 +12,14 @@
     correct_long: number; incorrect_long: number; missed_long: number;
     correct_short: number; incorrect_short: number; missed_short: number;
     avg_size?: number;
+    realized_pnl?: number;
     categories?: string[];
   };
-  // Server-side inclusion filters (re-run the query on change).
-  type Filters = { minLong: number; minShort: number; minLongPct: number; minShortPct: number; minSizeK: number };
+  // Server-side inclusion filters (re-run the query on change). minPnlK is nullable (off).
+  type Filters = {
+    minLong: number; minShort: number; minLongPct: number; minShortPct: number;
+    minSizeK: number; minPnlK: number | null;
+  };
 
   let {
     rows = [],
@@ -23,7 +27,7 @@
     error = null,
     snapshotDate = '',
     mode = 'flow',
-    filters = { minLong: 0, minShort: 0, minLongPct: 0, minShortPct: 0, minSizeK: 0 },
+    filters = { minLong: 0, minShort: 0, minLongPct: 0, minShortPct: 0, minSizeK: 0, minPnlK: null },
     onFilter = (_p: Partial<Filters>) => {},
     hideGrouped = false,
     onHideGrouped = (_v: boolean) => {},
@@ -54,11 +58,14 @@
   function fmtUsd(n: number | null | undefined): string {
     if (n == null || !isFinite(n)) return '—';
     const a = Math.abs(n);
-    if (a >= 1e9) return `$${(n / 1e9).toFixed(2)}B`;
-    if (a >= 1e6) return `$${(n / 1e6).toFixed(2)}M`;
-    if (a >= 1e3) return `$${(n / 1e3).toFixed(1)}K`;
-    return `$${n.toFixed(0)}`;
+    const s = n < 0 ? '-' : '';
+    if (a >= 1e9) return `${s}$${(a / 1e9).toFixed(2)}B`;
+    if (a >= 1e6) return `${s}$${(a / 1e6).toFixed(2)}M`;
+    if (a >= 1e3) return `${s}$${(a / 1e3).toFixed(1)}K`;
+    return `${s}$${a.toFixed(0)}`;
   }
+  const pnlClass = (n: number | undefined) =>
+    (n ?? 0) > 0 ? 'text-emerald-400' : (n ?? 0) < 0 ? 'text-rose-400' : 'text-zinc-500';
 
   let sortKey = $state<string>('correct_total');
   let sortDir = $state<1 | -1>(-1);
@@ -80,6 +87,7 @@
     if (k === 'short') return r.correct_short;
     if (k === 'incorrect_total') return r.incorrect_long + r.incorrect_short;
     if (k === 'avg_size') return r.avg_size ?? 0;
+    if (k === 'pnl') return r.realized_pnl ?? 0;
     if (k === 'recall')
       return totalLong + totalShort > 0 ? (r.correct_long + r.correct_short) / (totalLong + totalShort) : 0;
     return 0;
@@ -138,6 +146,9 @@
     <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min {avgLabel.toLowerCase()} size in $K (10 = $10,000). Server-side.">≥$K
       <input type="number" min="0" step="1" class={selClass + ' w-20'} value={filters.minSizeK}
         onchange={(e) => onFilter({ minSizeK: num0(e) })} /></label>
+    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min realized PnL over the range, in $K (10 = $10,000; can be negative; empty = off). Server-side.">≥PnL K
+      <input type="number" step="1" class={selClass + ' w-20'} value={filters.minPnlK ?? ''}
+        onchange={(e) => onFilter({ minPnlK: e.currentTarget.value === '' ? null : Number(e.currentTarget.value) })} /></label>
     <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Hide wallets already in any wallet group (find ungrouped movers)">
       <input type="checkbox" checked={hideGrouped} onchange={(e) => onHideGrouped(e.currentTarget.checked)} />
       Hide grouped
@@ -174,6 +185,8 @@
               title="Recall = correct / total moves in that direction: long / short / total" onclick={() => onSort('recall')}>Recall{sortArrow('recall')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
               title="Average size ($) of the wallet's identifying position/flow across the moves it reacted to" onclick={() => onSort('avg_size')}>{avgLabel}{sortArrow('avg_size')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
+              title="Realized PnL (sum of closed_pnl) over the token's fills in the range" onclick={() => onSort('pnl')}>Realized PnL{sortArrow('pnl')}</th>
           </tr>
         </thead>
         <tbody>
@@ -196,6 +209,7 @@
                 <span class="text-emerald-400">{recall(r.correct_long, totalLong)}%</span><span class="text-zinc-600">/</span><span class="text-rose-400">{recall(r.correct_short, totalShort)}%</span><span class="text-zinc-600">/</span><span class="text-zinc-300">{recall(r.correct_long + r.correct_short, totalLong + totalShort)}%</span>
               </td>
               <td class="px-3 py-1 text-right font-mono text-zinc-300">{fmtUsd(r.avg_size)}</td>
+              <td class="px-3 py-1 text-right font-mono {pnlClass(r.realized_pnl)}">{fmtUsd(r.realized_pnl)}</td>
             </tr>
           {/each}
         </tbody>

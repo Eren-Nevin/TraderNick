@@ -3365,6 +3365,8 @@ async def early_movers(request):
     min_cs = _f("min_correct_short", 0)
     min_cl_pct = _f("min_correct_long_pct", 0)
     min_cs_pct = _f("min_correct_short_pct", 0)
+    # Realized-PnL floor ($). Absent → -1e30 (off); PnL can be negative so 0 is a real value.
+    min_pnl = _f("min_realized_pnl", -1e30)
     try:
         max_len = max(1, min(int(request.args.get("max_len", "3")), 20))
     except ValueError:
@@ -3480,47 +3482,60 @@ async def early_movers(request):
         wb_params = {"tok": token, "snaps": sorted(set(wbkts))}
 
     rows = await ch.query(
-        "SELECT wallet,"
-        " countIf(mdir = 'long'  AND react = 'long')  AS cl,"
-        " countIf(mdir = 'long'  AND react = 'short') AS il,"
-        " countIf(mdir = 'short' AND react = 'short') AS cs,"
-        " countIf(mdir = 'short' AND react = 'long')  AS ish,"
-        " avg(av) AS avg_size,"
-        " any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS cats"
+        "SELECT s.wallet AS wallet, cl, il, cs, ish, avg_size, cats,"
+        " coalesce(pnl.realized_pnl, 0) AS realized_pnl"
         " FROM ("
-        "   SELECT wallet, mid, mdir, abs(v) AS av,"
-        "          multiIf(v >= {ms:Float64}, 'long', v <= -{ms:Float64}, 'short', 'none') AS react"
+        "   SELECT wallet,"
+        "     countIf(mdir = 'long'  AND react = 'long')  AS cl,"
+        "     countIf(mdir = 'long'  AND react = 'short') AS il,"
+        "     countIf(mdir = 'short' AND react = 'short') AS cs,"
+        "     countIf(mdir = 'short' AND react = 'long')  AS ish,"
+        "     avg(av) AS avg_size,"
+        "     any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS cats"
         "   FROM ("
-        "     SELECT wb.wallet AS wallet, m.mid AS mid, m.mdir AS mdir, sum(wb.val) AS v"
-        "     FROM (" + wb_sql + ") wb"
-        "     INNER JOIN ("
-        "       SELECT t.1 AS wbkt, t.2 AS mid, t.3 AS mdir"
-        "       FROM (SELECT arrayJoin(arrayZip({wbkts:Array(UInt32)}, {mids:Array(UInt32)}, {mdirs:Array(String)})) AS t)"
-        "     ) m ON wb.bkt = m.wbkt"
-        "     GROUP BY wallet, mid, mdir"
-        "   )"
-        "   WHERE react != 'none'"
-        " ) GROUP BY wallet"
-        # count floors + accuracy floors (% = correct / (correct + incorrect), i.e. of
-        # the moves the wallet reacted to). pct <= 0 disables that filter.
-        " HAVING cl >= {min_cl:Float64} AND cs >= {min_cs:Float64}"
+        "     SELECT wallet, mid, mdir, abs(v) AS av,"
+        "            multiIf(v >= {ms:Float64}, 'long', v <= -{ms:Float64}, 'short', 'none') AS react"
+        "     FROM ("
+        "       SELECT wb.wallet AS wallet, m.mid AS mid, m.mdir AS mdir, sum(wb.val) AS v"
+        "       FROM (" + wb_sql + ") wb"
+        "       INNER JOIN ("
+        "         SELECT t.1 AS wbkt, t.2 AS mid, t.3 AS mdir"
+        "         FROM (SELECT arrayJoin(arrayZip({wbkts:Array(UInt32)}, {mids:Array(UInt32)}, {mdirs:Array(String)})) AS t)"
+        "       ) m ON wb.bkt = m.wbkt"
+        "       GROUP BY wallet, mid, mdir"
+        "     )"
+        "     WHERE react != 'none'"
+        "   ) GROUP BY wallet"
+        " ) s"
+        # realized PnL over ALL of the token's fills in the range (per wallet).
+        " LEFT JOIN ("
+        "   SELECT wallet, sum(closed_pnl) AS realized_pnl FROM tradernick.hl_fills FINAL"
+        "   WHERE token = {tok_pnl:String} AND time >= {s_pnl:DateTime} AND time < {u_pnl:DateTime}"
+        "   GROUP BY wallet"
+        " ) pnl ON s.wallet = pnl.wallet"
+        # count floors + accuracy floors (% = correct / (correct + incorrect), of the
+        # moves the wallet reacted to; pct <= 0 disables) + size + realized-PnL floors.
+        " WHERE cl >= {min_cl:Float64} AND cs >= {min_cs:Float64}"
         "   AND ({clp:Float64} <= 0 OR (cl + il > 0 AND 100 * cl >= {clp:Float64} * (cl + il)))"
         "   AND ({csp:Float64} <= 0 OR (cs + ish > 0 AND 100 * cs >= {csp:Float64} * (cs + ish)))"
         "   AND avg_size >= {min_avg:Float64}"
+        "   AND coalesce(pnl.realized_pnl, 0) >= {min_pnl:Float64}"
         " ORDER BY (cl + cs) DESC"
         " LIMIT {n:UInt32}",
         parameters={**wb_params, "ms": min_size, "min_avg": min_avg_size,
                     "min_cl": min_cl, "min_cs": min_cs, "clp": min_cl_pct, "csp": min_cs_pct,
+                    "min_pnl": min_pnl, "tok_pnl": token, "s_pnl": since_dt, "u_pnl": until_dt,
                     "wbkts": wbkts, "mids": mids, "mdirs": mdirs, "n": n},
     )
     out = []
-    for w, cl, il, cs, ish, avg_size, cats in rows.result_rows:
+    for w, cl, il, cs, ish, avg_size, cats, realized_pnl in rows.result_rows:
         cl, il, cs, ish = int(cl), int(il), int(cs), int(ish)
         out.append({
             "wallet": w,
             "correct_long": cl, "incorrect_long": il, "missed_long": max(0, total_long - cl - il),
             "correct_short": cs, "incorrect_short": ish, "missed_short": max(0, total_short - cs - ish),
             "avg_size": float(avg_size or 0),
+            "realized_pnl": float(realized_pnl or 0),
             "categories": list(cats) if cats else [],
         })
     return response.json({**base, "rows": out})

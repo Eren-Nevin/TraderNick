@@ -6,7 +6,8 @@ import type { RequestHandler } from './$types';
 // predicted them.
 const PASSTHROUGH = ['token', 'interval', 'since', 'until', 'long_thr', 'short_thr',
   'max_len', 'lead', 'mode', 'min_size', 'min_avg_size', 'n', 'moves_only', 'skip_intra',
-  'min_correct_long', 'min_correct_short', 'min_correct_long_pct', 'min_correct_short_pct'];
+  'min_correct_long', 'min_correct_short', 'min_correct_long_pct', 'min_correct_short_pct',
+  'min_realized_pnl'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();
