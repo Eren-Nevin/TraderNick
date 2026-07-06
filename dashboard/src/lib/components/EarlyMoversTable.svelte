@@ -134,7 +134,8 @@
       <input type="checkbox" checked={hideGrouped} onchange={(e) => onHideGrouped(e.currentTarget.checked)} />
       Hide grouped
     </label>
-    <span class="ml-auto text-[15px]">Show</span>
+    <span class="ml-auto text-[15px] text-zinc-300">{rows.length} wallets loaded</span>
+    <span class="text-[15px]">Show</span>
     <select class={selClass} bind:value={limit} title="Number of rows to show">
       <option value="25">25</option>
       <option value="50">50</option>
