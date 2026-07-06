@@ -7,7 +7,7 @@
   // (20/50). Column-header clicks re-sort the returned rows CLIENT-side only.
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import WalletAddress from '$lib/components/WalletAddress.svelte';
-  import { tzShortLabel, fmtTzDateTime } from '$lib/stores/timezone.svelte';
+  import { tzShortLabel } from '$lib/stores/timezone.svelte';
 
   type Row = {
     wallet: string;
@@ -111,7 +111,16 @@
   }
   // Latest fill time in the token, "MM-DD HH:MM" in the active zone (0 = never traded).
   function fmtLastChange(ts: number): string {
-    return ts ? fmtTzDateTime(ts).slice(5) : '—';
+    if (!ts) return '—';
+    let s = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+    const d = Math.floor(s / 86400); s -= d * 86400;
+    const h = Math.floor(s / 3600); s -= h * 3600;
+    const m = Math.floor(s / 60);
+    const parts: string[] = [];
+    if (d) parts.push(`${d}d`);
+    if (h) parts.push(`${h}h`);
+    if (m || !parts.length) parts.push(`${m}m`);
+    return `${parts.join(' ')} ago`;
   }
 
   // ── client-side sort. '' = server order (already ranked by `order`). ──
@@ -251,7 +260,7 @@
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('roe')} title="Return on entry notional (unleveraged) — margin isn't stored for past snapshots">ROE{sortArrow('roe')}</th>
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('funding')}>Funding{sortArrow('funding')}</th>
                 <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('change')} title="Net position change over the bar window (fills-based)">Change{sortArrow('change')}</th>
-                <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('last_change')} title="The wallet's most recent fill in this token, as of the bar">Last change{sortArrow('last_change')}</th>
+                <th class="px-3 py-1.5 text-right font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('last_change')} title="Time since the wallet's most recent fill in this token (relative to now)">Last change{sortArrow('last_change')}</th>
               </tr>
             </thead>
             <tbody>
