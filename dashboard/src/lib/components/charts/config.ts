@@ -1775,6 +1775,9 @@ export type ChartInstance = {
   emMinCorrectShort?: number;
   emMinCorrectLongPct?: number;
   emMinCorrectShortPct?: number;
+  /** hide wallets already in any wallet group (client-side display filter, not in
+   *  the key — doesn't refetch). */
+  emHideGrouped?: boolean;
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2744,6 +2747,7 @@ export function newChartInstance(
     base.emMinCorrectShort = 0;
     base.emMinCorrectLongPct = 0;
     base.emMinCorrectShortPct = 0;
+    base.emHideGrouped = false;
   }
   if (kind === 'ohlcv') {
     base.pin = false;

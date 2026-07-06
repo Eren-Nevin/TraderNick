@@ -9260,6 +9260,8 @@
           if (p.minShortPct !== undefined) instance.emMinCorrectShortPct = p.minShortPct;
           if (p.minSizeK !== undefined) instance.emMinAvgSizeK = p.minSizeK;
         }}
+        hideGrouped={instance.emHideGrouped ?? false}
+        onHideGrouped={(v) => (instance.emHideGrouped = v)}
         totalLong={Number(emBody.total_long ?? 0)}
         totalShort={Number(emBody.total_short ?? 0)}
         totalBars={Number(emBody.total_bars ?? 0)}

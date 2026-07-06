@@ -867,6 +867,7 @@
         inst.emMinCorrectShort = num0(r.emMinCorrectShort);
         inst.emMinCorrectLongPct = num0(r.emMinCorrectLongPct);
         inst.emMinCorrectShortPct = num0(r.emMinCorrectShortPct);
+        inst.emHideGrouped = r.emHideGrouped === true;
       }
       if (inst.kind === 'book_depth') {
         // Binance-only; the mode selector flips the same dataset between the

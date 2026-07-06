@@ -5,6 +5,7 @@
   // Middle-click an address → the HL wallet page (token pre-selected).
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import WalletAddress from '$lib/components/WalletAddress.svelte';
+  import { walletPinsStore } from '$lib/stores/walletPins.svelte';
 
   type Row = {
     wallet: string;
@@ -24,6 +25,8 @@
     mode = 'flow',
     filters = { minLong: 0, minShort: 0, minLongPct: 0, minShortPct: 0, minSizeK: 0 },
     onFilter = (_p: Partial<Filters>) => {},
+    hideGrouped = false,
+    onHideGrouped = (_v: boolean) => {},
     totalLong = 0,
     totalShort = 0,
     totalBars = 0
@@ -35,6 +38,8 @@
     mode?: 'flow' | 'open_flip' | 'position_state';
     filters?: Filters;
     onFilter?: (p: Partial<Filters>) => void;
+    hideGrouped?: boolean;
+    onHideGrouped?: (v: boolean) => void;
     totalLong?: number;
     totalShort?: number;
     totalBars?: number;
@@ -82,40 +87,48 @@
     return sortDir === 1 ? ' ↑' : ' ↓';
   }
   let sortedRows = $derived.by(() => {
-    const arr = rows.filter((r) => fuzzy(search, r.wallet)); // count/size filters are server-side
+    const arr = rows.filter(
+      (r) =>
+        fuzzy(search, r.wallet) && // count/size filters are server-side
+        (!hideGrouped || walletPinsStore.groupsForWallet(r.wallet).length === 0)
+    );
     const dir = sortDir, k = sortKey;
     const s = [...arr].sort((a, b) => (sortVal(a, k) - sortVal(b, k)) * dir);
     return limit === 'all' ? s : s.slice(0, Number(limit));
   });
 
   const selClass =
-    'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200 hover:border-zinc-600 focus:outline-none';
+    'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[15px] text-zinc-200 hover:border-zinc-600 focus:outline-none';
 </script>
 
 <div class="h-full flex flex-col text-xs" use:stopDragEvents>
   <div class="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 text-zinc-400">
-    <span class="text-[11px]">
+    <span class="text-[15px]">
       <span class="text-emerald-400">{totalLong} long ({pct(totalLong)}%)</span>
       / <span class="text-rose-400">{totalShort} short ({pct(totalShort)}%)</span>
       of {totalBars} bars · correct/incorrect/missed
     </span>
     <input class={selClass + ' w-24'} placeholder="Wallet…" bind:value={search} title="Fuzzy filter by wallet" />
-    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct long (count). Server-side.">≥L
+    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min correct long (count). Server-side.">≥L
       <input type="number" min="0" step="1" class={selClass + ' w-11'} value={filters.minLong}
         onchange={(e) => onFilter({ minLong: num0(e) })} /></label>
-    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct short (count). Server-side.">≥S
+    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min correct short (count). Server-side.">≥S
       <input type="number" min="0" step="1" class={selClass + ' w-11'} value={filters.minShort}
         onchange={(e) => onFilter({ minShort: num0(e) })} /></label>
-    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct long as % of all long moves. Server-side.">≥L%
+    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min correct long as % of all long moves. Server-side.">≥L%
       <input type="number" min="0" max="100" step="1" class={selClass + ' w-11'} value={filters.minLongPct}
         onchange={(e) => onFilter({ minLongPct: num0(e) })} /></label>
-    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min correct short as % of all short moves. Server-side.">≥S%
+    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min correct short as % of all short moves. Server-side.">≥S%
       <input type="number" min="0" max="100" step="1" class={selClass + ' w-11'} value={filters.minShortPct}
         onchange={(e) => onFilter({ minShortPct: num0(e) })} /></label>
-    <label class="flex items-center gap-1 text-[10px] text-zinc-500" title="Min {avgLabel.toLowerCase()} size in $K (10 = $10,000). Server-side.">≥$K
+    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min {avgLabel.toLowerCase()} size in $K (10 = $10,000). Server-side.">≥$K
       <input type="number" min="0" step="1" class={selClass + ' w-14'} value={filters.minSizeK}
         onchange={(e) => onFilter({ minSizeK: num0(e) })} /></label>
-    <span class="ml-auto text-[11px]">Show</span>
+    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Hide wallets already in any wallet group (find ungrouped movers)">
+      <input type="checkbox" checked={hideGrouped} onchange={(e) => onHideGrouped(e.currentTarget.checked)} />
+      Hide grouped
+    </label>
+    <span class="ml-auto text-[15px]">Show</span>
     <select class={selClass} bind:value={limit} title="Number of rows to show">
       <option value="25">25</option>
       <option value="50">50</option>
