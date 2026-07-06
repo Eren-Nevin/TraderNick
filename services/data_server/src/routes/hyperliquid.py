@@ -3501,12 +3501,16 @@ async def early_movers(request):
         "   )"
         "   WHERE react != 'none'"
         " ) GROUP BY wallet"
-        " HAVING cl >= {cl_thr:Float64} AND cs >= {cs_thr:Float64} AND avg_size >= {min_avg:Float64}"
+        # count floors + accuracy floors (% = correct / (correct + incorrect), i.e. of
+        # the moves the wallet reacted to). pct <= 0 disables that filter.
+        " HAVING cl >= {min_cl:Float64} AND cs >= {min_cs:Float64}"
+        "   AND ({clp:Float64} <= 0 OR (cl + il > 0 AND 100 * cl >= {clp:Float64} * (cl + il)))"
+        "   AND ({csp:Float64} <= 0 OR (cs + ish > 0 AND 100 * cs >= {csp:Float64} * (cs + ish)))"
+        "   AND avg_size >= {min_avg:Float64}"
         " ORDER BY (cl + cs) DESC"
         " LIMIT {n:UInt32}",
         parameters={**wb_params, "ms": min_size, "min_avg": min_avg_size,
-                    "cl_thr": max(min_cl, min_cl_pct / 100.0 * total_long),
-                    "cs_thr": max(min_cs, min_cs_pct / 100.0 * total_short),
+                    "min_cl": min_cl, "min_cs": min_cs, "clp": min_cl_pct, "csp": min_cs_pct,
                     "wbkts": wbkts, "mids": mids, "mdirs": mdirs, "n": n},
     )
     out = []

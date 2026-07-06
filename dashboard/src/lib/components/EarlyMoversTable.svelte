@@ -115,10 +115,10 @@
     <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min correct short (count). Server-side.">≥S
       <input type="number" min="0" step="1" class={selClass + ' w-11'} value={filters.minShort}
         onchange={(e) => onFilter({ minShort: num0(e) })} /></label>
-    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min correct long as % of all long moves. Server-side.">≥L%
+    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min long accuracy: correct / (correct + incorrect) %, over the long moves the wallet reacted to. Server-side.">≥L%
       <input type="number" min="0" max="100" step="1" class={selClass + ' w-11'} value={filters.minLongPct}
         onchange={(e) => onFilter({ minLongPct: num0(e) })} /></label>
-    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min correct short as % of all short moves. Server-side.">≥S%
+    <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min short accuracy: correct / (correct + incorrect) %, over the short moves the wallet reacted to. Server-side.">≥S%
       <input type="number" min="0" max="100" step="1" class={selClass + ' w-11'} value={filters.minShortPct}
         onchange={(e) => onFilter({ minShortPct: num0(e) })} /></label>
     <label class="flex items-center gap-1 text-[14px] text-zinc-500" title="Min {avgLabel.toLowerCase()} size in $K (10 = $10,000). Server-side.">≥$K
