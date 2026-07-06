@@ -48,6 +48,8 @@
   const pct = (n: number) => (totalBars > 0 ? ((n / totalBars) * 100).toFixed(1) : '0.0');
   // Accuracy over reacted moves (the same basis as the ≥L% / ≥S% filters).
   const accTxt = (c: number, i: number) => (c + i > 0 ? Math.round((c / (c + i)) * 100) + '%' : '–');
+  // Recall = corrects / total moves in that direction.
+  const recall = (c: number, tot: number) => (tot > 0 ? Math.round((c / tot) * 100) : 0);
   const avgLabel = $derived(mode === 'position_state' ? 'Avg Position' : 'Avg Flow');
   function fmtUsd(n: number | null | undefined): string {
     if (n == null || !isFinite(n)) return '—';
@@ -78,6 +80,8 @@
     if (k === 'short') return r.correct_short;
     if (k === 'incorrect_total') return r.incorrect_long + r.incorrect_short;
     if (k === 'avg_size') return r.avg_size ?? 0;
+    if (k === 'recall')
+      return totalLong + totalShort > 0 ? (r.correct_long + r.correct_short) / (totalLong + totalShort) : 0;
     return 0;
   };
   function onSort(k: string) {
@@ -158,6 +162,8 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
               title="Total correct (long + short)" onclick={() => onSort('correct_total')}>Correct{sortArrow('correct_total')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
+              title="Recall = correct / total moves in that direction: long / short / total" onclick={() => onSort('recall')}>Recall{sortArrow('recall')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
               title="Average size ($) of the wallet's identifying position/flow across the moves it reacted to" onclick={() => onSort('avg_size')}>{avgLabel}{sortArrow('avg_size')}</th>
           </tr>
         </thead>
@@ -177,6 +183,9 @@
                 <span class="text-zinc-400"> ({accTxt(r.correct_short, r.incorrect_short)})</span>
               </td>
               <td class="px-3 py-1 text-right font-mono text-zinc-200">{r.correct_long + r.correct_short}</td>
+              <td class="px-3 py-1 text-right font-mono whitespace-nowrap">
+                <span class="text-emerald-400">{recall(r.correct_long, totalLong)}%</span><span class="text-zinc-600">/</span><span class="text-rose-400">{recall(r.correct_short, totalShort)}%</span><span class="text-zinc-600">/</span><span class="text-zinc-300">{recall(r.correct_long + r.correct_short, totalLong + totalShort)}%</span>
+              </td>
               <td class="px-3 py-1 text-right font-mono text-zinc-300">{fmtUsd(r.avg_size)}</td>
             </tr>
           {/each}
