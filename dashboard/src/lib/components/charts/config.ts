@@ -1786,6 +1786,8 @@ export type ChartInstance = {
   // ── trading_pit only ──
   /** selected tokens (capsules, ≥1 required) + optional wallet group. In the key. */
   tpTokens?: string[];
+  /** ignore tpTokens and include ALL tokens the group traded. In the key. */
+  tpAllTokens?: boolean;
   tpGroupId?: string | null;
   tpLookback?: '5m' | '15m' | '30m' | '1h' | '4h';
   tpMode?: 'normal' | 'aggregate' | 'overview';
@@ -2772,6 +2774,7 @@ export function newChartInstance(
   }
   if (kind === 'trading_pit') {
     base.tpTokens = ['BTC'];
+    base.tpAllTokens = false;
     base.tpGroupId = null;
     base.tpLookback = '5m';
     base.tpMode = 'normal';

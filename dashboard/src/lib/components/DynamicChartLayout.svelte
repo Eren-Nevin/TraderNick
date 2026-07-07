@@ -873,6 +873,7 @@
       if (inst.kind === 'trading_pit') {
         inst.tpTokens = Array.isArray(r.tpTokens)
           ? (r.tpTokens as unknown[]).filter((t): t is string => typeof t === 'string') : ['BTC'];
+        inst.tpAllTokens = r.tpAllTokens === true;
         inst.tpGroupId = typeof r.tpGroupId === 'string' ? r.tpGroupId : null;
         const lb = r.tpLookback;
         inst.tpLookback = lb === '5m' || lb === '15m' || lb === '30m' || lb === '1h' || lb === '4h' ? lb : '5m';

@@ -19,6 +19,7 @@
       min_size: String(instance.tpMinSize ?? 0),
       n: '1000'
     });
+    if (instance.tpAllTokens) qs.set('all_tokens', '1');
     if (instance.tpGroupId) qs.set('group', instance.tpGroupId);
     if (instance.tpSide) qs.set('side', instance.tpSide);
     if (instance.tpType) qs.set('type', instance.tpType);
@@ -1912,7 +1913,7 @@
       }
       // Trading Pit: a wallet group's classified fills over a short window (needs ≥1 token).
       if (instance.kind === 'trading_pit') {
-        if (!(instance.tpTokens ?? []).length) {
+        if (!instance.tpAllTokens && !(instance.tpTokens ?? []).length) {
           data = [{ tp: { mode: instance.tpMode ?? 'normal', rows: [], tokens: [] } } as unknown as AnyDatum];
         } else {
           const res = await queuedFetch(`/api/hyperliquid/trading_pit?${_tpQs(instance)}`, { signal });
@@ -7210,7 +7211,10 @@
       {:else if instance.kind === 'trading_pit'}
         {@const tpc = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}
         {@const avail = tokens.filter((t) => !(instance.tpTokens ?? []).includes(t))}
-        <div class="flex items-center gap-1 flex-wrap">
+        <button type="button" onclick={() => (instance.tpAllTokens = !instance.tpAllTokens)}
+          class="text-xs px-2 py-1 rounded border {instance.tpAllTokens ? 'border-blue-600 bg-blue-950/40 text-blue-300' : 'border-zinc-700 bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700/50'}"
+          title="Include ALL tokens the group traded (ignores the token selection)">All tokens</button>
+        <div class="flex items-center gap-1 flex-wrap {instance.tpAllTokens ? 'opacity-40 pointer-events-none' : ''}">
           {#each (instance.tpTokens ?? []) as tok (tok)}
             <span class="inline-flex items-center gap-1 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-200">
               {tok}

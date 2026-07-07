@@ -85,6 +85,15 @@
     return s + '$' + a.toFixed(0);
   }
   const num = (e: Event) => Math.max(0, Number((e.currentTarget as HTMLInputElement).value) || 0);
+  // Token-narrow dropdown: the selected capsules, or (All-tokens mode) the tokens present.
+  const tokenOpts = $derived(
+    selectedTokens.length
+      ? selectedTokens
+      : [...new Set([
+          ...(rows as FillRow[]).map((r) => r.token),
+          ...(overviewRows as OverviewRow[]).map((r) => r.token)
+        ])].sort()
+  );
 
   // ── client-side sort (fills modes) ──
   let sortKey = $state<string>('value');
@@ -158,7 +167,7 @@
     <label class="flex items-center gap-1 text-[11px]" title="Filter to one selected token">Token
       <select class={selCls} value={filters.token} onchange={(e) => onFilter({ token: e.currentTarget.value })}>
         <option value="">All</option>
-        {#each selectedTokens as t (t)}<option value={t}>{t}</option>{/each}
+        {#each tokenOpts as t (t)}<option value={t}>{t}</option>{/each}
       </select></label>
     <span class="ml-auto text-[11px] text-zinc-500">
       {mode === 'overview' ? `${overviewRows.length} tokens` : `${rows.length} ${mode === 'aggregate' ? 'aggregates' : 'fills'}`}

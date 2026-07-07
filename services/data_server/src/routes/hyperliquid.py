@@ -3605,7 +3605,8 @@ async def trading_pit(request):
     (comma list, required), group, lookback (5m|15m|30m|1h|4h), mode, flip_mode, min_size,
     side, type, token, n."""
     tokens = [t.strip().upper() for t in (request.args.get("tokens", "")).split(",") if t.strip()]
-    if not tokens:
+    all_tokens = request.args.get("all_tokens") in ("1", "true", "yes")
+    if not tokens and not all_tokens:
         return response.json({"error": "missing tokens (comma list)"}, status=400)
     lb = request.args.get("lookback", "5m")
     if lb not in _TP_LB:
@@ -3640,9 +3641,11 @@ async def trading_pit(request):
 
     # ── classified base: raw fills → type; flip_mode=split expands each flip into a
     # close-old + open-new pair via arrayJoin (else one row). Then filters on `type`. ──
-    where = ["token IN {tokens:Array(String)}",
-             "time >= now() - INTERVAL {lb:UInt32} SECOND", "time < now()"]
-    params = {"tokens": tokens, "lb": _TP_LB[lb], "split": 1 if flip_split else 0}
+    where = ["time >= now() - INTERVAL {lb:UInt32} SECOND", "time < now()"]
+    params = {"lb": _TP_LB[lb], "split": 1 if flip_split else 0}
+    if not all_tokens:
+        where.insert(0, "token IN {tokens:Array(String)}")
+        params["tokens"] = tokens
     if member:
         where.append(member)
     if min_size > 0:
@@ -3696,9 +3699,12 @@ async def trading_pit(request):
             " FROM (" + base + ") GROUP BY token, type",
             parameters=params,
         )
+        # seed the selected tokens (shown even with no fills); all_tokens adds the rest.
         agg: dict[str, dict] = {t: {"token": t} | {k: [0.0, 0] for k in _TP_TYPE_KEYS} for t in tokens}
         for tok, ty, v, c in r.result_rows:
-            if tok in agg and ty in agg[tok]:
+            if tok not in agg:
+                agg[tok] = {"token": tok} | {k: [0.0, 0] for k in _TP_TYPE_KEYS}
+            if ty in agg[tok]:
                 agg[tok][ty] = [float(v), int(c)]
         return response.json({"mode": mode, "flip_split": flip_split, "tokens": list(agg.values())})
 
