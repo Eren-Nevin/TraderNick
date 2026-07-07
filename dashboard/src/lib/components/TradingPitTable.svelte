@@ -22,6 +22,8 @@
     loading = false,
     error = null,
     selectedTokens = [],
+    allTokens = false,
+    availableTokens = [],
     timeFormat = 'relative',
     filters = { minSize: 0, side: '', type: '', token: '' },
     onFilter = (_p: Partial<Filters>) => {}
@@ -33,6 +35,8 @@
     loading?: boolean;
     error?: string | null;
     selectedTokens?: string[];
+    allTokens?: boolean;
+    availableTokens?: string[];
     timeFormat?: 'relative' | 'standard';
     filters?: Filters;
     onFilter?: (p: Partial<Filters>) => void;
@@ -85,14 +89,18 @@
     return s + '$' + a.toFixed(0);
   }
   const num = (e: Event) => Math.max(0, Number((e.currentTarget as HTMLInputElement).value) || 0);
-  // Token-narrow dropdown: the selected capsules, or (All-tokens mode) the tokens present.
+  // Token-narrow dropdown: All-tokens mode → every token the group traded (from the
+  // server); otherwise the selected capsules. Falls back to whatever is present.
+  const dataTokens = $derived(
+    [...new Set([
+      ...(rows as FillRow[]).map((r) => r.token),
+      ...(overviewRows as OverviewRow[]).map((r) => r.token)
+    ])].sort()
+  );
   const tokenOpts = $derived(
-    selectedTokens.length
-      ? selectedTokens
-      : [...new Set([
-          ...(rows as FillRow[]).map((r) => r.token),
-          ...(overviewRows as OverviewRow[]).map((r) => r.token)
-        ])].sort()
+    allTokens
+      ? (availableTokens.length ? availableTokens : dataTokens)
+      : (selectedTokens.length ? selectedTokens : dataTokens)
   );
 
   // ── client-side sort (fills modes) ──

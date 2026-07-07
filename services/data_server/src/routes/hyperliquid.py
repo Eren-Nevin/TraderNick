@@ -3651,6 +3651,19 @@ async def trading_pit(request):
     if min_size > 0:
         where.append("size * price >= {min_size:Float64}")
         params["min_size"] = min_size
+    # All-tokens mode: the header token-filter can narrow to ANY token the group traded,
+    # so list them here — distinct tokens over the window/group/size, BEFORE the
+    # single-token narrow (so the list is stable regardless of what's selected).
+    tokens_available: list[str] = []
+    if all_tokens:
+        tp_params = {"lb": _TP_LB[lb]}
+        if min_size > 0:
+            tp_params["min_size"] = min_size
+        tr = await ch.query(
+            "SELECT DISTINCT token FROM tradernick.hl_fills FINAL WHERE " + " AND ".join(where) + " ORDER BY token",
+            parameters=tp_params,
+        )
+        tokens_available = [row[0] for row in tr.result_rows]
     if token_one:
         where.append("token = {token_one:String}")
         params["token_one"] = token_one
@@ -3693,7 +3706,7 @@ async def trading_pit(request):
             "price": float(p), "value": float(v), "closed_pnl": float(cp),
             "categories": list(cats) if cats else [],
         } for (ts, w, tok, ty, sd, p, v, cp, cats) in r.result_rows]
-        return response.json({"mode": mode, "rows": rows})
+        return response.json({"mode": mode, "rows": rows, "tokens_available": tokens_available})
 
     if mode == "overview":
         r = await ch.query(
@@ -3708,7 +3721,7 @@ async def trading_pit(request):
                 agg[tok] = {"token": tok} | {k: [0.0, 0] for k in _TP_TYPE_KEYS}
             if ty in agg[tok]:
                 agg[tok][ty] = [float(v), int(c)]
-        return response.json({"mode": mode, "flip_split": flip_split, "tokens": list(agg.values())})
+        return response.json({"mode": mode, "flip_split": flip_split, "tokens": list(agg.values()), "tokens_available": tokens_available})
 
     # aggregate: per (wallet, token, bucket, pside). incdec netted (signed), else summed.
     r = await ch.query(
@@ -3744,7 +3757,7 @@ async def trading_pit(request):
         tf_set = set(_TP_TYPE_CATEGORIES.get(type_filter, [type_filter]))
         rows = [x for x in rows if x["type"] in tf_set]
     rows.sort(key=lambda x: x["value"], reverse=True)
-    return response.json({"mode": mode, "rows": rows[:n]})
+    return response.json({"mode": mode, "rows": rows[:n], "tokens_available": tokens_available})
 
 
 @bp.get("/hyperliquid/group_fill_pressure")
