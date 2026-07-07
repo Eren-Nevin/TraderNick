@@ -4375,10 +4375,15 @@ async def wallet_fills(request):
     Query params:
       wallet — required (0x…; lowercased to match the table).
       token  — optional (scope to one token).
-      since/until — ISO datetime window (default until=now, since=until-90d).
+      since/until — ISO datetime window (default until=now, since=until-30d).
       limit  — max rows (default 200, cap 1000).
     Returns { wallet, token, trades:[{time, token, dir, side, price, size, value,
               closed_pnl, fee}] } newest-first.
+
+    Perf: hl_fills is sorted (token, time, …) so a wallet-only filter can't use the
+    index and scans the whole window across all tokens. FINAL made that a ~20s scan for
+    HFT wallets (100k+ fills), so we drop it and dedup the rare re-backfill duplicates
+    cheaply with LIMIT 1 BY (token, time, tid) instead — ~0.5s.
     """
     wallet = request.args.get("wallet")
     if not wallet:
@@ -4395,7 +4400,7 @@ async def wallet_fills(request):
         until_dt = (datetime.fromisoformat(until_arg).replace(tzinfo=None)
                     if until_arg else datetime.utcnow())
         since_dt = (datetime.fromisoformat(since_arg).replace(tzinfo=None)
-                    if since_arg else until_dt - timedelta(days=90))
+                    if since_arg else until_dt - timedelta(days=30))
     except ValueError:
         return response.json({"error": "invalid since/until; expected ISO"}, status=400)
 
@@ -4408,9 +4413,10 @@ async def wallet_fills(request):
         f"""
         SELECT toUnixTimestamp(time) AS ts, token, dir, side, price, size,
                size * price AS value, closed_pnl, fee
-        FROM tradernick.hl_fills FINAL
+        FROM tradernick.hl_fills
         WHERE wallet = {{wallet:String}} AND time >= {{s:DateTime}} AND time < {{u:DateTime}} {tok_filter}
         ORDER BY time DESC
+        LIMIT 1 BY token, time, tid
         LIMIT {{lim:UInt32}}
         """,
         parameters=params,
