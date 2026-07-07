@@ -4381,9 +4381,11 @@ async def wallet_fills(request):
               closed_pnl, fee}] } newest-first.
 
     Perf: hl_fills is sorted (token, time, …) so a wallet-only filter can't use the
-    index and scans the whole window across all tokens. FINAL made that a ~20s scan for
-    HFT wallets (100k+ fills), so we drop it and dedup the rare re-backfill duplicates
-    cheaply with LIMIT 1 BY (token, time, tid) instead — ~0.5s.
+    primary index and scans the whole window across all tokens. A bloom_filter skip
+    index on `wallet` skips granules that don't contain it; FINAL (kept for correctness —
+    it returns the latest re-backfilled version of each fill) is then acceptable for
+    short windows. The wallet-page table defaults to a 1d window and shows a loading
+    indicator, so a long (90d) window is opt-in and non-blocking.
     """
     wallet = request.args.get("wallet")
     if not wallet:
@@ -4413,10 +4415,9 @@ async def wallet_fills(request):
         f"""
         SELECT toUnixTimestamp(time) AS ts, token, dir, side, price, size,
                size * price AS value, closed_pnl, fee
-        FROM tradernick.hl_fills
+        FROM tradernick.hl_fills FINAL
         WHERE wallet = {{wallet:String}} AND time >= {{s:DateTime}} AND time < {{u:DateTime}} {tok_filter}
         ORDER BY time DESC
-        LIMIT 1 BY token, time, tid
         LIMIT {{lim:UInt32}}
         """,
         parameters=params,

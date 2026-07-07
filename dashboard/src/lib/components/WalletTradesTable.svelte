@@ -1,6 +1,9 @@
 <script lang="ts">
-  // Latest individual trades (fills) for the HL wallet detail page — newest first,
-  // with an optional token filter. Fed by /api/hyperliquid/wallet_fills.
+  // Latest individual trades (fills) for the HL wallet detail page. Owns its own fetch
+  // (/api/hyperliquid/wallet_fills) + loading state so a long window can't block the
+  // rest of the page. In RANGE mode it shows the selected date range; otherwise a
+  // lookback selector (default 1d = last 24h) bounds the window — longer picks (up to
+  // 90d) are opt-in and show a loading indicator.
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import { fmtTzDateTime } from '$lib/stores/timezone.svelte';
 
@@ -10,22 +13,74 @@
   };
 
   let {
-    trades = [],
-    loading = false,
-    error = null
+    wallet = '',
+    rangeMode = false,
+    rangeSince = '',
+    rangeUntil = ''
   }: {
-    trades?: TradeRow[];
-    loading?: boolean;
-    error?: string | null;
+    wallet?: string;
+    rangeMode?: boolean;
+    rangeSince?: string; // ISO (range mode only)
+    rangeUntil?: string; // ISO (range mode only)
   } = $props();
 
+  const LOOKBACKS: Array<{ v: string; days: number }> = [
+    { v: '1d', days: 1 }, { v: '3d', days: 3 }, { v: '7d', days: 7 },
+    { v: '30d', days: 30 }, { v: '90d', days: 90 }
+  ];
+  let lookback = $state('1d');
+
+  let trades = $state<TradeRow[]>([]);
+  let loading = $state(false);
+  let error = $state<string | null>(null);
   let tokenFilter = $state('');
+  let ctl: AbortController | null = null;
+
   const shown = $derived(
     tokenFilter.trim()
       ? trades.filter((t) => t.token.toLowerCase().includes(tokenFilter.trim().toLowerCase()))
       : trades
   );
   const isBuy = (t: TradeRow) => t.side === 'B';
+
+  async function load(w: string, rm: boolean, rs: string, ru: string, lb: string) {
+    if (!w) { trades = []; return; }
+    ctl?.abort();
+    const c = new AbortController();
+    ctl = c;
+    loading = true;
+    error = null;
+    try {
+      let since: string, until: string;
+      if (rm && rs && ru) {
+        since = rs;
+        until = ru;
+      } else {
+        const days = LOOKBACKS.find((l) => l.v === lb)?.days ?? 1;
+        const now = Date.now();
+        since = new Date(now - days * 86400_000).toISOString();
+        until = new Date(now).toISOString();
+      }
+      const res = await fetch(
+        `/api/hyperliquid/wallet_fills?wallet=${w}&since=${since}&until=${until}&limit=500`,
+        { signal: c.signal }
+      );
+      if (!res.ok) throw new Error(`trades ${res.status}`);
+      const body = await res.json();
+      trades = (body.trades ?? []) as TradeRow[];
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') {
+        error = (e as Error).message;
+        trades = [];
+      }
+    } finally {
+      if (ctl === c) loading = false;
+    }
+  }
+  // Reload on wallet / mode / range window / lookback change.
+  $effect(() => {
+    load(wallet, rangeMode, rangeSince, rangeUntil, lookback);
+  });
 
   function fmtUsd(n: number): string {
     const abs = Math.abs(n), sign = n < 0 ? '-' : '';
@@ -51,6 +106,15 @@
     {#if loading}
       <span class="inline-block w-3 h-3 rounded-full border-2 border-zinc-600 border-t-blue-400 animate-spin" title="Loading…"></span>
     {/if}
+    {#if !rangeMode}
+      <select
+        class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
+        bind:value={lookback} title="How far back to load trades">
+        {#each LOOKBACKS as l (l.v)}<option value={l.v}>{l.v}</option>{/each}
+      </select>
+    {:else}
+      <span class="text-zinc-500 text-xs">range</span>
+    {/if}
     <input
       class="ml-auto bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs text-zinc-200 w-24 focus:outline-none focus:border-zinc-500"
       placeholder="Token…" bind:value={tokenFilter} title="Filter by token" />
@@ -60,9 +124,11 @@
   <div class="flex-1 overflow-auto scrollbar-none {loading ? 'opacity-50' : ''}">
     {#if error}
       <div class="h-full flex items-center justify-center text-rose-400 text-center px-4 py-8">{error}</div>
+    {:else if loading && trades.length === 0}
+      <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4 py-8">Loading trades…</div>
     {:else if shown.length === 0}
       <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4 py-8">
-        {trades.length === 0 ? 'No recent trades for this wallet.' : 'No trades match the filter.'}
+        {trades.length === 0 ? 'No trades in this window.' : 'No trades match the filter.'}
       </div>
     {:else}
       <table class="w-full">

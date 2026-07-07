@@ -13,9 +13,7 @@
   import WalletTransfersTable, {
     type TransferRow
   } from '$lib/components/WalletTransfersTable.svelte';
-  import WalletTradesTable, {
-    type TradeRow
-  } from '$lib/components/WalletTradesTable.svelte';
+  import WalletTradesTable from '$lib/components/WalletTradesTable.svelte';
   import {
     DAY_SLIDER_MAX_BACK,
     DAY_SLIDER_FLOOR_ISO,
@@ -87,10 +85,6 @@
   let transfersLoading = $state(false);
   let transfersError = $state<string | null>(null);
 
-  // Individual fills (the Trades table) — distinct from the markers' tradesRaw below.
-  let fills = $state<TradeRow[]>([]);
-  let fillsLoading = $state(false);
-  let fillsError = $state<string | null>(null);
 
   // Execution-quality stats over the window (taker %, fee/PnL %, funding/PnL %),
   // snapshot-independent.
@@ -522,25 +516,11 @@
     loadTransfers();
   });
 
-  async function loadFills() {
-    fillsLoading = true;
-    fillsError = null;
-    try {
-      const res = await fetch(`/api/hyperliquid/wallet_fills?wallet=${address}&limit=500`);
-      if (!res.ok) throw new Error(`trades ${res.status}`);
-      const body = await res.json();
-      fills = (body.trades ?? []) as TradeRow[];
-    } catch (e) {
-      fillsError = (e as Error).message;
-      fills = [];
-    } finally {
-      fillsLoading = false;
-    }
+  // Trades table window in range mode: [startIso, day-after(snapshotIso)) so the
+  // selected end day is included (the endpoint uses time < until).
+  function nextDayIso(iso: string): string {
+    return new Date(new Date(iso + 'T00:00:00Z').getTime() + 86400_000).toISOString().slice(0, 10);
   }
-  $effect(() => {
-    address;
-    loadFills();
-  });
 
   // Execution-quality stats over the full window [floor, today].
   async function loadTradeStats() {
@@ -1033,7 +1013,11 @@
 
   <!-- Trades (individual fills) — latest first, filterable by token -->
   <div class="h-[420px]">
-    <WalletTradesTable trades={fills} loading={fillsLoading} error={fillsError} />
+    <WalletTradesTable
+      wallet={address}
+      rangeMode={rangeMode}
+      rangeSince={rangeMode ? startIso : ''}
+      rangeUntil={rangeMode ? nextDayIso(snapshotIso) : ''} />
   </div>
 
   <!-- Transfers (deposits / withdrawals) — full history, snapshot-independent -->
