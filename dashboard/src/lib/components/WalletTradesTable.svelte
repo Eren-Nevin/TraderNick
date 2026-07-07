@@ -145,7 +145,7 @@
           </tr>
         </thead>
         <tbody>
-          {#each shown as t (t.time + t.token + t.dir + t.size + t.price)}
+          {#each shown as t, i (i)}
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
               <td class="px-3 py-1 font-mono text-zinc-300 tabular-nums whitespace-nowrap">{fmtTzDateTime(t.time)}</td>
               <td class="px-3 py-1 text-zinc-200">{t.token}</td>
