@@ -3582,6 +3582,13 @@ _TP_LONG_TYPES = ["open_long", "inc_long", "dec_long", "close_long", "flip_sl"]
 _TP_SHORT_TYPES = ["open_short", "inc_short", "dec_short", "close_short", "flip_ls"]
 _TP_TYPE_KEYS = ["open_long", "inc_long", "dec_long", "close_long",
                  "open_short", "inc_short", "dec_short", "close_short", "flip_ls", "flip_sl"]
+# The `type` filter is side-agnostic (Side is its own filter) → a category maps to its
+# two side variants. Unknown values fall back to an exact match (backward compat).
+_TP_TYPE_CATEGORIES = {
+    "opened": ["open_long", "open_short"], "increased": ["inc_long", "inc_short"],
+    "decreased": ["dec_long", "dec_short"], "closed": ["close_long", "close_short"],
+    "flip": ["flip_ls", "flip_sl"],
+}
 
 
 @bp.get("/hyperliquid/trading_pit")
@@ -3668,8 +3675,8 @@ async def trading_pit(request):
 
     if mode == "normal":
         if type_filter:
-            base += " AND type = {tf:String}"
-            params["tf"] = type_filter
+            base += " AND type IN {tf_types:Array(String)}"
+            params["tf_types"] = _TP_TYPE_CATEGORIES.get(type_filter, [type_filter])
         r = await ch.query(
             "SELECT toUnixTimestamp(time) AS ts, wallet, token, type, side, price, value, closed_pnl,"
             " dictGet('tradernick.wallet_labels', 'categories', lower(wallet)) AS cats"
@@ -3725,7 +3732,8 @@ async def trading_pit(request):
                      "value": val, "count": int(c), "time": int(med_time),
                      "categories": list(cats) if cats else []})
     if type_filter:
-        rows = [x for x in rows if x["type"] == type_filter]
+        tf_set = set(_TP_TYPE_CATEGORIES.get(type_filter, [type_filter]))
+        rows = [x for x in rows if x["type"] in tf_set]
     rows.sort(key=lambda x: x["value"], reverse=True)
     return response.json({"mode": mode, "rows": rows[:n]})
 

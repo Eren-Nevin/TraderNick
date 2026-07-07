@@ -72,7 +72,10 @@
   // Overview columns in the user's order + flip cols (Separate only).
   const OV_BASE = ['open_long', 'open_short', 'inc_long', 'dec_long', 'inc_short', 'dec_short', 'close_long', 'close_short'];
   const ovCols = $derived(flipSplit ? OV_BASE : [...OV_BASE, 'flip_ls', 'flip_sl']);
-  const TYPE_FILTER_OPTS = ['', ...OV_BASE, 'flip_ls', 'flip_sl'];
+  // Type filter is side-agnostic (Side is its own filter): the 4 action categories.
+  const TYPE_FILTER_LABELS: Record<string, string> = {
+    opened: 'Opened', increased: 'Increased', decreased: 'Decreased', closed: 'Closed'
+  };
 
   function fmtUsd(n: number): string {
     const a = Math.abs(n), s = n < 0 ? '-' : '';
@@ -148,7 +151,8 @@
     {#if mode !== 'overview'}
       <label class="flex items-center gap-1 text-[11px]" title="Fill type">Type
         <select class={selCls} value={filters.type} onchange={(e) => onFilter({ type: e.currentTarget.value })}>
-          {#each TYPE_FILTER_OPTS as t (t)}<option value={t}>{t === '' ? 'All' : typeLabel(t)}</option>{/each}
+          <option value="">All</option>
+          {#each Object.entries(TYPE_FILTER_LABELS) as [v, lbl] (v)}<option value={v}>{lbl}</option>{/each}
         </select></label>
     {/if}
     <label class="flex items-center gap-1 text-[11px]" title="Filter to one selected token">Token
