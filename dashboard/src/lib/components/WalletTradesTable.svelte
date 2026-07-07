@@ -24,11 +24,12 @@
     rangeUntil?: string; // ISO (range mode only)
   } = $props();
 
-  const LOOKBACKS: Array<{ v: string; days: number }> = [
-    { v: '1d', days: 1 }, { v: '3d', days: 3 }, { v: '7d', days: 7 },
-    { v: '30d', days: 30 }, { v: '90d', days: 90 }
+  const LOOKBACKS: Array<{ v: string; secs: number }> = [
+    { v: '15m', secs: 900 }, { v: '1h', secs: 3600 }, { v: '4h', secs: 14400 },
+    { v: '1d', secs: 86400 }, { v: '3d', secs: 259200 }, { v: '7d', secs: 604800 },
+    { v: '30d', secs: 2592000 }, { v: '90d', secs: 7776000 }
   ];
-  let lookback = $state('1d');
+  let lookback = $state('1h');
 
   let trades = $state<TradeRow[]>([]);
   let loading = $state(false);
@@ -56,9 +57,9 @@
         since = rs;
         until = ru;
       } else {
-        const days = LOOKBACKS.find((l) => l.v === lb)?.days ?? 1;
+        const secs = LOOKBACKS.find((l) => l.v === lb)?.secs ?? 3600;
         const now = Date.now();
-        since = new Date(now - days * 86400_000).toISOString();
+        since = new Date(now - secs * 1000).toISOString();
         until = new Date(now).toISOString();
       }
       const res = await fetch(
