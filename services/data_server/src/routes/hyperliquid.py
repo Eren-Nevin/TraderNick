@@ -4365,6 +4365,64 @@ async def token_close(request):
     return response.json({"token": token, "series": series})
 
 
+@bp.get("/hyperliquid/wallet_fills")
+@throttled("light")
+async def wallet_fills(request):
+    """The wallet's latest individual fills (raw trades) for the wallet-page trades
+    table + flow debugging: time, token, direction (Open/Close/flip), buy/sell, price,
+    size, value $, realized PnL, fee. Optionally scoped to one token, newest first.
+
+    Query params:
+      wallet — required (0x…; lowercased to match the table).
+      token  — optional (scope to one token).
+      since/until — ISO datetime window (default until=now, since=until-90d).
+      limit  — max rows (default 200, cap 1000).
+    Returns { wallet, token, trades:[{time, token, dir, side, price, size, value,
+              closed_pnl, fee}] } newest-first.
+    """
+    wallet = request.args.get("wallet")
+    if not wallet:
+        return response.json({"error": "missing wallet"}, status=400)
+    wallet = wallet.lower()
+    token = request.args.get("token") or None
+    try:
+        limit = max(1, min(int(request.args.get("limit", "200")), 1000))
+    except ValueError:
+        limit = 200
+    until_arg = request.args.get("until")
+    since_arg = request.args.get("since")
+    try:
+        until_dt = (datetime.fromisoformat(until_arg).replace(tzinfo=None)
+                    if until_arg else datetime.utcnow())
+        since_dt = (datetime.fromisoformat(since_arg).replace(tzinfo=None)
+                    if since_arg else until_dt - timedelta(days=90))
+    except ValueError:
+        return response.json({"error": "invalid since/until; expected ISO"}, status=400)
+
+    tok_filter = "AND token = {token:String}" if token else ""
+    params = {"wallet": wallet, "s": since_dt, "u": until_dt, "lim": limit}
+    if token:
+        params["token"] = token
+    ch = await client()
+    r = await ch.query(
+        f"""
+        SELECT toUnixTimestamp(time) AS ts, token, dir, side, price, size,
+               size * price AS value, closed_pnl, fee
+        FROM tradernick.hl_fills FINAL
+        WHERE wallet = {{wallet:String}} AND time >= {{s:DateTime}} AND time < {{u:DateTime}} {tok_filter}
+        ORDER BY time DESC
+        LIMIT {{lim:UInt32}}
+        """,
+        parameters=params,
+    )
+    trades = [{
+        "time": int(ts), "token": tok, "dir": d, "side": s,
+        "price": float(p), "size": float(sz), "value": float(v),
+        "closed_pnl": float(cp), "fee": float(f),
+    } for (ts, tok, d, s, p, sz, v, cp, f) in r.result_rows]
+    return response.json({"wallet": wallet, "token": token, "trades": trades})
+
+
 @bp.get("/hyperliquid/wallet_trades")
 @throttled("light")
 async def wallet_trades(request):

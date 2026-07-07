@@ -13,6 +13,9 @@
   import WalletTransfersTable, {
     type TransferRow
   } from '$lib/components/WalletTransfersTable.svelte';
+  import WalletTradesTable, {
+    type TradeRow
+  } from '$lib/components/WalletTradesTable.svelte';
   import {
     DAY_SLIDER_MAX_BACK,
     DAY_SLIDER_FLOOR_ISO,
@@ -83,6 +86,11 @@
   let transfers = $state<TransferRow[]>([]);
   let transfersLoading = $state(false);
   let transfersError = $state<string | null>(null);
+
+  // Individual fills (the Trades table) — distinct from the markers' tradesRaw below.
+  let fills = $state<TradeRow[]>([]);
+  let fillsLoading = $state(false);
+  let fillsError = $state<string | null>(null);
 
   // Execution-quality stats over the window (taker %, fee/PnL %, funding/PnL %),
   // snapshot-independent.
@@ -512,6 +520,26 @@
   $effect(() => {
     address;
     loadTransfers();
+  });
+
+  async function loadFills() {
+    fillsLoading = true;
+    fillsError = null;
+    try {
+      const res = await fetch(`/api/hyperliquid/wallet_fills?wallet=${address}&limit=500`);
+      if (!res.ok) throw new Error(`trades ${res.status}`);
+      const body = await res.json();
+      fills = (body.trades ?? []) as TradeRow[];
+    } catch (e) {
+      fillsError = (e as Error).message;
+      fills = [];
+    } finally {
+      fillsLoading = false;
+    }
+  }
+  $effect(() => {
+    address;
+    loadFills();
   });
 
   // Execution-quality stats over the full window [floor, today].
@@ -1001,6 +1029,11 @@
       {selectedToken}
       onToggleToken={(t) => (selectedToken = selectedToken === t ? null : t)}
     />
+  </div>
+
+  <!-- Trades (individual fills) — latest first, filterable by token -->
+  <div class="h-[420px]">
+    <WalletTradesTable trades={fills} loading={fillsLoading} error={fillsError} />
   </div>
 
   <!-- Transfers (deposits / withdrawals) — full history, snapshot-independent -->
