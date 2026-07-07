@@ -218,8 +218,8 @@
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('token')}>Token{arrow('token')}</th>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('type')}>Type{arrow('type')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('value')}>Size{arrow('value')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('price')} title={mode === 'aggregate' ? 'Size-weighted average price' : 'Fill price'}>Price{arrow('price')}</th>
             {#if mode === 'normal'}
-              <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('price')}>Price{arrow('price')}</th>
               <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('pnl')}>PnL{arrow('pnl')}</th>
             {:else}
               <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('count')}>Fills{arrow('count')}</th>
@@ -234,8 +234,8 @@
               <td class="px-3 py-1 text-zinc-200">{r.token}</td>
               <td class="px-3 py-1 whitespace-nowrap {typeCls(r.type)}">{typeLabel(r.type)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-200">{fmtUsd(r.value)}</td>
+              <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{r.price ? r.price.toPrecision(5) : ''}</td>
               {#if mode === 'normal'}
-                <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{r.price != null ? r.price.toPrecision(5) : ''}</td>
                 <td class="px-3 py-1 text-right font-mono tabular-nums {(r.closed_pnl ?? 0) > 0 ? 'text-emerald-400' : (r.closed_pnl ?? 0) < 0 ? 'text-rose-400' : 'text-zinc-600'}">{r.closed_pnl ? fmtUsd(r.closed_pnl) : '—'}</td>
               {:else}
                 <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{r.count ?? ''}</td>

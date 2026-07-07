@@ -3663,15 +3663,17 @@ async def trading_pit(request):
         params["short_types"] = _TP_SHORT_TYPES
 
     base = (
-        "SELECT wallet, token, time, price, side, closed_pnl, p.1 AS type, p.2 AS value FROM ("
+        "SELECT wallet, token, time, price, side, closed_pnl, p.1 AS type, p.2 AS value, p.3 AS tokens FROM ("
         "  SELECT wallet, token, time, price, side, closed_pnl, "
         "         " + _TP_TYPE_SQL + " AS t0, "
         "         multiIf("
         "           {split:UInt8} = 1 AND " + _TP_TYPE_SQL + " = 'flip_ls',"
-        "             [('close_long', abs(start_position)*price), ('open_short', (size-abs(start_position))*price)],"
+        "             [('close_long', abs(start_position)*price, abs(start_position)),"
+        "              ('open_short', (size-abs(start_position))*price, size-abs(start_position))],"
         "           {split:UInt8} = 1 AND " + _TP_TYPE_SQL + " = 'flip_sl',"
-        "             [('close_short', abs(start_position)*price), ('open_long', (size-abs(start_position))*price)],"
-        "           [(" + _TP_TYPE_SQL + ", size*price)]) AS parts"
+        "             [('close_short', abs(start_position)*price, abs(start_position)),"
+        "              ('open_long', (size-abs(start_position))*price, size-abs(start_position))],"
+        "           [(" + _TP_TYPE_SQL + ", size*price, size)]) AS parts"
         "  FROM tradernick.hl_fills FINAL WHERE " + " AND ".join(where) +
         ") ARRAY JOIN parts AS p WHERE " + " AND ".join(outer)
     )
@@ -3716,15 +3718,16 @@ async def trading_pit(request):
         "         type IN ('flip_ls','flip_sl'),'flip','incdec') AS bucket,"
         " if(type IN {long_all:Array(String)},'long','short') AS pside,"
         " sum(multiIf(type IN ('inc_long','inc_short'), value, type IN ('dec_long','dec_short'), -value, value)) AS net,"
-        " sum(value) AS gross, count() AS c,"
+        " sum(value) AS gross, sum(tokens) AS gtok, count() AS c,"
         " toUInt32(medianExact(toUnixTimestamp(time))) AS med_time,"
         " any(dictGet('tradernick.wallet_labels','categories',lower(wallet))) AS cats"
         " FROM (" + base + ") GROUP BY wallet, token, bucket, pside",
         parameters={**params, "long_all": _TP_LONG_TYPES},
     )
     rows = []
-    for w, tok, bucket, pside, net, gross, c, med_time, cats in r.result_rows:
-        net, gross = float(net), float(gross)
+    for w, tok, bucket, pside, net, gross, gtok, c, med_time, cats in r.result_rows:
+        net, gross, gtok = float(net), float(gross), float(gtok)
+        vwap = gross / gtok if gtok else 0.0
         if bucket == "open":
             ty, val = f"open_{pside}", gross
         elif bucket == "close":
@@ -3735,7 +3738,7 @@ async def trading_pit(request):
             ty = f"{'inc' if net >= 0 else 'dec'}_{pside}"
             val = abs(net)
         rows.append({"wallet": w, "token": tok, "type": ty, "side": pside,
-                     "value": val, "count": int(c), "time": int(med_time),
+                     "value": val, "price": vwap, "count": int(c), "time": int(med_time),
                      "categories": list(cats) if cats else []})
     if type_filter:
         tf_set = set(_TP_TYPE_CATEGORIES.get(type_filter, [type_filter]))
