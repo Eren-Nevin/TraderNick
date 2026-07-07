@@ -2968,26 +2968,40 @@ async def group_token_positions(request):
             SELECT wallet, side, amount, size_usd, entry_px, unrealized_pnl, funding,
                    change_amount, last_change, recon_amt, categories, change_usd
             FROM (
-                SELECT d.wallet AS wallet, d.side AS side, d.amt AS amount,
+                SELECT b.wallet AS wallet, d.side AS side, d.amt AS amount,
                        d.sz AS size_usd, d.entry AS entry_px, d.upnl AS unrealized_pnl,
                        d.fund AS funding, ifNull(c.d_amt, 0) AS change_amount,
                        ifNull(l.lc, 0) AS last_change, ifNull(rc.ra, 0) AS recon_amt,
-                       d.cats AS categories, ifNull(c.d_usd, 0) AS change_usd
+                       dictGet('tradernick.wallet_labels', 'categories', lower(b.wallet)) AS categories,
+                       ifNull(c.d_usd, 0) AS change_usd
                 FROM (
+                    -- everyone HOLDING at the snapshot OR who TRADED the token in the
+                    -- change window — the latter may be flat at t_end (closed-out).
+                    SELECT DISTINCT wallet FROM (
+                        SELECT wallet FROM tradernick.hl_position_history
+                        WHERE token = {tok:String}
+                          AND time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND
+                          AND """ + member + """
+                        UNION DISTINCT
+                        SELECT wallet FROM tradernick.hl_fills
+                        WHERE token = {tok:String} AND time >= {tp:DateTime} AND time < {te:DateTime}
+                          AND """ + member + """
+                    )
+                ) b
+                LEFT JOIN (
                     SELECT wallet,
                            argMax(side, time)          AS side,
                            argMax(amount, time)        AS amt,
                            argMax(size, time)          AS sz,
                            argMax(avg_entry, time)     AS entry,
                            argMax(unrealized_pnl, time) AS upnl,
-                           argMax(funding, time)       AS fund,
-                           any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS cats
+                           argMax(funding, time)       AS fund
                     FROM tradernick.hl_position_history
                     WHERE token = {tok:String}
                       AND time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND
                       AND """ + member + """
                     GROUP BY wallet
-                ) d
+                ) d ON b.wallet = d.wallet
                 LEFT JOIN (
                     -- change: net tokens (d_amt) AND net signed $ at FILL prices (d_usd),
                     -- the same basis as the leaderboard's Flow(grp) so they reconcile.
@@ -2997,7 +3011,7 @@ async def group_token_positions(request):
                     WHERE token = {tok:String} AND time >= {tp:DateTime} AND time < {te:DateTime}
                       AND """ + member + """
                     GROUP BY wallet
-                ) c ON d.wallet = c.wallet
+                ) c ON b.wallet = c.wallet
                 LEFT JOIN (
                     -- most recent fill for this token per wallet, as of the bar
                     -- (max is dedup-safe → no FINAL). 0 when the wallet never traded it.
@@ -3006,7 +3020,7 @@ async def group_token_positions(request):
                     WHERE token = {tok:String} AND time < {te:DateTime}
                       AND """ + member + """
                     GROUP BY wallet
-                ) l ON d.wallet = l.wallet
+                ) l ON b.wallet = l.wallet
                 LEFT JOIN (
                     -- net signed fills since the snapshot → carry the position forward
                     -- to t_end (fixes a stale side when the wallet flipped since).
@@ -3015,7 +3029,7 @@ async def group_token_positions(request):
                     WHERE token = {tok:String} AND time > {b:DateTime} AND time < {te:DateTime}
                       AND """ + member + """
                     GROUP BY wallet
-                ) rc ON d.wallet = rc.wallet
+                ) rc ON b.wallet = rc.wallet
             )
             WHERE last_change >= {lcs:UInt32}
             ORDER BY """ + _GTP_ORDER[order] + """ DESC
@@ -3030,12 +3044,14 @@ async def group_token_positions(request):
             # Carry the snapshot forward: signed position at t_end = snapshot + fills.
             snap_signed = amt * (1.0 if side == "long" else -1.0)
             now_signed = snap_signed + ra
-            side_now = "long" if now_signed >= 0 else "short"
-            amt_now = abs(now_signed)
+            # closed-out = traded the token in the window but flat at t_end (no position).
+            closed = abs(now_signed) < 1e-9
+            side_now = "flat" if closed else ("long" if now_signed >= 0 else "short")
+            amt_now = 0.0 if closed else abs(now_signed)
             # entry/uPnL/funding are for the snapshot position; keep them (revalued at
             # the current mark) only when the side didn't flip and there WAS a position.
             flipped = abs(snap_signed) > 1e-9 and (now_signed > 0) != (snap_signed > 0)
-            if flipped or abs(snap_signed) < 1e-9:
+            if closed or flipped or abs(snap_signed) < 1e-9:
                 entry_out = upnl_out = roe_out = fund_out = None
             else:
                 entry_out = entry or None
@@ -3044,7 +3060,7 @@ async def group_token_positions(request):
                 roe_out = (upnl_out / notional) if (upnl_out is not None and notional) else None
                 fund_out = fund
             out.append({
-                "wallet": w, "side": side_now,
+                "wallet": w, "side": side_now, "closed": closed,
                 "amount": amt_now, "size_usd": amt_now * price,   # positive magnitudes + side
                 "entry_px": entry_out, "unrealized_pnl": upnl_out,
                 "roe": roe_out, "funding": fund_out,

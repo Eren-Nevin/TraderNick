@@ -11,7 +11,8 @@
 
   type Row = {
     wallet: string;
-    side: 'long' | 'short';
+    side: 'long' | 'short' | 'flat';
+    closed?: boolean;       // traded in the window but flat at t_end (closed-out)
     amount: number;         // positive magnitude (side is separate)
     size_usd: number;       // positive magnitude
     entry_px: number | null;
@@ -235,7 +236,7 @@
         </div>
       </header>
       <div class="px-4 py-2 text-xs text-zinc-500 border-b border-zinc-800">
-        All group members holding {token || 'the token'}, ranked server-side by
+        Group members holding {token || 'the token'} <span class="text-zinc-400">or who traded it in the window (marked <span class="uppercase text-[10px] tracking-wider">closed</span>)</span>, ranked server-side by
         <span class="text-zinc-300">{ORDER_LABELS[order] ?? order}</span>. Column headers re-sort these rows only.
       </div>
 
@@ -265,18 +266,20 @@
             </thead>
             <tbody>
               {#each sortedRows as r, i (r.wallet)}
-                <tr class="border-b border-zinc-900 hover:bg-zinc-900/50">
+                <tr class="border-b border-zinc-900 hover:bg-zinc-900/50 {r.closed ? 'bg-zinc-900/40' : ''}">
                   <td class="px-3 py-1.5 text-zinc-500 tabular-nums">{i + 1}</td>
                   <td class="px-3 py-1.5">
                     <WalletAddress address={r.wallet} auxKind="wallet" snapshot={snapshotDate} token={token} tags={r.categories ?? []} />
                   </td>
                   <td class="px-3 py-1.5">
-                    <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border {r.side === 'long'
+                    <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border {r.closed
+                      ? 'bg-zinc-800/60 border-zinc-600 text-zinc-400'
+                      : r.side === 'long'
                       ? 'bg-emerald-950/40 border-emerald-800 text-emerald-400'
-                      : 'bg-rose-950/40 border-rose-800 text-rose-400'}">{r.side}</span>
+                      : 'bg-rose-950/40 border-rose-800 text-rose-400'}" title={r.closed ? 'Traded in the window but flat now (closed out)' : ''}>{r.closed ? 'closed' : r.side}</span>
                   </td>
-                  <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-300">{fmtUsd(r.size_usd)}</td>
-                  <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtAmt(r.amount)}</td>
+                  <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-300">{r.closed ? '—' : fmtUsd(r.size_usd)}</td>
+                  <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-400">{r.closed ? '—' : fmtAmt(r.amount)}</td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-400">{fmtPrice(r.entry_px)}</td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums {(r.unrealized_pnl ?? 0) > 0 ? 'text-emerald-400' : (r.unrealized_pnl ?? 0) < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(r.unrealized_pnl)}</td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums {(r.roe ?? 0) > 0 ? 'text-emerald-400' : (r.roe ?? 0) < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtRoe(r.roe)}</td>
