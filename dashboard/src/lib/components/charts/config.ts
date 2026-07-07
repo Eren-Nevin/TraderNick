@@ -2727,8 +2727,8 @@ export function newChartInstance(
   }
   if (kind === 'backtracker_leaderboard') {
     // Per-token HL activity leaderboard; 1d lookback, freshest snapshots by default.
-    base.blLookback = '1d';
-    base.blAsOf = 'recent';
+    base.blLookback = '1h';
+    base.blAsOf = 'now';
     base.blPosStaleness = '3d';
     base.blPosMode = 'consensus';
   }

@@ -922,7 +922,7 @@
     }
     if (instance.kind === 'backtracker_leaderboard') {
       // lookback + group + as_of all change the per-token aggregate → in the key.
-      return `backtracker_leaderboard|lb:${instance.blLookback ?? '1d'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'recent'}|ps:${instance.blPosStaleness ?? '3d'}`;
+      return `backtracker_leaderboard|lb:${instance.blLookback ?? '1h'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'now'}|ps:${instance.blPosStaleness ?? '3d'}`;
     }
     if (instance.kind === 'early_movers') {
       const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 0}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}|${instance.emMinRealizedPnlK ?? 'x'}`;
@@ -1875,7 +1875,7 @@
       // returns every token, the table sorts/limits client-side.
       if (instance.kind === 'backtracker_leaderboard') {
         const qs = new URLSearchParams({
-          lookback: instance.blLookback ?? '1d', as_of: instance.blAsOf ?? 'recent',
+          lookback: instance.blLookback ?? '1h', as_of: instance.blAsOf ?? 'now',
           pos_staleness: instance.blPosStaleness ?? '3d'
         });
         if (instance.btGroupId) qs.set('group', instance.btGroupId);
@@ -5322,7 +5322,7 @@
   function openBtpForToken(token: string, group: string) {
     btpGroupPickerOpen = false;
     const nowSec = Math.floor(Date.now() / 1000);
-    const cl = instance.blLookback ?? '1d';
+    const cl = instance.blLookback ?? '1h';
     const d = new Date(nowSec * 1000);
     const p2 = (n: number) => String(n).padStart(2, '0');
     btpSnapshotDate = `${d.getUTCFullYear()}-${p2(d.getUTCMonth() + 1)}-${p2(d.getUTCDate())}`;
@@ -7168,7 +7168,7 @@
              As-of + group live here; sort/filter/limit live in the table. -->
         <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL perp · all tokens</span>
         <select
-          value={instance.blLookback ?? '1d'}
+          value={instance.blLookback ?? '1h'}
           onchange={(e) => (instance.blLookback = e.currentTarget.value as '15m' | '1h' | '4h' | '12h' | '1d' | '7d')}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
           title="Lookback window for every column"
@@ -7181,7 +7181,7 @@
           <option value="7d">7d</option>
         </select>
         <select
-          value={instance.blAsOf ?? 'recent'}
+          value={instance.blAsOf ?? 'now'}
           onchange={(e) => (instance.blAsOf = e.currentTarget.value as 'now' | 'recent')}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
           title="OI columns as-of: Recent = freshest published snapshot; Now = reconstructed from fills"

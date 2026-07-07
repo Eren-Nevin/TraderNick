@@ -3092,10 +3092,10 @@ async def backtracker_leaderboard(request):
     Δ%, volume Δ% (vs the preceding equal window), and spot volume-delta ($ + %). OI
     columns end at the freshest snapshot (as_of=recent) or reconstructed to now from
     fills (as_of=now). Params: lookback (1h|4h|12h|1d|7d), group (optional), as_of."""
-    lb = request.args.get("lookback", "1d")
+    lb = request.args.get("lookback", "1h")
     if lb not in _BL_LB:
         return response.json({"error": f"lookback must be one of {list(_BL_LB)}"}, status=400)
-    as_of = request.args.get("as_of", "recent")
+    as_of = request.args.get("as_of", "now")
     if as_of not in ("now", "recent"):
         return response.json({"error": "as_of must be now|recent"}, status=400)
     stale = request.args.get("pos_staleness", "3d")
