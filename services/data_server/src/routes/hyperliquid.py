@@ -3106,6 +3106,10 @@ async def backtracker_leaderboard(request):
     hl_ends = [t for t in (oh, fi) if t is not None]
     end_ts = min(hl_ends) if hl_ends else now_naive
     spot_end = sp if sp is not None else now_naive
+    # Flow (grp) is fills-based (fresh, ~2m) — for as_of=now anchor its window at now()
+    # rather than the ohlcv-lagged end_ts, else a short "as of now" flow sits ~ohlcv_lag
+    # behind and its window doesn't even overlap the positions dialog's (which uses now).
+    flow_end = now_naive if as_of == "now" else end_ts
 
     # ── 1. Price Δ%, Volume Δ% (window vs preceding equal window), overall net flow
     # (= market taker CVD $ over the lookback; hl_fills is balanced market-wide so a
@@ -3161,7 +3165,7 @@ async def backtracker_leaderboard(request):
             WHERE token != '' AND time > {end:DateTime} - INTERVAL {s:UInt32} SECOND AND time <= {end:DateTime}
             GROUP BY token
             """,
-            parameters={"end": end_ts, "s": lb_sec},
+            parameters={"end": flow_end, "s": lb_sec},
         )
         for tok, nfg in nf.result_rows:
             if tok in agg:
