@@ -2966,13 +2966,13 @@ async def group_token_positions(request):
         rows = await ch.query(
             """
             SELECT wallet, side, amount, size_usd, entry_px, unrealized_pnl, funding,
-                   change_amount, last_change, recon_amt, categories
+                   change_amount, last_change, recon_amt, categories, change_usd
             FROM (
                 SELECT d.wallet AS wallet, d.side AS side, d.amt AS amount,
                        d.sz AS size_usd, d.entry AS entry_px, d.upnl AS unrealized_pnl,
                        d.fund AS funding, ifNull(c.d_amt, 0) AS change_amount,
                        ifNull(l.lc, 0) AS last_change, ifNull(rc.ra, 0) AS recon_amt,
-                       d.cats AS categories
+                       d.cats AS categories, ifNull(c.d_usd, 0) AS change_usd
                 FROM (
                     SELECT wallet,
                            argMax(side, time)          AS side,
@@ -2989,7 +2989,10 @@ async def group_token_positions(request):
                     GROUP BY wallet
                 ) d
                 LEFT JOIN (
-                    SELECT wallet, sum(if(side = 'B', size, -size)) AS d_amt
+                    -- change: net tokens (d_amt) AND net signed $ at FILL prices (d_usd),
+                    -- the same basis as the leaderboard's Flow(grp) so they reconcile.
+                    SELECT wallet, sum(if(side = 'B', size, -size)) AS d_amt,
+                           sum(if(side = 'B', size * price, -size * price)) AS d_usd
                     FROM tradernick.hl_fills FINAL
                     WHERE token = {tok:String} AND time >= {tp:DateTime} AND time < {te:DateTime}
                       AND """ + member + """
@@ -3021,9 +3024,9 @@ async def group_token_positions(request):
             parameters={"tok": token, "b": te_bucket, "tp": t_prev, "te": t_end,
                         "n": n, "lcs": lcs},
         )
-        for (w, side, amt, entry, fund, dch, lc, ra, cats) in (
+        for (w, side, amt, entry, fund, dch, lc, ra, cats, dusd) in (
                 (r[0], r[1], float(r[2]), float(r[4]), float(r[6]), float(r[7]),
-                 int(r[8]), float(r[9]), r[10]) for r in rows.result_rows):
+                 int(r[8]), float(r[9]), r[10], float(r[11])) for r in rows.result_rows):
             # Carry the snapshot forward: signed position at t_end = snapshot + fills.
             snap_signed = amt * (1.0 if side == "long" else -1.0)
             now_signed = snap_signed + ra
@@ -3045,7 +3048,7 @@ async def group_token_positions(request):
                 "amount": amt_now, "size_usd": amt_now * price,   # positive magnitudes + side
                 "entry_px": entry_out, "unrealized_pnl": upnl_out,
                 "roe": roe_out, "funding": fund_out,
-                "change_amount": float(dch), "change_usd": float(dch) * price,
+                "change_amount": float(dch), "change_usd": dusd,
                 "last_change": int(lc),
                 "categories": list(cats) if cats else [],
             })
