@@ -451,6 +451,7 @@ export type ChartKind =
   | 'token_leaderboard'
   | 'backtracker_leaderboard'
   | 'early_movers'
+  | 'trading_pit'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
@@ -592,6 +593,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   spot_cvd_table: 'Spot CVD Table',
   backtracker_leaderboard: 'Backtracker Leaderboard',
   early_movers: 'Early Movers',
+  trading_pit: 'Trading Pit',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1390,7 +1392,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Perp — GMX V2 + Hyperliquid family. smart_wallets_table is an HL-only
   // experimental tableview (no hl_ prefix so it stays out of the many
   // isHlKind() chart-control branches) — categorise it here explicitly.
-  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group' || kind === 'backtracker' || kind === 'backtracker_leaderboard' || kind === 'early_movers') return 'Perp';
+  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group' || kind === 'backtracker' || kind === 'backtracker_leaderboard' || kind === 'early_movers' || kind === 'trading_pit') return 'Perp';
   // Staking — Lido (and future Stader/Frax).
   if (kind === 'lido') return 'Staking';
   return null;
@@ -1781,6 +1783,20 @@ export type ChartInstance = {
   /** server-side floor on realized PnL over the range, in $K (10 = $10k). null/undefined
    *  = off (PnL can be negative, so 0 is a real threshold). In the key. */
   emMinRealizedPnlK?: number | null;
+  // ── trading_pit only ──
+  /** selected tokens (capsules, ≥1 required) + optional wallet group. In the key. */
+  tpTokens?: string[];
+  tpGroupId?: string | null;
+  tpLookback?: '5m' | '15m' | '30m' | '1h' | '4h';
+  tpMode?: 'normal' | 'aggregate' | 'overview';
+  tpFlipMode?: 'separate' | 'split';
+  /** server-side filters (in the key). tpSide/tpType/tpToken '' = off. */
+  tpMinSize?: number;
+  tpSide?: '' | 'long' | 'short';
+  tpType?: string;
+  tpToken?: string;
+  /** auto-refresh every 5 min. NOT in the key (a manual reload trigger). */
+  tpLive?: boolean;
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2751,6 +2767,18 @@ export function newChartInstance(
     base.emMinCorrectLongPct = 0;
     base.emMinCorrectShortPct = 0;
     base.emHideGrouped = false;
+  }
+  if (kind === 'trading_pit') {
+    base.tpTokens = ['BTC'];
+    base.tpGroupId = null;
+    base.tpLookback = '5m';
+    base.tpMode = 'normal';
+    base.tpFlipMode = 'separate';
+    base.tpMinSize = 0;
+    base.tpSide = '';
+    base.tpType = '';
+    base.tpToken = '';
+    base.tpLive = false;
   }
   if (kind === 'ohlcv') {
     base.pin = false;

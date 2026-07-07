@@ -870,6 +870,20 @@
         inst.emHideGrouped = r.emHideGrouped === true;
         inst.emMinRealizedPnlK = typeof r.emMinRealizedPnlK === 'number' ? r.emMinRealizedPnlK : null;
       }
+      if (inst.kind === 'trading_pit') {
+        inst.tpTokens = Array.isArray(r.tpTokens)
+          ? (r.tpTokens as unknown[]).filter((t): t is string => typeof t === 'string') : ['BTC'];
+        inst.tpGroupId = typeof r.tpGroupId === 'string' ? r.tpGroupId : null;
+        const lb = r.tpLookback;
+        inst.tpLookback = lb === '5m' || lb === '15m' || lb === '30m' || lb === '1h' || lb === '4h' ? lb : '5m';
+        inst.tpMode = r.tpMode === 'aggregate' || r.tpMode === 'overview' ? r.tpMode : 'normal';
+        inst.tpFlipMode = r.tpFlipMode === 'split' ? 'split' : 'separate';
+        inst.tpMinSize = typeof r.tpMinSize === 'number' && r.tpMinSize >= 0 ? r.tpMinSize : 0;
+        inst.tpSide = r.tpSide === 'long' || r.tpSide === 'short' ? r.tpSide : '';
+        inst.tpType = typeof r.tpType === 'string' ? r.tpType : '';
+        inst.tpToken = typeof r.tpToken === 'string' ? r.tpToken : '';
+        inst.tpLive = r.tpLive === true;
+      }
       if (inst.kind === 'book_depth') {
         // Binance-only; the mode selector flips the same dataset between the
         // totals / per_level_imbalance / imbalance / stacked / *_share views.

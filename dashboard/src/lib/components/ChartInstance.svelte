@@ -7,6 +7,24 @@
   import SpotCvdTable from '$lib/components/SpotCvdTable.svelte';
   import BacktrackerLeaderboardTable from '$lib/components/BacktrackerLeaderboardTable.svelte';
   import EarlyMoversTable from '$lib/components/EarlyMoversTable.svelte';
+  import TradingPitTable from '$lib/components/TradingPitTable.svelte';
+  // Trading Pit query params → URLSearchParams (shared by loadKey + fetch).
+  const _TP_LB_SECS: Record<string, number> = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
+  function _tpQs(instance: ChartInstanceT): URLSearchParams {
+    const qs = new URLSearchParams({
+      tokens: (instance.tpTokens ?? []).join(','),
+      lookback: instance.tpLookback ?? '5m',
+      mode: instance.tpMode ?? 'normal',
+      flip_mode: instance.tpFlipMode ?? 'separate',
+      min_size: String(instance.tpMinSize ?? 0),
+      n: '1000'
+    });
+    if (instance.tpGroupId) qs.set('group', instance.tpGroupId);
+    if (instance.tpSide) qs.set('side', instance.tpSide);
+    if (instance.tpType) qs.set('type', instance.tpType);
+    if (instance.tpToken) qs.set('token', instance.tpToken);
+    return qs;
+  }
   // Early Movers analysis range (lookback → seconds), ending now.
   const _EM_LB_SECS: Record<string, number> = { '1d': 86400, '3d': 259200, '7d': 604800, '14d': 1209600, '30d': 2592000 };
   function _emQs(instance: ChartInstanceT): URLSearchParams {
@@ -465,7 +483,7 @@
   onMount(async () => {
     // Group widget + Backtracker: load the wallet groups so the group dropdown
     // (and group-pin capsules) are populated.
-    if (isGroup || instance.kind === 'backtracker') walletPinsStore.hydrate();
+    if (isGroup || instance.kind === 'backtracker' || instance.kind === 'trading_pit') walletPinsStore.hydrate();
     if (instance.kind !== 'transfer') return;
     try {
       const [catsRes, entsRes] = await Promise.all([
@@ -923,6 +941,9 @@
     if (instance.kind === 'backtracker_leaderboard') {
       // lookback + group + as_of all change the per-token aggregate → in the key.
       return `backtracker_leaderboard|lb:${instance.blLookback ?? '1h'}|g:${instance.btGroupId ?? ''}|a:${instance.blAsOf ?? 'now'}|ps:${instance.blPosStaleness ?? '3d'}`;
+    }
+    if (instance.kind === 'trading_pit') {
+      return `trading_pit|${_tpQs(instance).toString()}`;
     }
     if (instance.kind === 'early_movers') {
       const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 0}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}|${instance.emMinRealizedPnlK ?? 'x'}`;
@@ -1883,6 +1904,21 @@
         if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
         const body = await res.json();
         data = [{ tokens: body.rows ?? [] } as unknown as AnyDatum];
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = pv ?? defaultView(sinceIso, untilIso);
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Trading Pit: a wallet group's classified fills over a short window (needs ≥1 token).
+      if (instance.kind === 'trading_pit') {
+        if (!(instance.tpTokens ?? []).length) {
+          data = [{ tp: { mode: instance.tpMode ?? 'normal', rows: [], tokens: [] } } as unknown as AnyDatum];
+        } else {
+          const res = await queuedFetch(`/api/hyperliquid/trading_pit?${_tpQs(instance)}`, { signal });
+          if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+          data = [{ tp: await res.json() } as unknown as AnyDatum];
+        }
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
         localView = pv ?? defaultView(sinceIso, untilIso);
@@ -5471,6 +5507,13 @@
 
   // Early Movers chart: green ▲ (below) on long-move bars, red ▼ (above) on short-move
   // bars, from a moves-only fetch that reacts to the criteria.
+  // Trading Pit 'Live': re-fetch every 5 min while the toggle is on (fills land < 5 min).
+  $effect(() => {
+    if (instance.kind !== 'trading_pit' || !instance.tpLive) return;
+    const id = setInterval(() => load(true, true), 300_000);
+    return () => clearInterval(id);
+  });
+
   let emMarkers = $state<CandleMarker[]>([]);
   let emStats = $state<{ long: number; short: number; bars: number }>({ long: 0, short: 0, bars: 0 });
   $effect(() => {
@@ -5641,6 +5684,7 @@
     instance.kind === 'token_leaderboard'
     || instance.kind === 'spot_cvd_table'
     || instance.kind === 'backtracker_leaderboard'
+    || instance.kind === 'trading_pit'
     // Dual-view chart mode renders a real LineChart, so the chart-only settings
     // (Point / Week lines / MA / zoom-sync) DO apply there — only the table view
     // counts as a tableview kind.
@@ -7163,6 +7207,47 @@
         </label>
         <button type="button" onclick={() => load(true, true)}
           class="text-xs px-2 py-1 rounded border border-zinc-700 bg-zinc-800/50 text-zinc-200 hover:bg-zinc-700/50" title="Re-run detection + scoring">↻ Refresh</button>
+      {:else if instance.kind === 'trading_pit'}
+        {@const tpc = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}
+        {@const avail = tokens.filter((t) => !(instance.tpTokens ?? []).includes(t))}
+        <div class="flex items-center gap-1 flex-wrap">
+          {#each (instance.tpTokens ?? []) as tok (tok)}
+            <span class="inline-flex items-center gap-1 rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-xs text-zinc-200">
+              {tok}
+              <button type="button" class="text-zinc-500 hover:text-rose-400 leading-none" title="Remove token"
+                onclick={() => (instance.tpTokens = (instance.tpTokens ?? []).filter((t) => t !== tok))}>×</button>
+            </span>
+          {/each}
+          {#if avail.length}
+            <select class={tpc} value="" title="Add a token"
+              onchange={(e) => { const v = e.currentTarget.value; if (v) { instance.tpTokens = [...(instance.tpTokens ?? []), v]; e.currentTarget.value = ''; } }}>
+              <option value="">+ token</option>
+              {#each avail as t (t)}<option value={t}>{t}</option>{/each}
+            </select>
+          {/if}
+        </div>
+        <select class={tpc} value={instance.tpLookback ?? '5m'}
+          onchange={(e) => (instance.tpLookback = e.currentTarget.value as '5m' | '15m' | '30m' | '1h' | '4h')} title="Lookback window">
+          {#each ['5m', '15m', '30m', '1h', '4h'] as lb (lb)}<option value={lb}>{lb}</option>{/each}
+        </select>
+        <select class={tpc} value={instance.tpGroupId ?? ''} onchange={(e) => (instance.tpGroupId = e.currentTarget.value || null)} title="Wallet group">
+          <option value="">Group: none</option>
+          {#each walletPinsStore.groups as g (g.id)}<option value={g.id}>{g.name}</option>{/each}
+        </select>
+        <select class={tpc} value={instance.tpMode ?? 'normal'}
+          onchange={(e) => (instance.tpMode = e.currentTarget.value as 'normal' | 'aggregate' | 'overview')} title="View mode">
+          <option value="normal">Normal</option>
+          <option value="aggregate">Aggregate</option>
+          <option value="overview">Overview</option>
+        </select>
+        <select class={tpc} value={instance.tpFlipMode ?? 'separate'}
+          onchange={(e) => (instance.tpFlipMode = e.currentTarget.value as 'separate' | 'split')} title="Flip accounting: Separate = own type; Split = close-old + open-new">
+          <option value="separate">Flips: separate</option>
+          <option value="split">Flips: split</option>
+        </select>
+        <button type="button" onclick={() => (instance.tpLive = !instance.tpLive)}
+          class="text-xs px-2 py-1 rounded border {instance.tpLive ? 'border-emerald-700 bg-emerald-950/40 text-emerald-400' : 'border-zinc-700 bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700/50'}"
+          title="Auto-refresh every 5 min (fills land under 5 min)">{instance.tpLive ? '● Live' : 'Live'}</button>
       {:else if instance.kind === 'backtracker_leaderboard'}
         <!-- Backtracker Leaderboard: global per-token, no token dimension. Lookback +
              As-of + group live here; sort/filter/limit live in the table. -->
@@ -9241,6 +9326,24 @@
         hasGroup={!!instance.btGroupId}
         posMode={instance.blPosMode ?? 'consensus'}
         onTokenClick={openBacktrackerLeaderboardToken}
+      />
+    {:else if instance.kind === 'trading_pit'}
+      {@const tp = (data.length > 0 ? (data[0] as unknown as { tp?: Record<string, unknown> }).tp : undefined) ?? {}}
+      <TradingPitTable
+        mode={(instance.tpMode ?? 'normal') as 'normal' | 'aggregate' | 'overview'}
+        rows={(tp.rows ?? []) as never}
+        overviewRows={(tp.tokens ?? []) as never}
+        flipSplit={(instance.tpFlipMode ?? 'separate') === 'split'}
+        loading={loading}
+        error={error}
+        selectedTokens={instance.tpTokens ?? []}
+        filters={{ minSize: instance.tpMinSize ?? 0, side: instance.tpSide ?? '', type: instance.tpType ?? '', token: instance.tpToken ?? '' }}
+        onFilter={(p) => {
+          if (p.minSize !== undefined) instance.tpMinSize = p.minSize;
+          if (p.side !== undefined) instance.tpSide = p.side as '' | 'long' | 'short';
+          if (p.type !== undefined) instance.tpType = p.type;
+          if (p.token !== undefined) instance.tpToken = p.token;
+        }}
       />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}
