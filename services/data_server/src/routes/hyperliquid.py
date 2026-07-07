@@ -3564,6 +3564,171 @@ async def early_movers(request):
     return response.json({**base, "rows": out})
 
 
+_TP_LB = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400}
+# fill type from dir + signed start_position + size; end = sp + if(B,+size,-size).
+_TP_TYPE_SQL = """multiIf(
+    dir = 'Open Long'  AND start_position = 0, 'open_long',
+    dir = 'Open Long', 'inc_long',
+    dir = 'Open Short' AND start_position = 0, 'open_short',
+    dir = 'Open Short', 'inc_short',
+    dir = 'Close Long'  AND abs(start_position + if(side='B', size, -size)) < 1e-6 * abs(start_position), 'close_long',
+    dir = 'Close Long', 'dec_long',
+    dir = 'Close Short' AND abs(start_position + if(side='B', size, -size)) < 1e-6 * abs(start_position), 'close_short',
+    dir = 'Close Short', 'dec_short',
+    dir = 'Long > Short', 'flip_ls',
+    dir = 'Short > Long', 'flip_sl',
+    'other')"""
+_TP_LONG_TYPES = ["open_long", "inc_long", "dec_long", "close_long", "flip_sl"]
+_TP_SHORT_TYPES = ["open_short", "inc_short", "dec_short", "close_short", "flip_ls"]
+_TP_TYPE_KEYS = ["open_long", "inc_long", "dec_long", "close_long",
+                 "open_short", "inc_short", "dec_short", "close_short", "flip_ls", "flip_sl"]
+
+
+@bp.get("/hyperliquid/trading_pit")
+@throttled("heavy")
+async def trading_pit(request):
+    """Trading Pit: a wallet GROUP's HL-perp fills over a short window, classified by
+    action type (opened/increased/decreased/closed a long/short; flips) — hl_fills only.
+
+    Modes: normal (latest classified fills), aggregate (per wallet+token: opens summed,
+    inc/dec netted by side → Increase/Decrease, closes summed, flips), overview (per token:
+    the 8 categories + flips as $ and count). flip_mode=split folds each flip into a
+    close-old + open-new pair (split by start_position). Filters (server-side): min_size $,
+    side long|short, type (one category), token (one of the selected). Params: tokens
+    (comma list, required), group, lookback (5m|15m|30m|1h|4h), mode, flip_mode, min_size,
+    side, type, token, n."""
+    tokens = [t.strip().upper() for t in (request.args.get("tokens", "")).split(",") if t.strip()]
+    if not tokens:
+        return response.json({"error": "missing tokens (comma list)"}, status=400)
+    lb = request.args.get("lookback", "5m")
+    if lb not in _TP_LB:
+        return response.json({"error": f"lookback must be one of {list(_TP_LB)}"}, status=400)
+    mode = request.args.get("mode", "normal")
+    if mode not in ("normal", "aggregate", "overview"):
+        return response.json({"error": "mode must be normal|aggregate|overview"}, status=400)
+    flip_split = request.args.get("flip_mode") == "split"
+
+    def _f(name, default):
+        try:
+            return float(request.args.get(name, default))
+        except (TypeError, ValueError):
+            return float(default)
+
+    min_size = _f("min_size", 0)
+    side = request.args.get("side") or None       # long | short | None
+    type_filter = request.args.get("type") or None  # one classified type or None
+    token_one = (request.args.get("token") or "").strip().upper() or None
+    try:
+        n = max(1, min(int(request.args.get("n", "500")), 2000))
+    except ValueError:
+        n = 500
+
+    ch = await client()
+    member = None
+    if request.args.get("group"):
+        try:
+            member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
+        except ValueError:
+            member = None
+
+    # ── classified base: raw fills → type; flip_mode=split expands each flip into a
+    # close-old + open-new pair via arrayJoin (else one row). Then filters on `type`. ──
+    where = ["token IN {tokens:Array(String)}",
+             "time >= now() - INTERVAL {lb:UInt32} SECOND", "time < now()"]
+    params = {"tokens": tokens, "lb": _TP_LB[lb], "split": 1 if flip_split else 0}
+    if member:
+        where.append(member)
+    if min_size > 0:
+        where.append("size * price >= {min_size:Float64}")
+        params["min_size"] = min_size
+    if token_one:
+        where.append("token = {token_one:String}")
+        params["token_one"] = token_one
+    outer = ["type != 'other'"]
+    if side == "long":
+        outer.append("type IN {long_types:Array(String)}")
+        params["long_types"] = _TP_LONG_TYPES
+    elif side == "short":
+        outer.append("type IN {short_types:Array(String)}")
+        params["short_types"] = _TP_SHORT_TYPES
+
+    base = (
+        "SELECT wallet, token, time, price, side, closed_pnl, p.1 AS type, p.2 AS value FROM ("
+        "  SELECT wallet, token, time, price, side, closed_pnl, "
+        "         " + _TP_TYPE_SQL + " AS t0, "
+        "         multiIf("
+        "           {split:UInt8} = 1 AND " + _TP_TYPE_SQL + " = 'flip_ls',"
+        "             [('close_long', abs(start_position)*price), ('open_short', (size-abs(start_position))*price)],"
+        "           {split:UInt8} = 1 AND " + _TP_TYPE_SQL + " = 'flip_sl',"
+        "             [('close_short', abs(start_position)*price), ('open_long', (size-abs(start_position))*price)],"
+        "           [(" + _TP_TYPE_SQL + ", size*price)]) AS parts"
+        "  FROM tradernick.hl_fills FINAL WHERE " + " AND ".join(where) +
+        ") ARRAY JOIN parts AS p WHERE " + " AND ".join(outer)
+    )
+
+    if mode == "normal":
+        if type_filter:
+            base += " AND type = {tf:String}"
+            params["tf"] = type_filter
+        r = await ch.query(
+            "SELECT toUnixTimestamp(time) AS ts, wallet, token, type, side, price, value, closed_pnl,"
+            " dictGet('tradernick.wallet_labels', 'categories', lower(wallet)) AS cats"
+            " FROM (" + base + ") ORDER BY time DESC LIMIT {n:UInt32}",
+            parameters={**params, "n": n},
+        )
+        rows = [{
+            "time": int(ts), "wallet": w, "token": tok, "type": ty, "side": sd,
+            "price": float(p), "value": float(v), "closed_pnl": float(cp),
+            "categories": list(cats) if cats else [],
+        } for (ts, w, tok, ty, sd, p, v, cp, cats) in r.result_rows]
+        return response.json({"mode": mode, "rows": rows})
+
+    if mode == "overview":
+        r = await ch.query(
+            "SELECT token, type, sum(value) AS v, count() AS c"
+            " FROM (" + base + ") GROUP BY token, type",
+            parameters=params,
+        )
+        agg: dict[str, dict] = {t: {"token": t} | {k: [0.0, 0] for k in _TP_TYPE_KEYS} for t in tokens}
+        for tok, ty, v, c in r.result_rows:
+            if tok in agg and ty in agg[tok]:
+                agg[tok][ty] = [float(v), int(c)]
+        return response.json({"mode": mode, "flip_split": flip_split, "tokens": list(agg.values())})
+
+    # aggregate: per (wallet, token, bucket, pside). incdec netted (signed), else summed.
+    r = await ch.query(
+        "SELECT wallet, token,"
+        " multiIf(type IN ('open_long','open_short'),'open',"
+        "         type IN ('close_long','close_short'),'close',"
+        "         type IN ('flip_ls','flip_sl'),'flip','incdec') AS bucket,"
+        " if(type IN {long_all:Array(String)},'long','short') AS pside,"
+        " sum(multiIf(type IN ('inc_long','inc_short'), value, type IN ('dec_long','dec_short'), -value, value)) AS net,"
+        " sum(value) AS gross, count() AS c,"
+        " any(dictGet('tradernick.wallet_labels','categories',lower(wallet))) AS cats"
+        " FROM (" + base + ") GROUP BY wallet, token, bucket, pside",
+        parameters={**params, "long_all": _TP_LONG_TYPES},
+    )
+    rows = []
+    for w, tok, bucket, pside, net, gross, c, cats in r.result_rows:
+        net, gross = float(net), float(gross)
+        if bucket == "open":
+            ty, val = f"open_{pside}", gross
+        elif bucket == "close":
+            ty, val = f"close_{pside}", gross
+        elif bucket == "flip":
+            ty, val = ("flip_sl" if pside == "long" else "flip_ls"), gross
+        else:  # incdec net
+            ty = f"{'inc' if net >= 0 else 'dec'}_{pside}"
+            val = abs(net)
+        rows.append({"wallet": w, "token": tok, "type": ty, "side": pside,
+                     "value": val, "count": int(c),
+                     "categories": list(cats) if cats else []})
+    if type_filter:
+        rows = [x for x in rows if x["type"] == type_filter]
+    rows.sort(key=lambda x: x["value"], reverse=True)
+    return response.json({"mode": mode, "rows": rows[:n]})
+
+
 @bp.get("/hyperliquid/group_fill_pressure")
 @throttled("heavy")
 async def group_fill_pressure(request):
