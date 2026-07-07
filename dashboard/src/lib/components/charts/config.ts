@@ -1797,6 +1797,8 @@ export type ChartInstance = {
   tpToken?: string;
   /** auto-refresh every 5 min. NOT in the key (a manual reload trigger). */
   tpLive?: boolean;
+  /** Time column format: relative ('3m ago') or standard clock. Display-only. */
+  tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
   pin?: boolean;
   /** ohlcv only: which exchange's candle table to read. Defaults to
@@ -2779,6 +2781,7 @@ export function newChartInstance(
     base.tpType = '';
     base.tpToken = '';
     base.tpLive = false;
+    base.tpTimeFormat = 'relative';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

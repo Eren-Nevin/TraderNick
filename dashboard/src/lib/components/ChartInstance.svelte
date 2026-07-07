@@ -7797,6 +7797,18 @@
           </select>
         </label>
       {/if}
+      {#if instance.kind === 'trading_pit'}
+        <label class="flex items-center gap-1.5 text-zinc-300"
+          title="Time column format (aggregate rows show the median fill time)">
+          Time format
+          <select value={instance.tpTimeFormat ?? 'relative'}
+            onchange={(e) => (instance.tpTimeFormat = e.currentTarget.value as 'relative' | 'standard')}
+            class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none">
+            <option value="relative">Relative</option>
+            <option value="standard">Standard</option>
+          </select>
+        </label>
+      {/if}
       {#if isSwKind(instance.kind) && !isGroup && (instance.kind === 'smart_wallets_dynamic' || isCutoff || instance.viewMode !== 'chart')}
         <!-- Smart-wallet finder filters. For Fixed they show in TABLE view only
              (chart mode shows chart-appearance settings); for Dynamic they
@@ -9337,6 +9349,7 @@
         loading={loading}
         error={error}
         selectedTokens={instance.tpTokens ?? []}
+        timeFormat={instance.tpTimeFormat ?? 'relative'}
         filters={{ minSize: instance.tpMinSize ?? 0, side: instance.tpSide ?? '', type: instance.tpType ?? '', token: instance.tpToken ?? '' }}
         onFilter={(p) => {
           if (p.minSize !== undefined) instance.tpMinSize = p.minSize;

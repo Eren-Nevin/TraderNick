@@ -3704,12 +3704,13 @@ async def trading_pit(request):
         " if(type IN {long_all:Array(String)},'long','short') AS pside,"
         " sum(multiIf(type IN ('inc_long','inc_short'), value, type IN ('dec_long','dec_short'), -value, value)) AS net,"
         " sum(value) AS gross, count() AS c,"
+        " toUInt32(medianExact(toUnixTimestamp(time))) AS med_time,"
         " any(dictGet('tradernick.wallet_labels','categories',lower(wallet))) AS cats"
         " FROM (" + base + ") GROUP BY wallet, token, bucket, pside",
         parameters={**params, "long_all": _TP_LONG_TYPES},
     )
     rows = []
-    for w, tok, bucket, pside, net, gross, c, cats in r.result_rows:
+    for w, tok, bucket, pside, net, gross, c, med_time, cats in r.result_rows:
         net, gross = float(net), float(gross)
         if bucket == "open":
             ty, val = f"open_{pside}", gross
@@ -3721,7 +3722,7 @@ async def trading_pit(request):
             ty = f"{'inc' if net >= 0 else 'dec'}_{pside}"
             val = abs(net)
         rows.append({"wallet": w, "token": tok, "type": ty, "side": pside,
-                     "value": val, "count": int(c),
+                     "value": val, "count": int(c), "time": int(med_time),
                      "categories": list(cats) if cats else []})
     if type_filter:
         rows = [x for x in rows if x["type"] == type_filter]

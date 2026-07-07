@@ -22,6 +22,7 @@
     loading = false,
     error = null,
     selectedTokens = [],
+    timeFormat = 'relative',
     filters = { minSize: 0, side: '', type: '', token: '' },
     onFilter = (_p: Partial<Filters>) => {}
   }: {
@@ -32,9 +33,26 @@
     loading?: boolean;
     error?: string | null;
     selectedTokens?: string[];
+    timeFormat?: 'relative' | 'standard';
     filters?: Filters;
     onFilter?: (p: Partial<Filters>) => void;
   } = $props();
+
+  // Time cell: relative ('3m ago', aggregate = median fill time) or standard clock.
+  function fmtTime(ts: number | undefined): string {
+    if (!ts) return '';
+    if (timeFormat === 'standard') return fmtTzTime(ts);
+    let s = Math.max(0, Math.floor(Date.now() / 1000) - ts);
+    const d = Math.floor(s / 86400); s -= d * 86400;
+    const h = Math.floor(s / 3600); s -= h * 3600;
+    const m = Math.floor(s / 60); s -= m * 60;
+    const parts: string[] = [];
+    if (d) parts.push(`${d}d`);
+    if (h) parts.push(`${h}h`);
+    if (m) parts.push(`${m}m`);
+    if (!parts.length) parts.push(`${s}s`);
+    return `${parts.slice(0, 2).join(' ')} ago`;
+  }
 
   // type → label + color
   const TYPE_META: Record<string, { label: string; cls: string }> = {
@@ -182,7 +200,7 @@
       <table class="w-full">
         <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
           <tr>
-            {#if mode === 'normal'}<th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('time')}>Time{arrow('time')}</th>{/if}
+            <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('time')} title={mode === 'aggregate' ? 'Median time of the aggregated fills' : 'Fill time'}>Time{arrow('time')}</th>
             <th class="text-left px-3 py-1.5 font-normal">Wallet</th>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('token')}>Token{arrow('token')}</th>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('type')}>Type{arrow('type')}</th>
@@ -198,7 +216,7 @@
         <tbody>
           {#each sortedFills as r, i (i)}
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
-              {#if mode === 'normal'}<td class="px-3 py-1 font-mono tabular-nums text-zinc-400 whitespace-nowrap">{r.time ? fmtTzTime(r.time) : ''}</td>{/if}
+              <td class="px-3 py-1 font-mono tabular-nums text-zinc-400 whitespace-nowrap">{fmtTime(r.time)}</td>
               <td class="px-3 py-1"><WalletAddress address={r.wallet} auxKind="wallet" tags={r.categories ?? []} /></td>
               <td class="px-3 py-1 text-zinc-200">{r.token}</td>
               <td class="px-3 py-1 whitespace-nowrap {typeCls(r.type)}">{typeLabel(r.type)}</td>

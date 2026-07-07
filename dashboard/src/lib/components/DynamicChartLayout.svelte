@@ -883,6 +883,7 @@
         inst.tpType = typeof r.tpType === 'string' ? r.tpType : '';
         inst.tpToken = typeof r.tpToken === 'string' ? r.tpToken : '';
         inst.tpLive = r.tpLive === true;
+        inst.tpTimeFormat = r.tpTimeFormat === 'standard' ? 'standard' : 'relative';
       }
       if (inst.kind === 'book_depth') {
         // Binance-only; the mode selector flips the same dataset between the
