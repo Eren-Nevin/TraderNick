@@ -24,13 +24,12 @@ class StreamSpec:
     enabled_default: bool = True
 
 
-# HL event cadences mirror _CADENCE in groups/hyperliquid_events.py.
-# All non-funding/vault events moved to 15m on 2026-06-11.
-_HL_CADENCE = {
-    "ohlcv": 900, "trades": 900, "fills": 900,
-    "position_history": 900, "trade_history": 900, "transfers": 900,
-    "funding": 1800, "vaults": 1800,
-}
+# HL live tick intervals — derived from the single source of truth (_CADENCE in
+# groups/hyperliquid_events.py) so the admin "Refresh" column can't drift out of
+# sync with what the streams actually poll (it used to be a hand-copied dict).
+from groups.hyperliquid_events import _CADENCE as _HL_CADENCE_TUPLES
+
+_HL_CADENCE = {ev: t[0] for ev, t in _HL_CADENCE_TUPLES.items()}
 
 
 def _hl(ev: str) -> StreamSpec:

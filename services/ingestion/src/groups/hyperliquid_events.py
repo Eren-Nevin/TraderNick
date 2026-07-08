@@ -55,7 +55,8 @@ _CADENCE: dict[str, tuple[int, int]] = {
     "ohlcv":            (60,    6),
     "trades":           (60,    6),
     # fills poll every 60s (2026-07-02) so the most-recent CLOSED 5-min slot is
-    # ingested within ~1m of DeFiStream having it (DS itself lags ~3m). The live
+    # ingested within ~1m of DeFiStream having it (DS lag ~15s, measured 2026-07-09;
+    # was ~3m). The live
     # window snaps to a 5-min grid and re-fetches a trailing lookback each tick so
     # DS's late arrivals land promptly (see streams/_hl_common.py). Gap-fill chunk
     # (sweep tier) unchanged at 6h — the usual sweep still runs.
