@@ -118,12 +118,12 @@
       <span class="text-zinc-500 text-xs">range</span>
     {/if}
     <select
-      class="ml-auto bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
+      class="bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
       bind:value={tokenFilter} title="Filter by token">
       <option value="">All tokens</option>
       {#each tokenOpts as tok (tok)}<option value={tok}>{tok}</option>{/each}
     </select>
-    <span class="text-zinc-500 text-xs whitespace-nowrap">{shown.length} fills</span>
+    <span class="ml-auto text-zinc-500 text-xs whitespace-nowrap">{shown.length} fills</span>
   </div>
 
   <div class="flex-1 overflow-auto scrollbar-none {loading ? 'opacity-50' : ''}">
