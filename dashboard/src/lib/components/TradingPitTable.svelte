@@ -133,6 +133,13 @@
     return arr;
   });
 
+  // Net position change per token (directional flow, excl. opens/closes/flips):
+  // increased longs + decreased shorts − increased shorts − decreased longs.
+  const netValue = (r: OverviewRow) =>
+    (r.inc_long?.[0] ?? 0) + (r.dec_short?.[0] ?? 0) - (r.inc_short?.[0] ?? 0) - (r.dec_long?.[0] ?? 0);
+  const netCount = (r: OverviewRow) =>
+    (r.inc_long?.[1] ?? 0) + (r.dec_short?.[1] ?? 0) + (r.inc_short?.[1] ?? 0) + (r.dec_long?.[1] ?? 0);
+
   // Overview sort (by a chosen column's value).
   let ovSortKey = $state<string>('token');
   let ovSortDir = $state<1 | -1>(-1);
@@ -146,6 +153,7 @@
     const k = ovSortKey, dir = ovSortDir;
     arr.sort((a, b) => {
       if (k === 'token') return String(a.token).localeCompare(String(b.token)) * dir;
+      if (k === 'net') return (netValue(a) - netValue(b)) * dir;
       const av = (a[k]?.[0] ?? 0), bv = (b[k]?.[0] ?? 0);
       return (av - bv) * dir;
     });
@@ -195,6 +203,7 @@
           <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
             <tr>
               <th class="text-left px-2 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onOvSort('token')}>Token{ovArrow('token')}</th>
+              <th class="text-right px-2 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none whitespace-nowrap" onclick={() => onOvSort('net')} title="Net position change: increased longs + decreased shorts − increased shorts − decreased longs (directional flow, excludes opens/closes)">Net Pos Change{ovArrow('net')}</th>
               {#each ovCols as c (c)}
                 <th class="text-right px-2 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none whitespace-nowrap {typeCls(c)}" onclick={() => onOvSort(c)} title={typeLabel(c)}>{typeLabel(c)}{ovArrow(c)}</th>
               {/each}
@@ -204,6 +213,9 @@
             {#each sortedOv as r (r.token)}
               <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
                 <td class="px-2 py-1 font-medium text-zinc-100">{r.token}</td>
+                <td class="px-2 py-1 text-right font-mono tabular-nums whitespace-nowrap {netValue(r) > 0 ? 'text-emerald-400' : netValue(r) < 0 ? 'text-rose-400' : 'text-zinc-600'}">
+                  {netCount(r) ? `${fmtUsd(netValue(r))} (${netCount(r)})` : '—'}
+                </td>
                 {#each ovCols as c (c)}
                   {@const cell = r[c] ?? [0, 0]}
                   <td class="px-2 py-1 text-right font-mono tabular-nums whitespace-nowrap {cell[1] ? 'text-zinc-200' : 'text-zinc-700'}">
