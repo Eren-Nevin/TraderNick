@@ -3805,12 +3805,16 @@ async def group_snapshot(request):
     Reads hl_position_history only (the latest snapshot bucket = current open positions,
     since a held position is snapshotted densely and a closed one drops out). `staleness`
     (1d|3d|7d|14d|30d, default 7d) drops positions whose wallet had NO fill in that token
-    within the window — focus on actively-traded positions, not stale ones.
-    Params: group, staleness."""
+    within the window — focus on actively-traded positions, not stale ones. as_of=live
+    reconstructs each wallet's position to NOW (snapshot + net fills since the bucket);
+    entry/uPnL are then approximate (snapshot entry carried for pre-existing positions,
+    fills-VWAP for ones opened since; uPnL marked to the last fill price).
+    Params: group, staleness, as_of."""
     if not request.args.get("group"):
         return response.json({"error": "missing group"}, status=400)
     stale = request.args.get("staleness", "7d")
     st_sec = _GS_STALE.get(stale, _GS_STALE["7d"])
+    as_of = request.args.get("as_of", "snapshot")
     ch = await client()
     try:
         member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
@@ -3825,29 +3829,66 @@ async def group_snapshot(request):
     if bucket is None:
         return response.json({"bucket": None, "rows": []})
 
-    r = await ch.query(
-        "SELECT token, sum(sz) AS size_usd,"
-        " sum(sz * entry) / nullIf(sum(sz), 0) AS entry, sum(upnl) AS upnl,"
-        " uniqExact(wallet) AS wallets, countIf(signed > 0) AS n_long, countIf(signed < 0) AS n_short,"
-        " sumIf(sz, signed > 0) AS long_usd, sumIf(sz, signed < 0) AS short_usd"
-        " FROM ("
-        "   SELECT token, wallet,"
-        "          argMax(amount, time) * if(side = 'long', 1, -1) AS signed,"
-        "          argMax(size, time) AS sz, argMax(avg_entry, time) AS entry,"
-        "          argMax(unrealized_pnl, time) AS upnl"
-        "   FROM tradernick.hl_position_history"
-        "   WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND AND " + member +
-        "   GROUP BY token, wallet, side"
-        " ) pos"
-        # staleness: keep only positions whose wallet traded that token in the window.
-        " INNER JOIN ("
-        "   SELECT DISTINCT token, wallet FROM tradernick.hl_fills"
-        "   WHERE time > now() - INTERVAL {st:UInt32} SECOND AND " + member +
-        " ) f USING (token, wallet)"
-        " WHERE abs(signed) > 1e-9"
-        " GROUP BY token ORDER BY size_usd DESC",
-        parameters={"b": bucket, "st": st_sec},
-    )
+    if as_of == "live":
+        # reconstruct each (wallet, token) to now = snapshot@bucket + net fills since;
+        # mark to the last fill price; entry approximated (see docstring). Staleness via
+        # the tuple-IN (only wallets that traded the token in the window).
+        r = await ch.query(
+            "SELECT token, sum(sz) AS size_usd, sum(sz * entry) / nullIf(sum(sz), 0) AS entry,"
+            " sum(upnl) AS upnl, uniqExact(wallet) AS wallets,"
+            " countIf(signed > 0) AS n_long, countIf(signed < 0) AS n_short,"
+            " sumIf(sz, signed > 0) AS long_usd, sumIf(sz, signed < 0) AS short_usd FROM ("
+            "   SELECT rec.token AS token, rec.wallet AS wallet, rec.cur AS signed, rec.entry AS entry,"
+            "          abs(rec.cur) * mk.mark AS sz, rec.cur * (mk.mark - rec.entry) AS upnl"
+            "   FROM ("
+            "     SELECT token, wallet,"
+            "            (sumIf(sig, tag='s') + sumIf(sig, tag='f')) AS cur,"
+            "            if(abs(sumIf(sig, tag='s')) > 1e-9, maxIf(ent, tag='s'),"
+            "               if(abs(sumIf(sig, tag='f')) > 1e-9, abs(sumIf(notl, tag='f') / sumIf(sig, tag='f')), 0)) AS entry"
+            "     FROM ("
+            "       SELECT token, wallet, 's' AS tag, argMax(amount, time) * if(side='long',1,-1) AS sig,"
+            "              argMax(avg_entry, time) AS ent, 0 AS notl"
+            "       FROM tradernick.hl_position_history"
+            "       WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND AND " + member +
+            "       GROUP BY token, wallet, side"
+            "       UNION ALL"
+            "       SELECT token, wallet, 'f' AS tag, sum(if(side='B', size, -size)) AS sig, 0 AS ent,"
+            "              sum(if(side='B', size*price, -size*price)) AS notl"
+            "       FROM tradernick.hl_fills WHERE time >= {b:DateTime} AND time < now() AND " + member +
+            "       GROUP BY token, wallet"
+            "     ) GROUP BY token, wallet"
+            "     HAVING abs(cur) > 1e-9 AND (token, wallet) IN ("
+            "       SELECT token, wallet FROM tradernick.hl_fills WHERE time > now() - INTERVAL {st:UInt32} SECOND AND " + member + ")"
+            "   ) rec"
+            "   INNER JOIN (SELECT token, argMax(price, time) AS mark FROM tradernick.hl_fills"
+            "               WHERE time > now() - INTERVAL 86400 SECOND GROUP BY token) mk ON rec.token = mk.token"
+            " ) GROUP BY token ORDER BY size_usd DESC",
+            parameters={"b": bucket, "st": st_sec},
+        )
+    else:
+        r = await ch.query(
+            "SELECT token, sum(sz) AS size_usd,"
+            " sum(sz * entry) / nullIf(sum(sz), 0) AS entry, sum(upnl) AS upnl,"
+            " uniqExact(wallet) AS wallets, countIf(signed > 0) AS n_long, countIf(signed < 0) AS n_short,"
+            " sumIf(sz, signed > 0) AS long_usd, sumIf(sz, signed < 0) AS short_usd"
+            " FROM ("
+            "   SELECT token, wallet,"
+            "          argMax(amount, time) * if(side = 'long', 1, -1) AS signed,"
+            "          argMax(size, time) AS sz, argMax(avg_entry, time) AS entry,"
+            "          argMax(unrealized_pnl, time) AS upnl"
+            "   FROM tradernick.hl_position_history"
+            "   WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND AND " + member +
+            "   GROUP BY token, wallet, side"
+            " ) pos"
+            # staleness: keep only positions whose wallet traded that token in the window.
+            " INNER JOIN ("
+            "   SELECT DISTINCT token, wallet FROM tradernick.hl_fills"
+            "   WHERE time > now() - INTERVAL {st:UInt32} SECOND AND " + member +
+            " ) f USING (token, wallet)"
+            " WHERE abs(signed) > 1e-9"
+            " GROUP BY token ORDER BY size_usd DESC",
+            parameters={"b": bucket, "st": st_sec},
+        )
     rows = [{
         "token": tok, "size_usd": float(sz), "entry": float(en or 0), "unrealized_pnl": float(up),
         "wallets": int(w), "n_long": int(nl), "n_short": int(ns),

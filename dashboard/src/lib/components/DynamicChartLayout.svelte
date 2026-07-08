@@ -890,6 +890,7 @@
         inst.gsGroupId = typeof r.gsGroupId === 'string' ? r.gsGroupId : null;
         const gss = r.gsStaleness;
         inst.gsStaleness = gss === '1h' || gss === '4h' || gss === '1d' || gss === '3d' || gss === '14d' || gss === '30d' ? gss : '7d';
+        inst.gsAsOf = r.gsAsOf === 'live' ? 'live' : 'snapshot';
       }
       if (inst.kind === 'book_depth') {
         // Binance-only; the mode selector flips the same dataset between the
