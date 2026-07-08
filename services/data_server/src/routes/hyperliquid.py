@@ -4761,7 +4761,7 @@ async def wallet_fills(request):
     r = await ch.query(
         f"""
         SELECT toUnixTimestamp(time) AS ts, token, dir, side, price, size,
-               size * price AS value, closed_pnl, fee
+               size * price AS value, closed_pnl, fee, {_TP_TYPE_SQL} AS type
         FROM tradernick.hl_fills FINAL
         WHERE wallet = {{wallet:String}} AND time >= {{s:DateTime}} AND time < {{u:DateTime}} {tok_filter}
         ORDER BY time DESC
@@ -4769,11 +4769,20 @@ async def wallet_fills(request):
         """,
         parameters=params,
     )
+    # HL's raw `dir` calls ANY size-increasing fill "Open …" — relabel open vs increase
+    # (and close vs decrease) from the signed start_position, like Trading Pit.
+    labels = {
+        "open_long": "Open Long", "inc_long": "Increase Long",
+        "dec_long": "Decrease Long", "close_long": "Close Long",
+        "open_short": "Open Short", "inc_short": "Increase Short",
+        "dec_short": "Decrease Short", "close_short": "Close Short",
+        "flip_ls": "Long > Short", "flip_sl": "Short > Long",
+    }
     trades = [{
-        "time": int(ts), "token": tok, "dir": d, "side": s,
+        "time": int(ts), "token": tok, "dir": labels.get(ty, d), "side": s,
         "price": float(p), "size": float(sz), "value": float(v),
         "closed_pnl": float(cp), "fee": float(f),
-    } for (ts, tok, d, s, p, sz, v, cp, f) in r.result_rows]
+    } for (ts, tok, d, s, p, sz, v, cp, f, ty) in r.result_rows]
     return response.json({"wallet": wallet, "token": token, "trades": trades})
 
 
