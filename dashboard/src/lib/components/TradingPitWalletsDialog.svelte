@@ -93,7 +93,7 @@
             <tbody>
               {#each sorted as r (r.wallet)}
                 <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
-                  <td class="px-3 py-1.5"><WalletAddress address={r.wallet} auxKind="wallet" tags={r.categories ?? []} /></td>
+                  <td class="px-3 py-1.5"><WalletAddress address={r.wallet} auxKind="wallet" token={token} tags={r.categories ?? []} /></td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums {r.net_value > 0 ? 'text-emerald-400' : r.net_value < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(r.net_value)}</td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-200">{fmtUsd(r.gross_value)}</td>
                   <td class="px-3 py-1.5 text-right font-mono tabular-nums text-zinc-400">{r.fills}</td>
