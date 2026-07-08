@@ -3793,6 +3793,9 @@ async def trading_pit(request):
     return response.json({"mode": mode, "rows": rows[:n], "tokens_available": tokens_available})
 
 
+_GS_STALE = {"1d": 86400, "3d": 259200, "7d": 604800, "14d": 1209600, "30d": 2592000}
+
+
 @bp.get("/hyperliquid/group_snapshot")
 @throttled("heavy")
 async def group_snapshot(request):
@@ -3800,9 +3803,14 @@ async def group_snapshot(request):
     combined into ONE book per token. Per token: size = Σ each wallet's size ($), entry =
     size-weighted avg entry, unrealized_pnl = Σ, plus wallet counts + long/short split.
     Reads hl_position_history only (the latest snapshot bucket = current open positions,
-    since a held position is snapshotted densely and a closed one drops out). Param: group."""
+    since a held position is snapshotted densely and a closed one drops out). `staleness`
+    (1d|3d|7d|14d|30d, default 7d) drops positions whose wallet had NO fill in that token
+    within the window — focus on actively-traded positions, not stale ones.
+    Params: group, staleness."""
     if not request.args.get("group"):
         return response.json({"error": "missing group"}, status=400)
+    stale = request.args.get("staleness", "7d")
+    st_sec = _GS_STALE.get(stale, _GS_STALE["7d"])
     ch = await client()
     try:
         member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
@@ -3830,9 +3838,15 @@ async def group_snapshot(request):
         "   FROM tradernick.hl_position_history"
         "   WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND AND " + member +
         "   GROUP BY token, wallet, side"
-        " ) WHERE abs(signed) > 1e-9"
+        " ) pos"
+        # staleness: keep only positions whose wallet traded that token in the window.
+        " INNER JOIN ("
+        "   SELECT DISTINCT token, wallet FROM tradernick.hl_fills"
+        "   WHERE time > now() - INTERVAL {st:UInt32} SECOND AND " + member +
+        " ) f USING (token, wallet)"
+        " WHERE abs(signed) > 1e-9"
         " GROUP BY token ORDER BY size_usd DESC",
-        parameters={"b": bucket},
+        parameters={"b": bucket, "st": st_sec},
     )
     rows = [{
         "token": tok, "size_usd": float(sz), "entry": float(en or 0), "unrealized_pnl": float(up),

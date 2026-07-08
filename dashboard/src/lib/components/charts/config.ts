@@ -1803,6 +1803,9 @@ export type ChartInstance = {
   tpLive?: boolean;
   /** group_snapshot only: the wallet group whose positions are combined per token. */
   gsGroupId?: string | null;
+  /** group_snapshot staleness: drop positions with no fill in the token within this
+   *  window (1d|3d|7d|14d|30d). In the key. */
+  gsStaleness?: '1d' | '3d' | '7d' | '14d' | '30d';
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
@@ -2792,6 +2795,7 @@ export function newChartInstance(
   }
   if (kind === 'group_snapshot') {
     base.gsGroupId = null;
+    base.gsStaleness = '7d';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

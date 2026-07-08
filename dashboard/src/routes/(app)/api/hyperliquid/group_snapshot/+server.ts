@@ -3,7 +3,7 @@ import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
 // Proxy for /hyperliquid/group_snapshot — a wallet group's positions combined per token.
-const PASSTHROUGH = ['group'];
+const PASSTHROUGH = ['group', 'staleness'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

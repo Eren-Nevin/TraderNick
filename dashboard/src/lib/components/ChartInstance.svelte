@@ -949,7 +949,7 @@
       return `trading_pit|${_tpQs(instance).toString()}`;
     }
     if (instance.kind === 'group_snapshot') {
-      return `group_snapshot|g:${instance.gsGroupId ?? ''}`;
+      return `group_snapshot|g:${instance.gsGroupId ?? ''}|st:${instance.gsStaleness ?? '7d'}`;
     }
     if (instance.kind === 'early_movers') {
       const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 0}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}|${instance.emMinRealizedPnlK ?? 'x'}`;
@@ -1936,7 +1936,7 @@
         if (!instance.gsGroupId) {
           data = [{ gs: { rows: [] } } as unknown as AnyDatum];
         } else {
-          const res = await queuedFetch(`/api/hyperliquid/group_snapshot?group=${instance.gsGroupId}`, { signal });
+          const res = await queuedFetch(`/api/hyperliquid/group_snapshot?group=${instance.gsGroupId}&staleness=${instance.gsStaleness ?? '7d'}`, { signal });
           if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
           data = [{ gs: await res.json() } as unknown as AnyDatum];
         }
@@ -7264,6 +7264,11 @@
           value={instance.gsGroupId ?? ''} onchange={(e) => (instance.gsGroupId = e.currentTarget.value || null)} title="Wallet group">
           <option value="">Group: none</option>
           {#each walletPinsStore.groups as g (g.id)}<option value={g.id}>{g.name}</option>{/each}
+        </select>
+        <select class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          value={instance.gsStaleness ?? '7d'} onchange={(e) => (instance.gsStaleness = e.currentTarget.value as '1d' | '3d' | '7d' | '14d' | '30d')}
+          title="Only show positions whose wallet traded that token within this window (drops stale positions)">
+          {#each ['1d', '3d', '7d', '14d', '30d'] as s (s)}<option value={s}>{s}</option>{/each}
         </select>
       {:else if instance.kind === 'trading_pit'}
         {@const tpc = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}

@@ -32,8 +32,9 @@
   }
   const arrow = (k: string) => (sortKey !== k ? '' : sortDir === 1 ? ' ↑' : ' ↓');
   const netUsd = (r: Row) => (r.long_usd ?? 0) - (r.short_usd ?? 0);
+  const sideLabel = (r: Row) => (netUsd(r) > 0 ? 'Long' : netUsd(r) < 0 ? 'Short' : 'Flat');
   const sv = (r: Row, k: string): number | string =>
-    k === 'token' ? r.token : k === 'net' ? netUsd(r) : ((r[k as keyof Row] as number) ?? 0);
+    k === 'token' ? r.token : k === 'net' || k === 'side' ? netUsd(r) : ((r[k as keyof Row] as number) ?? 0);
   let sorted = $derived.by(() => {
     const arr = (rows as Row[]).filter((r) => r.token.toLowerCase().includes(search.trim().toLowerCase()));
     const k = sortKey, dir = sortDir;
@@ -76,6 +77,7 @@
         <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
           <tr>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('token')}>Token{arrow('token')}</th>
+            <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('side')} title="Net side (long $ vs short $)">Side{arrow('side')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('size_usd')} title="Σ each wallet's position size ($)">Size{arrow('size_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('net')} title="Net = long $ − short $">Net{arrow('net')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('entry')} title="Size-weighted average entry price">Entry{arrow('entry')}</th>
@@ -87,6 +89,10 @@
           {#each sorted as r (r.token)}
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/50 cursor-pointer" onclick={() => onTokenClick(r.token)} title="Show the wallets holding {r.token}">
               <td class="px-3 py-1 font-medium text-zinc-100">{r.token}</td>
+              <td class="px-3 py-1">
+                <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border {netUsd(r) > 0
+                  ? 'border-emerald-800 text-emerald-400' : netUsd(r) < 0 ? 'border-rose-800 text-rose-400' : 'border-zinc-700 text-zinc-500'}">{sideLabel(r)}</span>
+              </td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-200">{fmtUsd(r.size_usd)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums {netUsd(r) > 0 ? 'text-emerald-400' : netUsd(r) < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(netUsd(r))}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{fmtPrice(r.entry)}</td>
