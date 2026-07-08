@@ -7266,9 +7266,9 @@
           {#each walletPinsStore.groups as g (g.id)}<option value={g.id}>{g.name}</option>{/each}
         </select>
         <select class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          value={instance.gsStaleness ?? '7d'} onchange={(e) => (instance.gsStaleness = e.currentTarget.value as '1d' | '3d' | '7d' | '14d' | '30d')}
+          value={instance.gsStaleness ?? '7d'} onchange={(e) => (instance.gsStaleness = e.currentTarget.value as '1h' | '4h' | '1d' | '3d' | '7d' | '14d' | '30d')}
           title="Only show positions whose wallet traded that token within this window (drops stale positions)">
-          {#each ['1d', '3d', '7d', '14d', '30d'] as s (s)}<option value={s}>{s}</option>{/each}
+          {#each ['1h', '4h', '1d', '3d', '7d', '14d', '30d'] as s (s)}<option value={s}>{s}</option>{/each}
         </select>
       {:else if instance.kind === 'trading_pit'}
         {@const tpc = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}

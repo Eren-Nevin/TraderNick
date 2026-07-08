@@ -3793,7 +3793,7 @@ async def trading_pit(request):
     return response.json({"mode": mode, "rows": rows[:n], "tokens_available": tokens_available})
 
 
-_GS_STALE = {"1d": 86400, "3d": 259200, "7d": 604800, "14d": 1209600, "30d": 2592000}
+_GS_STALE = {"1h": 3600, "4h": 14400, "1d": 86400, "3d": 259200, "7d": 604800, "14d": 1209600, "30d": 2592000}
 
 
 @bp.get("/hyperliquid/group_snapshot")

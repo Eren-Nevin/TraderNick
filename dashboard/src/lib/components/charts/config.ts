@@ -1805,7 +1805,7 @@ export type ChartInstance = {
   gsGroupId?: string | null;
   /** group_snapshot staleness: drop positions with no fill in the token within this
    *  window (1d|3d|7d|14d|30d). In the key. */
-  gsStaleness?: '1d' | '3d' | '7d' | '14d' | '30d';
+  gsStaleness?: '1h' | '4h' | '1d' | '3d' | '7d' | '14d' | '30d';
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
