@@ -64,14 +64,17 @@ async def run(stream_name: str, event: str) -> None:
     #
     # position_history stays at 30 min (its responses are heaviest per
     # bucket — see the 2026-06-06 OOM incident).
-    # funding / vaults stay at the 10× default (5h) — they're sparse
-    # endpoints where the longer window is cheap.
+    # funding / vaults are pinned to 1h (2026-07-09): their live tick dropped to
+    # 60s, so the 10× default would put the sweep at 10 min — needlessly frequent
+    # for sparse endpoints. 1h is a cheap backstop behind the fresh live tick.
     _SWEEP_CADENCE_OVERRIDES = {
         "ohlcv":             3600.0,  # 1 h
         "trades":            3600.0,
         "fills":             3600.0,
         "trade_history":     3600.0,
         "transfers":         3600.0,
+        "funding":           3600.0,
+        "vaults":            3600.0,
         "position_history":  1800.0,  # 30 min — keep the sweep backstop tight so
                                       # position_history lands within ~30 min.
     }
@@ -115,9 +118,9 @@ async def run(stream_name: str, event: str) -> None:
             #     event-bucket per response
             #   - idempotent across overlapping ticks (ReplacingMergeTree dedup
             #     in the source table absorbs repeated fetches)
-            #   - mismatched only for funding/vaults (30m cadence) which fire
-            #     half as often as 15m and so capture every other slot; the
-            #     sweep tier fills in the alternate slot
+            # Only position_history/trade_history still use this 15-min grid;
+            # ohlcv/trades/funding/transfers/vaults dropped to a 1-min grid + 60s
+            # tick (2026-07-09) for ~1-min freshness (see _live_grid below).
             # fills advance `until` on a 5-min grid (not 15m) and the stream polls
             # every 60s (_CADENCE), so the most-recent CLOSED 5-min slot is
             # ingested within ~1m of DS having it. DS itself lags ~3m, so each tick
@@ -128,7 +131,13 @@ async def run(stream_name: str, event: str) -> None:
             # (~3m-lag), narrow/tiny fills windows at HTTP 200 (no Code 241) —
             # fills are raw events, not a bucketed snapshot grid. Aggregated
             # snapshot events (ohlcv / position_history) keep the 15m grid.
-            _live_grid = 5 if event == "fills" else 15
+            # ohlcv/trades/funding/transfers/vaults poll every 60s on a 1-min grid
+            # (2026-07-09, after DeFiStream lag was reduced) so data lands ~1 min
+            # fresh instead of waiting for a 15-min bucket to close. fills stays on
+            # its 5-min grid; position_history/trade_history keep the 15-min grid
+            # (heavy aggregated buckets — off-grid windows have triggered DS 500s).
+            _FAST_1M = {"ohlcv", "trades", "funding", "transfers", "vaults"}
+            _live_grid = 1 if event in _FAST_1M else (5 if event == "fills" else 15)
             floor_now = now.replace(
                 minute=(now.minute // _live_grid) * _live_grid,
                 second=0, microsecond=0,
@@ -138,7 +147,15 @@ async def run(stream_name: str, event: str) -> None:
             # to rely on the slow hourly sweep. Re-fetch the last 45m of 15m
             # slots each tick so a late-published snapshot lands within ~30m.
             # Window stays on the 15m grid; RMT dedups the re-fetched overlap.
-            _live_lookback = 45 if event == "position_history" else (10 if event == "fills" else 15)
+            # Fast 1-min events re-fetch the last 5 one-min slots each tick so DS's
+            # residual ~3m lag lands within a minute of publication (RMT dedups the
+            # overlap). position_history: 45m (late-published). fills: 10m.
+            _live_lookback = (
+                45 if event == "position_history"
+                else 10 if event == "fills"
+                else 5 if event in _FAST_1M
+                else 15
+            )
             since = floor_now - timedelta(minutes=_live_lookback)
             until = floor_now
             n = 0

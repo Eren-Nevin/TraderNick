@@ -45,15 +45,15 @@ _PER_TOKEN_TABLE = {"ohlcv", "trades", "fills", "funding", "position_history", "
 # Per-endpoint live tick + gap-fill chunk size.
 _CADENCE: dict[str, tuple[int, int]] = {
     # event:  (tick_seconds, gap_fill_chunk_hours)
-    # All non-funding/vault events moved to 15m (2026-06-11). ohlcv /
-    # trades / fills were previously at 1m, which produced ~60× the live
-    # request volume of the new rate for downstream charts that the
-    # dashboard already buckets at >= 1m. position_history / trade_history
-    # / transfers were already moved earlier the same day for the same
-    # reason. Gap-fill chunks (second tuple element) are unchanged — they
-    # govern the sweep tier and don't track the live cadence.
-    "ohlcv":            (900,   6),
-    "trades":           (900,   6),
+    # These were briefly at 15m (2026-06-11) to cut request volume, then moved
+    # back to a 60s tick (2026-07-09) after DeFiStream's lag was reduced — the
+    # live window also drops to a 1-min grid for these (see streams/_hl_common.py)
+    # so data lands ~1 min fresh, not gated on a 15-min bucket close. Gap-fill
+    # chunks (second tuple element) are unchanged — they govern the sweep tier and
+    # don't track the live cadence. position_history / trade_history keep their
+    # coarser cadence (heavy per-bucket / once-daily).
+    "ohlcv":            (60,    6),
+    "trades":           (60,    6),
     # fills poll every 60s (2026-07-02) so the most-recent CLOSED 5-min slot is
     # ingested within ~1m of DeFiStream having it (DS itself lags ~3m). The live
     # window snaps to a 5-min grid and re-fetches a trailing lookback each tick so
@@ -66,9 +66,9 @@ _CADENCE: dict[str, tuple[int, int]] = {
     # snapshot per day. Polling more often is pointless — the value only
     # advances daily — so tick=24h with a 7-day gap-fill chunk.
     "trade_history":    (86400, 168),
-    "transfers":        (900,  24),
-    "funding":          (1800, 24),
-    "vaults":           (1800, 24),
+    "transfers":        (60,   24),
+    "funding":          (60,   24),
+    "vaults":           (60,   24),
 }
 
 # Live overlap window = a small multiple of the tick so transient gaps
