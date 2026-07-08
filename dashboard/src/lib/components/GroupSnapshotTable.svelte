@@ -26,6 +26,8 @@
   let sortKey = $state<string>('size_usd');
   let sortDir = $state<1 | -1>(-1);
   let search = $state('');
+  let sideFilter = $state<'' | 'long' | 'short'>('');
+  let minSize = $state(0);
   function onSort(k: string) {
     if (sortKey === k) sortDir = sortDir === 1 ? -1 : 1;
     else { sortKey = k; sortDir = k === 'token' ? 1 : -1; }
@@ -36,7 +38,14 @@
   const sv = (r: Row, k: string): number | string =>
     k === 'token' ? r.token : k === 'net' || k === 'side' ? netUsd(r) : ((r[k as keyof Row] as number) ?? 0);
   let sorted = $derived.by(() => {
-    const arr = (rows as Row[]).filter((r) => r.token.toLowerCase().includes(search.trim().toLowerCase()));
+    const q = search.trim().toLowerCase();
+    const minUsd = (minSize || 0) * 1000; // input is in $K
+    const arr = (rows as Row[]).filter(
+      (r) =>
+        r.token.toLowerCase().includes(q) &&
+        (!sideFilter || (sideFilter === 'long' ? netUsd(r) > 0 : netUsd(r) < 0)) &&
+        r.size_usd >= minUsd
+    );
     const k = sortKey, dir = sortDir;
     arr.sort((a, b) => {
       const av = sv(a, k), bv = sv(b, k);
@@ -60,7 +69,13 @@
   <div class="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 text-zinc-400">
     <span class="text-[11px]">Group positions · latest snapshot</span>
     <input class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200 w-24 focus:outline-none" placeholder="Token…" bind:value={search} />
-    <span class="ml-auto text-[11px] text-zinc-500">{rows.length} tokens</span>
+    <select class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200 focus:outline-none" bind:value={sideFilter} title="Filter by net side">
+      <option value="">All sides</option>
+      <option value="long">Long</option>
+      <option value="short">Short</option>
+    </select>
+    <input type="number" min="0" step="100" class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200 w-20 focus:outline-none" placeholder="Min $K" title="Minimum total size, in $K (e.g. 1000 = $1M)" bind:value={minSize} />
+    <span class="ml-auto text-[11px] text-zinc-500">{sorted.length}{sorted.length !== rows.length ? ` / ${rows.length}` : ''} tokens</span>
   </div>
 
   <div class="flex-1 overflow-auto scrollbar-none {loading ? 'opacity-60' : ''}">
