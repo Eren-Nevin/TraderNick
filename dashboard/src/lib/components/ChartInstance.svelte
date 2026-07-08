@@ -10,6 +10,7 @@
   import TradingPitTable from '$lib/components/TradingPitTable.svelte';
   import TradingPitWalletsDialog from '$lib/components/TradingPitWalletsDialog.svelte';
   import GroupSnapshotTable from '$lib/components/GroupSnapshotTable.svelte';
+  import GroupSnapshotWalletsDialog from '$lib/components/GroupSnapshotWalletsDialog.svelte';
   // Trading Pit query params → URLSearchParams (shared by loadKey + fetch).
   const _TP_LB_SECS: Record<string, number> = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
   function _tpQs(instance: ChartInstanceT): URLSearchParams {
@@ -5557,6 +5558,32 @@
     }
   }
 
+  // Group Snapshot: token-click → the group's wallets holding it (same data the table
+  // aggregates, so counts match).
+  let gswOpen = $state(false);
+  let gswToken = $state('');
+  let gswRows = $state<unknown[]>([]);
+  let gswLoading = $state(false);
+  let gswError = $state<string | null>(null);
+  let gswCtl: AbortController | null = null;
+  async function openGsWallets(token: string) {
+    if (!instance.gsGroupId) return;
+    gswToken = token; gswOpen = true; gswRows = []; gswError = null; gswLoading = true;
+    if (gswCtl) gswCtl.abort();
+    const ctl = new AbortController(); gswCtl = ctl;
+    try {
+      const qs = `group=${instance.gsGroupId}&staleness=${instance.gsStaleness ?? '7d'}&as_of=${instance.gsAsOf ?? 'snapshot'}&token=${encodeURIComponent(token)}`;
+      const res = await fetch(`/api/hyperliquid/group_snapshot?${qs}`, { signal: ctl.signal });
+      if (!res.ok) throw new Error(`group_snapshot ${res.status}`);
+      const body = await res.json();
+      gswRows = body.wallets ?? [];
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') { gswError = (e as Error).message; gswRows = []; }
+    } finally {
+      if (gswCtl === ctl) gswLoading = false;
+    }
+  }
+
   // Trading Pit 'Live': re-fetch every 5 min while the toggle is on (fills land < 5 min).
   $effect(() => {
     if (instance.kind !== 'trading_pit' || !instance.tpLive) return;
@@ -9440,7 +9467,7 @@
         loading={loading}
         error={error}
         hasGroup={!!instance.gsGroupId}
-        onTokenClick={(t) => { if (instance.gsGroupId) openBtpForToken(t, instance.gsGroupId); }}
+        onTokenClick={openGsWallets}
       />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}
@@ -9785,6 +9812,17 @@
   loading={tpwLoading}
   error={tpwError}
   onClose={() => { tpwOpen = false; if (tpwCtl) tpwCtl.abort(); }}
+/>
+
+<GroupSnapshotWalletsDialog
+  open={gswOpen}
+  token={gswToken}
+  asOf={instance.gsAsOf ?? 'snapshot'}
+  groupName={walletPinsStore.groups.find((g) => g.id === instance.gsGroupId)?.name ?? ''}
+  rows={gswRows as never}
+  loading={gswLoading}
+  error={gswError}
+  onClose={() => { gswOpen = false; if (gswCtl) gswCtl.abort(); }}
 />
 
 {#if btpGroupPickerOpen}

@@ -3815,6 +3815,7 @@ async def group_snapshot(request):
     stale = request.args.get("staleness", "7d")
     st_sec = _GS_STALE.get(stale, _GS_STALE["7d"])
     as_of = request.args.get("as_of", "snapshot")
+    token_one = (request.args.get("token") or "").strip().upper() or None
     ch = await client()
     try:
         member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
@@ -3829,66 +3830,76 @@ async def group_snapshot(request):
     if bucket is None:
         return response.json({"bucket": None, "rows": []})
 
+    # Per-(wallet, token) positions — the SINGLE source both the per-token table and the
+    # per-wallet token-click dialog derive from, so their counts always agree. Optional
+    # token filter (dialog) is pushed into the inner WHEREs. Columns: token, wallet,
+    # signed (amount, +long/−short), sz ($), entry, upnl.
+    tok_filter = " AND token = {tok:String}" if token_one else ""
+    params = {"b": bucket, "st": st_sec}
+    if token_one:
+        params["tok"] = token_one
+
     if as_of == "live":
-        # reconstruct each (wallet, token) to now = snapshot@bucket + net fills since;
-        # mark to the last fill price; entry approximated (see docstring). Staleness via
-        # the tuple-IN (only wallets that traded the token in the window).
-        r = await ch.query(
-            "SELECT token, sum(sz) AS size_usd, sum(sz * entry) / nullIf(sum(sz), 0) AS entry,"
-            " sum(upnl) AS upnl, uniqExact(wallet) AS wallets,"
-            " countIf(signed > 0) AS n_long, countIf(signed < 0) AS n_short,"
-            " sumIf(sz, signed > 0) AS long_usd, sumIf(sz, signed < 0) AS short_usd FROM ("
-            "   SELECT rec.token AS token, rec.wallet AS wallet, rec.cur AS signed, rec.entry AS entry,"
-            "          abs(rec.cur) * mk.mark AS sz, rec.cur * (mk.mark - rec.entry) AS upnl"
+        pos_sql = (
+            "SELECT rec.token AS token, rec.wallet AS wallet, rec.cur AS signed,"
+            " abs(rec.cur) * mk.mark AS sz, rec.entry AS entry, rec.cur * (mk.mark - rec.entry) AS upnl"
+            " FROM ("
+            "   SELECT token, wallet, (sumIf(sig, tag='s') + sumIf(sig, tag='f')) AS cur,"
+            "     if(abs(sumIf(sig,tag='s')) > 1e-9, maxIf(ent,tag='s'),"
+            "        if(abs(sumIf(sig,tag='f')) > 1e-9, abs(sumIf(notl,tag='f')/sumIf(sig,tag='f')), 0)) AS entry"
             "   FROM ("
-            "     SELECT token, wallet,"
-            "            (sumIf(sig, tag='s') + sumIf(sig, tag='f')) AS cur,"
-            "            if(abs(sumIf(sig, tag='s')) > 1e-9, maxIf(ent, tag='s'),"
-            "               if(abs(sumIf(sig, tag='f')) > 1e-9, abs(sumIf(notl, tag='f') / sumIf(sig, tag='f')), 0)) AS entry"
-            "     FROM ("
-            "       SELECT token, wallet, 's' AS tag, argMax(amount, time) * if(side='long',1,-1) AS sig,"
-            "              argMax(avg_entry, time) AS ent, 0 AS notl"
-            "       FROM tradernick.hl_position_history"
-            "       WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND AND " + member +
-            "       GROUP BY token, wallet, side"
-            "       UNION ALL"
-            "       SELECT token, wallet, 'f' AS tag, sum(if(side='B', size, -size)) AS sig, 0 AS ent,"
-            "              sum(if(side='B', size*price, -size*price)) AS notl"
-            "       FROM tradernick.hl_fills WHERE time >= {b:DateTime} AND time < now() AND " + member +
-            "       GROUP BY token, wallet"
-            "     ) GROUP BY token, wallet"
-            "     HAVING abs(cur) > 1e-9 AND (token, wallet) IN ("
-            "       SELECT token, wallet FROM tradernick.hl_fills WHERE time > now() - INTERVAL {st:UInt32} SECOND AND " + member + ")"
-            "   ) rec"
-            "   INNER JOIN (SELECT token, argMax(price, time) AS mark FROM tradernick.hl_fills"
-            "               WHERE time > now() - INTERVAL 86400 SECOND GROUP BY token) mk ON rec.token = mk.token"
-            " ) GROUP BY token ORDER BY size_usd DESC",
-            parameters={"b": bucket, "st": st_sec},
+            "     SELECT token, wallet, 's' AS tag, argMax(amount,time)*if(side='long',1,-1) AS sig,"
+            "            argMax(avg_entry,time) AS ent, 0 AS notl"
+            "     FROM tradernick.hl_position_history"
+            "     WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND" + tok_filter + " AND " + member +
+            "     GROUP BY token, wallet, side"
+            "     UNION ALL"
+            "     SELECT token, wallet, 'f' AS tag, sum(if(side='B',size,-size)) AS sig, 0 AS ent,"
+            "            sum(if(side='B',size*price,-size*price)) AS notl"
+            "     FROM tradernick.hl_fills WHERE time >= {b:DateTime} AND time < now()" + tok_filter + " AND " + member +
+            "     GROUP BY token, wallet"
+            "   ) GROUP BY token, wallet"
+            "   HAVING abs(cur) > 1e-9 AND (token, wallet) IN ("
+            "     SELECT token, wallet FROM tradernick.hl_fills WHERE time > now() - INTERVAL {st:UInt32} SECOND" + tok_filter + " AND " + member + ")"
+            " ) rec"
+            " INNER JOIN (SELECT token, argMax(price,time) AS mark FROM tradernick.hl_fills"
+            "             WHERE time > now() - INTERVAL 86400 SECOND" + tok_filter + " GROUP BY token) mk ON rec.token = mk.token"
         )
     else:
-        r = await ch.query(
-            "SELECT token, sum(sz) AS size_usd,"
-            " sum(sz * entry) / nullIf(sum(sz), 0) AS entry, sum(upnl) AS upnl,"
-            " uniqExact(wallet) AS wallets, countIf(signed > 0) AS n_long, countIf(signed < 0) AS n_short,"
-            " sumIf(sz, signed > 0) AS long_usd, sumIf(sz, signed < 0) AS short_usd"
-            " FROM ("
-            "   SELECT token, wallet,"
-            "          argMax(amount, time) * if(side = 'long', 1, -1) AS signed,"
-            "          argMax(size, time) AS sz, argMax(avg_entry, time) AS entry,"
-            "          argMax(unrealized_pnl, time) AS upnl"
+        pos_sql = (
+            "SELECT token, wallet, signed, sz, entry, upnl FROM ("
+            "   SELECT token, wallet, argMax(amount,time)*if(side='long',1,-1) AS signed,"
+            "          argMax(size,time) AS sz, argMax(avg_entry,time) AS entry, argMax(unrealized_pnl,time) AS upnl"
             "   FROM tradernick.hl_position_history"
-            "   WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND AND " + member +
+            "   WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND" + tok_filter + " AND " + member +
             "   GROUP BY token, wallet, side"
-            " ) pos"
-            # staleness: keep only positions whose wallet traded that token in the window.
-            " INNER JOIN ("
-            "   SELECT DISTINCT token, wallet FROM tradernick.hl_fills"
-            "   WHERE time > now() - INTERVAL {st:UInt32} SECOND AND " + member +
-            " ) f USING (token, wallet)"
+            " ) pos INNER JOIN (SELECT DISTINCT token, wallet FROM tradernick.hl_fills"
+            "   WHERE time > now() - INTERVAL {st:UInt32} SECOND" + tok_filter + " AND " + member + ") f USING (token, wallet)"
             " WHERE abs(signed) > 1e-9"
-            " GROUP BY token ORDER BY size_usd DESC",
-            parameters={"b": bucket, "st": st_sec},
         )
+
+    if token_one:
+        # per-wallet breakdown for one token (the dialog) — aggregates to the table row.
+        r = await ch.query(
+            "SELECT wallet, signed, sz, entry, upnl,"
+            " dictGet('tradernick.wallet_labels','categories',lower(wallet)) AS cats"
+            " FROM (" + pos_sql + ") ORDER BY sz DESC LIMIT 500",
+            parameters=params,
+        )
+        wrows = [{
+            "wallet": w, "side": "long" if sg > 0 else "short", "size_usd": float(sz),
+            "entry": float(en or 0), "unrealized_pnl": float(up),
+            "categories": list(cats) if cats else [],
+        } for (w, sg, sz, en, up, cats) in r.result_rows]
+        return response.json({"token": token_one, "as_of": as_of, "wallets": wrows})
+
+    r = await ch.query(
+        "SELECT token, sum(sz) AS size_usd, sum(sz*entry)/nullIf(sum(sz),0) AS entry, sum(upnl) AS upnl,"
+        " uniqExact(wallet) AS wallets, countIf(signed>0) AS n_long, countIf(signed<0) AS n_short,"
+        " sumIf(sz, signed>0) AS long_usd, sumIf(sz, signed<0) AS short_usd"
+        " FROM (" + pos_sql + ") GROUP BY token ORDER BY size_usd DESC",
+        parameters=params,
+    )
     rows = [{
         "token": tok, "size_usd": float(sz), "entry": float(en or 0), "unrealized_pnl": float(up),
         "wallets": int(w), "n_long": int(nl), "n_short": int(ns),
