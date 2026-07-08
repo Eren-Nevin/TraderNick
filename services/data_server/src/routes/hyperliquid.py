@@ -3724,6 +3724,17 @@ async def trading_pit(request):
                 agg[tok] = {"token": tok} | {k: [0.0, 0] for k in _TP_TYPE_KEYS}
             if ty in agg[tok]:
                 agg[tok][ty] = [float(v), int(c)]
+        # Net Pos Change count = DISTINCT wallets that increased/decreased (not #fills).
+        nwr = await ch.query(
+            "SELECT token, uniqExactIf(wallet, type IN ('inc_long','dec_short','inc_short','dec_long')) AS nw"
+            " FROM (" + base + ") GROUP BY token",
+            parameters=params,
+        )
+        for tok, nw in nwr.result_rows:
+            if tok in agg:
+                agg[tok]["net_wallets"] = int(nw)
+        for a in agg.values():
+            a.setdefault("net_wallets", 0)
         return response.json({"mode": mode, "flip_split": flip_split, "tokens": list(agg.values()), "tokens_available": tokens_available})
 
     if mode == "wallets":

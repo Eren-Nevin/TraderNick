@@ -139,8 +139,8 @@
   // increased longs + decreased shorts − increased shorts − decreased longs.
   const netValue = (r: OverviewRow) =>
     (r.inc_long?.[0] ?? 0) + (r.dec_short?.[0] ?? 0) - (r.inc_short?.[0] ?? 0) - (r.dec_long?.[0] ?? 0);
-  const netCount = (r: OverviewRow) =>
-    (r.inc_long?.[1] ?? 0) + (r.dec_short?.[1] ?? 0) + (r.inc_short?.[1] ?? 0) + (r.dec_long?.[1] ?? 0);
+  // distinct wallets that increased/decreased (from the server), NOT #fills.
+  const netCount = (r: OverviewRow) => ((r as unknown as { net_wallets?: number }).net_wallets ?? 0);
 
   // Overview sort (by a chosen column's value).
   let ovSortKey = $state<string>('token');
