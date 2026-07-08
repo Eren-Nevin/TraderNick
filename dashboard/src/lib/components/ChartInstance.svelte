@@ -7676,7 +7676,7 @@
           {/each}
         </select>
       {/if}
-      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'spot_cvd_table' && instance.kind !== 'backtracker_leaderboard' && instance.kind !== 'trading_pit' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
+      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'spot_cvd_table' && instance.kind !== 'backtracker_leaderboard' && instance.kind !== 'trading_pit' && instance.kind !== 'group_snapshot' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
         <select
           bind:value={instance.interval}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
