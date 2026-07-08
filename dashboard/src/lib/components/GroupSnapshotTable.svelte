@@ -23,7 +23,7 @@
     onTokenClick?: (t: string) => void;
   } = $props();
 
-  let sortKey = $state<string>('size_usd');
+  let sortKey = $state<string>('netsize');
   let sortDir = $state<1 | -1>(-1);
   let search = $state('');
   let sideFilter = $state<'' | 'long' | 'short'>('');
@@ -34,9 +34,10 @@
   }
   const arrow = (k: string) => (sortKey !== k ? '' : sortDir === 1 ? ' ↑' : ' ↓');
   const netUsd = (r: Row) => (r.long_usd ?? 0) - (r.short_usd ?? 0);
+  const netSize = (r: Row) => Math.abs(netUsd(r));
   const sideLabel = (r: Row) => (netUsd(r) > 0 ? 'Long' : netUsd(r) < 0 ? 'Short' : 'Flat');
   const sv = (r: Row, k: string): number | string =>
-    k === 'token' ? r.token : k === 'net' || k === 'side' ? netUsd(r) : ((r[k as keyof Row] as number) ?? 0);
+    k === 'token' ? r.token : k === 'net' || k === 'side' ? netUsd(r) : k === 'netsize' ? netSize(r) : ((r[k as keyof Row] as number) ?? 0);
   let sorted = $derived.by(() => {
     const q = search.trim().toLowerCase();
     const minUsd = (minSize || 0) * 1000; // input is in $K
@@ -44,7 +45,7 @@
       (r) =>
         r.token.toLowerCase().includes(q) &&
         (!sideFilter || (sideFilter === 'long' ? netUsd(r) > 0 : netUsd(r) < 0)) &&
-        r.size_usd >= minUsd
+        netSize(r) >= minUsd
     );
     const k = sortKey, dir = sortDir;
     arr.sort((a, b) => {
@@ -93,7 +94,7 @@
           <tr>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('token')}>Token{arrow('token')}</th>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('side')} title="Net side (long $ vs short $)">Side{arrow('side')}</th>
-            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('size_usd')} title="Σ each wallet's position size ($)">Size{arrow('size_usd')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('netsize')} title="|long $ − short $| — net directional exposure">Net Size{arrow('netsize')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('entry')} title="Size-weighted average entry price">Entry{arrow('entry')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('unrealized_pnl')} title="Σ unrealized PnL">uPnL{arrow('unrealized_pnl')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('long_usd')} title="Σ long positions ($); count in ()">Longs{arrow('long_usd')}</th>
@@ -108,7 +109,7 @@
                 <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border {netUsd(r) > 0
                   ? 'border-emerald-800 text-emerald-400' : netUsd(r) < 0 ? 'border-rose-800 text-rose-400' : 'border-zinc-700 text-zinc-500'}">{sideLabel(r)}</span>
               </td>
-              <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-200">{fmtUsd(r.size_usd)}</td>
+              <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-200">{fmtUsd(netSize(r))}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{fmtPrice(r.entry)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums {r.unrealized_pnl > 0 ? 'text-emerald-400' : r.unrealized_pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(r.unrealized_pnl)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-emerald-400 whitespace-nowrap">{r.n_long ? `${fmtUsd(r.long_usd)} (${r.n_long})` : '—'}</td>
