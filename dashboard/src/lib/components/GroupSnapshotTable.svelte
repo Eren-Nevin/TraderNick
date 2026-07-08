@@ -96,7 +96,8 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('size_usd')} title="Σ each wallet's position size ($)">Size{arrow('size_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('entry')} title="Size-weighted average entry price">Entry{arrow('entry')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('unrealized_pnl')} title="Σ unrealized PnL">uPnL{arrow('unrealized_pnl')}</th>
-            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('wallets')} title="# wallets holding (long / short)">Wallets{arrow('wallets')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('long_usd')} title="Σ long positions ($); count in ()">Longs{arrow('long_usd')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('short_usd')} title="Σ short positions ($); count in ()">Shorts{arrow('short_usd')}</th>
           </tr>
         </thead>
         <tbody>
@@ -110,7 +111,8 @@
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-200">{fmtUsd(r.size_usd)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{fmtPrice(r.entry)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums {r.unrealized_pnl > 0 ? 'text-emerald-400' : r.unrealized_pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(r.unrealized_pnl)}</td>
-              <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400 whitespace-nowrap">{r.wallets} <span class="text-emerald-500">{r.n_long}</span>/<span class="text-rose-500">{r.n_short}</span></td>
+              <td class="px-3 py-1 text-right font-mono tabular-nums text-emerald-400 whitespace-nowrap">{r.n_long ? `${fmtUsd(r.long_usd)} (${r.n_long})` : '—'}</td>
+              <td class="px-3 py-1 text-right font-mono tabular-nums text-rose-400 whitespace-nowrap">{r.n_short ? `${fmtUsd(r.short_usd)} (${r.n_short})` : '—'}</td>
             </tr>
           {/each}
         </tbody>
