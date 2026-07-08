@@ -3715,7 +3715,10 @@ async def trading_pit(request):
             parameters=params,
         )
         # seed the selected tokens (shown even with no fills); all_tokens adds the rest.
-        agg: dict[str, dict] = {t: {"token": t} | {k: [0.0, 0] for k in _TP_TYPE_KEYS} for t in tokens}
+        # When a single-token narrow is active, only that token seeds (else the other
+        # selected capsules would appear as empty rows).
+        seed = [token_one] if token_one else tokens
+        agg: dict[str, dict] = {t: {"token": t} | {k: [0.0, 0] for k in _TP_TYPE_KEYS} for t in seed}
         for tok, ty, v, c in r.result_rows:
             if tok not in agg:
                 agg[tok] = {"token": tok} | {k: [0.0, 0] for k in _TP_TYPE_KEYS}
