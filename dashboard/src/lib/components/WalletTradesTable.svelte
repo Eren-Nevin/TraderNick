@@ -37,10 +37,11 @@
   let tokenFilter = $state('');
   let ctl: AbortController | null = null;
 
-  const shown = $derived(
-    tokenFilter.trim()
-      ? trades.filter((t) => t.token.toLowerCase().includes(tokenFilter.trim().toLowerCase()))
-      : trades
+  const shown = $derived(tokenFilter ? trades.filter((t) => t.token === tokenFilter) : trades);
+  // Distinct traded tokens in the window, plus the current pick (so it survives a reload
+  // where that token has no fills), sorted for the selector.
+  const tokenOpts = $derived(
+    [...new Set([...(tokenFilter ? [tokenFilter] : []), ...trades.map((t) => t.token)])].sort()
   );
   const isBuy = (t: TradeRow) => t.side === 'B';
 
@@ -116,9 +117,12 @@
     {:else}
       <span class="text-zinc-500 text-xs">range</span>
     {/if}
-    <input
-      class="ml-auto bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs text-zinc-200 w-24 focus:outline-none focus:border-zinc-500"
-      placeholder="Token…" bind:value={tokenFilter} title="Filter by token" />
+    <select
+      class="ml-auto bg-zinc-900 border border-zinc-700 rounded px-2 py-0.5 text-xs text-zinc-200 focus:outline-none focus:border-zinc-500"
+      bind:value={tokenFilter} title="Filter by token">
+      <option value="">All tokens</option>
+      {#each tokenOpts as tok (tok)}<option value={tok}>{tok}</option>{/each}
+    </select>
     <span class="text-zinc-500 text-xs whitespace-nowrap">{shown.length} fills</span>
   </div>
 
