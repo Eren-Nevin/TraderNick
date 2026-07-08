@@ -8,6 +8,7 @@
   import BacktrackerLeaderboardTable from '$lib/components/BacktrackerLeaderboardTable.svelte';
   import EarlyMoversTable from '$lib/components/EarlyMoversTable.svelte';
   import TradingPitTable from '$lib/components/TradingPitTable.svelte';
+  import TradingPitWalletsDialog from '$lib/components/TradingPitWalletsDialog.svelte';
   // Trading Pit query params → URLSearchParams (shared by loadKey + fetch).
   const _TP_LB_SECS: Record<string, number> = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
   function _tpQs(instance: ChartInstanceT): URLSearchParams {
@@ -5508,6 +5509,35 @@
 
   // Early Movers chart: green ▲ (below) on long-move bars, red ▼ (above) on short-move
   // bars, from a moves-only fetch that reacts to the criteria.
+  // Trading Pit: Overview token-click → wallets-that-traded-it dialog (fills-only).
+  let tpwOpen = $state(false);
+  let tpwToken = $state('');
+  let tpwRows = $state<unknown[]>([]);
+  let tpwLoading = $state(false);
+  let tpwError = $state<string | null>(null);
+  let tpwCtl: AbortController | null = null;
+  async function openTpWallets(token: string) {
+    tpwToken = token; tpwOpen = true; tpwRows = []; tpwError = null; tpwLoading = true;
+    if (tpwCtl) tpwCtl.abort();
+    const ctl = new AbortController(); tpwCtl = ctl;
+    try {
+      const qs = new URLSearchParams({
+        tokens: token, lookback: instance.tpLookback ?? '5m', mode: 'wallets',
+        flip_mode: instance.tpFlipMode ?? 'separate', min_size: String(instance.tpMinSize ?? 0), n: '500'
+      });
+      if (instance.tpGroupId) qs.set('group', instance.tpGroupId);
+      if (instance.tpSide) qs.set('side', instance.tpSide);
+      const res = await fetch(`/api/hyperliquid/trading_pit?${qs}`, { signal: ctl.signal });
+      if (!res.ok) throw new Error(`trading_pit ${res.status}`);
+      const body = await res.json();
+      tpwRows = body.rows ?? [];
+    } catch (e) {
+      if ((e as Error).name !== 'AbortError') { tpwError = (e as Error).message; tpwRows = []; }
+    } finally {
+      if (tpwCtl === ctl) tpwLoading = false;
+    }
+  }
+
   // Trading Pit 'Live': re-fetch every 5 min while the toggle is on (fills land < 5 min).
   $effect(() => {
     if (instance.kind !== 'trading_pit' || !instance.tpLive) return;
@@ -9363,6 +9393,7 @@
           if (p.type !== undefined) instance.tpType = p.type;
           if (p.token !== undefined) instance.tpToken = p.token;
         }}
+        onTokenClick={openTpWallets}
       />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}
@@ -9696,6 +9727,17 @@
   changeLookback={btpChangeLookback}
   onChangeLookbackChange={(v) => { btpChangeLookback = v; fetchBtpRows(); }}
   onClose={() => { btpDialogOpen = false; if (btpFetchCtl) btpFetchCtl.abort(); }}
+/>
+
+<TradingPitWalletsDialog
+  open={tpwOpen}
+  token={tpwToken}
+  lookback={instance.tpLookback ?? '5m'}
+  groupName={walletPinsStore.groups.find((g) => g.id === instance.tpGroupId)?.name ?? ''}
+  rows={tpwRows as never}
+  loading={tpwLoading}
+  error={tpwError}
+  onClose={() => { tpwOpen = false; if (tpwCtl) tpwCtl.abort(); }}
 />
 
 {#if btpGroupPickerOpen}

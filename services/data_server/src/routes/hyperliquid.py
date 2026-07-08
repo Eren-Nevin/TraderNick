@@ -3612,8 +3612,8 @@ async def trading_pit(request):
     if lb not in _TP_LB:
         return response.json({"error": f"lookback must be one of {list(_TP_LB)}"}, status=400)
     mode = request.args.get("mode", "normal")
-    if mode not in ("normal", "aggregate", "overview"):
-        return response.json({"error": "mode must be normal|aggregate|overview"}, status=400)
+    if mode not in ("normal", "aggregate", "overview", "wallets"):
+        return response.json({"error": "mode must be normal|aggregate|overview|wallets"}, status=400)
     flip_split = request.args.get("flip_mode") == "split"
 
     def _f(name, default):
@@ -3725,6 +3725,25 @@ async def trading_pit(request):
             if ty in agg[tok]:
                 agg[tok][ty] = [float(v), int(c)]
         return response.json({"mode": mode, "flip_split": flip_split, "tokens": list(agg.values()), "tokens_available": tokens_available})
+
+    if mode == "wallets":
+        # per-wallet summary for the token(s): net directional flow (excl opens/closes),
+        # gross value, fill count, median time. Drives the Overview token-click dialog.
+        r = await ch.query(
+            "SELECT wallet,"
+            " sum(multiIf(type='inc_long', value, type='dec_short', value,"
+            "             type='inc_short', -value, type='dec_long', -value, 0)) AS net_value,"
+            " sum(value) AS gross_value, toUInt32(count()) AS fills,"
+            " toUInt32(medianExact(toUnixTimestamp(time))) AS med_time,"
+            " any(dictGet('tradernick.wallet_labels','categories',lower(wallet))) AS cats"
+            " FROM (" + base + ") GROUP BY wallet ORDER BY gross_value DESC LIMIT {n:UInt32}",
+            parameters={**params, "n": n},
+        )
+        rows = [{
+            "wallet": w, "net_value": float(nv), "gross_value": float(gv),
+            "fills": int(f), "time": int(mt), "categories": list(cats) if cats else [],
+        } for (w, nv, gv, f, mt, cats) in r.result_rows]
+        return response.json({"mode": mode, "rows": rows})
 
     # aggregate: per (wallet, token, bucket, pside). incdec netted (signed), else summed.
     r = await ch.query(

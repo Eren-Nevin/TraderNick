@@ -26,7 +26,8 @@
     availableTokens = [],
     timeFormat = 'relative',
     filters = { minSize: 0, side: '', type: '', token: '' },
-    onFilter = (_p: Partial<Filters>) => {}
+    onFilter = (_p: Partial<Filters>) => {},
+    onTokenClick = (_t: string) => {}
   }: {
     mode?: 'normal' | 'aggregate' | 'overview';
     rows?: FillRow[];
@@ -40,6 +41,7 @@
     timeFormat?: 'relative' | 'standard';
     filters?: Filters;
     onFilter?: (p: Partial<Filters>) => void;
+    onTokenClick?: (t: string) => void;
   } = $props();
 
   // Time cell: relative ('3m ago', aggregate = median fill time) or standard clock.
@@ -211,7 +213,7 @@
           </thead>
           <tbody>
             {#each sortedOv as r (r.token)}
-              <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
+              <tr class="border-b border-zinc-900 hover:bg-zinc-900/50 cursor-pointer" onclick={() => onTokenClick(r.token)} title="Show the wallets that traded {r.token}">
                 <td class="px-2 py-1 font-medium text-zinc-100">{r.token}</td>
                 <td class="px-2 py-1 text-right font-mono tabular-nums whitespace-nowrap {netValue(r) > 0 ? 'text-emerald-400' : netValue(r) < 0 ? 'text-rose-400' : 'text-zinc-600'}">
                   {netCount(r) ? `${fmtUsd(netValue(r))} (${netCount(r)})` : '—'}
