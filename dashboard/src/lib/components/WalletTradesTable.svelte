@@ -93,12 +93,6 @@
     if (abs >= 1e3) return sign + '$' + (abs / 1e3).toFixed(1) + 'K';
     return sign + '$' + abs.toFixed(2);
   }
-  function fmtNum(n: number): string {
-    const a = Math.abs(n);
-    if (a >= 1e3) return n.toLocaleString(undefined, { maximumFractionDigits: 2 });
-    if (a >= 1) return n.toFixed(3);
-    return a === 0 ? '0' : n.toPrecision(3);
-  }
   function fmtPrice(n: number): string {
     return n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n.toPrecision(5);
   }
@@ -146,7 +140,6 @@
             <th class="text-left px-3 py-1.5 font-normal">Direction</th>
             <th class="text-right px-3 py-1.5 font-normal">Price</th>
             <th class="text-right px-3 py-1.5 font-normal">Size</th>
-            <th class="text-right px-3 py-1.5 font-normal">Value</th>
             <th class="text-right px-3 py-1.5 font-normal">Realized PnL</th>
             <th class="text-right px-3 py-1.5 font-normal">Fee</th>
           </tr>
@@ -162,7 +155,6 @@
                   : 'border-rose-800 text-rose-400'}">{t.dir}</span>
               </td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-300">{fmtPrice(t.price)}</td>
-              <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{fmtNum(t.size)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-300">{fmtUsd(t.value)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums {t.closed_pnl > 0 ? 'text-emerald-400' : t.closed_pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">{t.closed_pnl ? fmtUsd(t.closed_pnl) : '—'}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-500">{fmtUsd(t.fee)}</td>
