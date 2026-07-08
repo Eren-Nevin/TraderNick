@@ -886,6 +886,9 @@
         inst.tpLive = r.tpLive === true;
         inst.tpTimeFormat = r.tpTimeFormat === 'standard' ? 'standard' : 'relative';
       }
+      if (inst.kind === 'group_snapshot') {
+        inst.gsGroupId = typeof r.gsGroupId === 'string' ? r.gsGroupId : null;
+      }
       if (inst.kind === 'book_depth') {
         // Binance-only; the mode selector flips the same dataset between the
         // totals / per_level_imbalance / imbalance / stacked / *_share views.

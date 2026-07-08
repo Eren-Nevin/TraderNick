@@ -9,6 +9,7 @@
   import EarlyMoversTable from '$lib/components/EarlyMoversTable.svelte';
   import TradingPitTable from '$lib/components/TradingPitTable.svelte';
   import TradingPitWalletsDialog from '$lib/components/TradingPitWalletsDialog.svelte';
+  import GroupSnapshotTable from '$lib/components/GroupSnapshotTable.svelte';
   // Trading Pit query params → URLSearchParams (shared by loadKey + fetch).
   const _TP_LB_SECS: Record<string, number> = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
   function _tpQs(instance: ChartInstanceT): URLSearchParams {
@@ -485,7 +486,7 @@
   onMount(async () => {
     // Group widget + Backtracker: load the wallet groups so the group dropdown
     // (and group-pin capsules) are populated.
-    if (isGroup || instance.kind === 'backtracker' || instance.kind === 'trading_pit') walletPinsStore.hydrate();
+    if (isGroup || instance.kind === 'backtracker' || instance.kind === 'trading_pit' || instance.kind === 'group_snapshot') walletPinsStore.hydrate();
     if (instance.kind !== 'transfer') return;
     try {
       const [catsRes, entsRes] = await Promise.all([
@@ -946,6 +947,9 @@
     }
     if (instance.kind === 'trading_pit') {
       return `trading_pit|${_tpQs(instance).toString()}`;
+    }
+    if (instance.kind === 'group_snapshot') {
+      return `group_snapshot|g:${instance.gsGroupId ?? ''}`;
     }
     if (instance.kind === 'early_movers') {
       const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 0}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}|${instance.emMinRealizedPnlK ?? 'x'}`;
@@ -1920,6 +1924,21 @@
           const res = await queuedFetch(`/api/hyperliquid/trading_pit?${_tpQs(instance)}`, { signal });
           if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
           data = [{ tp: await res.json() } as unknown as AnyDatum];
+        }
+        since = sinceIso; until = untilIso;
+        loadedKey = loadKey();
+        localView = pv ?? defaultView(sinceIso, untilIso);
+        loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
+        return;
+      }
+      // Group Snapshot: the group's positions combined per token at the latest snapshot.
+      if (instance.kind === 'group_snapshot') {
+        if (!instance.gsGroupId) {
+          data = [{ gs: { rows: [] } } as unknown as AnyDatum];
+        } else {
+          const res = await queuedFetch(`/api/hyperliquid/group_snapshot?group=${instance.gsGroupId}`, { signal });
+          if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
+          data = [{ gs: await res.json() } as unknown as AnyDatum];
         }
         since = sinceIso; until = untilIso;
         loadedKey = loadKey();
@@ -5261,11 +5280,6 @@
   // "Only <group>" toggle: filter the dialog to the backtracker's selected wallet
   // group. Persists across bar-clicks within this widget.
   let btGroupOnly = $state(false);
-  let btDialogGroupName = $derived(
-    instance.kind === 'backtracker' && instance.btGroupId
-      ? (walletPinsStore.groups.find((g) => g.id === instance.btGroupId)?.name ?? null)
-      : null
-  );
   let btLoading = $state(false);
   let btError = $state<string | null>(null);
   let btRows = $state<BtRow[]>([]);
@@ -5310,6 +5324,11 @@
   // marker path); the leaderboard path can set it via the group picker.
   let btpGroup = $state<string | null>(null);
   let btpGroupPickerOpen = $state(false); // leaderboard: pick a group before opening
+  // Group name shown in the positions dialog — derived from the ACTIVE dialog group
+  // (set by openBtpForToken), so it works for backtracker, leaderboard, and group_snapshot.
+  let btDialogGroupName = $derived(
+    btpGroup ? (walletPinsStore.groups.find((g) => g.id === btpGroup)?.name ?? null) : null
+  );
   let btpPendingToken = $state('');       // token awaiting a group pick
   let btpTimeSec = $state(0);
   let btpStartSec = $state(0);
@@ -5716,6 +5735,7 @@
     || instance.kind === 'spot_cvd_table'
     || instance.kind === 'backtracker_leaderboard'
     || instance.kind === 'trading_pit'
+    || instance.kind === 'group_snapshot'
     // Dual-view chart mode renders a real LineChart, so the chart-only settings
     // (Point / Week lines / MA / zoom-sync) DO apply there — only the table view
     // counts as a tableview kind.
@@ -7238,6 +7258,13 @@
         </label>
         <button type="button" onclick={() => load(true, true)}
           class="text-xs px-2 py-1 rounded border border-zinc-700 bg-zinc-800/50 text-zinc-200 hover:bg-zinc-700/50" title="Re-run detection + scoring">↻ Refresh</button>
+      {:else if instance.kind === 'group_snapshot'}
+        <span class="text-zinc-300 text-xs px-2 py-1 rounded-md bg-zinc-900 border border-zinc-700">HL perp · positions</span>
+        <select class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          value={instance.gsGroupId ?? ''} onchange={(e) => (instance.gsGroupId = e.currentTarget.value || null)} title="Wallet group">
+          <option value="">Group: none</option>
+          {#each walletPinsStore.groups as g (g.id)}<option value={g.id}>{g.name}</option>{/each}
+        </select>
       {:else if instance.kind === 'trading_pit'}
         {@const tpc = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}
         {@const avail = tokens.filter((t) => !(instance.tpTokens ?? []).includes(t))}
@@ -9394,6 +9421,15 @@
           if (p.token !== undefined) instance.tpToken = p.token;
         }}
         onTokenClick={openTpWallets}
+      />
+    {:else if instance.kind === 'group_snapshot'}
+      {@const gs = (data.length > 0 ? (data[0] as unknown as { gs?: Record<string, unknown> }).gs : undefined) ?? {}}
+      <GroupSnapshotTable
+        rows={(gs.rows ?? []) as never}
+        loading={loading}
+        error={error}
+        hasGroup={!!instance.gsGroupId}
+        onTokenClick={(t) => { if (instance.gsGroupId) openBtpForToken(t, instance.gsGroupId); }}
       />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}

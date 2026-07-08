@@ -3793,6 +3793,58 @@ async def trading_pit(request):
     return response.json({"mode": mode, "rows": rows[:n], "tokens_available": tokens_available})
 
 
+@bp.get("/hyperliquid/group_snapshot")
+@throttled("heavy")
+async def group_snapshot(request):
+    """Group Snapshot: the wallet group's positions at the latest published snapshot,
+    combined into ONE book per token. Per token: size = Σ each wallet's size ($), entry =
+    size-weighted avg entry, unrealized_pnl = Σ, plus wallet counts + long/short split.
+    Reads hl_position_history only (the latest snapshot bucket = current open positions,
+    since a held position is snapshotted densely and a closed one drops out). Param: group."""
+    if not request.args.get("group"):
+        return response.json({"error": "missing group"}, status=400)
+    ch = await client()
+    try:
+        member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
+    except ValueError as e:
+        return response.json({"error": str(e)}, status=400)
+
+    # latest snapshot bucket (15-min grid) available now.
+    br = await ch.query(
+        "SELECT toStartOfInterval(max(time), INTERVAL 900 SECOND) FROM tradernick.hl_position_history WHERE time <= now()"
+    )
+    bucket = br.result_rows[0][0] if br.result_rows else None
+    if bucket is None:
+        return response.json({"bucket": None, "rows": []})
+
+    r = await ch.query(
+        "SELECT token, sum(sz) AS size_usd,"
+        " sum(sz * entry) / nullIf(sum(sz), 0) AS entry, sum(upnl) AS upnl,"
+        " uniqExact(wallet) AS wallets, countIf(signed > 0) AS n_long, countIf(signed < 0) AS n_short,"
+        " sumIf(sz, signed > 0) AS long_usd, sumIf(sz, signed < 0) AS short_usd"
+        " FROM ("
+        "   SELECT token, wallet,"
+        "          argMax(amount, time) * if(side = 'long', 1, -1) AS signed,"
+        "          argMax(size, time) AS sz, argMax(avg_entry, time) AS entry,"
+        "          argMax(unrealized_pnl, time) AS upnl"
+        "   FROM tradernick.hl_position_history"
+        "   WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND AND " + member +
+        "   GROUP BY token, wallet, side"
+        " ) WHERE abs(signed) > 1e-9"
+        " GROUP BY token ORDER BY size_usd DESC",
+        parameters={"b": bucket},
+    )
+    rows = [{
+        "token": tok, "size_usd": float(sz), "entry": float(en or 0), "unrealized_pnl": float(up),
+        "wallets": int(w), "n_long": int(nl), "n_short": int(ns),
+        "long_usd": float(lu), "short_usd": float(su),
+    } for (tok, sz, en, up, w, nl, ns, lu, su) in r.result_rows]
+    return response.json({
+        "bucket": int(bucket.replace(tzinfo=timezone.utc).timestamp()),
+        "rows": rows,
+    })
+
+
 @bp.get("/hyperliquid/group_fill_pressure")
 @throttled("heavy")
 async def group_fill_pressure(request):

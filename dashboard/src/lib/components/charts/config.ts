@@ -452,6 +452,7 @@ export type ChartKind =
   | 'backtracker_leaderboard'
   | 'early_movers'
   | 'trading_pit'
+  | 'group_snapshot'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
@@ -594,6 +595,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   backtracker_leaderboard: 'Backtracker Leaderboard',
   early_movers: 'Early Movers',
   trading_pit: 'Trading Pit',
+  group_snapshot: 'Group Snapshot',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1392,7 +1394,7 @@ export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Perp — GMX V2 + Hyperliquid family. smart_wallets_table is an HL-only
   // experimental tableview (no hl_ prefix so it stays out of the many
   // isHlKind() chart-control branches) — categorise it here explicitly.
-  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group' || kind === 'backtracker' || kind === 'backtracker_leaderboard' || kind === 'early_movers' || kind === 'trading_pit') return 'Perp';
+  if (kind === 'gmx_v2' || isHlKind(kind) || kind === 'smart_wallets_table' || kind === 'smart_wallets_dynamic' || kind === 'smart_wallets_cutoff' || kind === 'smart_wallets_group' || kind === 'backtracker' || kind === 'backtracker_leaderboard' || kind === 'early_movers' || kind === 'trading_pit' || kind === 'group_snapshot') return 'Perp';
   // Staking — Lido (and future Stader/Frax).
   if (kind === 'lido') return 'Staking';
   return null;
@@ -1799,6 +1801,8 @@ export type ChartInstance = {
   tpToken?: string;
   /** auto-refresh every 5 min. NOT in the key (a manual reload trigger). */
   tpLive?: boolean;
+  /** group_snapshot only: the wallet group whose positions are combined per token. */
+  gsGroupId?: string | null;
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
@@ -2785,6 +2789,9 @@ export function newChartInstance(
     base.tpToken = '';
     base.tpLive = false;
     base.tpTimeFormat = 'relative';
+  }
+  if (kind === 'group_snapshot') {
+    base.gsGroupId = null;
   }
   if (kind === 'ohlcv') {
     base.pin = false;
