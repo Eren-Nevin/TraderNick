@@ -16,12 +16,14 @@
     wallet = '',
     rangeMode = false,
     rangeSince = '',
-    rangeUntil = ''
+    rangeUntil = '',
+    initialToken = ''
   }: {
     wallet?: string;
     rangeMode?: boolean;
     rangeSince?: string; // ISO (range mode only)
     rangeUntil?: string; // ISO (range mode only)
+    initialToken?: string; // seed the token filter (e.g. from ?token=)
   } = $props();
 
   const LOOKBACKS: Array<{ v: string; secs: number }> = [
@@ -34,7 +36,7 @@
   let trades = $state<TradeRow[]>([]);
   let loading = $state(false);
   let error = $state<string | null>(null);
-  let tokenFilter = $state('');
+  let tokenFilter = $state(initialToken ?? '');
   let ctl: AbortController | null = null;
 
   const shown = $derived(tokenFilter ? trades.filter((t) => t.token === tokenFilter) : trades);

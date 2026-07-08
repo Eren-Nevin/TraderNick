@@ -1017,7 +1017,8 @@
       wallet={address}
       rangeMode={rangeMode}
       rangeSince={rangeMode ? startIso : ''}
-      rangeUntil={rangeMode ? nextDayIso(snapshotIso) : ''} />
+      rangeUntil={rangeMode ? nextDayIso(snapshotIso) : ''}
+      initialToken={data.initialToken ?? ''} />
   </div>
 
   <!-- Transfers (deposits / withdrawals) — full history, snapshot-independent -->
