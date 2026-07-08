@@ -222,7 +222,7 @@
         <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
           <tr>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('time')} title={mode === 'aggregate' ? 'Median time of the aggregated fills' : 'Fill time'}>Time{arrow('time')}</th>
-            <th class="text-left px-3 py-1.5 font-normal">Wallet</th>
+            <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('wallet')} title="Sort by wallet (groups a wallet's fills together)">Wallet{arrow('wallet')}</th>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('token')}>Token{arrow('token')}</th>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('type')}>Type{arrow('type')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('value')}>Size{arrow('value')}</th>
