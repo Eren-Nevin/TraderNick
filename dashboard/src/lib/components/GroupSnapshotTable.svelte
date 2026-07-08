@@ -94,7 +94,6 @@
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('token')}>Token{arrow('token')}</th>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('side')} title="Net side (long $ vs short $)">Side{arrow('side')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('size_usd')} title="Σ each wallet's position size ($)">Size{arrow('size_usd')}</th>
-            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('net')} title="Net = long $ − short $">Net{arrow('net')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('entry')} title="Size-weighted average entry price">Entry{arrow('entry')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('unrealized_pnl')} title="Σ unrealized PnL">uPnL{arrow('unrealized_pnl')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('wallets')} title="# wallets holding (long / short)">Wallets{arrow('wallets')}</th>
@@ -109,7 +108,6 @@
                   ? 'border-emerald-800 text-emerald-400' : netUsd(r) < 0 ? 'border-rose-800 text-rose-400' : 'border-zinc-700 text-zinc-500'}">{sideLabel(r)}</span>
               </td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-200">{fmtUsd(r.size_usd)}</td>
-              <td class="px-3 py-1 text-right font-mono tabular-nums {netUsd(r) > 0 ? 'text-emerald-400' : netUsd(r) < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(netUsd(r))}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{fmtPrice(r.entry)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums {r.unrealized_pnl > 0 ? 'text-emerald-400' : r.unrealized_pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(r.unrealized_pnl)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400 whitespace-nowrap">{r.wallets} <span class="text-emerald-500">{r.n_long}</span>/<span class="text-rose-500">{r.n_short}</span></td>
