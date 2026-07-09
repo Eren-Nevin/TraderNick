@@ -9482,6 +9482,7 @@
         selectedTokens={instance.tpTokens ?? []}
         allTokens={instance.tpAllTokens ?? false}
         availableTokens={(tp.tokens_available ?? []) as string[]}
+        rosterTokens={tokens}
         timeFormat={instance.tpTimeFormat ?? 'relative'}
         filters={{ minSize: instance.tpMinSize ?? 0, side: instance.tpSide ?? '', type: instance.tpType ?? '', token: instance.tpToken ?? '' }}
         onFilter={(p) => {

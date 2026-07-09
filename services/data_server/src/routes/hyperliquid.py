@@ -3643,7 +3643,10 @@ async def trading_pit(request):
     # close-old + open-new pair via arrayJoin (else one row). Then filters on `type`. ──
     where = ["time >= now() - INTERVAL {lb:UInt32} SECOND", "time < now()"]
     params = {"lb": _TP_LB[lb], "split": 1 if flip_split else 0}
-    if not all_tokens:
+    # The single-token narrow (`token`) is a HARD override: it scopes to that one token
+    # regardless of the capsule selection or all-tokens mode, so the header token filter
+    # can pick ANY token, not just the capsules / group-traded set.
+    if not all_tokens and not token_one:
         where.insert(0, "token IN {tokens:Array(String)}")
         params["tokens"] = tokens
     if member:

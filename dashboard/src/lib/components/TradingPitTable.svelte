@@ -24,6 +24,7 @@
     selectedTokens = [],
     allTokens = false,
     availableTokens = [],
+    rosterTokens = [],
     timeFormat = 'relative',
     filters = { minSize: 0, side: '', type: '', token: '' },
     onFilter = (_p: Partial<Filters>) => {},
@@ -38,6 +39,7 @@
     selectedTokens?: string[];
     allTokens?: boolean;
     availableTokens?: string[];
+    rosterTokens?: string[];
     timeFormat?: 'relative' | 'standard';
     filters?: Filters;
     onFilter?: (p: Partial<Filters>) => void;
@@ -102,10 +104,16 @@
       ...(overviewRows as OverviewRow[]).map((r) => r.token)
     ])].sort()
   );
+  // The header token-narrow can pick ANY token (the backend treats it as a hard
+  // override), so offer the full roster — unioned with whatever's present, so nothing
+  // is ever missing even if the roster prop is stale/empty.
   const tokenOpts = $derived(
-    allTokens
-      ? (availableTokens.length ? availableTokens : dataTokens)
-      : (selectedTokens.length ? selectedTokens : dataTokens)
+    [...new Set([
+      ...(rosterTokens as string[]),
+      ...(availableTokens as string[]),
+      ...(selectedTokens as string[]),
+      ...dataTokens
+    ])].sort()
   );
 
   // ── client-side sort (fills modes) ──
