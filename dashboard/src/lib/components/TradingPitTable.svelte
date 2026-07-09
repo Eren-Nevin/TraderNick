@@ -109,7 +109,7 @@
   );
 
   // ── client-side sort (fills modes) ──
-  let sortKey = $state<string>('value');
+  let sortKey = $state<string>('time'); // normal/aggregate default: newest first
   let sortDir = $state<1 | -1>(-1);
   function onSort(k: string) {
     if (sortKey === k) sortDir = sortDir === 1 ? -1 : 1;

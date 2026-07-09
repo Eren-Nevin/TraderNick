@@ -3105,6 +3105,22 @@
       if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
       const body = await res.json();
       data = pickArr(body);
+      // Backtracker: the token dropdown is the futures roster, but Spot candles cover
+      // fewer tokens. If Spot returned nothing, fall back to Binance futures so the
+      // chart isn't blank — flag it so the toolbar can note we're on Futures.
+      if (instance.kind === 'backtracker') {
+        btSpotFellBack = false;
+        if ((instance.btOhlcvSource ?? 'spot') !== 'futures' && data.length === 0) {
+          const fbUrl = url.replace('exchange=binance_spot', 'exchange=binance');
+          if (fbUrl !== url) {
+            const r2 = await queuedFetch(fbUrl, { signal });
+            if (r2.ok) {
+              const d2 = pickArr(await r2.json());
+              if (d2.length) { data = d2; btSpotFellBack = true; }
+            }
+          }
+        }
+      }
       since = sinceIso;
       until = untilIso;
       loadedKey = loadKey();
@@ -5281,6 +5297,9 @@
   // "Only <group>" toggle: filter the dialog to the backtracker's selected wallet
   // group. Persists across bar-clicks within this widget.
   let btGroupOnly = $state(false);
+  // True when the Spot source had no candles for the token and we auto-fell back to
+  // Binance futures (many futures-roster tokens aren't listed on Binance spot).
+  let btSpotFellBack = $state(false);
   let btLoading = $state(false);
   let btError = $state<string | null>(null);
   let btRows = $state<BtRow[]>([]);
@@ -7740,6 +7759,10 @@
           <option value="spot">Spot</option>
           <option value="futures">Futures</option>
         </select>
+        {#if btSpotFellBack}
+          <span class="text-[11px] px-1.5 py-0.5 rounded border border-amber-800 bg-amber-950/40 text-amber-400 whitespace-nowrap"
+            title="No Binance-spot candles for this token — showing Binance Futures instead.">Futures (no spot)</span>
+        {/if}
         <!-- Position-change lookback: clicking a bar shows wallets whose position
              changed over this window ending at the clicked bar. -->
         <select
