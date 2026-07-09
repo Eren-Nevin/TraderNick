@@ -106,15 +106,11 @@
   let sortDir = $state<1 | -1>(-1);
   let limit = $state<'10' | '30' | 'all'>('30');
   let search = $state('');
+  // Distinct tokens in the leaderboard (+ current pick), sorted, for the selector.
+  const tokenOpts = $derived(
+    [...new Set([...(search ? [search] : []), ...(rows as Row[]).map((r) => String(r.token))])].sort()
+  );
 
-  function fuzzy(q: string, t: string): boolean {
-    q = q.trim().toLowerCase();
-    if (!q) return true;
-    t = t.toLowerCase();
-    let i = 0;
-    for (const ch of t) { if (ch === q[i]) i++; if (i === q.length) return true; }
-    return false;
-  }
   function onSort(k: string) {
     if (sortKey === k) sortDir = sortDir === 1 ? -1 : 1;
     else { sortKey = k; sortDir = k === 'token' ? 1 : -1; }
@@ -124,7 +120,7 @@
     return sortDir === 1 ? ' ↑' : ' ↓';
   }
   let sortedRows = $derived.by(() => {
-    const arr = (rows as Row[]).filter((r) => fuzzy(search, String(r.token)));
+    const arr = (rows as Row[]).filter((r) => !search || String(r.token) === search);
     const dir = sortDir, k = sortKey;
     const posNet = (r: Row) => posLong(r) - posShort(r); // sort Positions by net lean
     const posDNet = (r: Row) => posDLong(r) - posDShort(r); // sort Positions Δ by net change
@@ -172,7 +168,10 @@
     <span class="text-[11px]">Click a token → position book · header to sort</span>
     <button class={selClass} onclick={() => (sortDir = sortDir === 1 ? -1 : 1)}
       title="Toggle ascending / descending">{sortDir === 1 ? 'Asc ↑' : 'Desc ↓'}</button>
-    <input class={selClass + ' w-24'} placeholder="Token…" bind:value={search} title="Fuzzy filter by token" />
+    <select class={selClass} bind:value={search} title="Filter by token">
+      <option value="">All tokens</option>
+      {#each tokenOpts as tok (tok)}<option value={tok}>{tok}</option>{/each}
+    </select>
     <span class="ml-auto text-[11px]">Show</span>
     <select class={selClass} bind:value={limit} title="Number of rows to show">
       <option value="10">10</option>
