@@ -78,10 +78,13 @@
   // Overview columns in the user's order + flip cols (Separate only).
   const OV_BASE = ['open_long', 'open_short', 'inc_long', 'dec_long', 'inc_short', 'dec_short', 'close_long', 'close_short'];
   const ovCols = $derived(flipSplit ? OV_BASE : [...OV_BASE, 'flip_ls', 'flip_sl']);
-  // Type filter is side-agnostic (Side is its own filter): the 4 action categories.
-  const TYPE_FILTER_LABELS: Record<string, string> = {
-    opened: 'Opened', increased: 'Increased', decreased: 'Decreased', closed: 'Closed'
-  };
+  // Type filter is side-agnostic (Side is its own filter): the action categories.
+  // Flip only exists as a distinct type in Separate mode — Split decomposes each
+  // flip into a close + open, so there's nothing to filter to there.
+  const TYPE_FILTER_LABELS = $derived<Record<string, string>>({
+    opened: 'Opened', increased: 'Increased', decreased: 'Decreased', closed: 'Closed',
+    ...(flipSplit ? {} : { flip: 'Flip' })
+  });
 
   function fmtUsd(n: number): string {
     const a = Math.abs(n), s = n < 0 ? '-' : '';
