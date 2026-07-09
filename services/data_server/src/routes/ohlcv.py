@@ -66,6 +66,83 @@ async def tokens(_request):
     return response.json({"tokens": [r[0] for r in rows.result_rows]})
 
 
+_RP_LOOKBACK = {"6h": 21600, "12h": 43200, "1d": 86400, "3d": 259200,
+                "7d": 604800, "14d": 1209600, "30d": 2592000, "90d": 7776000}
+_RP_INTERVAL = {"5m": "5 MINUTE", "15m": "15 MINUTE", "1h": "1 HOUR", "4h": "4 HOUR", "1d": "1 DAY"}
+_RP_TABLE = {"binance": "binance_ohlcv_1m", "binance_spot": "binance_spot_ohlcv_1m", "hl": "hl_ohlcv_1m"}
+
+
+@bp.get("/relative_performance")
+async def relative_performance(request):
+    """Every token's performance RELATIVE to a base (default BTC) over a lookback, as a
+    time series — powers the reworked Relative Price chart (one line per token).
+
+    For each bucket T, value = (token return since T0) / (base return since T0), in %:
+        ((P[T]-P[T0])/P[T0]) / ((B[T]-B[T0])/B[T0]) * 100
+    where T0 is the first bucket of the window. So 100% = moved exactly like the base;
+    >100% = outperformed; negative = moved opposite the base. Points where the base's
+    return is ~0 (undefined ratio) are null. `min_volume` (USD/bucket) drops tokens whose
+    per-bucket volume dips below the threshold in any bucket. Params: base, lookback,
+    interval, min_volume, exchange."""
+    base = (request.args.get("base") or "BTC").strip().upper()
+    lb_sec = _RP_LOOKBACK.get(request.args.get("lookback", "7d"), _RP_LOOKBACK["7d"])
+    iv_expr = _RP_INTERVAL.get(request.args.get("interval", "1h"), _RP_INTERVAL["1h"])
+    table = _RP_TABLE.get(request.args.get("exchange", "binance"), _RP_TABLE["binance"])
+    try:
+        min_volume = float(request.args.get("min_volume", "0") or 0)
+    except ValueError:
+        min_volume = 0.0
+
+    ch = await client()
+    # Pre-multiply volume*close in a subquery: referencing `close` inside sum() in the
+    # same SELECT as argMax(close,time) AS close binds to the aggregate alias (code 184).
+    r = await ch.query(
+        "SELECT token, bkt, argMax(close, time) AS close, sum(vol_usd_raw) AS vol_usd FROM ("
+        "  SELECT token, toStartOfInterval(time, INTERVAL " + iv_expr + ") AS bkt, close, time,"
+        "         volume * close AS vol_usd_raw"
+        "  FROM tradernick." + table +
+        "  WHERE time >= now() - INTERVAL {lb:UInt32} SECOND AND time < now()"
+        ") GROUP BY token, bkt ORDER BY token, bkt",
+        parameters={"lb": lb_sec},
+    )
+    by_token: dict[str, dict] = {}
+    for token, bkt, close, vol in r.result_rows:
+        by_token.setdefault(token, {})[bkt] = (float(close), float(vol))
+
+    btc = by_token.get(base)
+    if not btc or len(btc) < 2:
+        return response.json({"base": base, "times": [], "series": [],
+                              "error": f"no data for base {base}"})
+    times_dt = sorted(btc.keys())
+    t0 = times_dt[0]
+    btc_t0 = btc[t0][0]
+    times = [int(t.replace(tzinfo=timezone.utc).timestamp()) for t in times_dt]
+
+    series = []
+    for token, pts in by_token.items():
+        if min_volume > 0 and any(v < min_volume for (_, v) in pts.values()):
+            continue
+        p0 = pts.get(t0)
+        if p0 is None or p0[0] == 0:
+            continue
+        p0_close = p0[0]
+        values = []
+        for t in times_dt:
+            bc = btc.get(t)
+            p = pts.get(t)
+            if bc is None or p is None:
+                values.append(None)
+                continue
+            btc_ret = (bc[0] - btc_t0) / btc_t0
+            if abs(btc_ret) < 1e-6:
+                values.append(None)
+            else:
+                values.append(round(100.0 * ((p[0] - p0_close) / p0_close) / btc_ret, 3))
+        series.append({"token": token, "values": values})
+    series.sort(key=lambda s: s["token"])
+    return response.json({"base": base, "times": times, "series": series})
+
+
 @bp.get("/token_leaderboard")
 async def token_leaderboard(_request):
     """Per-token snapshot for the Token Leaderboard tableview: current price,

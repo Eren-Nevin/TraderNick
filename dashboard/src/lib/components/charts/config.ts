@@ -604,7 +604,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   backtracker: 'Backtracker',
   transfer: 'Token Flow',
   exchange_flow: 'Exchange Flow',
-  pc: 'Relative Price',
+  pc: 'Relative Performance',
   aave_v3: 'AAVE V3',
   aave_v2: 'AAVE V2',
   aave_v4: 'AAVE V4',
@@ -1863,6 +1863,12 @@ export type ChartInstance = {
   // rebased % line. The primary `instance.token` is itself one of the
   // lines, anchored at the leftmost data point of its own series.
   overlayTokens?: string[];
+  // pc (Relative Performance) — base token every series is measured against (default
+  // BTC, changeable in settings); lookback = window start T0; min USD volume/bucket to
+  // keep a token's series (thins the ~100 tokens). All in the load key.
+  pcBase?: string;
+  pcLookback?: '6h' | '12h' | '1d' | '3d' | '7d' | '14d' | '30d' | '90d';
+  pcMinVolume?: number;
   // transfer / aave / uniswap — every event-stream kind that selects a chain
   chain?: string;
   // uniswap_* only: the pool (symbol0/symbol1/fee) on the selected chain
@@ -2832,11 +2838,14 @@ export function newChartInstance(
     base.bookDepthMode = 'totals';
   }
   if (kind === 'pc') {
-    // Relative-price chart: the chart token is shown relative to each base
-    // token (one price-ratio series per base). overlayTokens holds the base
-    // tokens; default a single BTC base.
-    base.overlayTokens = ['BTC'];
+    // Relative Performance chart: EVERY token as its own series, each showing its
+    // return relative to a base token's return since the lookback start (T0). Base
+    // default BTC; min-volume filter thins the ~100 series. interval = bucket size.
     base.exchange = 'binance';
+    base.pcBase = 'BTC';
+    base.pcLookback = '7d';
+    base.pcMinVolume = 0;
+    base.interval = '1h';
   }
   if (isLeaderboardKind(kind)) {
     // Top-wallets leaderboards. Defaults vary by paramShape — AAVE keys by

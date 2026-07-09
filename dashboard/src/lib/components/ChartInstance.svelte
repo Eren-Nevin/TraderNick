@@ -13,6 +13,13 @@
   import GroupSnapshotWalletsDialog from '$lib/components/GroupSnapshotWalletsDialog.svelte';
   // Trading Pit query params → URLSearchParams (shared by loadKey + fetch).
   const _TP_LB_SECS: Record<string, number> = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
+  // Relative Performance (pc) lookback → seconds, + the response shape.
+  const _RP_LB_SECS: Record<string, number> = {
+    '6h': 21600, '12h': 43200, '1d': 86400, '3d': 259200,
+    '7d': 604800, '14d': 1209600, '30d': 2592000, '90d': 7776000
+  };
+  type RpSeries = { token: string; values: (number | null)[] };
+  type RpResp = { base?: string; times?: number[]; series?: RpSeries[] };
   function _tpQs(instance: ChartInstanceT): URLSearchParams {
     const qs = new URLSearchParams({
       tokens: (instance.tpTokens ?? []).join(','),
@@ -988,13 +995,10 @@
       return `${instance.kind}|${cPart}|${tPart}|${ex}|${instance.interval}`;
     }
     if (instance.kind === 'pc') {
-      // Overlay tokens influence the rendered chart, so they belong in the
-      // cache key. Sorted so order-of-add doesn't bust the key. Exchange
-      // included since switching Binance ↔ HL pulls from a different
-      // ohlcv table.
-      const ov = [...(instance.overlayTokens ?? [])].sort().join(',');
+      // Relative Performance: all tokens vs a base. Key on base, lookback, interval
+      // (bucket), min-volume, and exchange (source ohlcv table). Token-independent.
       const ex = instance.exchange ?? 'binance';
-      return `${instance.kind}|${instance.token}|${ex}|${instance.interval}|ov:${ov}`;
+      return `pc|b:${instance.pcBase ?? 'BTC'}|lb:${instance.pcLookback ?? '7d'}|iv:${instance.interval ?? '1h'}|mv:${instance.pcMinVolume ?? 0}|${ex}`;
     }
     if (isLeaderboardKind(instance.kind)) {
       // Top-wallets leaderboards: AAVE kinds key on (chain, token); Uniswap
@@ -2903,40 +2907,24 @@
         case 'pc': {
           // Price Comparison — main token + each instance.overlayTokens
           // fetched in parallel from /api/ohlcv, then rebased to % from
-          // the leftmost close in the render path.
-          const overlays = (instance.overlayTokens ?? []).filter(
-            (t) => t && t !== instance.token
-          );
-          const buildOhlcvQs = (tok: string) => {
-            const q = new URLSearchParams({
-              ...baseQS,
-              token: tok,
-              exchange: instance.exchange ?? 'binance'
-            });
-            if (forceFresh) q.set('fresh', '1');
-            return q;
-          };
-          const [mainRes, ...ovRes] = await Promise.all([
-            queuedFetch(`/api/ohlcv?${buildOhlcvQs(instance.token)}`, { signal }),
-            ...overlays.map((t) => queuedFetch(`/api/ohlcv?${buildOhlcvQs(t)}`, { signal }))
-          ]);
-          if (!mainRes.ok) throw new Error(`pc ${mainRes.status}`);
-          const mainBody = await mainRes.json();
-          data = ((mainBody.candles ?? []) as AnyDatum[]);
-          const nextOverlay: Record<string, Candle[]> = {};
-          for (let i = 0; i < overlays.length; i++) {
-            const tok = overlays[i];
-            const r = ovRes[i];
-            if (!r.ok) continue;
-            const body = await r.json();
-            nextOverlay[tok] = (body.candles ?? []) as Candle[];
-          }
-          overlayData = nextOverlay;
-          since = sinceIso;
-          until = untilIso;
+          // every token vs the base, in ONE call → { base, times, series:[{token,values}] }.
+          const rpQs = new URLSearchParams({
+            base: instance.pcBase ?? 'BTC',
+            lookback: instance.pcLookback ?? '7d',
+            interval: instance.interval ?? '1h',
+            min_volume: String(instance.pcMinVolume ?? 0),
+            exchange: instance.exchange ?? 'binance'
+          });
+          const rpRes = await queuedFetch(`/api/relative_performance?${rpQs}`, { signal });
+          if (!rpRes.ok) throw new Error(`pc ${rpRes.status}`);
+          const rpBody = await rpRes.json();
+          data = [{ rp: rpBody } as unknown as AnyDatum];
+          const rpTimes = (rpBody.times ?? []) as number[];
+          since = new Date((rpTimes[0] ?? Math.floor(Date.now() / 1000 - (_RP_LB_SECS[instance.pcLookback ?? '7d'] ?? 604800))) * 1000).toISOString();
+          until = new Date().toISOString();
           loadedKey = loadKey();
-          localView = pv ?? defaultView(sinceIso, untilIso);
-          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView, overlayData });
+          localView = pv ?? defaultView(since, until);
+          loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
         case 'ps': {
@@ -4791,35 +4779,32 @@
   // tokens live in instance.overlayTokens (default ['BTC']). Candle grids are
   // assumed index-aligned across tokens (same interval/window), matching the
   // multi-token fetch above.
-  let pcMainCloses = $derived(
+  // Relative Performance: the fetched { base, times, series:[{token, values}] }.
+  let rpResp = $derived(
+    instance.kind === 'pc' && data.length > 0
+      ? ((data[0] as unknown as { rp?: RpResp }).rp ?? ({} as RpResp))
+      : ({} as RpResp)
+  );
+  // x-axis points, one per bucket time.
+  let pcData = $derived(
     instance.kind === 'pc'
-      ? (data as unknown as { close?: number }[]).map((r) =>
-          r && typeof r.close === 'number' ? r.close : NaN)
+      ? ((rpResp.times ?? []) as number[]).map((t) => ({ time: t }) as unknown as Candle)
       : []
   );
-  let pcRatioByToken = $derived.by<Record<string, number[]>>(() => {
-    const out: Record<string, number[]> = {};
-    if (instance.kind !== 'pc') return out;
-    for (const tok of instance.overlayTokens ?? []) {
-      const rows = overlayData[tok];
-      out[tok] = pcMainCloses.map((mc, i) => {
-        const b = rows?.[i]?.close;
-        return typeof b === 'number' && b !== 0 && Number.isFinite(mc) ? mc / b : NaN;
-      });
-    }
-    return out;
-  });
   // Distinct palette for the pc chart's ratio lines.
   const OVERLAY_COLORS = ['#06b6d4', '#fbbf24', '#a855f7', '#22c55e', '#ef4444', '#ec4899'] as const;
   // OHLCV chart is back to its original behaviour: candles + MAs only.
   let ohlcvLinesD = $derived(cumulativeLines);
-  // One price-ratio line per base token: chart token / base token.
+  // One line per token — its return vs the base's return, indexed by bucket.
   let pcLinesD = $derived(
-    (instance.overlayTokens ?? []).map((tok, idx) => ({
-      key: `pc_ratio_${tok}`,
-      label: `${instance.token} / ${tok}`,
-      color: OVERLAY_COLORS[idx % OVERLAY_COLORS.length],
-      compute: (_d: Candle, i: number) => (pcRatioByToken[tok] ?? [])[i] ?? NaN
+    ((rpResp.series ?? []) as RpSeries[]).map((s, idx, arr) => ({
+      key: `rp_${s.token}`,
+      label: s.token,
+      color: `hsl(${Math.round((360 * idx) / Math.max(1, arr.length)) % 360} 70% 55%)`,
+      compute: (_d: Candle, i: number) => {
+        const v = s.values[i];
+        return v == null ? NaN : v;
+      }
     }))
   );
   let frLinesD = $derived(cumulativeLines);
@@ -7727,15 +7712,18 @@
             <option value="token">{instance.token ?? 'Token'}</option>
           </select>
         {/if}
-        <select
-          value={instance.token}
-          onchange={(e) => onTokenChange(instance.id, e.currentTarget.value)}
-          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-        >
-          {#each tokens as t (t)}
-            <option value={t}>{t}</option>
-          {/each}
-        </select>
+        {#if instance.kind !== 'pc'}
+          <!-- pc (Relative Performance) shows ALL tokens; its base lives in settings. -->
+          <select
+            value={instance.token}
+            onchange={(e) => onTokenChange(instance.id, e.currentTarget.value)}
+            class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          >
+            {#each tokens as t (t)}
+              <option value={t}>{t}</option>
+            {/each}
+          </select>
+        {/if}
       {/if}
       {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'spot_cvd_table' && instance.kind !== 'backtracker_leaderboard' && instance.kind !== 'trading_pit' && instance.kind !== 'group_snapshot' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
         <select
@@ -8695,57 +8683,31 @@
     </div>
 
     {#if instance.kind === 'pc'}
-      <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-2">
+      <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-3">
         <div class="text-[10px] uppercase tracking-widest text-zinc-500">
-          Base tokens
-          <span class="text-zinc-600 normal-case">
-            — {instance.token} is shown relative to each (one {instance.token} / base price-ratio line per base)
-          </span>
+          Relative Performance
+          <span class="text-zinc-600 normal-case">— each token's return vs the base's return since the lookback start (T0), in % (100 = moved like the base)</span>
         </div>
-        <div class="flex items-center gap-2 flex-wrap">
-          {#each (instance.overlayTokens ?? []) as tok, idx (tok)}
-            <span
-              class="inline-flex items-center gap-1 rounded-md border border-zinc-700 bg-zinc-900 px-1.5 py-0.5"
-              style="color: {OVERLAY_COLORS[idx % OVERLAY_COLORS.length]}"
-            >
-              <span class="font-medium">{tok}</span>
-              <button
-                type="button"
-                aria-label="Remove {tok}"
-                title="Remove"
-                onclick={() => {
-                  instance.overlayTokens = (instance.overlayTokens ?? []).filter((t) => t !== tok);
-                }}
-                class="text-zinc-500 hover:text-red-400 leading-none"
-              >×</button>
-            </span>
-          {/each}
-          {#if (instance.overlayTokens ?? []).length < 5}
-            {@const taken = new Set([instance.token, ...(instance.overlayTokens ?? [])])}
-            {@const available = tokens.filter((t) => !taken.has(t))}
-            {#if available.length > 0}
-              <select
-                value=""
-                onchange={(e) => {
-                  const v = e.currentTarget.value;
-                  if (!v) return;
-                  instance.overlayTokens = [...(instance.overlayTokens ?? []), v];
-                  e.currentTarget.value = '';
-                }}
-                class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100"
-              >
-                <option value="">+ add base token…</option>
-                {#each available as t (t)}
-                  <option value={t}>{t}</option>
-                {/each}
-              </select>
-            {:else}
-              <span class="text-zinc-600 text-[11px]">no more tokens to add</span>
-            {/if}
-          {:else}
-            <span class="text-zinc-600 text-[11px]">max 5</span>
-          {/if}
+        <div class="flex items-center gap-4 flex-wrap">
+          <label class="flex items-center gap-1.5 text-zinc-300">Base
+            <select value={instance.pcBase ?? 'BTC'} onchange={(e) => (instance.pcBase = e.currentTarget.value)}
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100">
+              {#each tokens as t (t)}<option value={t}>{t}</option>{/each}
+            </select>
+          </label>
+          <label class="flex items-center gap-1.5 text-zinc-300">Lookback (T0)
+            <select value={instance.pcLookback ?? '7d'} onchange={(e) => (instance.pcLookback = e.currentTarget.value as NonNullable<ChartInstanceT['pcLookback']>)}
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100">
+              {#each ['6h', '12h', '1d', '3d', '7d', '14d', '30d', '90d'] as lb (lb)}<option value={lb}>{lb}</option>{/each}
+            </select>
+          </label>
+          <label class="flex items-center gap-1.5 text-zinc-300" title="Drop any token whose per-bucket USD volume dips below this in any bucket">Min vol $M
+            <input type="number" min="0" step="0.5" value={(instance.pcMinVolume ?? 0) / 1e6}
+              onchange={(e) => (instance.pcMinVolume = Math.max(0, (Number(e.currentTarget.value) || 0) * 1e6))}
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 w-24" />
+          </label>
         </div>
+        <div class="text-[10px] text-zinc-600">Bucket size = the toolbar interval selector. {(rpResp.series ?? []).length} tokens shown.</div>
       </div>
     {/if}
 
@@ -8985,9 +8947,10 @@
         fontFamily={instance.kind === 'backtracker' ? '"Arial Black", "Arial Bold", Gadget, sans-serif' : undefined}
       />
     {:else if instance.kind === 'pc'}
-      <!-- Relative price: chart token / base token ratios (one line per base). -->
+      <!-- Relative Performance: one line per token = its return vs the base's return
+           since T0, in % (100 = moved like the base). -->
       <LineChart
-        data={data as Candle[]}
+        data={pcData as Candle[]}
         lines={pcLinesD}
         height={chartCanvasHeight}
         {xExtent}
@@ -8996,8 +8959,8 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={fmtRatio}
-        formatTooltip={(v) => v.toPrecision(5)}
+        formatY={(v) => `${v.toFixed(0)}%`}
+        formatTooltip={(v) => `${v.toFixed(1)}%`}
       />
     {:else if effectiveKind === 'oi' || effectiveKind === 'hl_smart_oi'}
       <!-- HL Long/Short ratio is unitless (1.03, not $1.03). Otherwise USD

@@ -923,16 +923,17 @@
         inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
       }
       if (inst.kind === 'pc') {
-        // Price Comparison chart — the overlay token list is the *whole*
-        // configuration alongside instance.token. Exchange selector
-        // picks the close-price source (binance_ohlcv_1m vs hl_ohlcv_1m).
-        inst.overlayTokens = Array.isArray(r.overlayTokens)
-          ? r.overlayTokens
-              .map((t) => (typeof t === 'string' ? t : ''))
-              .filter((t) => t.length > 0)
-              .slice(0, 5)
-          : [];
-        inst.exchange = r.exchange === 'hl' ? 'hl' : 'binance';
+        // Relative Performance chart — every token vs a base. Exchange picks the
+        // close-price source (binance / binance_spot / hl ohlcv table).
+        inst.pcBase = typeof r.pcBase === 'string' && r.pcBase ? r.pcBase : 'BTC';
+        const lb = r.pcLookback;
+        inst.pcLookback = (['6h', '12h', '1d', '3d', '7d', '14d', '30d', '90d'] as const).includes(
+          lb as NonNullable<ChartInstanceT['pcLookback']>
+        )
+          ? (lb as NonNullable<ChartInstanceT['pcLookback']>)
+          : '7d';
+        inst.pcMinVolume = typeof r.pcMinVolume === 'number' && r.pcMinVolume >= 0 ? r.pcMinVolume : 0;
+        inst.exchange = r.exchange === 'hl' ? 'hl' : r.exchange === 'binance_spot' ? 'binance_spot' : 'binance';
       }
       // AAVE chart kinds (single-event + net) need a `chain` just like the
       // transfer kind. Default to the page's preferred chain. valueMode
