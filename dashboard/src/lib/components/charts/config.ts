@@ -1809,6 +1809,9 @@ export type ChartInstance = {
   /** group_snapshot: 'snapshot' = last published snapshot; 'live' = reconstructed to now
    *  from fills (fresher, entry/uPnL approximate). In the key. */
   gsAsOf?: 'snapshot' | 'live';
+  /** group_snapshot: lookback for the per-token price-change % column (separate from
+   *  staleness). In the key. */
+  gsPriceLb?: '5m' | '15m' | '1h' | '4h' | '1d';
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
@@ -2800,6 +2803,7 @@ export function newChartInstance(
     base.gsGroupId = null;
     base.gsStaleness = '7d';
     base.gsAsOf = 'snapshot';
+    base.gsPriceLb = '1h';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

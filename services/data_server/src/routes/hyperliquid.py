@@ -3794,6 +3794,7 @@ async def trading_pit(request):
 
 
 _GS_STALE = {"1h": 3600, "4h": 14400, "1d": 86400, "3d": 259200, "7d": 604800, "14d": 1209600, "30d": 2592000}
+_GS_PRICE_LB = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 
 
 @bp.get("/hyperliquid/group_snapshot")
@@ -3905,6 +3906,26 @@ async def group_snapshot(request):
         "wallets": int(w), "n_long": int(nl), "n_short": int(ns),
         "long_usd": float(lu), "short_usd": float(su),
     } for (tok, sz, en, up, w, nl, ns, lu, su) in r.result_rows]
+
+    # per-token price change % over a SEPARATE lookback (ohlcv 1m closes): first vs
+    # last close in the window. Independent of the position staleness lookback.
+    plb = _GS_PRICE_LB.get(request.args.get("price_lb", "1h"), _GS_PRICE_LB["1h"])
+    pcr = await ch.query(
+        "SELECT token, argMax(close, time) AS cur, argMin(close, time) AS past"
+        " FROM tradernick.hl_ohlcv_1m"
+        " WHERE time >= now() - INTERVAL {plb:UInt32} SECOND AND time <= now()"
+        " GROUP BY token",
+        parameters={"plb": plb},
+    )
+    # ratio = cur/past per token. price_change_pct = (ratio-1)*100. The BTC-relative
+    # change prices each token IN BTC over the same window: (ratio / btc_ratio - 1)*100.
+    ratios = {tok: float(cur) / float(past) for (tok, cur, past) in pcr.result_rows if past}
+    btc_ratio = ratios.get("BTC")
+    for row in rows:
+        ra = ratios.get(row["token"])
+        row["price_change_pct"] = (ra - 1.0) * 100.0 if ra is not None else None
+        row["price_change_pct_btc"] = ((ra / btc_ratio) - 1.0) * 100.0 if (ra is not None and btc_ratio) else None
+
     return response.json({
         "bucket": int(bucket.replace(tzinfo=timezone.utc).timestamp()),
         "rows": rows,

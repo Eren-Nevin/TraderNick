@@ -891,6 +891,8 @@
         const gss = r.gsStaleness;
         inst.gsStaleness = gss === '1h' || gss === '4h' || gss === '1d' || gss === '3d' || gss === '14d' || gss === '30d' ? gss : '7d';
         inst.gsAsOf = r.gsAsOf === 'live' ? 'live' : 'snapshot';
+        const gpl = r.gsPriceLb;
+        inst.gsPriceLb = gpl === '5m' || gpl === '15m' || gpl === '4h' || gpl === '1d' ? gpl : '1h';
       }
       if (inst.kind === 'book_depth') {
         // Binance-only; the mode selector flips the same dataset between the

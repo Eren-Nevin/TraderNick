@@ -7,6 +7,7 @@
   type Row = {
     token: string; size_usd: number; entry: number; unrealized_pnl: number;
     wallets: number; n_long: number; n_short: number; long_usd: number; short_usd: number;
+    price_change_pct?: number | null; price_change_pct_btc?: number | null;
   };
 
   let {
@@ -68,6 +69,9 @@
     return s + '$' + a.toFixed(0);
   }
   const fmtPrice = (n: number) => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n.toPrecision(5));
+  const fmtPct = (n: number | null | undefined) => (n == null ? '—' : (n > 0 ? '+' : '') + n.toFixed(2) + '%');
+  const pctCls = (n: number | null | undefined) =>
+    n == null ? 'text-zinc-600' : n > 0 ? 'text-emerald-400' : n < 0 ? 'text-rose-400' : 'text-zinc-500';
 </script>
 
 <div class="h-full flex flex-col text-xs" use:stopDragEvents>
@@ -103,6 +107,8 @@
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('side')} title="Net side (long $ vs short $)">Side{arrow('side')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('netsize')} title="|long $ − short $| — net directional exposure">Net Size{arrow('netsize')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('entry')} title="Size-weighted average entry price">Entry{arrow('entry')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('price_change_pct')} title="Price change % over the Δprice lookback">Chg %{arrow('price_change_pct')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('price_change_pct_btc')} title="Price change % relative to BTC (priced in BTC) over the Δprice lookback">Chg %/BTC{arrow('price_change_pct_btc')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('unrealized_pnl')} title="Σ unrealized PnL">uPnL{arrow('unrealized_pnl')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('long_usd')} title="Σ long positions ($); count in ()">Longs{arrow('long_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('short_usd')} title="Σ short positions ($); count in ()">Shorts{arrow('short_usd')}</th>
@@ -118,6 +124,8 @@
               </td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-200">{fmtUsd(netSize(r))}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{fmtPrice(r.entry)}</td>
+              <td class="px-3 py-1 text-right font-mono tabular-nums {pctCls(r.price_change_pct)}">{fmtPct(r.price_change_pct)}</td>
+              <td class="px-3 py-1 text-right font-mono tabular-nums {pctCls(r.price_change_pct_btc)}">{fmtPct(r.price_change_pct_btc)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums {r.unrealized_pnl > 0 ? 'text-emerald-400' : r.unrealized_pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(r.unrealized_pnl)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-emerald-400 whitespace-nowrap">{r.n_long ? `${fmtUsd(r.long_usd)} (${r.n_long})` : '—'}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-rose-400 whitespace-nowrap">{r.n_short ? `${fmtUsd(r.short_usd)} (${r.n_short})` : '—'}</td>
