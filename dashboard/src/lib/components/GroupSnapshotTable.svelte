@@ -39,7 +39,11 @@
   const sideLabel = (r: Row) => (netUsd(r) > 0 ? 'Long' : netUsd(r) < 0 ? 'Short' : 'Flat');
   // Net long = # long wallets − # short wallets; parenthesis = long:short ratio %.
   const netLong = (r: Row) => (r.n_long ?? 0) - (r.n_short ?? 0);
-  const lsRatio = (r: Row) => (r.n_short ? Math.round((100 * (r.n_long ?? 0)) / r.n_short) + '%' : 'N/A');
+  // long / (long + short) as a %. N/A only if there are no wallets at all.
+  const lsRatio = (r: Row) => {
+    const t = (r.n_long ?? 0) + (r.n_short ?? 0);
+    return t ? Math.round((100 * (r.n_long ?? 0)) / t) + '%' : 'N/A';
+  };
   const sv = (r: Row, k: string): number | string =>
     k === 'token' ? r.token
       : k === 'net' || k === 'side' ? netUsd(r)
@@ -119,7 +123,7 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('unrealized_pnl')} title="Σ unrealized PnL">uPnL{arrow('unrealized_pnl')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('long_usd')} title="Σ long positions ($); count in ()">Longs{arrow('long_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('short_usd')} title="Σ short positions ($); count in ()">Shorts{arrow('short_usd')}</th>
-            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('netlong')} title="# long − # short wallets; () = long:short ratio %, N/A when no shorts">Net Long{arrow('netlong')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('netlong')} title="# long − # short wallets; () = long / (long + short) as %">Net Long{arrow('netlong')}</th>
           </tr>
         </thead>
         <tbody>
