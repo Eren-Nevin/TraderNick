@@ -85,6 +85,7 @@
   $effect(() => {
     load(wallet, rangeMode, rangeSince, rangeUntil, lookback);
   });
+  const refresh = () => load(wallet, rangeMode, rangeSince, rangeUntil, lookback);
 
   function fmtUsd(n: number): string {
     const abs = Math.abs(n), sign = n < 0 ? '-' : '';
@@ -120,6 +121,13 @@
       {#each tokenOpts as tok (tok)}<option value={tok}>{tok}</option>{/each}
     </select>
     <span class="ml-auto text-zinc-500 text-xs whitespace-nowrap">{shown.length} fills</span>
+    <button
+      type="button"
+      onclick={refresh}
+      disabled={loading}
+      class="text-[11px] px-2 py-0.5 rounded border border-zinc-700 bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700/50 disabled:opacity-40 disabled:cursor-default whitespace-nowrap"
+      title="Refresh trades"
+    >↻ Refresh</button>
   </div>
 
   <div class="flex-1 overflow-auto scrollbar-none {loading ? 'opacity-50' : ''}">
