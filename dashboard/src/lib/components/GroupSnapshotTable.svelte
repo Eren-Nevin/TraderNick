@@ -37,8 +37,15 @@
   const netUsd = (r: Row) => (r.long_usd ?? 0) - (r.short_usd ?? 0);
   const netSize = (r: Row) => Math.abs(netUsd(r));
   const sideLabel = (r: Row) => (netUsd(r) > 0 ? 'Long' : netUsd(r) < 0 ? 'Short' : 'Flat');
+  // Net long = # long wallets − # short wallets; parenthesis = long:short ratio %.
+  const netLong = (r: Row) => (r.n_long ?? 0) - (r.n_short ?? 0);
+  const lsRatio = (r: Row) => (r.n_short ? Math.round((100 * (r.n_long ?? 0)) / r.n_short) + '%' : 'N/A');
   const sv = (r: Row, k: string): number | string =>
-    k === 'token' ? r.token : k === 'net' || k === 'side' ? netUsd(r) : k === 'netsize' ? netSize(r) : ((r[k as keyof Row] as number) ?? 0);
+    k === 'token' ? r.token
+      : k === 'net' || k === 'side' ? netUsd(r)
+      : k === 'netsize' ? netSize(r)
+      : k === 'netlong' ? netLong(r)
+      : ((r[k as keyof Row] as number) ?? 0);
   // Distinct tokens in the group (plus the current pick, so it survives a reload where
   // that token drops out), sorted for the selector.
   const tokenOpts = $derived(
@@ -112,6 +119,7 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('unrealized_pnl')} title="Σ unrealized PnL">uPnL{arrow('unrealized_pnl')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('long_usd')} title="Σ long positions ($); count in ()">Longs{arrow('long_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('short_usd')} title="Σ short positions ($); count in ()">Shorts{arrow('short_usd')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('netlong')} title="# long − # short wallets; () = long:short ratio %, N/A when no shorts">Net Long{arrow('netlong')}</th>
           </tr>
         </thead>
         <tbody>
@@ -129,6 +137,7 @@
               <td class="px-3 py-1 text-right font-mono tabular-nums {r.unrealized_pnl > 0 ? 'text-emerald-400' : r.unrealized_pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(r.unrealized_pnl)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-emerald-400 whitespace-nowrap">{r.n_long ? `${fmtUsd(r.long_usd)} (${r.n_long})` : '—'}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-rose-400 whitespace-nowrap">{r.n_short ? `${fmtUsd(r.short_usd)} (${r.n_short})` : '—'}</td>
+              <td class="px-3 py-1 text-right font-mono tabular-nums whitespace-nowrap {netLong(r) > 0 ? 'text-emerald-400' : netLong(r) < 0 ? 'text-rose-400' : 'text-zinc-500'}">{netLong(r) > 0 ? '+' : ''}{netLong(r)} <span class="text-zinc-500">({lsRatio(r)})</span></td>
             </tr>
           {/each}
         </tbody>
