@@ -121,23 +121,18 @@ async def run(stream_name: str, event: str) -> None:
             # Only position_history/trade_history still use this 15-min grid;
             # ohlcv/trades/funding/transfers/vaults dropped to a 1-min grid + 60s
             # tick (2026-07-09) for ~1-min freshness (see _live_grid below).
-            # fills advance `until` on a 5-min grid (not 15m) and the stream polls
-            # every 60s (_CADENCE), so the most-recent CLOSED 5-min slot is
-            # ingested within ~1m of DS having it. DS lag is now ~15s (measured
-            # 2026-07-09; was ~3m), so each tick re-fetches a 10m-wide trailing
-            # window ([floor_5(now)-10m, floor_5]) — that spans the last TWO closed
-            # 5-min slots, and re-fetching every 60s means DS's late arrivals for
-            # the newest slot land within ~1m of publication. RMT dedups the heavy
-            # overlap. Verified DS serves fresh, narrow/tiny fills windows at HTTP
-            # 200 (no Code 241) — fills are raw events, not a bucketed snapshot
-            # grid. Aggregated snapshot events (position_history) keep the 15m grid.
-            # ohlcv/trades/funding/transfers/vaults poll every 60s on a 1-min grid
-            # (2026-07-09, after DeFiStream lag was reduced) so data lands ~1 min
-            # fresh instead of waiting for a 15-min bucket to close. fills stays on
-            # its 5-min grid; position_history/trade_history keep the 15-min grid
-            # (heavy aggregated buckets — off-grid windows have triggered DS 500s).
-            _FAST_1M = {"ohlcv", "trades", "funding", "transfers", "vaults"}
-            _live_grid = 1 if event in _FAST_1M else (5 if event == "fills" else 15)
+            # fills/ohlcv/trades/funding/transfers/vaults poll every 60s on a 1-min
+            # grid so `until` = floor_1min(now) and the newest data is ~1 min old
+            # (+ DS's ~15s lag), instead of waiting for a coarser bucket to close.
+            # fills was on a 5-min grid until 2026-07-09 — that capped the newest
+            # ingested fill at the last closed 5-min boundary, so fills read 1–5 min
+            # stale (avg ~2–3m) even at a 60s tick; dropping it to a 1-min grid fixes
+            # that. fills are raw events (verified: DS serves fresh, narrow windows at
+            # HTTP 200, no Code 241), so an off-15m-grid window is safe. Only
+            # position_history/trade_history keep the 15-min grid (heavy aggregated
+            # buckets — off-grid windows have triggered DS 500s).
+            _FAST_1M = {"fills", "ohlcv", "trades", "funding", "transfers", "vaults"}
+            _live_grid = 1 if event in _FAST_1M else 15
             floor_now = now.replace(
                 minute=(now.minute // _live_grid) * _live_grid,
                 second=0, microsecond=0,
@@ -147,13 +142,13 @@ async def run(stream_name: str, event: str) -> None:
             # to rely on the slow hourly sweep. Re-fetch the last 45m of 15m
             # slots each tick so a late-published snapshot lands within ~30m.
             # Window stays on the 15m grid; RMT dedups the re-fetched overlap.
-            # Fast 1-min events re-fetch the last 5 one-min slots each tick so DS's
-            # residual lag (~15s, measured 2026-07-09) lands within a minute of
-            # publication (RMT dedups the overlap; 5m is a generous margin over the
-            # ~15s lag). position_history: 45m (late-published). fills: 10m.
+            # Fast 1-min events (incl. fills) re-fetch the last 5 one-min slots each
+            # tick so DS's residual lag (~15s, measured 2026-07-09) lands within a
+            # minute of publication (RMT dedups the overlap; 5m is a generous margin
+            # over the ~15s lag, and the 1h sweep backstops anything missed).
+            # position_history: 45m (late-published).
             _live_lookback = (
                 45 if event == "position_history"
-                else 10 if event == "fills"
                 else 5 if event in _FAST_1M
                 else 15
             )

@@ -54,12 +54,11 @@ _CADENCE: dict[str, tuple[int, int]] = {
     # coarser cadence (heavy per-bucket / once-daily).
     "ohlcv":            (60,    6),
     "trades":           (60,    6),
-    # fills poll every 60s (2026-07-02) so the most-recent CLOSED 5-min slot is
-    # ingested within ~1m of DeFiStream having it (DS lag ~15s, measured 2026-07-09;
-    # was ~3m). The live
-    # window snaps to a 5-min grid and re-fetches a trailing lookback each tick so
-    # DS's late arrivals land promptly (see streams/_hl_common.py). Gap-fill chunk
-    # (sweep tier) unchanged at 6h — the usual sweep still runs.
+    # fills poll every 60s on a 1-min window grid (2026-07-09) so the newest fill is
+    # ~1m old (+ DS's ~15s lag). Was a 5-min grid, which capped the newest ingested
+    # fill at the last closed 5-min boundary → fills read 1–5m stale (avg ~2–3m) even
+    # at a 60s tick. Each tick re-fetches a 5m trailing window; RMT dedups the
+    # overlap (see streams/_hl_common.py). Gap-fill chunk (sweep tier) unchanged at 6h.
     "fills":            (60,    6),
     "position_history": (900,   1),
     # trade_history moved to a DAILY tick (2026-06): DeFiStream deprecated the
