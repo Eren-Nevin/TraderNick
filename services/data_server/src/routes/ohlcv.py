@@ -56,6 +56,11 @@ async def tokens(_request):
         "  SELECT token FROM tradernick.binance_ohlcv_1m"
         "  UNION DISTINCT"
         "  SELECT token FROM tradernick.hl_ohlcv_1m WHERE time > now() - INTERVAL 30 DAY"
+        "  UNION DISTINCT"
+        # every active token batch — so newly-added batch tokens are selectable even
+        # before their OHLCV backfill lands (they'll chart empty until it does).
+        "  SELECT arrayJoin(splitByChar(',', tokens)) AS token"
+        "  FROM tradernick.ingestion_token_batches FINAL WHERE deleted = 0"
         ") WHERE token != '' ORDER BY token"
     )
     return response.json({"tokens": [r[0] for r in rows.result_rows]})

@@ -8954,6 +8954,10 @@
           {/if}
         {:else if instance.token && instance.chain && (instance.kind === 'transfer' || instance.kind === 'exchange_flow')}
           No data available for {activeTokenGroup ? `Σ ${tokenGroups.find((g) => g.name === activeTokenGroup)?.label ?? activeTokenGroup}` : instance.token} on {activeChainGroup ? `Σ ${activeChainGroup.label}` : instance.chain}{instance.kind === 'exchange_flow' ? ` for ${EXCHANGE_LABEL[instance.exchangeFlowExchange ?? 'binance'] ?? (instance.exchangeFlowExchange ?? 'binance')}` : ''}.
+        {:else if instance.kind === 'backtracker'}
+          No Binance candles for <span class="text-zinc-200 font-medium">{instance.token}</span> — it isn't listed on Binance spot or futures, so it can't be charted here (positions/flow are HL-only). Pick a token that trades on Binance.
+        {:else if instance.kind === 'ohlcv'}
+          No {instance.exchange === 'hl' ? 'Hyperliquid' : instance.exchange === 'binance_spot' ? 'Binance spot' : 'Binance'} candles for <span class="text-zinc-200 font-medium">{instance.token}</span> — it may not trade on this exchange. Try a different source or token.
         {:else if chartKindGroup(effectiveKind)}
           No data for {chartKindGroup(effectiveKind)} {chartKindShortLabel(effectiveKind)}.
         {:else}
@@ -9468,6 +9472,7 @@
         error={error}
         hasGroup={!!instance.btGroupId}
         posMode={instance.blPosMode ?? 'consensus'}
+        rosterTokens={tokens}
         onTokenClick={openBacktrackerLeaderboardToken}
       />
     {:else if instance.kind === 'trading_pit'}
@@ -9500,6 +9505,7 @@
         loading={loading}
         error={error}
         hasGroup={!!instance.gsGroupId}
+        rosterTokens={tokens}
         onTokenClick={openGsWallets}
       />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}

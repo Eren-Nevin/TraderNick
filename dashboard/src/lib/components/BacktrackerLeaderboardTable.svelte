@@ -14,6 +14,7 @@
     loading = false,
     error = null,
     hasGroup = false,
+    rosterTokens = [],
     onTokenClick,
     posMode = 'consensus',
   }: {
@@ -21,6 +22,7 @@
     loading?: boolean;
     error?: string | null;
     hasGroup?: boolean;
+    rosterTokens?: string[];
     onTokenClick: (token: string) => void;
     posMode?: string;
   } = $props();
@@ -106,9 +108,14 @@
   let sortDir = $state<1 | -1>(-1);
   let limit = $state<'10' | '30' | 'all'>('30');
   let search = $state('');
-  // Distinct tokens in the leaderboard (+ current pick), sorted, for the selector.
+  // Full roster (all supported tokens) + what's present + the current pick, sorted.
+  // Filtering to a token not in the leaderboard shows an empty table.
   const tokenOpts = $derived(
-    [...new Set([...(search ? [search] : []), ...(rows as Row[]).map((r) => String(r.token))])].sort()
+    [...new Set([
+      ...(rosterTokens as string[]),
+      ...(search ? [search] : []),
+      ...(rows as Row[]).map((r) => String(r.token))
+    ])].sort()
   );
 
   function onSort(k: string) {

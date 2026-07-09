@@ -15,12 +15,14 @@
     loading = false,
     error = null,
     hasGroup = false,
+    rosterTokens = [],
     onTokenClick = (_t: string) => {}
   }: {
     rows?: Row[];
     loading?: boolean;
     error?: string | null;
     hasGroup?: boolean;
+    rosterTokens?: string[];
     onTokenClick?: (t: string) => void;
   } = $props();
 
@@ -56,8 +58,15 @@
       : ((r[k as keyof Row] as number) ?? 0);
   // Distinct tokens in the group (plus the current pick, so it survives a reload where
   // that token drops out), sorted for the selector.
+  // Full roster (all supported tokens) so any token is selectable, unioned with what's
+  // present + the current pick. Filtering to a token the group doesn't hold shows an
+  // empty table (handled below).
   const tokenOpts = $derived(
-    [...new Set([...(search ? [search] : []), ...(rows as Row[]).map((r) => r.token)])].sort()
+    [...new Set([
+      ...(rosterTokens as string[]),
+      ...(search ? [search] : []),
+      ...(rows as Row[]).map((r) => r.token)
+    ])].sort()
   );
   let sorted = $derived.by(() => {
     const minUsd = (minSize || 0) * 1000; // input is in $K
@@ -114,6 +123,8 @@
       <div class="h-full flex items-center justify-center text-zinc-500">Loading…</div>
     {:else if rows.length === 0}
       <div class="h-full flex items-center justify-center text-zinc-500">No open positions in the group.</div>
+    {:else if sorted.length === 0}
+      <div class="h-full flex items-center justify-center text-zinc-500 px-4 text-center">The group holds no position in{search ? ` ${search}` : ' any matching token'} for the current filters.</div>
     {:else}
       <table class="w-full">
         <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
