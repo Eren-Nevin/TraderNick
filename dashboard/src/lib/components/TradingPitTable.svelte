@@ -252,7 +252,7 @@
           {#each sortedFills as r, i (i)}
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
               <td class="px-3 py-1 font-mono tabular-nums text-zinc-400 whitespace-nowrap">{fmtTime(r.time)}</td>
-              <td class="px-3 py-1"><WalletAddress address={r.wallet} auxKind="wallet" tags={r.categories ?? []} /></td>
+              <td class="px-3 py-1"><WalletAddress address={r.wallet} auxKind="wallet" token={r.token} tags={r.categories ?? []} /></td>
               <td class="px-3 py-1 text-zinc-200">{r.token}</td>
               <td class="px-3 py-1 whitespace-nowrap {typeCls(r.type)}">{typeLabel(r.type)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-200">{fmtUsd(r.value)}</td>
