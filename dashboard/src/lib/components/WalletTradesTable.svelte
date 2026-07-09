@@ -138,10 +138,9 @@
             <th class="text-left px-3 py-1.5 font-normal">Time</th>
             <th class="text-left px-3 py-1.5 font-normal">Token</th>
             <th class="text-left px-3 py-1.5 font-normal">Direction</th>
-            <th class="text-right px-3 py-1.5 font-normal">Price</th>
             <th class="text-right px-3 py-1.5 font-normal">Size</th>
+            <th class="text-right px-3 py-1.5 font-normal">Price</th>
             <th class="text-right px-3 py-1.5 font-normal">Realized PnL</th>
-            <th class="text-right px-3 py-1.5 font-normal">Fee</th>
           </tr>
         </thead>
         <tbody>
@@ -154,10 +153,9 @@
                   ? 'border-emerald-800 text-emerald-400'
                   : 'border-rose-800 text-rose-400'}">{t.dir}</span>
               </td>
-              <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-300">{fmtPrice(t.price)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-300">{fmtUsd(t.value)}</td>
+              <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-300">{fmtPrice(t.price)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums {t.closed_pnl > 0 ? 'text-emerald-400' : t.closed_pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">{t.closed_pnl ? fmtUsd(t.closed_pnl) : '—'}</td>
-              <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-500">{fmtUsd(t.fee)}</td>
             </tr>
           {/each}
         </tbody>
