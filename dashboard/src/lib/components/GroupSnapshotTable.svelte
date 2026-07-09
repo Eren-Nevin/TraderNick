@@ -38,12 +38,16 @@
   const sideLabel = (r: Row) => (netUsd(r) > 0 ? 'Long' : netUsd(r) < 0 ? 'Short' : 'Flat');
   const sv = (r: Row, k: string): number | string =>
     k === 'token' ? r.token : k === 'net' || k === 'side' ? netUsd(r) : k === 'netsize' ? netSize(r) : ((r[k as keyof Row] as number) ?? 0);
+  // Distinct tokens in the group (plus the current pick, so it survives a reload where
+  // that token drops out), sorted for the selector.
+  const tokenOpts = $derived(
+    [...new Set([...(search ? [search] : []), ...(rows as Row[]).map((r) => r.token)])].sort()
+  );
   let sorted = $derived.by(() => {
-    const q = search.trim().toLowerCase();
     const minUsd = (minSize || 0) * 1000; // input is in $K
     const arr = (rows as Row[]).filter(
       (r) =>
-        r.token.toLowerCase().includes(q) &&
+        (!search || r.token === search) &&
         (!sideFilter || (sideFilter === 'long' ? netUsd(r) > 0 : netUsd(r) < 0)) &&
         netSize(r) >= minUsd
     );
@@ -69,7 +73,10 @@
 <div class="h-full flex flex-col text-xs" use:stopDragEvents>
   <div class="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 text-zinc-400">
     <span class="text-[11px]">Group positions · latest snapshot</span>
-    <input class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200 w-24 focus:outline-none" placeholder="Token…" bind:value={search} />
+    <select class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200 focus:outline-none" bind:value={search} title="Filter by token">
+      <option value="">All tokens</option>
+      {#each tokenOpts as tok (tok)}<option value={tok}>{tok}</option>{/each}
+    </select>
     <select class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200 focus:outline-none" bind:value={sideFilter} title="Filter by net side">
       <option value="">All sides</option>
       <option value="long">Long</option>
