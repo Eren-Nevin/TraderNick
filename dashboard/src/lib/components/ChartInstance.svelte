@@ -5328,7 +5328,11 @@
   // Group name shown in the positions dialog — derived from the ACTIVE dialog group
   // (set by openBtpForToken), so it works for backtracker, leaderboard, and group_snapshot.
   let btDialogGroupName = $derived(
-    btpGroup ? (walletPinsStore.groups.find((g) => g.id === btpGroup)?.name ?? null) : null
+    btpGroup
+      ? (walletPinsStore.groups.find((g) => g.id === btpGroup)?.name ?? null)
+      : instance.btGroupId
+        ? (walletPinsStore.groups.find((g) => g.id === instance.btGroupId)?.name ?? null)
+        : null
   );
   let btpPendingToken = $state('');       // token awaiting a group pick
   let btpTimeSec = $state(0);

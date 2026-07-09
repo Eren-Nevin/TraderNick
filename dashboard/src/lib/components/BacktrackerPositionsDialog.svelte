@@ -46,6 +46,8 @@
     onLastChangeSinceChange,
     changeLookback = '',
     onChangeLookbackChange,
+    groupOnly = false,
+    onToggleGroupOnly = undefined,
     onClose
   }: {
     open: boolean;
@@ -74,6 +76,10 @@
      *  window; otherwise 1h/4h/1d/3d/7d/14d/30d ending at the bar). */
     changeLookback?: string;
     onChangeLookbackChange: (v: string) => void;
+    /** When set, a toggle appears to restrict the book to the selected wallet group
+     *  (vs all wallets holding the token). */
+    groupOnly?: boolean;
+    onToggleGroupOnly?: (() => void) | undefined;
     onClose: () => void;
   } = $props();
 
@@ -173,6 +179,11 @@
           <span class="text-zinc-300 font-medium">Positions</span>
           {#if token}<span class="text-zinc-500">·</span><span class="text-zinc-200">{token}</span>{/if}
           {#if groupName}<span class="text-zinc-500">·</span><span class="text-zinc-400">{groupName}</span>{/if}
+          {#if onToggleGroupOnly && groupName}
+            <button type="button" onclick={onToggleGroupOnly}
+              class="ml-1 text-[11px] px-2 py-0.5 rounded border {groupOnly ? 'border-emerald-700 bg-emerald-950/40 text-emerald-400' : 'border-zinc-700 bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700/50'}"
+              title="Restrict the book to the '{groupName}' wallet group (vs all wallets holding {token})">{groupOnly ? '● Group only' : 'Group only'}</button>
+          {/if}
           {#if lookback === 'none'}
             <span class="text-zinc-500">· current bar</span>
           {:else}
