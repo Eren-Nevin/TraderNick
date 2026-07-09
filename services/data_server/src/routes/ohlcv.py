@@ -44,12 +44,19 @@ _CAP_TABLE = {**_OHLCV_TABLE, "hl_fills": "tradernick.hl_fills"}
 
 @bp.get("/tokens")
 async def tokens(_request):
-    """Distinct tokens that have binance OHLCV — the canonical source for
-    the dashboard's token dropdowns. HL has the same roster (driven from
-    INGEST_TOKENS) so a single tokens list serves both exchanges."""
+    """Distinct tradeable tokens for the dashboard's token dropdowns — the UNION of
+    Binance OHLCV and recently-active Hyperliquid markets, so the roster covers every
+    token either exchange lists (incl. HL-only ones like GRAM that Binance doesn't
+    trade). Most tokens overlap; a Binance-only chart shows empty for an HL-only token
+    and vice-versa, which is expected. HL side is time-bounded (30d) to drop delisted
+    markets; Binance side is unbounded (matches prior behavior)."""
     ch = await client()
     rows = await ch.query(
-        "SELECT DISTINCT token FROM tradernick.binance_ohlcv_1m ORDER BY token"
+        "SELECT DISTINCT token FROM ("
+        "  SELECT token FROM tradernick.binance_ohlcv_1m"
+        "  UNION DISTINCT"
+        "  SELECT token FROM tradernick.hl_ohlcv_1m WHERE time > now() - INTERVAL 30 DAY"
+        ") WHERE token != '' ORDER BY token"
     )
     return response.json({"tokens": [r[0] for r in rows.result_rows]})
 
