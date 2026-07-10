@@ -9039,7 +9039,7 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        refLines={[{ value: 0, color: '#3f3f46', width: 1 }]}
+        refLines={[{ value: 0, color: '#71717a', width: 1, label: '0%' }]}
         sortTooltipDesc={true}
         formatY={(v) => `${v.toFixed(2)}%`}
         formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}%`}
