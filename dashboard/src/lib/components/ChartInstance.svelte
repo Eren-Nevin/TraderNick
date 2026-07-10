@@ -7340,9 +7340,9 @@
             onchange={(e) => (instance.emMinSize = Number(e.currentTarget.value) || 0)} /></label>
         <select class={emc} value={instance.emMode ?? 'flow'}
           onchange={(e) => (instance.emMode = e.currentTarget.value as 'flow' | 'open_flip' | 'position_state')}
-          title="What counts as reacting: Flow = net trade direction; Open/Flip = opened or flipped a position; State = an open position exists">
+          title="What counts as reacting: Flow = net trade direction (includes reducing/closing a position); More intentional = only risk-ADDING actions — opening, increasing, or flipping INTO a position (reductions and closes are NOT counted); State = an open position exists at the snapshot">
           <option value="flow">Flow</option>
-          <option value="open_flip">Open/Flip</option>
+          <option value="open_flip">More intentional</option>
           <option value="position_state">State</option>
         </select>
         <label class="flex items-center gap-1 text-[10px] {(instance.emLead ?? 1) >= 1 ? 'text-zinc-400' : 'text-zinc-700'}"

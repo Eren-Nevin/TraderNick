@@ -2738,81 +2738,41 @@ async def position_change_wallets(request):
     # Mark price at T (last close ≤ T) to value change / notional in USD.
     price = await mark_price(ch, token, t_end)
 
-    # Freshest position snapshot ≤ t_end. If it's BEFORE t_end, the raw hasn't
-    # published the clicked bar's snapshot yet (its ~25m DeFiStream lag) — the exact
-    # diff would come back empty, so reconstruct the "after" side from fills
-    # (hl_fills ~2m) via positions.positions_at so the most-recent bar still works.
+    price_prev = await mark_price(ch, token, t_prev)
+    # Freshest position snapshot ≤ t_end — used ONLY for the Total-OI column below.
     te_bucket = await latest_snapshot_bucket(ch, token, t_end)
-    reconstruct = te_bucket is None or te_bucket < t_end
 
-    if not reconstruct:
-        # Exact snapshot diff: UNION the two snapshots tagged e(nd)/s(tart), sum the
-        # signed position per wallet. (UNION not FULL JOIN — CH fills a missing key
-        # with '' not NULL.)
-        rows = await ch.query(
-            """
-            SELECT wallet,
-                   sum(if(tag = 'e', a, 0)) AS amt_new,
-                   sum(if(tag = 's', a, 0)) AS amt_old,
-                   sum(if(tag = 'e', u, 0)) AS usd_new,
-                   sum(if(tag = 's', u, 0)) AS usd_old,
-                   sum(if(tag = 's', p, 0)) AS unrealized_old,
-                   any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS categories
-            FROM (
-                SELECT wallet, 'e' AS tag,
-                       argMax(amount, time) * if(side = 'long', 1, -1) AS a,
-                       argMax(size,   time) * if(side = 'long', 1, -1) AS u,
-                       0.0 AS p
-                FROM tradernick.hl_position_history
-                WHERE token = {tok:String}
-                  AND time >= {te:DateTime} AND time < {te:DateTime} + INTERVAL 900 SECOND""" + mem + """
-                GROUP BY wallet, side
-                UNION ALL
-                SELECT wallet, 's' AS tag,
-                       argMax(amount, time) * if(side = 'long', 1, -1) AS a,
-                       argMax(size,   time) * if(side = 'long', 1, -1) AS u,
-                       argMax(unrealized_pnl, time) AS p
-                FROM tradernick.hl_position_history
-                WHERE token = {tok:String}
-                  AND time >= {tp:DateTime} AND time < {tp:DateTime} + INTERVAL 900 SECOND""" + mem + """
-                GROUP BY wallet, side
-            )
-            GROUP BY wallet
-            HAVING abs(amt_new - amt_old) > 1e-9
-            ORDER BY abs(amt_new - amt_old) DESC
-            LIMIT {n:UInt32}
-            """,
-            parameters={"tok": token, "te": t_end, "tp": t_prev, "n": n},
-        )
-        base_rows = list(rows.result_rows)
-    else:
-        # Reconstruct: candidates = wallets that TRADED the token over [t_prev, t_end)
-        # (position change equals net fills), ranked by |Δamount|. Then positions_at
-        # gives each one's old (t_prev snapshot) + new (t_prev snapshot + fills).
-        cand = await ch.query(
-            """
-            SELECT wallet,
-                   sum(if(side = 'B', size, -size)) AS d_amt,
-                   any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS categories
-            FROM tradernick.hl_fills FINAL
-            WHERE token = {tok:String} AND time >= {tp:DateTime} AND time < {te:DateTime}""" + mem + """
-            GROUP BY wallet
-            HAVING abs(d_amt) > 1e-9
-            ORDER BY abs(d_amt) DESC
-            LIMIT {n:UInt32}
-            """,
-            parameters={"tok": token, "tp": t_prev, "te": t_end, "n": n},
-        )
-        cwallets = [r[0] for r in cand.result_rows]
-        pos = (await positions_at(ch, token=token, at_time=t_end, base_bucket=t_prev,
-                                  wallets=cwallets, price=price)) if cwallets else {}
-        base_rows = []
-        for (w, d_amt, cats) in cand.result_rows:
-            p = pos.get(w) or {}
-            ao = p.get("base_amount", 0.0)
-            an = p.get("amount", ao + float(d_amt))
-            base_rows.append((w, an, ao, p.get("size_usd", 0.0),
-                              p.get("base_size_usd", 0.0), p.get("base_unrealized", 0.0), cats))
+    # Position change is derived ENTIRELY from hl_fills (2026-07-10). amt_old =
+    # signed position just before the window's first fill (that fill's
+    # start_position); amt_new = amt_old + net signed fills over the window (Buy
+    # +size, Sell −size). This replaces the old snapshot-diff + positions_at
+    # reconstruction, which was coarse (15m grid), lagged (~25–45m), and
+    # mislabelled recent changes — e.g. a wallet merely closing a long showed up
+    # as "Open short". Fills are ~1–2m fresh and unambiguous; the open/inc/dec/
+    # close/flip label follows exactly from amt_old→amt_new (frontend changeType).
+    # start_position is signed (+long / −short / 0). usd_* value the positions at
+    # the window-end / -start mark price. unrealized_old stays snapshot-sourced (a
+    # state column fills can't produce), fetched per-wallet below.
+    rows = await ch.query(
+        """
+        SELECT wallet,
+               argMin(start_position, time) AS amt_old,
+               argMin(start_position, time) + sum(if(side = 'B', size, -size)) AS amt_new,
+               any(dictGet('tradernick.wallet_labels', 'categories', lower(wallet))) AS categories
+        FROM tradernick.hl_fills FINAL
+        WHERE token = {tok:String} AND time >= {tp:DateTime} AND time < {te:DateTime}""" + mem + """
+        GROUP BY wallet
+        HAVING abs(amt_new - amt_old) > 1e-9
+        ORDER BY abs(amt_new - amt_old) DESC
+        LIMIT {n:UInt32}
+        """,
+        parameters={"tok": token, "tp": t_prev, "te": t_end, "n": n},
+    )
+    # base_rows shape: (wallet, amt_new, amt_old, usd_new, usd_old, unrealized_old, cats)
+    base_rows = [
+        (w, float(an), float(ao), float(an) * price, float(ao) * price_prev, 0.0, cats)
+        for (w, ao, an, cats) in rows.result_rows
+    ]
 
     wallets = [r[0] for r in base_rows]
     # Total OI per wallet at the freshest snapshot bucket (= t_end normally, the last
@@ -2853,9 +2813,23 @@ async def position_change_wallets(request):
         )
         gross = {w: (float(gb), float(gs), float(pn)) for w, gb, gs, pn in gr.result_rows}
 
+    # unrealized PnL at the window-start (t_prev) snapshot, per wallet — a state
+    # column fills can't produce, so (like Total OI) it stays snapshot-sourced.
+    upnl_old: dict[str, float] = {}
+    if wallets:
+        ur = await ch.query(
+            "SELECT wallet, sum(up) AS up FROM ("
+            "  SELECT wallet, argMax(unrealized_pnl, time) AS up FROM tradernick.hl_position_history"
+            "  WHERE token = {tok:String} AND time >= {tp:DateTime} AND time < {tp:DateTime} + INTERVAL 900 SECOND"
+            "    AND wallet IN {ws:Array(String)} GROUP BY wallet, side"
+            ") GROUP BY wallet",
+            parameters={"tok": token, "tp": t_prev, "ws": wallets},
+        )
+        upnl_old = {w: float(v) for w, v in ur.result_rows}
+
     out = [
         {"wallet": w, "amt_old": float(ao), "amt_new": float(an),
-         "usd_old": float(uo), "usd_new": float(un), "unrealized_old": float(up),
+         "usd_old": float(uo), "usd_new": float(un), "unrealized_old": upnl_old.get(w, 0.0),
          "account_value": acct.get(w, 0.0),
          "gross_buy": gross.get(w, (0.0, 0.0, 0.0))[0], "gross_sell": gross.get(w, (0.0, 0.0, 0.0))[1],
          "realized_pnl": gross.get(w, (0.0, 0.0, 0.0))[2],
