@@ -417,7 +417,7 @@
   {#if legendRight && legendRight.length}
     <!-- Persistent name list pinned to the right edge (e.g. Relative Performance's
          top-N tokens), so labels don't crowd the dots. -->
-    <div class="absolute top-1 right-1 max-h-[94%] overflow-y-auto flex flex-col gap-0.5 px-2 py-1 rounded border border-zinc-600 bg-zinc-950/90 text-[10px] font-mono z-30 scrollbar-none pointer-events-none">
+    <div class="absolute top-1 right-14 max-h-[94%] overflow-y-auto flex flex-col gap-0.5 px-2 py-1 rounded border border-zinc-600 bg-zinc-950/90 text-[10px] font-mono z-30 scrollbar-none pointer-events-none">
       {#each legendRight as e (e.label)}
         <div class="flex items-center gap-1.5 whitespace-nowrap">
           <span class="inline-block w-2 h-2 rounded-full shrink-0" style="background: {e.color}"></span>

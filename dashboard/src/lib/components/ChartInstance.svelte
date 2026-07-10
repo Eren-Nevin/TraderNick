@@ -2924,7 +2924,9 @@
           since = sinceIso;
           until = untilIso;
           loadedKey = loadKey();
-          localView = pv ?? defaultView(sinceIso, untilIso);
+          // Default view = the last 7 days (not the whole loaded chunk); pan left to see
+          // more, which lazy-loads older history.
+          localView = pv ?? [unixSec(untilIso) - 7 * 86_400, unixSec(untilIso)];
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
