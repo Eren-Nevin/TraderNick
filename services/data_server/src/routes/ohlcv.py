@@ -152,10 +152,12 @@ async def relative_performance(request):
                 continue
             if prev_p and prev_b:  # both present + non-zero
                 rt, rb = p[0] / prev_p, bc[0] / prev_b
-                # A >10x single-bucket move is a data glitch / redenomination (e.g. FIL's
-                # ~1000x scale correction on 2026-07-08 06:00), not a real return — null it
-                # so one bad tick doesn't dominate the chart.
-                if rt > 10 or rt < 0.1 or rb > 10 or rb < 0.1:
+                # A >6x single-bucket move is a data glitch / redenomination, not a real
+                # return — null it so one bad tick doesn't dominate the chart. Catches the
+                # known binance-futures scale glitches: FIL (2026-07-08) & CELO (2026-03-19)
+                # ~1000x, and DOGS (2026-04-27) ~9x. Real hourly moves for these tokens
+                # never approach 6x.
+                if rt > 6 or rt < 1 / 6 or rb > 6 or rb < 1 / 6:
                     vals_full.append(None)
                 else:
                     vals_full.append(round((rt - 1) * 100.0 - (rb - 1) * 100.0, 4))
