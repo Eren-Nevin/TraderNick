@@ -98,10 +98,14 @@
     return Array.isArray(v) && typeof v[0] === 'number' ? (v as [number, number]) : [0, 0];
   };
   // Net position change: increased longs + decreased shorts − increased shorts − decreased
-  // longs; parenthesis = the number of fills making it up (this is a single wallet).
+  // longs. Parenthesis = NET directional fill count: long-sided fills (inc_long +
+  // dec_short) − short-sided fills (inc_short + dec_long). Signed; the cell is gated on
+  // total inc/dec activity (netFills) since the net count can be 0 / negative.
   const netValue = (r: OverviewRow) =>
     cellOf(r, 'inc_long')[0] + cellOf(r, 'dec_short')[0] - cellOf(r, 'inc_short')[0] - cellOf(r, 'dec_long')[0];
   const netCount = (r: OverviewRow) =>
+    (cellOf(r, 'inc_long')[1] + cellOf(r, 'dec_short')[1]) - (cellOf(r, 'inc_short')[1] + cellOf(r, 'dec_long')[1]);
+  const netFills = (r: OverviewRow) =>
     cellOf(r, 'inc_long')[1] + cellOf(r, 'dec_short')[1] + cellOf(r, 'inc_short')[1] + cellOf(r, 'dec_long')[1];
   const shownCount = $derived(aggregateMode ? aggWallets.length : rows.length);
 
@@ -283,7 +287,7 @@
                   <div class="flex items-center justify-between text-xs border-b border-zinc-800 pb-2">
                     <span class="text-zinc-500">Net Pos Change</span>
                     <span class="font-mono tabular-nums {netValue(r) > 0 ? 'text-emerald-400' : netValue(r) < 0 ? 'text-rose-400' : 'text-zinc-600'}">
-                      {netCount(r) ? `${fmtUsd(netValue(r))} (${netCount(r)})` : '—'}
+                      {netFills(r) ? `${fmtUsd(netValue(r))} (${netCount(r)})` : '—'}
                     </span>
                   </div>
                   <div class="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">

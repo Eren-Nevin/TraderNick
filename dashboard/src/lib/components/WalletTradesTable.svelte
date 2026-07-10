@@ -152,10 +152,12 @@
   // increased longs + decreased shorts − increased shorts − decreased longs.
   const netValue = (r: OverviewRow) =>
     cellOf(r, 'inc_long')[0] + cellOf(r, 'dec_short')[0] - cellOf(r, 'inc_short')[0] - cellOf(r, 'dec_long')[0];
-  // Parenthesis = number of fills making up the net change (the inc/dec fill count),
-  // not distinct wallets — this view is already a single wallet. Summed from the four
-  // inc/dec category counts the net is built from.
+  // Parenthesis = NET directional fill count: long-sided fills (increased longs +
+  // decreased shorts) − short-sided fills (increased shorts + decreased longs). Signed
+  // (can be 0 / negative), so the cell is gated on total inc/dec activity (netFills).
   const netCount = (r: OverviewRow) =>
+    (cellOf(r, 'inc_long')[1] + cellOf(r, 'dec_short')[1]) - (cellOf(r, 'inc_short')[1] + cellOf(r, 'dec_long')[1]);
+  const netFills = (r: OverviewRow) =>
     cellOf(r, 'inc_long')[1] + cellOf(r, 'dec_short')[1] + cellOf(r, 'inc_short')[1] + cellOf(r, 'dec_long')[1];
 
   // ── Overview client-side sort (default: Net Pos Change desc). ──
@@ -243,7 +245,7 @@
               <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
                 <td class="px-3 py-1 font-medium text-zinc-100">{r.token}</td>
                 <td class="px-3 py-1 text-right font-mono tabular-nums whitespace-nowrap {netValue(r) > 0 ? 'text-emerald-400' : netValue(r) < 0 ? 'text-rose-400' : 'text-zinc-600'}">
-                  {netCount(r) ? `${fmtUsd(netValue(r))} (${netCount(r)})` : '—'}
+                  {netFills(r) ? `${fmtUsd(netValue(r))} (${netCount(r)})` : '—'}
                 </td>
                 {#each ovCols as c (c)}
                   {@const cell = cellOf(r, c)}
