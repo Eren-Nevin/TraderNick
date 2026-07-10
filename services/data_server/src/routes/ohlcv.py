@@ -69,6 +69,7 @@ async def tokens(_request):
 _RP_LOOKBACK = {"6h": 21600, "12h": 43200, "1d": 86400, "3d": 259200,
                 "7d": 604800, "14d": 1209600, "30d": 2592000, "90d": 7776000}
 _RP_INTERVAL = {"5m": "5 MINUTE", "15m": "15 MINUTE", "1h": "1 HOUR", "4h": "4 HOUR", "1d": "1 DAY"}
+_RP_IV_SECS = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
 _RP_TABLE = {"binance": "binance_ohlcv_1m", "binance_spot": "binance_spot_ohlcv_1m", "hl": "hl_ohlcv_1m"}
 
 
@@ -81,17 +82,33 @@ async def relative_performance(request):
     percentage points (each measured against the PREVIOUS bucket T-1):
         ((P[T]-P[T-1])/P[T-1])*100 - ((B[T]-B[T-1])/B[T-1])*100
     So 0 = moved exactly like the base this bucket; >0 = outperformed it; <0 =
-    underperformed. The first bucket (and any bucket after a gap) is null. `min_volume`
-    (USD/bucket) drops tokens whose per-bucket volume dips below the threshold in any
-    bucket. Params: base, lookback, interval, min_volume, exchange."""
+    underperformed. The first returned bucket still has a valid T-1 (one extra bucket is
+    fetched before `since`), so chunks stitch cleanly for pan-to-load. The base token is
+    omitted (it's always 0). `min_volume` (USD/bucket) drops tokens whose per-bucket volume
+    dips below the threshold in any bucket. Window: explicit `since`/`until` (unix seconds)
+    or `lookback`. Params: base, since, until, lookback, interval, min_volume, exchange."""
     base = (request.args.get("base") or "BTC").strip().upper()
-    lb_sec = _RP_LOOKBACK.get(request.args.get("lookback", "7d"), _RP_LOOKBACK["7d"])
-    iv_expr = _RP_INTERVAL.get(request.args.get("interval", "1h"), _RP_INTERVAL["1h"])
+    iv_key = request.args.get("interval", "1h")
+    iv_expr = _RP_INTERVAL.get(iv_key, _RP_INTERVAL["1h"])
+    iv_secs = _RP_IV_SECS.get(iv_key, 3600)
     table = _RP_TABLE.get(request.args.get("exchange", "binance"), _RP_TABLE["binance"])
     try:
         min_volume = float(request.args.get("min_volume", "0") or 0)
     except ValueError:
         min_volume = 0.0
+
+    now_u = int(datetime.now(timezone.utc).timestamp())
+    try:
+        if request.args.get("since") and request.args.get("until"):
+            since_u = int(float(request.args["since"][0] if isinstance(request.args["since"], list) else request.args.get("since")))
+            until_u = int(float(request.args.get("until")))
+        else:
+            since_u = now_u - _RP_LOOKBACK.get(request.args.get("lookback", "7d"), _RP_LOOKBACK["7d"])
+            until_u = now_u
+    except (ValueError, TypeError):
+        since_u = now_u - _RP_LOOKBACK["7d"]
+        until_u = now_u
+    query_start = since_u - iv_secs  # one extra bucket for the first T-1
 
     ch = await client()
     # Pre-multiply volume*close in a subquery: referencing `close` inside sum() in the
@@ -101,9 +118,9 @@ async def relative_performance(request):
         "  SELECT token, toStartOfInterval(time, INTERVAL " + iv_expr + ") AS bkt, close, time,"
         "         volume * close AS vol_usd_raw"
         "  FROM tradernick." + table +
-        "  WHERE time >= now() - INTERVAL {lb:UInt32} SECOND AND time < now()"
+        "  WHERE time >= fromUnixTimestamp({qs:UInt32}) AND time < fromUnixTimestamp({u:UInt32})"
         ") GROUP BY token, bkt ORDER BY token, bkt",
-        parameters={"lb": lb_sec},
+        parameters={"qs": max(0, query_start), "u": until_u},
     )
     by_token: dict[str, dict] = {}
     for token, bkt, close, vol in r.result_rows:
@@ -113,29 +130,35 @@ async def relative_performance(request):
     if not base_s or len(base_s) < 2:
         return response.json({"base": base, "times": [], "series": [],
                               "error": f"no data for base {base}"})
-    times_dt = sorted(base_s.keys())
-    times = [int(t.replace(tzinfo=timezone.utc).timestamp()) for t in times_dt]
+    times_dt = sorted(base_s.keys())  # includes the extra pre-`since` bucket
+    ts = [int(t.replace(tzinfo=timezone.utc).timestamp()) for t in times_dt]
+    out_idx = [i for i, u in enumerate(ts) if u >= since_u]  # buckets in [since, until]
+    times = [ts[i] for i in out_idx]
 
     series = []
     for token, pts in by_token.items():
+        if token == base:  # base's excess return vs itself is always 0
+            continue
         if min_volume > 0 and any(v < min_volume for (_, v) in pts.values()):
             continue
-        values = []
+        vals_full = []
         prev_p = prev_b = None  # previous-bucket closes (token, base)
         for t in times_dt:
             bc = base_s.get(t)
             p = pts.get(t)
             if p is None or bc is None:
-                values.append(None)
+                vals_full.append(None)
                 prev_p = prev_b = None  # a gap breaks the T-1 chain
                 continue
-            if prev_p and prev_b:  # both non-zero and present
-                tok_ret = (p[0] - prev_p) / prev_p * 100.0
-                base_ret = (bc[0] - prev_b) / prev_b * 100.0
-                values.append(round(tok_ret - base_ret, 4))
+            if prev_p and prev_b:  # both present + non-zero
+                vals_full.append(round((p[0] - prev_p) / prev_p * 100.0
+                                       - (bc[0] - prev_b) / prev_b * 100.0, 4))
             else:
-                values.append(None)
+                vals_full.append(None)
             prev_p, prev_b = p[0], bc[0]
+        values = [vals_full[i] for i in out_idx]
+        if all(v is None for v in values):  # nothing in the output window
+            continue
         series.append({"token": token, "values": values})
     series.sort(key=lambda s: s["token"])
     return response.json({"base": base, "times": times, "series": series})

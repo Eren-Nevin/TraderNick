@@ -13,11 +13,7 @@
   import GroupSnapshotWalletsDialog from '$lib/components/GroupSnapshotWalletsDialog.svelte';
   // Trading Pit query params → URLSearchParams (shared by loadKey + fetch).
   const _TP_LB_SECS: Record<string, number> = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
-  // Relative Performance (pc) lookback → seconds, + the response shape.
-  const _RP_LB_SECS: Record<string, number> = {
-    '6h': 21600, '12h': 43200, '1d': 86400, '3d': 259200,
-    '7d': 604800, '14d': 1209600, '30d': 2592000, '90d': 7776000
-  };
+  // Relative Performance (pc) response shape.
   type RpSeries = { token: string; values: (number | null)[] };
   type RpResp = { base?: string; times?: number[]; series?: RpSeries[] };
   // HSL→hex (lightweight-charts' color parser rejects the space-separated hsl() syntax,
@@ -665,7 +661,13 @@
     ? 30
     : instance.kind === 'smart_wallets_dynamic'
       ? 14
-      : 60;
+      : instance.kind === 'pc'
+        ? 45
+        : 60;
+  // Relative Performance: how far back pan-to-load reaches (data starts ~2026-01), and
+  // the initial chunk shown before any panning.
+  const RP_FLOOR_DAYS = 220;
+  const RP_FIRST_DAYS = 30;
   // Dynamic FIRST fetch window (days). Kept tiny so the initial paint is cheap;
   // ≤ DEFAULT_VIEW_DAYS (14) so defaultView() fits the view to exactly this
   // loaded range (no unloaded gap on the left). Older history backfills on pan.
@@ -692,6 +694,7 @@
     if (isDualViewKind(instance.kind) && instance.viewMode === 'chart') return true;
     if (instance.kind === 'oi') return (instance.exchange ?? 'binance') === 'hl';
     if (instance.kind === 'exchange_flow') return true;
+    if (instance.kind === 'pc') return true;  // Relative Performance pans to data start
     return false;
   }
 
@@ -1348,6 +1351,13 @@
         const ts = new Date(tu.getTime() - 180 * 24 * 60 * 60 * 1000);
         sinceIso = ts.toISOString();
         untilIso = tu.toISOString();
+      } else if (instance.kind === 'pc') {
+        // Relative Performance: full window = back to ~data start; the dynamic block
+        // below narrows the first fetch to a recent chunk and pans older on demand.
+        const now = new Date();
+        const tu = new Date(Math.floor(now.getTime() / 60_000) * 60_000);
+        sinceIso = new Date(tu.getTime() - RP_FLOOR_DAYS * 86_400_000).toISOString();
+        untilIso = tu.toISOString();
       } else {
         const w = lookbackWindow(instance.interval);
         sinceIso = w.since.toISOString();
@@ -1376,6 +1386,8 @@
           const lookbackSec = (instance.swLookback ?? 7) * 86_400;
           const startU = snapU < untilU - 86_400 ? snapU : untilU - lookbackSec;
           chunkU = Math.max(fullFloorU, Math.min(startU, untilU - 3_600));
+        } else if (instance.kind === 'pc') {
+          chunkU = Math.max(fullFloorU, untilU - RP_FIRST_DAYS * 86_400);
         }
         sinceIso = new Date(chunkU * 1000).toISOString();
       } else {
@@ -2916,25 +2928,14 @@
           break;
         }
         case 'pc': {
-          // Price Comparison — main token + each instance.overlayTokens
-          // fetched in parallel from /api/ohlcv, then rebased to % from
-          // every token vs the base, in ONE call → { base, times, series:[{token,values}] }.
-          const rpQs = new URLSearchParams({
-            base: instance.pcBase ?? 'BTC',
-            lookback: instance.pcLookback ?? '7d',
-            interval: instance.interval ?? '1h',
-            min_volume: String(instance.pcMinVolume ?? 0),
-            exchange: instance.exchange ?? 'binance'
-          });
-          const rpRes = await queuedFetch(`/api/relative_performance?${rpQs}`, { signal });
-          if (!rpRes.ok) throw new Error(`pc ${rpRes.status}`);
-          const rpBody = await rpRes.json();
-          data = [{ rp: rpBody } as unknown as AnyDatum];
-          const rpTimes = (rpBody.times ?? []) as number[];
-          since = new Date((rpTimes[0] ?? Math.floor(Date.now() / 1000 - (_RP_LB_SECS[instance.pcLookback ?? '7d'] ?? 604800))) * 1000).toISOString();
-          until = new Date().toISOString();
+          // Relative Performance: the dynamic block set sinceIso/untilIso to a recent
+          // chunk; older history backfills on pan (loadOlderChunk). data = per-bucket
+          // datum array [{ time, TOKEN: excessReturn, … }].
+          data = await fetchRpWindow(sinceIso, untilIso, signal);
+          since = sinceIso;
+          until = untilIso;
           loadedKey = loadKey();
-          localView = pv ?? defaultView(since, until);
+          localView = pv ?? defaultView(sinceIso, untilIso);
           loadCache.set(cacheId(), { key: loadedKey, data, since, until, localView });
           return;
         }
@@ -3476,9 +3477,40 @@
   /** Resolve the window-fetcher for the current dynamic kind, or null when the
    *  instance isn't a chunked kind / isn't ready (e.g. smart-OI with no valid
    *  filter). The returned fn fetches one [since, until) window of rows. */
+  // Relative Performance: turn { times, series:[{token,values}] } into a per-bucket
+  // datum array [{ time, TOKEN: excessReturn, … }] so it merges like any time series.
+  function _rpToData(body: RpResp): AnyDatum[] {
+    const times = body.times ?? [];
+    const series = body.series ?? [];
+    return times.map((t, i) => {
+      const d: Record<string, number> = { time: t };
+      for (const s of series) {
+        const v = s.values[i];
+        if (v != null) d[s.token] = v;
+      }
+      return d as unknown as AnyDatum;
+    });
+  }
+  async function fetchRpWindow(sinceIso: string, untilIso: string, signal?: AbortSignal): Promise<AnyDatum[]> {
+    const qs = new URLSearchParams({
+      base: instance.pcBase ?? 'BTC',
+      since: String(unixSec(sinceIso)),
+      until: String(unixSec(untilIso)),
+      interval: instance.interval ?? '1h',
+      min_volume: String(instance.pcMinVolume ?? 0),
+      exchange: instance.exchange ?? 'binance'
+    });
+    const res = await queuedFetch(`/api/relative_performance?${qs}`, { signal });
+    if (!res.ok) throw new Error(`pc ${res.status}`);
+    return _rpToData((await res.json()) as RpResp);
+  }
+
   function dynamicFetcher():
     | ((sinceIso: string, untilIso: string, signal?: AbortSignal) => Promise<AnyDatum[]>)
     | null {
+    if (instance.kind === 'pc') {
+      return (s, u, sig) => fetchRpWindow(s, u, sig);
+    }
     if (instance.kind === 'hl_smart_oi') {
       const wire = smartCombinedWire;
       if (wire === null || wire === 'broken') return null;
@@ -4784,36 +4816,28 @@
   ]);
   // Rebase an array of {close} (Candle-shaped) rows so the first non-null
   // close is 0%, every subsequent value is `(close - base) / base * 100`.
-  // ── Relative Price (pc) ──────────────────────────────────────────────
-  // The chart token's price expressed RELATIVE to each base token: one line
-  // per base, value = close(chart token) / close(base token) per bucket. Base
-  // tokens live in instance.overlayTokens (default ['BTC']). Candle grids are
-  // assumed index-aligned across tokens (same interval/window), matching the
-  // multi-token fetch above.
-  // Relative Performance: the fetched { base, times, series:[{token, values}] }.
-  let rpResp = $derived(
-    instance.kind === 'pc' && data.length > 0
-      ? ((data[0] as unknown as { rp?: RpResp }).rp ?? ({} as RpResp))
-      : ({} as RpResp)
-  );
-  // x-axis points, one per bucket time.
-  let pcData = $derived(
-    instance.kind === 'pc'
-      ? ((rpResp.times ?? []) as number[]).map((t) => ({ time: t }) as unknown as Candle)
-      : []
-  );
+  // ── Relative Performance (pc) ────────────────────────────────────────
+  // `data` is the per-bucket datum array [{ time, TOKEN: excessReturn, … }], built by
+  // _rpToData and grown on the left by loadOlderChunk. The token series present is the
+  // union of datum keys (chunks can carry different tokens as min-vol/coverage varies).
+  let rpTokens = $derived.by<string[]>(() => {
+    if (instance.kind !== 'pc') return [];
+    const s = new Set<string>();
+    for (const d of data) for (const k in d as object) if (k !== 'time') s.add(k);
+    return [...s].sort();
+  });
   // Distinct palette for the pc chart's ratio lines.
   const OVERLAY_COLORS = ['#06b6d4', '#fbbf24', '#a855f7', '#22c55e', '#ef4444', '#ec4899'] as const;
   // OHLCV chart is back to its original behaviour: candles + MAs only.
   let ohlcvLinesD = $derived(cumulativeLines);
-  // One line per token — its return vs the base's return, indexed by bucket.
+  // One line per token — its per-bucket excess return vs the base, read off the datum.
   let pcLinesD = $derived(
-    ((rpResp.series ?? []) as RpSeries[]).map((s, idx, arr) => ({
-      key: `rp_${s.token}`,
-      label: s.token,
+    rpTokens.map((tok, idx, arr) => ({
+      key: `rp_${tok}`,
+      label: tok,
       color: _rpHueHex(idx, arr.length),
-      compute: (_d: Candle, i: number) => {
-        const v = s.values[i];
+      compute: (d: Candle, _i: number) => {
+        const v = (d as unknown as Record<string, number>)[tok];
         return v == null ? NaN : v;
       }
     }))
@@ -8712,7 +8736,7 @@
               class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 w-24" />
           </label>
         </div>
-        <div class="text-[10px] text-zinc-600">Bucket size = the toolbar interval selector. {(rpResp.series ?? []).length} tokens shown.</div>
+        <div class="text-[10px] text-zinc-600">Bucket size = the toolbar interval selector. Pan/zoom left to load history back to ~data start. {rpTokens.length} tokens shown.</div>
       </div>
     {/if}
 
@@ -8955,7 +8979,7 @@
       <!-- Relative Performance: one line per token = its per-bucket return minus the
            base's per-bucket return, in percentage points (0 = moved like the base). -->
       <LineChart
-        data={pcData as Candle[]}
+        data={data as unknown as Candle[]}
         lines={pcLinesD}
         height={chartCanvasHeight}
         {xExtent}

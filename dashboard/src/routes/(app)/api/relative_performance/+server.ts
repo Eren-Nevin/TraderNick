@@ -3,7 +3,7 @@ import { error } from '@sveltejs/kit';
 import type { RequestHandler } from './$types';
 
 // Proxy for /relative_performance — every token's performance vs a base, as a time series.
-const PASSTHROUGH = ['base', 'lookback', 'interval', 'min_volume', 'exchange'];
+const PASSTHROUGH = ['base', 'since', 'until', 'lookback', 'interval', 'min_volume', 'exchange'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();
