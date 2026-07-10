@@ -77,13 +77,13 @@ async def relative_performance(request):
     """Every token's performance RELATIVE to a base (default BTC) over a lookback, as a
     time series — powers the reworked Relative Price chart (one line per token).
 
-    For each bucket T, value = (token return since T0) / (base return since T0), in %:
-        ((P[T]-P[T0])/P[T0]) / ((B[T]-B[T0])/B[T0]) * 100
-    where T0 is the first bucket of the window. So 100% = moved exactly like the base;
-    >100% = outperformed; negative = moved opposite the base. Points where the base's
-    return is ~0 (undefined ratio) are null. `min_volume` (USD/bucket) drops tokens whose
-    per-bucket volume dips below the threshold in any bucket. Params: base, lookback,
-    interval, min_volume, exchange."""
+    For each bucket T, value = the token's per-bucket return MINUS the base's, in
+    percentage points (each measured against the PREVIOUS bucket T-1):
+        ((P[T]-P[T-1])/P[T-1])*100 - ((B[T]-B[T-1])/B[T-1])*100
+    So 0 = moved exactly like the base this bucket; >0 = outperformed it; <0 =
+    underperformed. The first bucket (and any bucket after a gap) is null. `min_volume`
+    (USD/bucket) drops tokens whose per-bucket volume dips below the threshold in any
+    bucket. Params: base, lookback, interval, min_volume, exchange."""
     base = (request.args.get("base") or "BTC").strip().upper()
     lb_sec = _RP_LOOKBACK.get(request.args.get("lookback", "7d"), _RP_LOOKBACK["7d"])
     iv_expr = _RP_INTERVAL.get(request.args.get("interval", "1h"), _RP_INTERVAL["1h"])
@@ -109,35 +109,33 @@ async def relative_performance(request):
     for token, bkt, close, vol in r.result_rows:
         by_token.setdefault(token, {})[bkt] = (float(close), float(vol))
 
-    btc = by_token.get(base)
-    if not btc or len(btc) < 2:
+    base_s = by_token.get(base)
+    if not base_s or len(base_s) < 2:
         return response.json({"base": base, "times": [], "series": [],
                               "error": f"no data for base {base}"})
-    times_dt = sorted(btc.keys())
-    t0 = times_dt[0]
-    btc_t0 = btc[t0][0]
+    times_dt = sorted(base_s.keys())
     times = [int(t.replace(tzinfo=timezone.utc).timestamp()) for t in times_dt]
 
     series = []
     for token, pts in by_token.items():
         if min_volume > 0 and any(v < min_volume for (_, v) in pts.values()):
             continue
-        p0 = pts.get(t0)
-        if p0 is None or p0[0] == 0:
-            continue
-        p0_close = p0[0]
         values = []
+        prev_p = prev_b = None  # previous-bucket closes (token, base)
         for t in times_dt:
-            bc = btc.get(t)
+            bc = base_s.get(t)
             p = pts.get(t)
-            if bc is None or p is None:
+            if p is None or bc is None:
                 values.append(None)
+                prev_p = prev_b = None  # a gap breaks the T-1 chain
                 continue
-            btc_ret = (bc[0] - btc_t0) / btc_t0
-            if abs(btc_ret) < 1e-6:
-                values.append(None)
+            if prev_p and prev_b:  # both non-zero and present
+                tok_ret = (p[0] - prev_p) / prev_p * 100.0
+                base_ret = (bc[0] - prev_b) / prev_b * 100.0
+                values.append(round(tok_ret - base_ret, 4))
             else:
-                values.append(round(100.0 * ((p[0] - p0_close) / p0_close) / btc_ret, 3))
+                values.append(None)
+            prev_p, prev_b = p[0], bc[0]
         series.append({"token": token, "values": values})
     series.sort(key=lambda s: s["token"])
     return response.json({"base": base, "times": times, "series": series})

@@ -8697,7 +8697,7 @@
       <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-3">
         <div class="text-[10px] uppercase tracking-widest text-zinc-500">
           Relative Performance
-          <span class="text-zinc-600 normal-case">— each token's return vs the base's return since the lookback start (T0), in % (100 = moved like the base)</span>
+          <span class="text-zinc-600 normal-case">— each token's per-bucket return minus the base's, in percentage points (0 = moved like the base this bucket)</span>
         </div>
         <div class="flex items-center gap-4 flex-wrap">
           <label class="flex items-center gap-1.5 text-zinc-300">Base
@@ -8706,7 +8706,7 @@
               {#each tokens as t (t)}<option value={t}>{t}</option>{/each}
             </select>
           </label>
-          <label class="flex items-center gap-1.5 text-zinc-300">Lookback (T0)
+          <label class="flex items-center gap-1.5 text-zinc-300">Lookback
             <select value={instance.pcLookback ?? '7d'} onchange={(e) => (instance.pcLookback = e.currentTarget.value as NonNullable<ChartInstanceT['pcLookback']>)}
               class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100">
               {#each ['6h', '12h', '1d', '3d', '7d', '14d', '30d', '90d'] as lb (lb)}<option value={lb}>{lb}</option>{/each}
@@ -8958,8 +8958,8 @@
         fontFamily={instance.kind === 'backtracker' ? '"Arial Black", "Arial Bold", Gadget, sans-serif' : undefined}
       />
     {:else if instance.kind === 'pc'}
-      <!-- Relative Performance: one line per token = its return vs the base's return
-           since T0, in % (100 = moved like the base). -->
+      <!-- Relative Performance: one line per token = its per-bucket return minus the
+           base's per-bucket return, in percentage points (0 = moved like the base). -->
       <LineChart
         data={pcData as Candle[]}
         lines={pcLinesD}
@@ -8970,8 +8970,9 @@
         hoverTime={effectiveHoverTime}
         onHover={handleHover}
         vRefLines={weekVRefLines}
-        formatY={(v) => `${v.toFixed(0)}%`}
-        formatTooltip={(v) => `${v.toFixed(1)}%`}
+        refLines={[{ value: 0, color: '#3f3f46', width: 1 }]}
+        formatY={(v) => `${v.toFixed(2)}%`}
+        formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}%`}
       />
     {:else if effectiveKind === 'oi' || effectiveKind === 'hl_smart_oi'}
       <!-- HL Long/Short ratio is unitless (1.03, not $1.03). Otherwise USD
