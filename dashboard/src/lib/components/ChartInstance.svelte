@@ -9851,6 +9851,9 @@
   groupName={btDialogGroupName}
   groupOnly={btGroupOnly}
   onToggleGroupOnly={btDialogGroupName ? toggleBtGroupOnly : undefined}
+  startSec={btStartSec}
+  endSec={btEndSec}
+  groupId={instance.btGroupId ?? null}
   onClose={() => { btDialogOpen = false; if (btFetchCtl) btFetchCtl.abort(); }}
 />
 

@@ -3586,8 +3586,8 @@ async def trading_pit(request):
     if lb not in _TP_LB:
         return response.json({"error": f"lookback must be one of {list(_TP_LB)}"}, status=400)
     mode = request.args.get("mode", "normal")
-    if mode not in ("normal", "aggregate", "overview", "wallets"):
-        return response.json({"error": "mode must be normal|aggregate|overview|wallets"}, status=400)
+    if mode not in ("normal", "aggregate", "overview", "overview_wallets", "wallets"):
+        return response.json({"error": "mode must be normal|aggregate|overview|overview_wallets|wallets"}, status=400)
     flip_split = request.args.get("flip_mode") == "split"
 
     def _f(name, default):
@@ -3729,6 +3729,28 @@ async def trading_pit(request):
         for a in agg.values():
             a.setdefault("net_wallets", 0)
         return response.json({"mode": mode, "flip_split": flip_split, "tokens": list(agg.values()), "tokens_available": tokens_available})
+
+    if mode == "overview_wallets":
+        # Per-WALLET classified breakdown (same 8+2 categories as overview, grouped by
+        # wallet instead of token) — drives the Backtracker dialog's Aggregate cards.
+        # Expects a single-token narrow (tokens=<one>). Each wallet: {wallet, cats, +the
+        # 10 category keys as [Σ$, count]}. Ordered by gross traded $ desc, capped at n.
+        r = await ch.query(
+            "SELECT wallet, type, sum(value) AS v, count() AS c,"
+            " any(dictGet('tradernick.wallet_labels','categories',lower(wallet))) AS cats"
+            " FROM (" + base + ") GROUP BY wallet, type",
+            parameters=params,
+        )
+        wagg: dict[str, dict] = {}
+        for w, ty, v, c, cats in r.result_rows:
+            a = wagg.get(w)
+            if a is None:
+                a = {"wallet": w, "cats": list(cats) if cats else []} | {k: [0.0, 0] for k in _TP_TYPE_KEYS}
+                wagg[w] = a
+            if ty in a:
+                a[ty] = [float(v), int(c)]
+        rows = sorted(wagg.values(), key=lambda a: sum(a[k][0] for k in _TP_TYPE_KEYS), reverse=True)[:n]
+        return response.json({"mode": mode, "flip_split": flip_split, "wallets": rows})
 
     if mode == "wallets":
         # per-wallet summary for the token(s): net directional flow (excl opens/closes),
