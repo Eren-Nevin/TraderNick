@@ -4850,8 +4850,8 @@
   // OHLCV chart is back to its original behaviour: candles + MAs only.
   let ohlcvLinesD = $derived(cumulativeLines);
   // One dot-series per shown token — its per-bucket excess return, but ONLY at buckets
-  // where it ranks in the top-N (else NaN → no dot). All the SAME colour; the token names
-  // live in a right-side legend (below) rather than on each dot (too dense).
+  // where it ranks in the top-N (else NaN → no dot). All the SAME colour; the token symbol
+  // is drawn beside each dot (pointLabel), with de-overlap handled in the chart.
   const PC_DOT_COLOR = '#38bdf8';
   let pcLinesD = $derived(
     rpShownTokens.map((tok) => ({
@@ -4859,6 +4859,7 @@
       label: tok,
       color: PC_DOT_COLOR,
       pointsOnly: true,
+      pointLabel: tok,
       compute: (d: { time: number } & Record<string, number>, i: number) => {
         if (!pcTopSets[i]?.has(tok)) return NaN;
         const v = d[tok];
@@ -4866,8 +4867,6 @@
       }
     }))
   );
-  // Legend entries for the right-side name list (pc only) — the top-mover tokens present.
-  let pcLegend = $derived(rpShownTokens.map((tok) => ({ label: tok, color: PC_DOT_COLOR })));
   let frLinesD = $derived(cumulativeLines);
 
   // ---- book_depth ----------------------------------------------------------
@@ -8769,7 +8768,7 @@
       <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-3">
         <div class="text-[10px] uppercase tracking-widest text-zinc-500">
           Relative Performance
-          <span class="text-zinc-600 normal-case">— per snapshot, the top-N tokens by change (vs the base's move) as dots; colors are keyed in the right-side legend, hover for exact values</span>
+          <span class="text-zinc-600 normal-case">— per snapshot, the top-N tokens by change (vs the base's move) as dots, token symbol beside each; zoom in if labels crowd, hover for exact values</span>
         </div>
         <div class="flex items-center gap-4 flex-wrap">
           <label class="flex items-center gap-1.5 text-zinc-300">Base
@@ -9032,7 +9031,6 @@
         onHover={handleHover}
         vRefLines={weekVRefLines}
         refLines={[{ value: 0, color: '#3f3f46', width: 1 }]}
-        legendRight={pcLegend}
         formatY={(v) => `${v.toFixed(2)}%`}
         formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}%`}
       />

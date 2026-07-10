@@ -30,6 +30,10 @@
     /** Render as isolated dots (no connecting line) — for scatter-style series
      *  whose finite points are sparse/non-contiguous. */
     pointsOnly?: boolean;
+    /** If set, draw this text beside each of the series' finite points (with
+     *  de-overlap). For scatter series where each point needs a label (e.g. a
+     *  token symbol on each dot). */
+    pointLabel?: string;
     /** Per-point markers (e.g. a labeled dot per data point). When present, the
      *  series' own point markers are suppressed — these replace them. Must be in
      *  ascending-time order. */
@@ -143,6 +147,46 @@
     return { type: 'custom' as const, formatter: fn, minMove: 0.00000001 };
   }
 
+  // Per-point labels drawn beside each dot (for lines with `pointLabel`). Positions are
+  // recomputed from the chart's scales on every data/view change; a greedy de-overlap
+  // keeps them readable (labels that would collide are dropped — zoom in for more).
+  let pointLabels = $state<{ x: number; y: number; text: string }[]>([]);
+  function recomputeLabels() {
+    if (!chart || data.length === 0 || !lines.some((l) => l.pointLabel)) {
+      if (pointLabels.length) pointLabels = [];
+      return;
+    }
+    const ts = chart.timeScale();
+    const lr = ts.getVisibleLogicalRange();
+    const lo = lr ? Math.max(0, Math.floor(lr.from)) : 0;
+    const hi = lr ? Math.min(data.length - 1, Math.ceil(lr.to)) : data.length - 1;
+    const out: { x: number; y: number; text: string }[] = [];
+    const placed: { x: number; y: number }[] = [];
+    for (const ln of lines) {
+      if (!ln.pointLabel) continue;
+      const entry = lineSeries.get(ln.key);
+      if (!entry) continue;
+      for (let i = lo; i <= hi; i++) {
+        const v = ln.compute(data[i], i, data);
+        if (!Number.isFinite(v)) continue;
+        const x = ts.timeToCoordinate(data[i].time as UTCTimestamp);
+        if (x === null) continue;
+        const y = entry.series.priceToCoordinate(v);
+        if (y === null) continue;
+        const xn = x as number, yn = y as number;
+        if (placed.some((p) => Math.abs(p.x - xn) < 30 && Math.abs(p.y - yn) < 11)) continue;
+        placed.push({ x: xn, y: yn });
+        out.push({ x: xn + 5, y: yn - 6, text: ln.pointLabel });
+      }
+    }
+    pointLabels = out;
+  }
+  let _labelRaf = 0;
+  function scheduleLabels() {
+    if (_labelRaf) return;
+    _labelRaf = requestAnimationFrame(() => { _labelRaf = 0; recomputeLabels(); });
+  }
+
   onMount(() => {
     if (!wrapper) return;
     const c = createChart(wrapper, { ...lwcChartOptions(), height, autoSize: true });
@@ -167,6 +211,7 @@
       lastEmittedFrom = from;
       lastEmittedTo = to;
       onView?.([from, to]);
+      scheduleLabels();
     });
 
     // Subscribe unconditionally and read `onClick` at click time. Gating the
@@ -254,6 +299,7 @@
       entry.series.setData(points);
       entry.series.setMarkers((ln.markers ?? []) as unknown as SeriesMarker<UTCTimestamp>[]);
     }
+    scheduleLabels();
 
     // Show the LEFT price scale's axis labels only when a series actually uses
     // the secondary (left) axis. Lightweight-charts hides the left scale by
@@ -426,4 +472,11 @@
       {/each}
     </div>
   {/if}
+
+  {#each pointLabels as p, i (i)}
+    <span
+      class="absolute text-[9px] leading-none font-mono text-zinc-100 pointer-events-none whitespace-nowrap z-20"
+      style="left: {p.x}px; top: {p.y}px; text-shadow: 0 0 3px #000, 0 0 2px #000;"
+    >{p.text}</span>
+  {/each}
 </div>
