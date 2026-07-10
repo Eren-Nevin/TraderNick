@@ -4830,11 +4830,18 @@
         const v = rec[t];
         if (typeof v === 'number' && Number.isFinite(v)) es.push([t, v]);
       }
-      if (side === 'positive') es.sort((a, b) => b[1] - a[1]);
-      else if (side === 'negative') es.sort((a, b) => a[1] - b[1]);
-      else es.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
-      const keep = es.filter(([, v]) => (side === 'positive' ? v > 0 : side === 'negative' ? v < 0 : true));
-      return new Set(keep.slice(0, n).map(([t]) => t));
+      if (side === 'positive') {
+        const keep = es.filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, n);
+        return new Set(keep.map(([t]) => t));
+      }
+      if (side === 'negative') {
+        const keep = es.filter(([, v]) => v < 0).sort((a, b) => a[1] - b[1]).slice(0, n);
+        return new Set(keep.map(([t]) => t));
+      }
+      // 'all' → Top N on EACH side: the N most-positive AND the N most-negative (2N total).
+      const pos = es.filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]).slice(0, n);
+      const neg = es.filter(([, v]) => v < 0).sort((a, b) => a[1] - b[1]).slice(0, n);
+      return new Set([...pos, ...neg].map(([t]) => t));
     });
   });
   // Only the tokens that appear in some bucket's top-N get a series (keeps the legend
@@ -7812,7 +7819,7 @@
           value={String(instance.pcTopN ?? 5)}
           onchange={(e) => (instance.pcTopN = Number(e.currentTarget.value) as NonNullable<ChartInstanceT['pcTopN']>)}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          title="How many top movers to show per snapshot"
+          title="How many top movers to show per snapshot. In 'All' mode this is N per side — the N most-positive AND the N most-negative (2N total)."
         >
           {#each [3, 5, 10, 15] as n (n)}<option value={String(n)}>Top {n}</option>{/each}
         </select>
