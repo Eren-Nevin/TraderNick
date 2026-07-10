@@ -7371,8 +7371,13 @@
           <option value="">Group: none</option>
           {#each walletPinsStore.groups as g (g.id)}<option value={g.id}>{g.name}</option>{/each}
         </select>
-        <!-- staleness / Δprice / Snapshot·Live moved to the settings pane (gear) to
-             declutter the toolbar — see the group_snapshot block below. -->
+        <select class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          value={instance.gsPriceLb ?? '1h'} onchange={(e) => (instance.gsPriceLb = e.currentTarget.value as '5m' | '15m' | '1h' | '4h' | '1d')}
+          title="Lookback for the price-change % columns">
+          {#each ['5m', '15m', '1h', '4h', '1d'] as s (s)}<option value="{s}">Δprice {s}</option>{/each}
+        </select>
+        <!-- staleness / Snapshot·Live moved to the settings pane (gear) to declutter
+             the toolbar — see the group_snapshot block below. -->
       {:else if instance.kind === 'trading_pit'}
         {@const tpc = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}
         {@const avail = tokens.filter((t) => !(instance.tpTokens ?? []).includes(t))}
@@ -8016,14 +8021,6 @@
             onchange={(e) => (instance.gsStaleness = e.currentTarget.value as '1h' | '4h' | '1d' | '3d' | '7d' | '14d' | '30d')}
             class={gsSel}>
             {#each ['1h', '4h', '1d', '3d', '7d', '14d', '30d'] as s (s)}<option value={s}>{s}</option>{/each}
-          </select>
-        </label>
-        <label class="flex items-center gap-1.5 text-zinc-300" title="Lookback for the price-change % columns">
-          Δprice lookback
-          <select value={instance.gsPriceLb ?? '1h'}
-            onchange={(e) => (instance.gsPriceLb = e.currentTarget.value as '5m' | '15m' | '1h' | '4h' | '1d')}
-            class={gsSel}>
-            {#each ['5m', '15m', '1h', '4h', '1d'] as s (s)}<option value={s}>{s}</option>{/each}
           </select>
         </label>
         <label class="flex items-center gap-1.5 text-zinc-300"
