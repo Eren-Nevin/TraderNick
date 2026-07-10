@@ -8706,12 +8706,6 @@
               {#each tokens as t (t)}<option value={t}>{t}</option>{/each}
             </select>
           </label>
-          <label class="flex items-center gap-1.5 text-zinc-300">Lookback
-            <select value={instance.pcLookback ?? '7d'} onchange={(e) => (instance.pcLookback = e.currentTarget.value as NonNullable<ChartInstanceT['pcLookback']>)}
-              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100">
-              {#each ['6h', '12h', '1d', '3d', '7d', '14d', '30d', '90d'] as lb (lb)}<option value={lb}>{lb}</option>{/each}
-            </select>
-          </label>
           <label class="flex items-center gap-1.5 text-zinc-300" title="Drop any token whose per-bucket USD volume dips below this in any bucket">Min vol $M
             <input type="number" min="0" step="0.5" value={(instance.pcMinVolume ?? 0) / 1e6}
               onchange={(e) => (instance.pcMinVolume = Math.max(0, (Number(e.currentTarget.value) || 0) * 1e6))}
