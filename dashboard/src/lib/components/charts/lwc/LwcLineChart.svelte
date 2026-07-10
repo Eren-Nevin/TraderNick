@@ -72,7 +72,8 @@
     formatTooltip = (v: number) => v.toFixed(4),
     formatY2,
     formatTooltip2,
-    legendRight = null as { label: string; color: string }[] | null
+    legendRight = null as { label: string; color: string }[] | null,
+    sortTooltipByAbs = false
   }: {
     data: Datum[];
     lines: Line[];
@@ -80,6 +81,9 @@
     vRefLines?: VRefLine[];
     /** Optional persistent legend pinned to the chart's right edge (name + color). */
     legendRight?: { label: string; color: string }[] | null;
+    /** Sort the hover tooltip's rows by |value| descending (biggest movers first)
+     *  instead of line order. */
+    sortTooltipByAbs?: boolean;
     height?: number;
     title?: string;
     xExtent?: [number, number];
@@ -133,6 +137,20 @@
     return Math.abs(b - hoverTime) < Math.abs(hoverTime - a) ? lo : lo - 1;
   });
   const hoverDatum = $derived(hoverIdx !== null ? data[hoverIdx] : null);
+  // Tooltip rows at the hovered point — only finite-valued lines, optionally sorted by
+  // |value| descending (biggest movers first) rather than line order.
+  const tooltipRows = $derived.by<{ ln: Line; v: number }[]>(() => {
+    if (hoverDatum === null) return [];
+    const rows: { ln: Line; v: number }[] = [];
+    for (const ln of lines) {
+      const v = ln.rawValue
+        ? ln.rawValue(hoverDatum, hoverIdx ?? 0, data)
+        : ln.compute(hoverDatum, hoverIdx ?? 0, data);
+      if (Number.isFinite(v)) rows.push({ ln, v });
+    }
+    if (sortTooltipByAbs) rows.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+    return rows;
+  });
 
   // First primary series — refLines are drawn against it.
   function firstPrimarySeries(): ISeriesApi<'Line'> | null {
@@ -270,7 +288,7 @@
           lineWidth: 1,
           lineVisible: !ln.pointsOnly,
           pointMarkersVisible: (ln.pointsOnly ?? false) && !(ln.markers?.length),
-          pointMarkersRadius: ln.pointsOnly ? 3 : undefined,
+          pointMarkersRadius: ln.pointsOnly ? 5 : undefined,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
           priceScaleId: axis === 'secondary' ? 'left' : 'right',
           priceFormat: priceFormatFor(axis),
@@ -285,7 +303,7 @@
           color: ln.color,
           lineVisible: !ln.pointsOnly,
           pointMarkersVisible: (ln.pointsOnly ?? false) && !(ln.markers?.length),
-          pointMarkersRadius: ln.pointsOnly ? 3 : undefined,
+          pointMarkersRadius: ln.pointsOnly ? 5 : undefined,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
           priceFormat: priceFormatFor(axis)
         });
@@ -433,29 +451,24 @@
       <div class="text-zinc-400">
         {fmtUtcTime(hoverDatum.time)}
       </div>
-      {#each lines as ln (ln.key)}
-        {@const v = ln.rawValue
-          ? ln.rawValue(hoverDatum, hoverIdx ?? 0, data)
-          : ln.compute(hoverDatum, hoverIdx ?? 0, data)}
-        <!-- Only list series that actually have a value at this snapshot (a NaN means
-             the series has no point here — e.g. a token not in the top-N this bucket). -->
-        {#if Number.isFinite(v)}
-          {@const fmt =
-            ln.rawValue && ln.rawFormat
-              ? ln.rawFormat
-              : ln.axis === 'secondary'
-                ? (formatTooltip2 ?? formatTooltip)
-                : formatTooltip}
-          {@const pct = ln.pct ? ln.pct(hoverDatum, hoverIdx ?? 0, data) : null}
-          <div class="flex items-center gap-2">
-            <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
-            <span class="text-zinc-400 w-28">{ln.label}</span>
-            <span class="w-20 text-right">{fmt(v)}</span>
-            {#if pct !== null && Number.isFinite(pct)}
-              <span class="w-12 text-right text-zinc-500">{pct.toFixed(1)}%</span>
-            {/if}
-          </div>
-        {/if}
+      <!-- Only finite-valued lines (a NaN means no point here — e.g. a token not in the
+           top-N this bucket); optionally sorted biggest-mover-first (sortTooltipByAbs). -->
+      {#each tooltipRows as { ln, v } (ln.key)}
+        {@const fmt =
+          ln.rawValue && ln.rawFormat
+            ? ln.rawFormat
+            : ln.axis === 'secondary'
+              ? (formatTooltip2 ?? formatTooltip)
+              : formatTooltip}
+        {@const pct = ln.pct ? ln.pct(hoverDatum, hoverIdx ?? 0, data) : null}
+        <div class="flex items-center gap-2">
+          <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
+          <span class="text-zinc-400 w-28">{ln.label}</span>
+          <span class="w-20 text-right">{fmt(v)}</span>
+          {#if pct !== null && Number.isFinite(pct)}
+            <span class="w-12 text-right text-zinc-500">{pct.toFixed(1)}%</span>
+          {/if}
+        </div>
       {/each}
     </div>
   {/if}
