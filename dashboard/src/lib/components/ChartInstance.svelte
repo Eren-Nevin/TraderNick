@@ -20,6 +20,17 @@
   };
   type RpSeries = { token: string; values: (number | null)[] };
   type RpResp = { base?: string; times?: number[]; series?: RpSeries[] };
+  // HSL→hex (lightweight-charts' color parser rejects the space-separated hsl() syntax,
+  // which blanked the chart). Distinct-ish hue per series index.
+  function _rpHueHex(idx: number, n: number): string {
+    const h = (Math.round((360 * idx) / Math.max(1, n)) % 360) / 360;
+    const s = 0.68, l = 0.55;
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const hk = (t: number) => { t = (t % 1 + 1) % 1; return t < 1 / 6 ? p + (q - p) * 6 * t : t < 0.5 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p; };
+    const to = (x: number) => Math.round(x * 255).toString(16).padStart(2, '0');
+    return `#${to(hk(h + 1 / 3))}${to(hk(h))}${to(hk(h - 1 / 3))}`;
+  }
   function _tpQs(instance: ChartInstanceT): URLSearchParams {
     const qs = new URLSearchParams({
       tokens: (instance.tpTokens ?? []).join(','),
@@ -4800,7 +4811,7 @@
     ((rpResp.series ?? []) as RpSeries[]).map((s, idx, arr) => ({
       key: `rp_${s.token}`,
       label: s.token,
-      color: `hsl(${Math.round((360 * idx) / Math.max(1, arr.length)) % 360} 70% 55%)`,
+      color: _rpHueHex(idx, arr.length),
       compute: (_d: Candle, i: number) => {
         const v = s.values[i];
         return v == null ? NaN : v;
