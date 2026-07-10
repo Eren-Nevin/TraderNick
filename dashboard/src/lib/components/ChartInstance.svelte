@@ -16,17 +16,6 @@
   // Relative Performance (pc) response shape.
   type RpSeries = { token: string; values: (number | null)[] };
   type RpResp = { base?: string; times?: number[]; series?: RpSeries[] };
-  // Distinct-ish hex color per series index (HSL→hex; lightweight-charts rejects the
-  // space-separated hsl() syntax).
-  function _rpHueHex(idx: number, n: number): string {
-    const h = (Math.round((360 * idx) / Math.max(1, n)) % 360) / 360;
-    const s = 0.68, l = 0.58;
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    const hk = (t: number) => { t = (t % 1 + 1) % 1; return t < 1 / 6 ? p + (q - p) * 6 * t : t < 0.5 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p; };
-    const to = (x: number) => Math.round(x * 255).toString(16).padStart(2, '0');
-    return `#${to(hk(h + 1 / 3))}${to(hk(h))}${to(hk(h - 1 / 3))}`;
-  }
   function _tpQs(instance: ChartInstanceT): URLSearchParams {
     const qs = new URLSearchParams({
       tokens: (instance.tpTokens ?? []).join(','),
@@ -4859,13 +4848,14 @@
   // OHLCV chart is back to its original behaviour: candles + MAs only.
   let ohlcvLinesD = $derived(cumulativeLines);
   // One dot-series per shown token — its per-bucket excess return, but ONLY at buckets
-  // where it ranks in the top-N (else NaN → no dot). Distinct color per token; token
-  // names live in a right-side legend (below) rather than on each dot (too dense).
+  // where it ranks in the top-N (else NaN → no dot). All the SAME colour; the token names
+  // live in a right-side legend (below) rather than on each dot (too dense).
+  const PC_DOT_COLOR = '#38bdf8';
   let pcLinesD = $derived(
-    rpShownTokens.map((tok, idx, arr) => ({
+    rpShownTokens.map((tok) => ({
       key: `rp_${tok}`,
       label: tok,
-      color: _rpHueHex(idx, arr.length),
+      color: PC_DOT_COLOR,
       pointsOnly: true,
       compute: (d: { time: number } & Record<string, number>, i: number) => {
         if (!pcTopSets[i]?.has(tok)) return NaN;
@@ -4874,8 +4864,8 @@
       }
     }))
   );
-  // Legend entries for the right-side name list (pc only).
-  let pcLegend = $derived(pcLinesD.map((l) => ({ label: l.label, color: l.color })));
+  // Legend entries for the right-side name list (pc only) — the top-mover tokens present.
+  let pcLegend = $derived(rpShownTokens.map((tok) => ({ label: tok, color: PC_DOT_COLOR })));
   let frLinesD = $derived(cumulativeLines);
 
   // ---- book_depth ----------------------------------------------------------
