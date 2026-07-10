@@ -152,7 +152,11 @@
   // increased longs + decreased shorts − increased shorts − decreased longs.
   const netValue = (r: OverviewRow) =>
     cellOf(r, 'inc_long')[0] + cellOf(r, 'dec_short')[0] - cellOf(r, 'inc_short')[0] - cellOf(r, 'dec_long')[0];
-  const netCount = (r: OverviewRow) => (typeof r.net_wallets === 'number' ? r.net_wallets : 0);
+  // Parenthesis = number of fills making up the net change (the inc/dec fill count),
+  // not distinct wallets — this view is already a single wallet. Summed from the four
+  // inc/dec category counts the net is built from.
+  const netCount = (r: OverviewRow) =>
+    cellOf(r, 'inc_long')[1] + cellOf(r, 'dec_short')[1] + cellOf(r, 'inc_short')[1] + cellOf(r, 'dec_long')[1];
 
   // ── Overview client-side sort (default: Net Pos Change desc). ──
   let ovSortKey = $state<string>('net');
