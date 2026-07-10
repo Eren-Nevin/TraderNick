@@ -192,9 +192,9 @@
         const y = entry.series.priceToCoordinate(v);
         if (y === null) continue;
         const xn = x as number, yn = y as number;
-        if (placed.some((p) => Math.abs(p.x - xn) < 30 && Math.abs(p.y - yn) < 11)) continue;
+        if (placed.some((p) => Math.abs(p.x - xn) < 38 && Math.abs(p.y - yn) < 14)) continue;
         placed.push({ x: xn, y: yn });
-        out.push({ x: xn + 5, y: yn - 6, text: ln.pointLabel });
+        out.push({ x: xn + 9, y: yn - 8, text: ln.pointLabel });
       }
     }
     pointLabels = out;
@@ -288,7 +288,7 @@
           lineWidth: 1,
           lineVisible: !ln.pointsOnly,
           pointMarkersVisible: (ln.pointsOnly ?? false) && !(ln.markers?.length),
-          pointMarkersRadius: ln.pointsOnly ? 5 : undefined,
+          pointMarkersRadius: ln.pointsOnly ? 7 : undefined,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
           priceScaleId: axis === 'secondary' ? 'left' : 'right',
           priceFormat: priceFormatFor(axis),
@@ -303,7 +303,7 @@
           color: ln.color,
           lineVisible: !ln.pointsOnly,
           pointMarkersVisible: (ln.pointsOnly ?? false) && !(ln.markers?.length),
-          pointMarkersRadius: ln.pointsOnly ? 5 : undefined,
+          pointMarkersRadius: ln.pointsOnly ? 7 : undefined,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
           priceFormat: priceFormatFor(axis)
         });
@@ -488,7 +488,7 @@
 
   {#each pointLabels as p, i (i)}
     <span
-      class="absolute text-[9px] leading-none font-mono text-zinc-100 pointer-events-none whitespace-nowrap z-20"
+      class="absolute text-[12px] leading-none font-mono font-medium text-zinc-100 pointer-events-none whitespace-nowrap z-20"
       style="left: {p.x}px; top: {p.y}px; text-shadow: 0 0 3px #000, 0 0 2px #000;"
     >{p.text}</span>
   {/each}
