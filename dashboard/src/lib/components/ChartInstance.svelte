@@ -654,9 +654,11 @@
         ? 45
         : 60;
   // Relative Performance: how far back pan-to-load reaches (data starts ~2026-01), and
-  // the initial chunk shown before any panning.
+  // the initial chunk shown before any panning. FIRST = 1 week so the default view is
+  // exactly 1 week even if the localView isn't applied (chart falls back to the loaded
+  // data extent); older history backfills on pan (the view stays pinned).
   const RP_FLOOR_DAYS = 220;
-  const RP_FIRST_DAYS = 30;
+  const RP_FIRST_DAYS = 7;
   // Dynamic FIRST fetch window (days). Kept tiny so the initial paint is cheap;
   // ≤ DEFAULT_VIEW_DAYS (14) so defaultView() fits the view to exactly this
   // loaded range (no unloaded gap on the left). Older history backfills on pan.
@@ -7369,22 +7371,8 @@
           <option value="">Group: none</option>
           {#each walletPinsStore.groups as g (g.id)}<option value={g.id}>{g.name}</option>{/each}
         </select>
-        <select class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          value={instance.gsStaleness ?? '7d'} onchange={(e) => (instance.gsStaleness = e.currentTarget.value as '1h' | '4h' | '1d' | '3d' | '7d' | '14d' | '30d')}
-          title="Only show positions whose wallet traded that token within this window (drops stale positions)">
-          {#each ['1h', '4h', '1d', '3d', '7d', '14d', '30d'] as s (s)}<option value={s}>{s}</option>{/each}
-        </select>
-        <select class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          value={instance.gsPriceLb ?? '1h'} onchange={(e) => (instance.gsPriceLb = e.currentTarget.value as '5m' | '15m' | '1h' | '4h' | '1d')}
-          title="Lookback for the price-change % columns">
-          {#each ['5m', '15m', '1h', '4h', '1d'] as s (s)}<option value="{s}">Δprice {s}</option>{/each}
-        </select>
-        <select class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
-          value={instance.gsAsOf ?? 'snapshot'} onchange={(e) => (instance.gsAsOf = e.currentTarget.value as 'snapshot' | 'live')}
-          title="Snapshot = last published snapshot; Live = reconstructed to now from fills (fresher; entry/uPnL approximate)">
-          <option value="snapshot">Snapshot</option>
-          <option value="live">Live</option>
-        </select>
+        <!-- staleness / Δprice / Snapshot·Live moved to the settings pane (gear) to
+             declutter the toolbar — see the group_snapshot block below. -->
       {:else if instance.kind === 'trading_pit'}
         {@const tpc = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500'}
         {@const avail = tokens.filter((t) => !(instance.tpTokens ?? []).includes(t))}
@@ -8016,6 +8004,36 @@
             class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none">
             <option value="relative">Relative</option>
             <option value="standard">Standard</option>
+          </select>
+        </label>
+      {/if}
+      {#if instance.kind === 'group_snapshot'}
+        {@const gsSel = 'bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-zinc-100 hover:border-zinc-600 focus:outline-none'}
+        <label class="flex items-center gap-1.5 text-zinc-300"
+          title="Only show positions whose wallet traded that token within this window (drops stale positions)">
+          Position staleness
+          <select value={instance.gsStaleness ?? '7d'}
+            onchange={(e) => (instance.gsStaleness = e.currentTarget.value as '1h' | '4h' | '1d' | '3d' | '7d' | '14d' | '30d')}
+            class={gsSel}>
+            {#each ['1h', '4h', '1d', '3d', '7d', '14d', '30d'] as s (s)}<option value={s}>{s}</option>{/each}
+          </select>
+        </label>
+        <label class="flex items-center gap-1.5 text-zinc-300" title="Lookback for the price-change % columns">
+          Δprice lookback
+          <select value={instance.gsPriceLb ?? '1h'}
+            onchange={(e) => (instance.gsPriceLb = e.currentTarget.value as '5m' | '15m' | '1h' | '4h' | '1d')}
+            class={gsSel}>
+            {#each ['5m', '15m', '1h', '4h', '1d'] as s (s)}<option value={s}>{s}</option>{/each}
+          </select>
+        </label>
+        <label class="flex items-center gap-1.5 text-zinc-300"
+          title="Snapshot = last published snapshot; Live = reconstructed to now from fills (fresher; entry/uPnL approximate)">
+          As of
+          <select value={instance.gsAsOf ?? 'snapshot'}
+            onchange={(e) => (instance.gsAsOf = e.currentTarget.value as 'snapshot' | 'live')}
+            class={gsSel}>
+            <option value="snapshot">Snapshot</option>
+            <option value="live">Live</option>
           </select>
         </label>
       {/if}

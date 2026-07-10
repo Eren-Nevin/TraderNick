@@ -900,6 +900,21 @@
         // across reloads. Other bt* toolbar fields fall back to config defaults.
         if (typeof r.btGroupOnly === 'boolean') inst.btGroupOnly = r.btGroupOnly;
       }
+      if (inst.kind === 'backtracker_leaderboard') {
+        // Restore the widget's selections across reloads — most importantly the
+        // wallet group (btGroupId), so it doesn't have to be re-picked every time.
+        inst.btGroupId = typeof r.btGroupId === 'string' ? r.btGroupId : null;
+        const bllb = r.blLookback;
+        inst.blLookback = (['15m', '1h', '4h', '12h', '1d', '7d'] as const).includes(
+          bllb as NonNullable<ChartInstanceT['blLookback']>
+        ) ? (bllb as NonNullable<ChartInstanceT['blLookback']>) : '1h';
+        inst.blAsOf = r.blAsOf === 'recent' ? 'recent' : 'now';
+        const blps = r.blPosStaleness;
+        inst.blPosStaleness = (['4h', '1d', '3d', '7d', '14d', '30d'] as const).includes(
+          blps as NonNullable<ChartInstanceT['blPosStaleness']>
+        ) ? (blps as NonNullable<ChartInstanceT['blPosStaleness']>) : '3d';
+        inst.blPosMode = r.blPosMode === 'oi' ? 'oi' : 'consensus';
+      }
       if (inst.kind === 'book_depth') {
         // Binance-only; the mode selector flips the same dataset between the
         // totals / per_level_imbalance / imbalance / stacked / *_share views.
