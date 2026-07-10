@@ -151,8 +151,14 @@ async def relative_performance(request):
                 prev_p = prev_b = None  # a gap breaks the T-1 chain
                 continue
             if prev_p and prev_b:  # both present + non-zero
-                vals_full.append(round((p[0] - prev_p) / prev_p * 100.0
-                                       - (bc[0] - prev_b) / prev_b * 100.0, 4))
+                rt, rb = p[0] / prev_p, bc[0] / prev_b
+                # A >10x single-bucket move is a data glitch / redenomination (e.g. FIL's
+                # ~1000x scale correction on 2026-07-08 06:00), not a real return — null it
+                # so one bad tick doesn't dominate the chart.
+                if rt > 10 or rt < 0.1 or rb > 10 or rb < 0.1:
+                    vals_full.append(None)
+                else:
+                    vals_full.append(round((rt - 1) * 100.0 - (rb - 1) * 100.0, 4))
             else:
                 vals_full.append(None)
             prev_p, prev_b = p[0], bc[0]
