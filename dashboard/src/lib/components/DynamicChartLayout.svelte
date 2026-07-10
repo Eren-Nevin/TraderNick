@@ -894,6 +894,12 @@
         const gpl = r.gsPriceLb;
         inst.gsPriceLb = gpl === '5m' || gpl === '15m' || gpl === '4h' || gpl === '1d' ? gpl : '1h';
       }
+      if (inst.kind === 'backtracker') {
+        // Persist the Position-Changes dialog "Only <group>" filter (default ON):
+        // an explicit untoggle is saved as false and restored here so it sticks
+        // across reloads. Other bt* toolbar fields fall back to config defaults.
+        if (typeof r.btGroupOnly === 'boolean') inst.btGroupOnly = r.btGroupOnly;
+      }
       if (inst.kind === 'book_depth') {
         // Binance-only; the mode selector flips the same dataset between the
         // totals / per_level_imbalance / imbalance / stacked / *_share views.

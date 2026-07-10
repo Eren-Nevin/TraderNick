@@ -1716,6 +1716,9 @@ export type ChartInstance = {
   /** backtracker only: wallet group whose per-bar buy/sell pressure is overlaid
    *  as markers. null/'' = None (no markers). */
   btGroupId?: string | null;
+  /** backtracker only: Position-Changes dialog "Only <group>" filter. Persisted so an
+   *  untoggle sticks per chart. undefined = default ON (when a group is selected). */
+  btGroupOnly?: boolean;
   /** backtracker only: 'both' (separate buy+sell flow markers, default), 'net'
    *  (one flow marker for buys−sells), 'netflow_spotvd' (net flows + a secondary
    *  spot volume-delta marker), 'netpos' (group net position at bar start) or

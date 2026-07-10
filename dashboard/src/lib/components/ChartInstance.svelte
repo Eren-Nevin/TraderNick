@@ -5348,7 +5348,9 @@
   let btDialogOpen = $state(false);
   // "Only <group>" toggle: filter the dialog to the backtracker's selected wallet
   // group. Persists across bar-clicks within this widget.
-  let btGroupOnly = $state(false);
+  // Persisted per chart (instance.btGroupOnly); default ON when a group is selected so
+  // the dialog opens filtered to it. Untoggling sticks (saved on the instance).
+  let btGroupOnly = $derived(instance.btGroupOnly ?? true);
   // True when the Spot source had no candles for the token and we auto-fell back to
   // Binance futures (many futures-roster tokens aren't listed on Binance spot).
   let btSpotFellBack = $state(false);
@@ -5811,7 +5813,7 @@
   }
 
   function toggleBtGroupOnly() {
-    btGroupOnly = !btGroupOnly;
+    instance.btGroupOnly = !(instance.btGroupOnly ?? true);
     fetchBtRows();
   }
 
