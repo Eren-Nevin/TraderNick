@@ -3780,7 +3780,7 @@ async def trading_pit(request):
         " if(type IN {long_all:Array(String)},'long','short') AS pside,"
         " sum(multiIf(type IN ('inc_long','inc_short'), value, type IN ('dec_long','dec_short'), -value, value)) AS net,"
         " sum(value) AS gross, sum(tokens) AS gtok, count() AS c,"
-        " toUInt32(medianExact(toUnixTimestamp(time))) AS med_time,"
+        " toUInt32(max(toUnixTimestamp(time))) AS med_time,"  # most-recent fill in the group
         " any(dictGet('tradernick.wallet_labels','categories',lower(wallet))) AS cats"
         " FROM (" + base + ") GROUP BY wallet, token, bucket, pside",
         parameters={**params, "long_all": _TP_LONG_TYPES},
