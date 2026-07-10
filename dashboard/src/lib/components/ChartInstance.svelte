@@ -16,6 +16,17 @@
   // Relative Performance (pc) response shape.
   type RpSeries = { token: string; values: (number | null)[] };
   type RpResp = { base?: string; times?: number[]; series?: RpSeries[] };
+  // Distinct-ish hex color per series index (HSL→hex; lightweight-charts rejects the
+  // space-separated hsl() syntax).
+  function _rpHueHex(idx: number, n: number): string {
+    const h = (Math.round((360 * idx) / Math.max(1, n)) % 360) / 360;
+    const s = 0.68, l = 0.58;
+    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
+    const p = 2 * l - q;
+    const hk = (t: number) => { t = (t % 1 + 1) % 1; return t < 1 / 6 ? p + (q - p) * 6 * t : t < 0.5 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p; };
+    const to = (x: number) => Math.round(x * 255).toString(16).padStart(2, '0');
+    return `#${to(hk(h + 1 / 3))}${to(hk(h))}${to(hk(h - 1 / 3))}`;
+  }
   function _tpQs(instance: ChartInstanceT): URLSearchParams {
     const qs = new URLSearchParams({
       tokens: (instance.tpTokens ?? []).join(','),
@@ -4847,34 +4858,24 @@
   const OVERLAY_COLORS = ['#06b6d4', '#fbbf24', '#a855f7', '#22c55e', '#ef4444', '#ec4899'] as const;
   // OHLCV chart is back to its original behaviour: candles + MAs only.
   let ohlcvLinesD = $derived(cumulativeLines);
-  // One series per shown token — its per-bucket excess return, but ONLY at buckets where
-  // it ranks in the top-N (else NaN → no point). All the same colour; each top-N point
-  // gets a labeled marker (the token symbol) so it's identifiable without hovering.
-  const PC_DOT_COLOR = '#38bdf8';
+  // One dot-series per shown token — its per-bucket excess return, but ONLY at buckets
+  // where it ranks in the top-N (else NaN → no dot). Distinct color per token; token
+  // names live in a right-side legend (below) rather than on each dot (too dense).
   let pcLinesD = $derived(
-    rpShownTokens.map((tok) => {
-      const markers: {
-        time: number; position: 'inBar'; color: string; shape: 'circle'; text: string;
-      }[] = [];
-      for (let i = 0; i < data.length; i++) {
-        if (pcTopSets[i]?.has(tok)) {
-          markers.push({ time: (data[i] as unknown as { time: number }).time, position: 'inBar', color: PC_DOT_COLOR, shape: 'circle', text: tok });
-        }
+    rpShownTokens.map((tok, idx, arr) => ({
+      key: `rp_${tok}`,
+      label: tok,
+      color: _rpHueHex(idx, arr.length),
+      pointsOnly: true,
+      compute: (d: { time: number } & Record<string, number>, i: number) => {
+        if (!pcTopSets[i]?.has(tok)) return NaN;
+        const v = d[tok];
+        return v == null ? NaN : v;
       }
-      return {
-        key: `rp_${tok}`,
-        label: tok,
-        color: PC_DOT_COLOR,
-        pointsOnly: true,
-        markers,
-        compute: (d: { time: number } & Record<string, number>, i: number) => {
-          if (!pcTopSets[i]?.has(tok)) return NaN;
-          const v = d[tok];
-          return v == null ? NaN : v;
-        }
-      };
-    })
+    }))
   );
+  // Legend entries for the right-side name list (pc only).
+  let pcLegend = $derived(pcLinesD.map((l) => ({ label: l.label, color: l.color })));
   let frLinesD = $derived(cumulativeLines);
 
   // ---- book_depth ----------------------------------------------------------
@@ -8776,7 +8777,7 @@
       <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-3">
         <div class="text-[10px] uppercase tracking-widest text-zinc-500">
           Relative Performance
-          <span class="text-zinc-600 normal-case">— per snapshot, the top-N tokens by change (vs the base's move) shown as dots; hover for token + value</span>
+          <span class="text-zinc-600 normal-case">— per snapshot, the top-N tokens by change (vs the base's move) as dots; colors are keyed in the right-side legend, hover for exact values</span>
         </div>
         <div class="flex items-center gap-4 flex-wrap">
           <label class="flex items-center gap-1.5 text-zinc-300">Base
@@ -9039,6 +9040,7 @@
         onHover={handleHover}
         vRefLines={weekVRefLines}
         refLines={[{ value: 0, color: '#3f3f46', width: 1 }]}
+        legendRight={pcLegend}
         formatY={(v) => `${v.toFixed(2)}%`}
         formatTooltip={(v) => `${v >= 0 ? '+' : ''}${v.toFixed(3)}%`}
       />
