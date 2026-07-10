@@ -5731,7 +5731,7 @@
     // group/tag capsules in the dialog reflect the latest state (they were
     // otherwise only loaded once). Reactive — capsules update as it resolves.
     walletPinsStore.reload();
-    const lb = instance.btLookback ?? '1h';
+    const lb = instance.btLookback ?? 'none';
     // Net Position marker mode → the full group position book dialog (all holders +
     // per-wallet change), not the flow/position-change table. Needs a group.
     if (btMarkerModeR === 'netpos' && instance.btGroupId) {
@@ -7843,7 +7843,7 @@
         <!-- Position-change lookback: clicking a bar shows wallets whose position
              changed over this window ending at the clicked bar. -->
         <select
-          value={instance.btLookback ?? '1h'}
+          value={instance.btLookback ?? 'none'}
           onchange={(e) => (instance.btLookback = e.currentTarget.value as 'none' | '15m' | '30m' | '1h' | '4h' | '1d' | '7d')}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
           title="Position-change window for the dialog: Δ = the lookback BEFORE the clicked bar; None = the clicked bar itself [T, T+interval)"

@@ -2821,7 +2821,7 @@ export function newChartInstance(
     // lookback ending at that bar.
     base.exchange = 'hl';
     base.interval = '15m';
-    base.btLookback = '1h';
+    base.btLookback = 'none';   // default: the clicked bar's own window [T, T+interval)
     base.btMarkerMode = 'netflow_spotvd';
     base.btMarkerMin = 1000;    // default flow-marker floor: $1K
     base.btSpotVdMin = 1000;    // default spot-VD floor: $1K
