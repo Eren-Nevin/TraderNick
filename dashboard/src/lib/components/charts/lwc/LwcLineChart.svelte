@@ -180,6 +180,9 @@
     const hi = lr ? Math.min(data.length - 1, Math.ceil(lr.to)) : data.length - 1;
     const out: { x: number; y: number; text: string }[] = [];
     const placed: { x: number; y: number }[] = [];
+    // Collect every candidate label, then place biggest-|value| first so the top movers
+    // always win the de-overlap (a smaller mover never hides a bigger one's label).
+    const cands: { x: number; y: number; mag: number; text: string }[] = [];
     for (const ln of lines) {
       if (!ln.pointLabel) continue;
       const entry = lineSeries.get(ln.key);
@@ -191,11 +194,14 @@
         if (x === null) continue;
         const y = entry.series.priceToCoordinate(v);
         if (y === null) continue;
-        const xn = x as number, yn = y as number;
-        if (placed.some((p) => Math.abs(p.x - xn) < 38 && Math.abs(p.y - yn) < 14)) continue;
-        placed.push({ x: xn, y: yn });
-        out.push({ x: xn + 9, y: yn - 8, text: ln.pointLabel });
+        cands.push({ x: x as number, y: y as number, mag: Math.abs(v), text: ln.pointLabel });
       }
+    }
+    cands.sort((a, b) => b.mag - a.mag);
+    for (const c of cands) {
+      if (placed.some((p) => Math.abs(p.x - c.x) < 38 && Math.abs(p.y - c.y) < 14)) continue;
+      placed.push({ x: c.x, y: c.y });
+      out.push({ x: c.x + 9, y: c.y - 8, text: c.text });
     }
     pointLabels = out;
   }
