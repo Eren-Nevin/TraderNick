@@ -4,7 +4,7 @@ import type { RequestHandler } from './$types';
 
 // Proxy for /hyperliquid/trading_pit — a wallet group's classified HL-perp fills.
 const PASSTHROUGH = ['tokens', 'all_tokens', 'group', 'lookback', 'mode', 'flip_mode',
-  'min_size', 'side', 'type', 'token', 'n'];
+  'min_size', 'side', 'type', 'token', 'n', 'wallet', 'since', 'until'];
 
 export const GET: RequestHandler = async ({ url, fetch }) => {
   const params = new URLSearchParams();

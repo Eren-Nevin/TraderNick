@@ -4,6 +4,13 @@
   // rest of the page. In RANGE mode it shows the selected date range; otherwise a
   // lookback selector (default 1d = last 24h) bounds the window — longer picks (up to
   // 90d) are opt-in and show a loading indicator.
+  //
+  // Two view modes:
+  //   Trades    — the raw fills (this component's original behaviour).
+  //   Aggregate — exactly the Trading Pit "Overview": one row per token with the 8 (+2
+  //               flip) action categories as $ (count) + Net Pos Change, but scoped to
+  //               THIS wallet (via /hyperliquid/trading_pit?wallet=…&mode=overview). Same
+  //               table chrome as Trades mode — only the columns differ.
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import { fmtTzDateTime } from '$lib/stores/timezone.svelte';
 
@@ -11,6 +18,7 @@
     time: number; token: string; dir: string; side: string;
     price: number; size: number; value: number; closed_pnl: number; fee: number;
   };
+  type OverviewRow = { token: string } & Record<string, [number, number] | number | string>;
 
   let {
     wallet = '',
@@ -32,60 +40,81 @@
     { v: '30d', secs: 2592000 }, { v: '90d', secs: 7776000 }
   ];
   let lookback = $state('1h');
+  let viewMode = $state<'trades' | 'aggregate'>('trades');
 
   let trades = $state<TradeRow[]>([]);
+  let overviewRows = $state<OverviewRow[]>([]);
+  let flipSplit = $state(false);
   let loading = $state(false);
   let error = $state<string | null>(null);
   let tokenFilter = $state(initialToken ?? '');
   let ctl: AbortController | null = null;
 
   const shown = $derived(tokenFilter ? trades.filter((t) => t.token === tokenFilter) : trades);
+  const shownOv = $derived(tokenFilter ? overviewRows.filter((r) => r.token === tokenFilter) : overviewRows);
   // Distinct traded tokens in the window, plus the current pick (so it survives a reload
   // where that token has no fills), sorted for the selector.
   const tokenOpts = $derived(
-    [...new Set([...(tokenFilter ? [tokenFilter] : []), ...trades.map((t) => t.token)])].sort()
+    [...new Set([
+      ...(tokenFilter ? [tokenFilter] : []),
+      ...trades.map((t) => t.token),
+      ...overviewRows.map((r) => r.token)
+    ])].sort()
   );
   const isBuy = (t: TradeRow) => t.side === 'B';
 
-  async function load(w: string, rm: boolean, rs: string, ru: string, lb: string) {
-    if (!w) { trades = []; return; }
+  // Window [since, until] as ISO — shared by both modes (range picks it, else lookback).
+  function windowIso(rm: boolean, rs: string, ru: string, lb: string): { since: string; until: string } {
+    if (rm && rs && ru) return { since: rs, until: ru };
+    const secs = LOOKBACKS.find((l) => l.v === lb)?.secs ?? 3600;
+    const now = Date.now();
+    return { since: new Date(now - secs * 1000).toISOString(), until: new Date(now).toISOString() };
+  }
+
+  async function load(w: string, vm: string, rm: boolean, rs: string, ru: string, lb: string) {
+    if (!w) { trades = []; overviewRows = []; return; }
     ctl?.abort();
     const c = new AbortController();
     ctl = c;
     loading = true;
     error = null;
     try {
-      let since: string, until: string;
-      if (rm && rs && ru) {
-        since = rs;
-        until = ru;
+      const { since, until } = windowIso(rm, rs, ru, lb);
+      if (vm === 'aggregate') {
+        // Trading Pit Overview scoped to this wallet. Always send since/until (the
+        // endpoint's `lookback` list caps at 4h; since/until bypasses that).
+        const qs = new URLSearchParams({
+          wallet: w, all_tokens: '1', mode: 'overview', since, until
+        });
+        const res = await fetch(`/api/hyperliquid/trading_pit?${qs}`, { signal: c.signal });
+        if (!res.ok) throw new Error(`aggregate ${res.status}`);
+        const body = await res.json();
+        overviewRows = (body.tokens ?? []) as OverviewRow[];
+        flipSplit = !!body.flip_split;
       } else {
-        const secs = LOOKBACKS.find((l) => l.v === lb)?.secs ?? 3600;
-        const now = Date.now();
-        since = new Date(now - secs * 1000).toISOString();
-        until = new Date(now).toISOString();
+        const res = await fetch(
+          `/api/hyperliquid/wallet_fills?wallet=${w}&since=${since}&until=${until}&limit=500`,
+          { signal: c.signal }
+        );
+        if (!res.ok) throw new Error(`trades ${res.status}`);
+        const body = await res.json();
+        trades = (body.trades ?? []) as TradeRow[];
       }
-      const res = await fetch(
-        `/api/hyperliquid/wallet_fills?wallet=${w}&since=${since}&until=${until}&limit=500`,
-        { signal: c.signal }
-      );
-      if (!res.ok) throw new Error(`trades ${res.status}`);
-      const body = await res.json();
-      trades = (body.trades ?? []) as TradeRow[];
     } catch (e) {
       if ((e as Error).name !== 'AbortError') {
         error = (e as Error).message;
         trades = [];
+        overviewRows = [];
       }
     } finally {
       if (ctl === c) loading = false;
     }
   }
-  // Reload on wallet / mode / range window / lookback change.
+  // Reload on wallet / view mode / range window / lookback change.
   $effect(() => {
-    load(wallet, rangeMode, rangeSince, rangeUntil, lookback);
+    load(wallet, viewMode, rangeMode, rangeSince, rangeUntil, lookback);
   });
-  const refresh = () => load(wallet, rangeMode, rangeSince, rangeUntil, lookback);
+  const refresh = () => load(wallet, viewMode, rangeMode, rangeSince, rangeUntil, lookback);
 
   function fmtUsd(n: number): string {
     const abs = Math.abs(n), sign = n < 0 ? '-' : '';
@@ -97,11 +126,63 @@
   function fmtPrice(n: number): string {
     return n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n.toPrecision(5);
   }
+
+  // ── Overview (Aggregate) column model — identical set/labels/colors to Trading Pit. ──
+  const TYPE_META: Record<string, { label: string; cls: string }> = {
+    open_long: { label: 'Opened Long', cls: 'text-emerald-400' },
+    inc_long: { label: 'Increased Long', cls: 'text-emerald-400' },
+    dec_long: { label: 'Decreased Long', cls: 'text-amber-400' },
+    close_long: { label: 'Closed Long', cls: 'text-rose-400' },
+    open_short: { label: 'Opened Short', cls: 'text-rose-400' },
+    inc_short: { label: 'Increased Short', cls: 'text-rose-400' },
+    dec_short: { label: 'Decreased Short', cls: 'text-amber-400' },
+    close_short: { label: 'Closed Short', cls: 'text-emerald-400' },
+    flip_ls: { label: 'Flip L→S', cls: 'text-fuchsia-400' },
+    flip_sl: { label: 'Flip S→L', cls: 'text-fuchsia-400' }
+  };
+  const typeLabel = (t: string) => TYPE_META[t]?.label ?? t;
+  const typeCls = (t: string) => TYPE_META[t]?.cls ?? 'text-zinc-400';
+  const OV_BASE = ['open_long', 'open_short', 'inc_long', 'dec_long', 'inc_short', 'dec_short', 'close_long', 'close_short'];
+  const ovCols = $derived(flipSplit ? OV_BASE : [...OV_BASE, 'flip_ls', 'flip_sl']);
+  const cellOf = (r: OverviewRow, k: string): [number, number] => {
+    const v = r[k];
+    return Array.isArray(v) ? (v as [number, number]) : [0, 0];
+  };
+  // Net position change per token (directional flow, excl. opens/closes/flips):
+  // increased longs + decreased shorts − increased shorts − decreased longs.
+  const netValue = (r: OverviewRow) =>
+    cellOf(r, 'inc_long')[0] + cellOf(r, 'dec_short')[0] - cellOf(r, 'inc_short')[0] - cellOf(r, 'dec_long')[0];
+  const netCount = (r: OverviewRow) => (typeof r.net_wallets === 'number' ? r.net_wallets : 0);
+
+  // ── Overview client-side sort (default: Net Pos Change desc). ──
+  let ovSortKey = $state<string>('net');
+  let ovSortDir = $state<1 | -1>(-1);
+  function onOvSort(k: string) {
+    if (ovSortKey === k) ovSortDir = ovSortDir === 1 ? -1 : 1;
+    else { ovSortKey = k; ovSortDir = -1; }
+  }
+  const ovArrow = (k: string) => (ovSortKey !== k ? '' : ovSortDir === 1 ? ' ↑' : ' ↓');
+  const sortedOv = $derived.by(() => {
+    const arr = [...shownOv];
+    const k = ovSortKey, dir = ovSortDir;
+    arr.sort((a, b) => {
+      if (k === 'token') return String(a.token).localeCompare(String(b.token)) * dir;
+      if (k === 'net') return (netValue(a) - netValue(b)) * dir;
+      return (cellOf(a, k)[0] - cellOf(b, k)[0]) * dir;
+    });
+    return arr;
+  });
 </script>
 
 <div class="h-full flex flex-col text-sm border border-zinc-800 rounded-lg overflow-hidden" use:stopDragEvents>
   <div class="flex items-center gap-2 px-3 py-2 border-b border-zinc-800 bg-zinc-950">
     <span class="text-zinc-200 font-medium">Trades</span>
+    <div class="flex rounded border border-zinc-700 overflow-hidden text-[11px]" title="Trades = raw fills · Aggregate = per-token action summary (like Trading Pit Overview)">
+      {#each [['trades', 'Trades'], ['aggregate', 'Aggregate']] as [v, lbl] (v)}
+        <button type="button" onclick={() => (viewMode = v as 'trades' | 'aggregate')}
+          class="px-2 py-0.5 {viewMode === v ? 'bg-zinc-700 text-zinc-100' : 'bg-zinc-900 text-zinc-400 hover:bg-zinc-800'}">{lbl}</button>
+      {/each}
+    </div>
     {#if loading}
       <span class="inline-block w-3 h-3 rounded-full border-2 border-zinc-600 border-t-blue-400 animate-spin" title="Loading…"></span>
     {/if}
@@ -125,16 +206,52 @@
       onclick={refresh}
       disabled={loading}
       class="text-[11px] px-2 py-0.5 rounded border border-zinc-700 bg-zinc-800/50 text-zinc-300 hover:bg-zinc-700/50 disabled:opacity-40 disabled:cursor-default whitespace-nowrap"
-      title="Refresh trades"
+      title="Refresh"
     >↻ Refresh</button>
-    <span class="ml-auto text-zinc-500 text-xs whitespace-nowrap">{shown.length} fills</span>
+    <span class="ml-auto text-zinc-500 text-xs whitespace-nowrap">
+      {viewMode === 'aggregate' ? `${shownOv.length} tokens` : `${shown.length} fills`}
+    </span>
   </div>
 
   <div class="flex-1 overflow-auto scrollbar-none {loading ? 'opacity-50' : ''}">
     {#if error}
       <div class="h-full flex items-center justify-center text-rose-400 text-center px-4 py-8">{error}</div>
-    {:else if loading && trades.length === 0}
-      <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4 py-8">Loading trades…</div>
+    {:else if loading && trades.length === 0 && overviewRows.length === 0}
+      <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4 py-8">Loading…</div>
+    {:else if viewMode === 'aggregate'}
+      {#if shownOv.length === 0}
+        <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4 py-8">
+          {overviewRows.length === 0 ? 'No trades in this window.' : 'No trades match the filter.'}
+        </div>
+      {:else}
+        <table class="w-full">
+          <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
+            <tr>
+              <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onOvSort('token')}>Token{ovArrow('token')}</th>
+              <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none whitespace-nowrap" onclick={() => onOvSort('net')} title="Net position change: increased longs + decreased shorts − increased shorts − decreased longs (directional flow, excludes opens/closes)">Net Pos Change{ovArrow('net')}</th>
+              {#each ovCols as c (c)}
+                <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none whitespace-nowrap {typeCls(c)}" onclick={() => onOvSort(c)} title={typeLabel(c)}>{typeLabel(c)}{ovArrow(c)}</th>
+              {/each}
+            </tr>
+          </thead>
+          <tbody>
+            {#each sortedOv as r (r.token)}
+              <tr class="border-b border-zinc-900 hover:bg-zinc-900/40">
+                <td class="px-3 py-1 font-medium text-zinc-100">{r.token}</td>
+                <td class="px-3 py-1 text-right font-mono tabular-nums whitespace-nowrap {netValue(r) > 0 ? 'text-emerald-400' : netValue(r) < 0 ? 'text-rose-400' : 'text-zinc-600'}">
+                  {netCount(r) ? `${fmtUsd(netValue(r))} (${netCount(r)})` : '—'}
+                </td>
+                {#each ovCols as c (c)}
+                  {@const cell = cellOf(r, c)}
+                  <td class="px-3 py-1 text-right font-mono tabular-nums whitespace-nowrap {cell[1] ? 'text-zinc-200' : 'text-zinc-700'}">
+                    {cell[1] ? `${fmtUsd(cell[0])} (${cell[1]})` : '—'}
+                  </td>
+                {/each}
+              </tr>
+            {/each}
+          </tbody>
+        </table>
+      {/if}
     {:else if shown.length === 0}
       <div class="h-full flex items-center justify-center text-zinc-500 text-center px-4 py-8">
         {trades.length === 0 ? 'No trades in this window.' : 'No trades match the filter.'}

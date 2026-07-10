@@ -3600,6 +3600,12 @@ async def trading_pit(request):
     side = request.args.get("side") or None       # long | short | None
     type_filter = request.args.get("type") or None  # one classified type or None
     token_one = (request.args.get("token") or "").strip().upper() or None
+    # Single-wallet scope (the wallet page's Trades → Aggregate view) + an optional
+    # explicit since/until window that overrides the lookback (e.g. the wallet page's
+    # range mode). Both are additive filters on the same classified base.
+    wallet_one = (request.args.get("wallet") or "").strip().lower() or None
+    since_arg = request.args.get("since")
+    until_arg = request.args.get("until")
     try:
         n = max(1, min(int(request.args.get("n", "500")), 2000))
     except ValueError:
@@ -3615,8 +3621,16 @@ async def trading_pit(request):
 
     # ── classified base: raw fills → type; flip_mode=split expands each flip into a
     # close-old + open-new pair via arrayJoin (else one row). Then filters on `type`. ──
-    where = ["time >= now() - INTERVAL {lb:UInt32} SECOND", "time < now()"]
-    params = {"lb": _TP_LB[lb], "split": 1 if flip_split else 0}
+    if since_arg and until_arg:
+        try:
+            params = {"since": _parse_iso(since_arg), "until": _parse_iso(until_arg),
+                      "split": 1 if flip_split else 0}
+        except ValueError:
+            return response.json({"error": "invalid since/until; expected ISO"}, status=400)
+        where = ["time >= {since:DateTime}", "time < {until:DateTime}"]
+    else:
+        where = ["time >= now() - INTERVAL {lb:UInt32} SECOND", "time < now()"]
+        params = {"lb": _TP_LB[lb], "split": 1 if flip_split else 0}
     # The single-token narrow (`token`) is a HARD override: it scopes to that one token
     # regardless of the capsule selection or all-tokens mode, so the header token filter
     # can pick ANY token, not just the capsules / group-traded set.
@@ -3625,6 +3639,9 @@ async def trading_pit(request):
         params["tokens"] = tokens
     if member:
         where.append(member)
+    if wallet_one:
+        where.append("lower(wallet) = {wallet_one:String}")
+        params["wallet_one"] = wallet_one
     if min_size > 0:
         where.append("size * price >= {min_size:Float64}")
         params["min_size"] = min_size
@@ -3633,12 +3650,11 @@ async def trading_pit(request):
     # single-token narrow (so the list is stable regardless of what's selected).
     tokens_available: list[str] = []
     if all_tokens:
-        tp_params = {"lb": _TP_LB[lb]}
-        if min_size > 0:
-            tp_params["min_size"] = min_size
+        # `params` already carries the window + wallet + min_size filters `where`
+        # references (token_one isn't appended yet); the unused `split` is harmless.
         tr = await ch.query(
             "SELECT DISTINCT token FROM tradernick.hl_fills FINAL WHERE " + " AND ".join(where) + " ORDER BY token",
-            parameters=tp_params,
+            parameters=params,
         )
         tokens_available = [row[0] for row in tr.result_rows]
     if token_one:
