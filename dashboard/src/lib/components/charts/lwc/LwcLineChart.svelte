@@ -26,6 +26,9 @@
     /** When 'secondary', the line is scaled against the secondary (left-
      *  side) y-axis. Default 'primary' (right-side, the existing axis). */
     axis?: 'primary' | 'secondary';
+    /** Render as isolated dots (no connecting line) — for scatter-style series
+     *  whose finite points are sparse/non-contiguous. */
+    pointsOnly?: boolean;
     rawValue?: (d: Datum, i: number, data: Datum[]) => number;
     rawFormat?: (v: number) => string;
     /** Optional secondary value shown in parentheses after the main value in
@@ -205,6 +208,9 @@
         const series = chart.addLineSeries({
           color: ln.color,
           lineWidth: 1,
+          lineVisible: !ln.pointsOnly,
+          pointMarkersVisible: ln.pointsOnly ?? false,
+          pointMarkersRadius: ln.pointsOnly ? 3 : undefined,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
           priceScaleId: axis === 'secondary' ? 'left' : 'right',
           priceFormat: priceFormatFor(axis),
@@ -217,6 +223,9 @@
       } else {
         entry.series.applyOptions({
           color: ln.color,
+          lineVisible: !ln.pointsOnly,
+          pointMarkersVisible: ln.pointsOnly ?? false,
+          pointMarkersRadius: ln.pointsOnly ? 3 : undefined,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
           priceFormat: priceFormatFor(axis)
         });

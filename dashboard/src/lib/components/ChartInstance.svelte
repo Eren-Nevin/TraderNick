@@ -1009,10 +1009,10 @@
       return `${instance.kind}|${cPart}|${tPart}|${ex}|${instance.interval}`;
     }
     if (instance.kind === 'pc') {
-      // Relative Performance: all tokens vs a base. Key on base, lookback, interval
-      // (bucket), min-volume, and exchange (source ohlcv table). Token-independent.
+      // Relative Performance: all tokens vs a base, per-bucket. Key on base, interval
+      // (bucket), exchange. Top-N/Side are render-only (client-side), so NOT in the key.
       const ex = instance.exchange ?? 'binance';
-      return `pc|b:${instance.pcBase ?? 'BTC'}|lb:${instance.pcLookback ?? '7d'}|iv:${instance.interval ?? '1h'}|mv:${instance.pcMinVolume ?? 0}|${ex}`;
+      return `pc|b:${instance.pcBase ?? 'BTC'}|iv:${instance.interval ?? '1h'}|${ex}`;
     }
     if (isLeaderboardKind(instance.kind)) {
       // Top-wallets leaderboards: AAVE kinds key on (chain, token); Uniswap
@@ -3497,7 +3497,6 @@
       since: String(unixSec(sinceIso)),
       until: String(unixSec(untilIso)),
       interval: instance.interval ?? '1h',
-      min_volume: String(instance.pcMinVolume ?? 0),
       exchange: instance.exchange ?? 'binance'
     });
     const res = await queuedFetch(`/api/relative_performance?${qs}`, { signal });
@@ -4826,17 +4825,49 @@
     for (const d of data) for (const k in d as object) if (k !== 'time') s.add(k);
     return [...s].sort();
   });
+  // Per bucket, the set of tokens in the top-N by change (Side-filtered). Positive =
+  // N highest; Negative = N lowest; All = N by absolute magnitude.
+  let pcTopSets = $derived.by<Set<string>[]>(() => {
+    if (instance.kind !== 'pc') return [];
+    const n = instance.pcTopN ?? 5;
+    const side = instance.pcSide ?? 'positive';
+    const toks = rpTokens;
+    return data.map((d) => {
+      const rec = d as unknown as Record<string, number>;
+      const es: [string, number][] = [];
+      for (const t of toks) {
+        const v = rec[t];
+        if (typeof v === 'number' && Number.isFinite(v)) es.push([t, v]);
+      }
+      if (side === 'positive') es.sort((a, b) => b[1] - a[1]);
+      else if (side === 'negative') es.sort((a, b) => a[1] - b[1]);
+      else es.sort((a, b) => Math.abs(b[1]) - Math.abs(a[1]));
+      const keep = es.filter(([, v]) => (side === 'positive' ? v > 0 : side === 'negative' ? v < 0 : true));
+      return new Set(keep.slice(0, n).map(([t]) => t));
+    });
+  });
+  // Only the tokens that appear in some bucket's top-N get a series (keeps the legend
+  // and color set small), each rendered as dots at its top-N buckets only.
+  let rpShownTokens = $derived.by<string[]>(() => {
+    if (instance.kind !== 'pc') return [];
+    const s = new Set<string>();
+    for (const set of pcTopSets) for (const t of set) s.add(t);
+    return [...s].sort();
+  });
   // Distinct palette for the pc chart's ratio lines.
   const OVERLAY_COLORS = ['#06b6d4', '#fbbf24', '#a855f7', '#22c55e', '#ef4444', '#ec4899'] as const;
   // OHLCV chart is back to its original behaviour: candles + MAs only.
   let ohlcvLinesD = $derived(cumulativeLines);
-  // One line per token — its per-bucket excess return vs the base, read off the datum.
+  // One dot-series per shown token — its per-bucket excess return, but ONLY at buckets
+  // where it ranks in the top-N (else NaN → no dot). Points-only (no connecting line).
   let pcLinesD = $derived(
-    rpTokens.map((tok, idx, arr) => ({
+    rpShownTokens.map((tok, idx, arr) => ({
       key: `rp_${tok}`,
       label: tok,
       color: _rpHueHex(idx, arr.length),
-      compute: (d: Candle, _i: number) => {
+      pointsOnly: true,
+      compute: (d: Candle, i: number) => {
+        if (!pcTopSets[i]?.has(tok)) return NaN;
         const v = (d as unknown as Record<string, number>)[tok];
         return v == null ? NaN : v;
       }
@@ -8721,7 +8752,7 @@
       <div class="px-4 py-3 border-b border-zinc-800 bg-zinc-900/30 text-xs space-y-3">
         <div class="text-[10px] uppercase tracking-widest text-zinc-500">
           Relative Performance
-          <span class="text-zinc-600 normal-case">— each token's per-bucket return minus the base's, in percentage points (0 = moved like the base this bucket)</span>
+          <span class="text-zinc-600 normal-case">— per snapshot, the top-N tokens by change (vs the base's move) shown as dots; hover for token + value</span>
         </div>
         <div class="flex items-center gap-4 flex-wrap">
           <label class="flex items-center gap-1.5 text-zinc-300">Base
@@ -8730,13 +8761,22 @@
               {#each tokens as t (t)}<option value={t}>{t}</option>{/each}
             </select>
           </label>
-          <label class="flex items-center gap-1.5 text-zinc-300" title="Drop any token whose per-bucket USD volume dips below this in any bucket">Min vol $M
-            <input type="number" min="0" step="0.5" value={(instance.pcMinVolume ?? 0) / 1e6}
-              onchange={(e) => (instance.pcMinVolume = Math.max(0, (Number(e.currentTarget.value) || 0) * 1e6))}
-              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100 w-24" />
+          <label class="flex items-center gap-1.5 text-zinc-300">Top N
+            <select value={String(instance.pcTopN ?? 5)} onchange={(e) => (instance.pcTopN = Number(e.currentTarget.value) as NonNullable<ChartInstanceT['pcTopN']>)}
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100">
+              {#each [3, 5, 10, 15] as n (n)}<option value={String(n)}>{n}</option>{/each}
+            </select>
+          </label>
+          <label class="flex items-center gap-1.5 text-zinc-300">Side
+            <select value={instance.pcSide ?? 'positive'} onchange={(e) => (instance.pcSide = e.currentTarget.value as NonNullable<ChartInstanceT['pcSide']>)}
+              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100">
+              <option value="positive">Positive</option>
+              <option value="negative">Negative</option>
+              <option value="all">All</option>
+            </select>
           </label>
         </div>
-        <div class="text-[10px] text-zinc-600">Bucket size = the toolbar interval selector. Pan/zoom left to load history back to ~data start. {rpTokens.length} tokens shown.</div>
+        <div class="text-[10px] text-zinc-600">Bucket size = the toolbar interval selector. Pan/zoom left to load history back to ~data start. {rpShownTokens.length} tokens appear in the top-{instance.pcTopN ?? 5}.</div>
       </div>
     {/if}
 

@@ -932,7 +932,8 @@
         )
           ? (lb as NonNullable<ChartInstanceT['pcLookback']>)
           : '7d';
-        inst.pcMinVolume = typeof r.pcMinVolume === 'number' && r.pcMinVolume >= 0 ? r.pcMinVolume : 0;
+        inst.pcTopN = r.pcTopN === 3 || r.pcTopN === 10 || r.pcTopN === 15 ? r.pcTopN : 5;
+        inst.pcSide = r.pcSide === 'negative' || r.pcSide === 'all' ? r.pcSide : 'positive';
         inst.exchange = r.exchange === 'hl' ? 'hl' : r.exchange === 'binance_spot' ? 'binance_spot' : 'binance';
       }
       // AAVE chart kinds (single-event + net) need a `chain` just like the

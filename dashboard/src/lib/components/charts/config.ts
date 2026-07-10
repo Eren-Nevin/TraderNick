@@ -1864,11 +1864,12 @@ export type ChartInstance = {
   // lines, anchored at the leftmost data point of its own series.
   overlayTokens?: string[];
   // pc (Relative Performance) — base token every series is measured against (default
-  // BTC, changeable in settings); lookback = window start T0; min USD volume/bucket to
-  // keep a token's series (thins the ~100 tokens). All in the load key.
+  // BTC, changeable in settings). pcTopN/pcSide are RENDER-only (not in the load key):
+  // per snapshot, show the top-N tokens by change, filtered by side.
   pcBase?: string;
   pcLookback?: '6h' | '12h' | '1d' | '3d' | '7d' | '14d' | '30d' | '90d';
-  pcMinVolume?: number;
+  pcTopN?: 3 | 5 | 10 | 15;
+  pcSide?: 'positive' | 'negative' | 'all';
   // transfer / aave / uniswap — every event-stream kind that selects a chain
   chain?: string;
   // uniswap_* only: the pool (symbol0/symbol1/fee) on the selected chain
@@ -2844,7 +2845,8 @@ export function newChartInstance(
     base.exchange = 'binance';
     base.pcBase = 'BTC';
     base.pcLookback = '7d';
-    base.pcMinVolume = 0;
+    base.pcTopN = 5;
+    base.pcSide = 'positive';
     base.interval = '1h';
   }
   if (isLeaderboardKind(kind)) {
