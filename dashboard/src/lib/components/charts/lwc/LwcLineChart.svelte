@@ -73,7 +73,7 @@
     formatY2,
     formatTooltip2,
     legendRight = null as { label: string; color: string }[] | null,
-    sortTooltipByAbs = false
+    sortTooltipDesc = false
   }: {
     data: Datum[];
     lines: Line[];
@@ -81,9 +81,9 @@
     vRefLines?: VRefLine[];
     /** Optional persistent legend pinned to the chart's right edge (name + color). */
     legendRight?: { label: string; color: string }[] | null;
-    /** Sort the hover tooltip's rows by |value| descending (biggest movers first)
-     *  instead of line order. */
-    sortTooltipByAbs?: boolean;
+    /** Sort the hover tooltip's rows by value descending (highest first) instead of
+     *  line order. */
+    sortTooltipDesc?: boolean;
     height?: number;
     title?: string;
     xExtent?: [number, number];
@@ -148,7 +148,7 @@
         : ln.compute(hoverDatum, hoverIdx ?? 0, data);
       if (Number.isFinite(v)) rows.push({ ln, v });
     }
-    if (sortTooltipByAbs) rows.sort((a, b) => Math.abs(b.v) - Math.abs(a.v));
+    if (sortTooltipDesc) rows.sort((a, b) => b.v - a.v);
     return rows;
   });
 
