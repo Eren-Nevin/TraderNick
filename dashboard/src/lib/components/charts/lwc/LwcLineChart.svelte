@@ -375,21 +375,25 @@
         {@const v = ln.rawValue
           ? ln.rawValue(hoverDatum, hoverIdx ?? 0, data)
           : ln.compute(hoverDatum, hoverIdx ?? 0, data)}
-        {@const fmt =
-          ln.rawValue && ln.rawFormat
-            ? ln.rawFormat
-            : ln.axis === 'secondary'
-              ? (formatTooltip2 ?? formatTooltip)
-              : formatTooltip}
-        {@const pct = ln.pct ? ln.pct(hoverDatum, hoverIdx ?? 0, data) : null}
-        <div class="flex items-center gap-2">
-          <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
-          <span class="text-zinc-400 w-28">{ln.label}</span>
-          <span class="w-20 text-right">{fmt(v)}</span>
-          {#if pct !== null && Number.isFinite(pct)}
-            <span class="w-12 text-right text-zinc-500">{pct.toFixed(1)}%</span>
-          {/if}
-        </div>
+        <!-- Only list series that actually have a value at this snapshot (a NaN means
+             the series has no point here — e.g. a token not in the top-N this bucket). -->
+        {#if Number.isFinite(v)}
+          {@const fmt =
+            ln.rawValue && ln.rawFormat
+              ? ln.rawFormat
+              : ln.axis === 'secondary'
+                ? (formatTooltip2 ?? formatTooltip)
+                : formatTooltip}
+          {@const pct = ln.pct ? ln.pct(hoverDatum, hoverIdx ?? 0, data) : null}
+          <div class="flex items-center gap-2">
+            <span class="inline-block w-3 h-[2px]" style="background: {ln.color}"></span>
+            <span class="text-zinc-400 w-28">{ln.label}</span>
+            <span class="w-20 text-right">{fmt(v)}</span>
+            {#if pct !== null && Number.isFinite(pct)}
+              <span class="w-12 text-right text-zinc-500">{pct.toFixed(1)}%</span>
+            {/if}
+          </div>
+        {/if}
       {/each}
     </div>
   {/if}

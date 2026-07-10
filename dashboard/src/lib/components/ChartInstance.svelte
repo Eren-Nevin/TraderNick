@@ -7801,6 +7801,28 @@
           {/each}
         </select>
       {/if}
+      {#if instance.kind === 'pc'}
+        <!-- Relative Performance: per-snapshot top-N movers by change, filtered by side.
+             Render-only (client-side) — no refetch. -->
+        <select
+          value={instance.pcSide ?? 'positive'}
+          onchange={(e) => (instance.pcSide = e.currentTarget.value as NonNullable<ChartInstanceT['pcSide']>)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="Which movers to show per snapshot"
+        >
+          <option value="positive">Positive</option>
+          <option value="negative">Negative</option>
+          <option value="all">All</option>
+        </select>
+        <select
+          value={String(instance.pcTopN ?? 5)}
+          onchange={(e) => (instance.pcTopN = Number(e.currentTarget.value) as NonNullable<ChartInstanceT['pcTopN']>)}
+          class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
+          title="How many top movers to show per snapshot"
+        >
+          {#each [3, 5, 10, 15] as n (n)}<option value={String(n)}>Top {n}</option>{/each}
+        </select>
+      {/if}
       {#if instance.kind === 'backtracker'}
         <!-- OHLCV candle source: Binance Spot (default) or Futures (perp). Markers
              / positions are always HL perp regardless. -->
@@ -8761,22 +8783,8 @@
               {#each tokens as t (t)}<option value={t}>{t}</option>{/each}
             </select>
           </label>
-          <label class="flex items-center gap-1.5 text-zinc-300">Top N
-            <select value={String(instance.pcTopN ?? 5)} onchange={(e) => (instance.pcTopN = Number(e.currentTarget.value) as NonNullable<ChartInstanceT['pcTopN']>)}
-              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100">
-              {#each [3, 5, 10, 15] as n (n)}<option value={String(n)}>{n}</option>{/each}
-            </select>
-          </label>
-          <label class="flex items-center gap-1.5 text-zinc-300">Side
-            <select value={instance.pcSide ?? 'positive'} onchange={(e) => (instance.pcSide = e.currentTarget.value as NonNullable<ChartInstanceT['pcSide']>)}
-              class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs text-zinc-100">
-              <option value="positive">Positive</option>
-              <option value="negative">Negative</option>
-              <option value="all">All</option>
-            </select>
-          </label>
         </div>
-        <div class="text-[10px] text-zinc-600">Bucket size = the toolbar interval selector. Pan/zoom left to load history back to ~data start. {rpShownTokens.length} tokens appear in the top-{instance.pcTopN ?? 5}.</div>
+        <div class="text-[10px] text-zinc-600">Top N + Side are in the chart header. Bucket size = the toolbar interval selector. Pan/zoom left to load history back to ~data start. {rpShownTokens.length} tokens appear in the top-{instance.pcTopN ?? 5}.</div>
       </div>
     {/if}
 
