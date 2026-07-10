@@ -7,6 +7,7 @@
     type IPriceLine,
     type ISeriesApi,
     type LineData,
+    type SeriesMarker,
     type UTCTimestamp
   } from 'lightweight-charts';
   import { themeStore } from '$lib/stores/theme.svelte';
@@ -29,6 +30,17 @@
     /** Render as isolated dots (no connecting line) — for scatter-style series
      *  whose finite points are sparse/non-contiguous. */
     pointsOnly?: boolean;
+    /** Per-point markers (e.g. a labeled dot per data point). When present, the
+     *  series' own point markers are suppressed — these replace them. Must be in
+     *  ascending-time order. */
+    markers?: {
+      time: number;
+      position: 'aboveBar' | 'belowBar' | 'inBar';
+      color: string;
+      shape: 'circle' | 'square' | 'arrowUp' | 'arrowDown';
+      text?: string;
+      size?: number;
+    }[];
     rawValue?: (d: Datum, i: number, data: Datum[]) => number;
     rawFormat?: (v: number) => string;
     /** Optional secondary value shown in parentheses after the main value in
@@ -209,7 +221,7 @@
           color: ln.color,
           lineWidth: 1,
           lineVisible: !ln.pointsOnly,
-          pointMarkersVisible: ln.pointsOnly ?? false,
+          pointMarkersVisible: (ln.pointsOnly ?? false) && !(ln.markers?.length),
           pointMarkersRadius: ln.pointsOnly ? 3 : undefined,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
           priceScaleId: axis === 'secondary' ? 'left' : 'right',
@@ -224,7 +236,7 @@
         entry.series.applyOptions({
           color: ln.color,
           lineVisible: !ln.pointsOnly,
-          pointMarkersVisible: ln.pointsOnly ?? false,
+          pointMarkersVisible: (ln.pointsOnly ?? false) && !(ln.markers?.length),
           pointMarkersRadius: ln.pointsOnly ? 3 : undefined,
           lineStyle: ln.dash ? LineStyle.Dashed : LineStyle.Solid,
           priceFormat: priceFormatFor(axis)
@@ -237,6 +249,7 @@
         if (Number.isFinite(v)) points.push({ time: data[i].time as UTCTimestamp, value: v });
       }
       entry.series.setData(points);
+      entry.series.setMarkers((ln.markers ?? []) as unknown as SeriesMarker<UTCTimestamp>[]);
     }
 
     // Show the LEFT price scale's axis labels only when a series actually uses

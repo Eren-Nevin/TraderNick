@@ -16,17 +16,6 @@
   // Relative Performance (pc) response shape.
   type RpSeries = { token: string; values: (number | null)[] };
   type RpResp = { base?: string; times?: number[]; series?: RpSeries[] };
-  // HSL→hex (lightweight-charts' color parser rejects the space-separated hsl() syntax,
-  // which blanked the chart). Distinct-ish hue per series index.
-  function _rpHueHex(idx: number, n: number): string {
-    const h = (Math.round((360 * idx) / Math.max(1, n)) % 360) / 360;
-    const s = 0.68, l = 0.55;
-    const q = l < 0.5 ? l * (1 + s) : l + s - l * s;
-    const p = 2 * l - q;
-    const hk = (t: number) => { t = (t % 1 + 1) % 1; return t < 1 / 6 ? p + (q - p) * 6 * t : t < 0.5 ? q : t < 2 / 3 ? p + (q - p) * (2 / 3 - t) * 6 : p; };
-    const to = (x: number) => Math.round(x * 255).toString(16).padStart(2, '0');
-    return `#${to(hk(h + 1 / 3))}${to(hk(h))}${to(hk(h - 1 / 3))}`;
-  }
   function _tpQs(instance: ChartInstanceT): URLSearchParams {
     const qs = new URLSearchParams({
       tokens: (instance.tpTokens ?? []).join(','),
@@ -4858,20 +4847,33 @@
   const OVERLAY_COLORS = ['#06b6d4', '#fbbf24', '#a855f7', '#22c55e', '#ef4444', '#ec4899'] as const;
   // OHLCV chart is back to its original behaviour: candles + MAs only.
   let ohlcvLinesD = $derived(cumulativeLines);
-  // One dot-series per shown token — its per-bucket excess return, but ONLY at buckets
-  // where it ranks in the top-N (else NaN → no dot). Points-only (no connecting line).
+  // One series per shown token — its per-bucket excess return, but ONLY at buckets where
+  // it ranks in the top-N (else NaN → no point). All the same colour; each top-N point
+  // gets a labeled marker (the token symbol) so it's identifiable without hovering.
+  const PC_DOT_COLOR = '#38bdf8';
   let pcLinesD = $derived(
-    rpShownTokens.map((tok, idx, arr) => ({
-      key: `rp_${tok}`,
-      label: tok,
-      color: _rpHueHex(idx, arr.length),
-      pointsOnly: true,
-      compute: (d: Candle, i: number) => {
-        if (!pcTopSets[i]?.has(tok)) return NaN;
-        const v = (d as unknown as Record<string, number>)[tok];
-        return v == null ? NaN : v;
+    rpShownTokens.map((tok) => {
+      const markers: {
+        time: number; position: 'inBar'; color: string; shape: 'circle'; text: string;
+      }[] = [];
+      for (let i = 0; i < data.length; i++) {
+        if (pcTopSets[i]?.has(tok)) {
+          markers.push({ time: (data[i] as unknown as { time: number }).time, position: 'inBar', color: PC_DOT_COLOR, shape: 'circle', text: tok });
+        }
       }
-    }))
+      return {
+        key: `rp_${tok}`,
+        label: tok,
+        color: PC_DOT_COLOR,
+        pointsOnly: true,
+        markers,
+        compute: (d: { time: number } & Record<string, number>, i: number) => {
+          if (!pcTopSets[i]?.has(tok)) return NaN;
+          const v = d[tok];
+          return v == null ? NaN : v;
+        }
+      };
+    })
   );
   let frLinesD = $derived(cumulativeLines);
 
