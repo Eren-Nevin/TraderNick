@@ -22,10 +22,8 @@ import config
 import token_batches
 import sweep
 from clickhouse import HL_EVENTS, async_client
-from gap_fill import latest_time, min_watermark_per_token
 from groups.hyperliquid_events import (
     _CADENCE,
-    _PER_TOKEN_TABLE,
     _fetch_and_insert,
 )
 
@@ -51,32 +49,24 @@ async def run(stream_name: str, event: str) -> None:
     # DeFiStream is still streaming the parquet body.
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY, timeout=1800.0)
     tick_s, _ = _CADENCE[event]
-    # Per-event sweep cadence overrides — the default is
-    # sweep.sweep_cadence_s(live) = live × SWEEP_MULTIPLIER (10×). For the
-    # 15m HL streams that default works out to 2h30m, which on heavy
-    # endpoints (ohlcv / trades / fills / trade_history / transfers)
-    # produces multi-hundred-MB sweep responses that DeFiStream sometimes
-    # rejects with "Time range too large" or 500s under load. Cap them at
-    # **1 h** (2026-06-11) so each sweep covers a smaller, predictable
-    # window even if the live tick missed a few minutes — the ReplacingMT
-    # source table absorbs the re-fetched rows for free, so a tighter
-    # cadence costs nothing on correctness.
-    #
-    # position_history stays at 30 min (its responses are heaviest per
-    # bucket — see the 2026-06-06 OOM incident).
-    # funding / vaults are pinned to 1h (2026-07-09): their live tick dropped to
-    # 60s, so the 10× default would put the sweep at 10 min — needlessly frequent
-    # for sparse endpoints. 1h is a cheap backstop behind the fresh live tick.
+    # Per-event sweep cadence overrides. The sweep re-fetches a fixed rolling
+    # window ([now - lookback, now], see _SWEEP_LOOKBACK) on this cadence — the
+    # ReplacingMT source table absorbs the re-fetched rows for free, so a tighter
+    # cadence only costs request volume, not correctness. All HL events are
+    # pinned to **30 min** (2026-07-10) so a hole (e.g. a DeFiStream mid-window
+    # outage) self-heals within ~30 min of the data becoming available upstream,
+    # instead of up to an hour. Chunking (MAX_SWEEP_CHUNK) still bounds each
+    # request so heavy endpoints don't blow past DeFiStream's per-request /
+    # response-memory caps (the 2026-06-06 position_history OOM).
     _SWEEP_CADENCE_OVERRIDES = {
-        "ohlcv":             3600.0,  # 1 h
-        "trades":            3600.0,
-        "fills":             3600.0,
-        "trade_history":     3600.0,
-        "transfers":         3600.0,
-        "funding":           3600.0,
-        "vaults":            3600.0,
-        "position_history":  1800.0,  # 30 min — keep the sweep backstop tight so
-                                      # position_history lands within ~30 min.
+        "ohlcv":             1800.0,  # 30 min
+        "trades":            1800.0,
+        "fills":             1800.0,
+        "trade_history":     1800.0,
+        "transfers":         1800.0,
+        "funding":           1800.0,
+        "vaults":            1800.0,
+        "position_history":  1800.0,
     }
     sweep_cadence = _SWEEP_CADENCE_OVERRIDES.get(event, sweep.sweep_cadence_s(tick_s))
 
@@ -90,7 +80,6 @@ async def run(stream_name: str, event: str) -> None:
     # trade_history stays on its 1h bucket grid.
     _SWEEP_GRID_MIN = {"position_history": 15, "trade_history": 60}
     _method, table, _cols, _tf = HL_EVENTS[event]
-    per_token = event in _PER_TOKEN_TABLE
 
     log.info("HL stream %s starting (event=%s live=%ss sweep=%ss)",
              stream_name, event, tick_s, sweep_cadence)
@@ -168,13 +157,11 @@ async def run(stream_name: str, event: str) -> None:
             await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
 
     # DeFiStream caps `position_history` (and several other endpoints) at a
-    # 31-day window per request. The sweep `since` comes from the table
-    # watermark, which can lag arbitrarily far behind — adding a new token
-    # to the live roster temporarily drags `min_watermark_per_token` back
-    # to that token's earliest row, and a single request would 400 with
-    # "Time range too large". Cap each sweep request and walk the gap in
-    # sequential chunks so a wide window closes incrementally instead of
-    # failing outright.
+    # 31-day window per request, and heavy endpoints blow past its response-side
+    # memory limit well before that. The sweep now fetches a fixed rolling window
+    # ([now - lookback, now], lookback = 8h) — still wider than some per-request
+    # caps — so cap each request and walk the window in sequential chunks so it
+    # closes incrementally instead of failing outright.
     #
     # Per-event override below `MAX_SWEEP_CHUNK` for heavy endpoints whose
     # response volume blows past DeFiStream's *response-side* memory limit
@@ -202,37 +189,36 @@ async def run(stream_name: str, event: str) -> None:
     MAX_SWEEP_CHUNK = _SWEEP_CHUNK_OVERRIDES.get(event, timedelta(days=30))
     CHUNK_PACING_S = 0.5
 
-    # Per-event cap on how far back a sweep may reach. These endpoints are
-    # per-token, so the sweep watermark is min_watermark_per_token — a single
-    # dead/inactive token pins it far back and the sweep re-walks (and re-inserts)
-    # that whole span every cycle, which also keeps re-invalidating the derived
-    # rollups. Examples: `fills` TST (no fills since 2026-05-25, ~30d) and
-    # `position_history` VINE (~2d). The live tick owns recency (15/45-min
-    # window); the sweep only closes recent gaps, so cap its look-back. Larger
-    # genuine gaps (long downtime, new-token history) use an explicit backfill.
-    _SWEEP_MAX_LOOKBACK = {
-        "fills":            timedelta(hours=24),
-        "trades":           timedelta(hours=24),
-        "position_history": timedelta(hours=24),
-    }
+    # Sweep look-back window. The sweep no longer derives `since` from the table
+    # watermark (2026-07-10). The watermark strategy could only heal gaps at the
+    # leading tip (or where a stale/pinned per-token watermark happened to drag
+    # `since` back) — it walked straight over mid-range holes that already had
+    # fresher data on top of them (e.g. a DeFiStream outage that recovered
+    # mid-window: data before + after the hole ⇒ watermark sits past it ⇒ the
+    # hole is never re-fetched). Instead every sweep fire now re-fetches a FIXED
+    # rolling window [now - lookback, now], UNCONDITIONALLY, so any hole inside
+    # the last `lookback` self-heals on the next sweep tick (ReplacingMergeTree
+    # dedups the re-fetched rows for free). Uniform 8h for every event;
+    # per-event overrides go in _SWEEP_LOOKBACK. Gaps older than `lookback` (long
+    # downtime) still need an explicit backfill. The two tunables are the
+    # lookback here and the sweep cadence (_SWEEP_CADENCE_OVERRIDES) — raise
+    # either for a longer / denser backstop.
+    _DEFAULT_SWEEP_LOOKBACK = timedelta(hours=8)
+    _SWEEP_LOOKBACK: dict[str, timedelta] = {}
 
     async def _run_sweep_once(ch, label: str) -> tuple[int, str | None]:
-        """Single sweep iteration. Reads the watermark, computes since,
-        runs one fetch (or a sequence of ≤30-day chunks if the gap is
-        wider), and returns (rows_inserted, error_string). Shared between
-        the cadenced sweep_loop and the boot sweep that fires before
-        live_loop starts."""
+        """Single sweep iteration. Re-fetches the fixed rolling window
+        [now - lookback, now] (one fetch, or a sequence of chunks if the
+        window is wider than the per-request cap), and returns
+        (rows_inserted, error_string). Shared between the cadenced
+        sweep_loop and the boot sweep that fires before live_loop starts."""
         tokens = token_batches.get_live_tokens()
         now = datetime.now(timezone.utc).replace(tzinfo=None)
         try:
-            if per_token:
-                last_seen = await min_watermark_per_token(ch, table=table, tokens=tokens)
-            else:
-                last_seen = await latest_time(ch, table=table)
-            since = sweep.sweep_since(now=now, sweep_cadence_seconds=sweep_cadence, last_seen=last_seen)
-            _cap = _SWEEP_MAX_LOOKBACK.get(event)
-            if _cap is not None and since < now - _cap:
-                since = now - _cap
+            # Fixed rolling-window sweep: always re-fetch [now - lookback, now],
+            # independent of the table watermark (see _SWEEP_LOOKBACK above).
+            lookback = _SWEEP_LOOKBACK.get(event, _DEFAULT_SWEEP_LOOKBACK)
+            since = now - lookback
             sweep_until = now
             _grid = _SWEEP_GRID_MIN.get(event)
             if _grid:
@@ -242,19 +228,19 @@ async def run(stream_name: str, event: str) -> None:
                 sweep_until = now.replace(minute=(now.minute // _grid) * _grid, second=0, microsecond=0)
                 since = since.replace(minute=(since.minute // _grid) * _grid, second=0, microsecond=0)
                 if since >= sweep_until:
-                    # No closed bucket crossed since last_seen — nothing to sweep.
+                    # No closed bucket inside the window — nothing to sweep.
                     return 0, None
             if since >= sweep_until:
                 return 0, None
             span = sweep_until - since
             if span <= MAX_SWEEP_CHUNK:
                 n = await _fetch_and_insert(ds, event=event, tokens=tokens, since=since, until=sweep_until)
-                log.info("%s %s window=%s..%s rows=%d (last_seen=%s)",
-                         event, label, since, sweep_until, n, last_seen)
+                log.info("%s %s window=%s..%s rows=%d",
+                         event, label, since, sweep_until, n)
                 return n, None
-            log.info("%s %s window=%s spans %.1f hours — chunking in %.1f-hour slices (last_seen=%s)",
+            log.info("%s %s window=%s spans %.1f hours — chunking in %.1f-hour slices",
                      event, label, since, span.total_seconds() / 3600.0,
-                     MAX_SWEEP_CHUNK.total_seconds() / 3600.0, last_seen)
+                     MAX_SWEEP_CHUNK.total_seconds() / 3600.0)
             chunks_total = 0
             n_chunks = 0
             cur = since
@@ -290,14 +276,12 @@ async def run(stream_name: str, event: str) -> None:
             await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, rows=rows, error=err) if stream_name else None
             await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
-    # Boot sweep — race-fix. Before letting live_loop fire, run one sweep
-    # iteration so the cadenced sweep can't be lapped by the live insert
-    # advancing the watermark past a pre-startup gap. Without this, a
-    # restart after a multi-hour stop (e.g. while waiting on a backfill)
-    # leaves a permanent hole in the affected event tables because the
-    # live tick fetches a 5-min overlap around `now`, advancing the
-    # watermark past the gap, and the subsequent cadenced sweep computes
-    # `since` from the new (post-live) watermark and never sees the hole.
+    # Boot sweep — fire one sweep iteration before live_loop starts so a
+    # restart immediately re-fetches the last `lookback` window (closing any
+    # hole from the downtime) instead of waiting up to one sweep cadence for the
+    # first cadenced fire. With the fixed rolling-window sweep this is no longer
+    # a correctness race (the sweep covers [now - lookback, now] regardless of
+    # the watermark) — it just makes recovery prompt on restart.
     ch = await async_client()
     _boot_t0 = time.monotonic()
     rows, err = await _run_sweep_once(ch, label="boot-sweep")

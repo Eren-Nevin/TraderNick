@@ -1,3 +1,10 @@
+# CPU ceiling shared by all *_live ingestion containers (2026-07-10). Honored by
+# `docker compose up` (v2) outside swarm. Change the cap in one place here.
+x-live-cpu-limit: &live_cpu_limit
+  resources:
+    limits:
+      cpus: '2.0'
+
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
@@ -47,6 +54,7 @@ services:
   # admin_server fans out to these.
   # =============================================================
   hyperliquid_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
@@ -79,6 +87,7 @@ services:
     restart: unless-stopped
 
   binance_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
@@ -111,6 +120,7 @@ services:
     restart: unless-stopped
 
   transfers_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
@@ -139,6 +149,7 @@ services:
     restart: unless-stopped
 
   aave_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
@@ -167,6 +178,7 @@ services:
     restart: unless-stopped
 
   uniswap_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
@@ -195,6 +207,7 @@ services:
     restart: unless-stopped
 
   aerodrome_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
@@ -223,6 +236,7 @@ services:
     restart: unless-stopped
 
   lido_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
@@ -251,6 +265,7 @@ services:
     restart: unless-stopped
 
   morpho_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
@@ -279,6 +294,7 @@ services:
     restart: unless-stopped
 
   spark_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
@@ -307,6 +323,7 @@ services:
     restart: unless-stopped
 
   gmx_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
@@ -339,6 +356,7 @@ services:
   # provider services and writes into MVs (hl_position_history_*,
   # hl_fills_pnl_daily, exchange_flow_minute).
   data_process_live:
+    deploy: *live_cpu_limit
     build: ./services/ingestion
     depends_on:
       clickhouse:
