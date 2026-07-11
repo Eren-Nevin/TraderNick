@@ -152,6 +152,11 @@
     (r.inc_long?.[0] ?? 0) + (r.dec_short?.[0] ?? 0) - (r.inc_short?.[0] ?? 0) - (r.dec_long?.[0] ?? 0);
   // distinct wallets that increased/decreased (from the server), NOT #fills.
   const netCount = (r: OverviewRow) => ((r as unknown as { net_wallets?: number }).net_wallets ?? 0);
+  // Net flip to long = Flip S→L − Flip L→S ($, and the fill-count net in the paren).
+  // Only meaningful in Separate mode (Split decomposes flips into close+open).
+  const netFlipValue = (r: OverviewRow) => (r.flip_sl?.[0] ?? 0) - (r.flip_ls?.[0] ?? 0);
+  const netFlipCount = (r: OverviewRow) => (r.flip_sl?.[1] ?? 0) - (r.flip_ls?.[1] ?? 0);
+  const netFlipFills = (r: OverviewRow) => (r.flip_sl?.[1] ?? 0) + (r.flip_ls?.[1] ?? 0);
 
   // Overview sort (by a chosen column's value).
   let ovSortKey = $state<string>('token');
@@ -167,6 +172,7 @@
     arr.sort((a, b) => {
       if (k === 'token') return String(a.token).localeCompare(String(b.token)) * dir;
       if (k === 'net') return (netValue(a) - netValue(b)) * dir;
+      if (k === 'netflip') return (netFlipValue(a) - netFlipValue(b)) * dir;
       const av = (a[k]?.[0] ?? 0), bv = (b[k]?.[0] ?? 0);
       return (av - bv) * dir;
     });
@@ -217,6 +223,9 @@
             <tr>
               <th class="text-left px-2 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onOvSort('token')}>Token{ovArrow('token')}</th>
               <th class="text-right px-2 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none whitespace-nowrap" onclick={() => onOvSort('net')} title="Net position change: increased longs + decreased shorts − increased shorts − decreased longs (directional flow, excludes opens/closes)">Net Pos Change{ovArrow('net')}</th>
+              {#if !flipSplit}
+                <th class="text-right px-2 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none whitespace-nowrap" onclick={() => onOvSort('netflip')} title="Net flip to long: Flip S→L − Flip L→S ($, with the net flip count in parens)">Net Flip{ovArrow('netflip')}</th>
+              {/if}
               {#each ovCols as c (c)}
                 <th class="text-right px-2 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none whitespace-nowrap {typeCls(c)}" onclick={() => onOvSort(c)} title={typeLabel(c)}>{typeLabel(c)}{ovArrow(c)}</th>
               {/each}
@@ -229,6 +238,11 @@
                 <td class="px-2 py-1 text-right font-mono tabular-nums whitespace-nowrap {netValue(r) > 0 ? 'text-emerald-400' : netValue(r) < 0 ? 'text-rose-400' : 'text-zinc-600'}">
                   {netCount(r) ? `${fmtUsd(netValue(r))} (${netCount(r)})` : '—'}
                 </td>
+                {#if !flipSplit}
+                  <td class="px-2 py-1 text-right font-mono tabular-nums whitespace-nowrap {netFlipValue(r) > 0 ? 'text-emerald-400' : netFlipValue(r) < 0 ? 'text-rose-400' : 'text-zinc-600'}">
+                    {netFlipFills(r) ? `${fmtUsd(netFlipValue(r))} (${netFlipCount(r)})` : '—'}
+                  </td>
+                {/if}
                 {#each ovCols as c (c)}
                   {@const cell = r[c] ?? [0, 0]}
                   <td class="px-2 py-1 text-right font-mono tabular-nums whitespace-nowrap {cell[1] ? 'text-zinc-200' : 'text-zinc-700'}">
