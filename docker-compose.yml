@@ -8,6 +8,12 @@ x-live-cpu-limit: &live_cpu_limit
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
+    # Pin ClickHouse to 6 fixed cores (of 16): both a hard 6-core cap AND CPU
+    # affinity — CH always runs on cores 0-5, so its working set stays on the
+    # same physical cores (better cache locality) and can't monopolize the host.
+    # (Applying this recreates the container → a brief CH outage; the ingestion /
+    # data_server / data_provider CH clients now reconnect+retry through it.)
+    cpuset: "0-5"
     # Auto-recover a transient/accidental stop instead of staying down (it was the
     # only service without this — a stray SIGTERM on 2026-07-03 left it down ~12h).
     restart: unless-stopped
