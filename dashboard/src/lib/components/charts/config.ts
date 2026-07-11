@@ -1747,7 +1747,7 @@ export type ChartInstance = {
    *  columns. Display-only (server returns both) → NOT in the load key. */
   cvdtUnit?: 'usd' | 'token';
   /** backtracker_leaderboard only: lookback for the per-token aggregates. In the key. */
-  blLookback?: '15m' | '1h' | '4h' | '12h' | '1d' | '7d';
+  blLookback?: '15m' | '30m' | '1h' | '4h' | '12h' | '1d' | '7d';
   /** backtracker_leaderboard only: OI freshness — 'recent' (freshest snapshot) or
    *  'now' (reconstructed from fills). In the key. */
   blAsOf?: 'now' | 'recent';

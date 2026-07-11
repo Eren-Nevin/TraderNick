@@ -7433,6 +7433,7 @@
           title="Lookback window for every column"
         >
           <option value="15m">15m</option>
+          <option value="30m">30m</option>
           <option value="1h">1h</option>
           <option value="4h">4h</option>
           <option value="12h">12h</option>

@@ -905,7 +905,7 @@
         // wallet group (btGroupId), so it doesn't have to be re-picked every time.
         inst.btGroupId = typeof r.btGroupId === 'string' ? r.btGroupId : null;
         const bllb = r.blLookback;
-        inst.blLookback = (['15m', '1h', '4h', '12h', '1d', '7d'] as const).includes(
+        inst.blLookback = (['15m', '30m', '1h', '4h', '12h', '1d', '7d'] as const).includes(
           bllb as NonNullable<ChartInstanceT['blLookback']>
         ) ? (bllb as NonNullable<ChartInstanceT['blLookback']>) : '1h';
         inst.blAsOf = r.blAsOf === 'recent' ? 'recent' : 'now';
