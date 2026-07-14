@@ -3669,8 +3669,8 @@ async def trading_pit(request):
         params["short_types"] = _TP_SHORT_TYPES
 
     base = (
-        "SELECT wallet, token, time, price, side, closed_pnl, p.1 AS type, p.2 AS value, p.3 AS tokens FROM ("
-        "  SELECT wallet, token, time, price, side, closed_pnl, "
+        "SELECT wallet, token, time, price, side, closed_pnl, crossed, p.1 AS type, p.2 AS value, p.3 AS tokens FROM ("
+        "  SELECT wallet, token, time, price, side, closed_pnl, crossed, "
         "         " + _TP_TYPE_SQL + " AS t0, "
         "         multiIf("
         "           {split:UInt8} = 1 AND " + _TP_TYPE_SQL + " = 'flip_ls',"
@@ -3689,7 +3689,7 @@ async def trading_pit(request):
             base += " AND type IN {tf_types:Array(String)}"
             params["tf_types"] = _TP_TYPE_CATEGORIES.get(type_filter, [type_filter])
         r = await ch.query(
-            "SELECT toUnixTimestamp(time) AS ts, wallet, token, type, side, price, value, closed_pnl,"
+            "SELECT toUnixTimestamp(time) AS ts, wallet, token, type, side, price, value, closed_pnl, crossed,"
             " dictGet('tradernick.wallet_labels', 'categories', lower(wallet)) AS cats"
             " FROM (" + base + ") ORDER BY time DESC LIMIT {n:UInt32}",
             parameters={**params, "n": n},
@@ -3697,13 +3697,15 @@ async def trading_pit(request):
         rows = [{
             "time": int(ts), "wallet": w, "token": tok, "type": ty, "side": sd,
             "price": float(p), "value": float(v), "closed_pnl": float(cp),
-            "categories": list(cats) if cats else [],
-        } for (ts, w, tok, ty, sd, p, v, cp, cats) in r.result_rows]
+            "crossed": int(cr), "categories": list(cats) if cats else [],
+        } for (ts, w, tok, ty, sd, p, v, cp, cr, cats) in r.result_rows]
         return response.json({"mode": mode, "rows": rows, "tokens_available": tokens_available})
 
     if mode == "overview":
+        # Each cell is [Σ$, fill_count, crossed_fill_count]; the crossed count drives the
+        # "% market (aggressor)" badge in the UI (crossed=1 = the fill took liquidity).
         r = await ch.query(
-            "SELECT token, type, sum(value) AS v, count() AS c"
+            "SELECT token, type, sum(value) AS v, count() AS c, countIf(crossed = 1) AS xc"
             " FROM (" + base + ") GROUP BY token, type",
             parameters=params,
         )
@@ -3711,12 +3713,12 @@ async def trading_pit(request):
         # When a single-token narrow is active, only that token seeds (else the other
         # selected capsules would appear as empty rows).
         seed = [token_one] if token_one else tokens
-        agg: dict[str, dict] = {t: {"token": t} | {k: [0.0, 0] for k in _TP_TYPE_KEYS} for t in seed}
-        for tok, ty, v, c in r.result_rows:
+        agg: dict[str, dict] = {t: {"token": t} | {k: [0.0, 0, 0] for k in _TP_TYPE_KEYS} for t in seed}
+        for tok, ty, v, c, xc in r.result_rows:
             if tok not in agg:
-                agg[tok] = {"token": tok} | {k: [0.0, 0] for k in _TP_TYPE_KEYS}
+                agg[tok] = {"token": tok} | {k: [0.0, 0, 0] for k in _TP_TYPE_KEYS}
             if ty in agg[tok]:
-                agg[tok][ty] = [float(v), int(c)]
+                agg[tok][ty] = [float(v), int(c), int(xc)]
         # Net Pos Change count = DISTINCT wallets that increased/decreased (not #fills).
         nwr = await ch.query(
             "SELECT token, uniqExactIf(wallet, type IN ('inc_long','dec_short','inc_short','dec_long')) AS nw"
@@ -3779,14 +3781,14 @@ async def trading_pit(request):
         "         type IN ('flip_ls','flip_sl'),'flip','incdec') AS bucket,"
         " if(type IN {long_all:Array(String)},'long','short') AS pside,"
         " sum(multiIf(type IN ('inc_long','inc_short'), value, type IN ('dec_long','dec_short'), -value, value)) AS net,"
-        " sum(value) AS gross, sum(tokens) AS gtok, count() AS c,"
+        " sum(value) AS gross, sum(tokens) AS gtok, count() AS c, countIf(crossed = 1) AS xc,"
         " toUInt32(max(toUnixTimestamp(time))) AS med_time,"  # most-recent fill in the group
         " any(dictGet('tradernick.wallet_labels','categories',lower(wallet))) AS cats"
         " FROM (" + base + ") GROUP BY wallet, token, bucket, pside",
         parameters={**params, "long_all": _TP_LONG_TYPES},
     )
     rows = []
-    for w, tok, bucket, pside, net, gross, gtok, c, med_time, cats in r.result_rows:
+    for w, tok, bucket, pside, net, gross, gtok, c, xc, med_time, cats in r.result_rows:
         net, gross, gtok = float(net), float(gross), float(gtok)
         vwap = gross / gtok if gtok else 0.0
         if bucket == "open":
@@ -3798,9 +3800,10 @@ async def trading_pit(request):
         else:  # incdec net
             ty = f"{'inc' if net >= 0 else 'dec'}_{pside}"
             val = abs(net)
+        # crossed_count / count = share of this aggregate's fills that were market/aggressor.
         rows.append({"wallet": w, "token": tok, "type": ty, "side": pside,
-                     "value": val, "price": vwap, "count": int(c), "time": int(med_time),
-                     "categories": list(cats) if cats else []})
+                     "value": val, "price": vwap, "count": int(c), "crossed_count": int(xc),
+                     "time": int(med_time), "categories": list(cats) if cats else []})
     if type_filter:
         tf_set = set(_TP_TYPE_CATEGORIES.get(type_filter, [type_filter]))
         rows = [x for x in rows if x["type"] in tf_set]

@@ -77,7 +77,7 @@
   const DND = { flipDurationMs: 150, dropTargetStyle: {} };
 </script>
 
-<div class="px-2 pt-3 border-t border-zinc-800">
+<div class="px-2 pt-3 pb-3 border-t border-zinc-800">
   <div class="px-1 pb-1.5 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 select-none">
     Token Shortlist
   </div>

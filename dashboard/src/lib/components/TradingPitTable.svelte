@@ -9,9 +9,11 @@
 
   type FillRow = {
     time?: number; wallet: string; token: string; type: string; side: string;
-    price?: number; value: number; closed_pnl?: number; count?: number; categories?: string[];
+    price?: number; value: number; closed_pnl?: number; count?: number;
+    crossed?: number; crossed_count?: number; categories?: string[];
   };
-  type OverviewRow = { token: string } & Record<string, [number, number]>;
+  // Overview cell = [Σ$, fill_count, crossed_fill_count]; the 3rd drives the % market badge.
+  type OverviewRow = { token: string } & Record<string, [number, number, number]>;
   type Filters = { minSize: number; side: string; type: string; token: string };
 
   let {
@@ -244,9 +246,9 @@
                   </td>
                 {/if}
                 {#each ovCols as c (c)}
-                  {@const cell = r[c] ?? [0, 0]}
+                  {@const cell = r[c] ?? [0, 0, 0]}
                   <td class="px-2 py-1 text-right font-mono tabular-nums whitespace-nowrap {cell[1] ? 'text-zinc-200' : 'text-zinc-700'}">
-                    {cell[1] ? `${fmtUsd(cell[0])} (${cell[1]})` : '—'}
+                    {#if cell[1]}{fmtUsd(cell[0])} ({cell[1]}) <span class="text-amber-400/80" title="{Math.round(100 * (cell[2] ?? 0) / cell[1])}% of these fills were market orders (crossed / aggressor)">[{Math.round(100 * (cell[2] ?? 0) / cell[1])}%]</span>{:else}—{/if}
                   </td>
                 {/each}
               </tr>
@@ -266,6 +268,7 @@
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('type')}>Type{arrow('type')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('value')}>Size{arrow('value')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('price')} title={mode === 'aggregate' ? 'Size-weighted average price' : 'Fill price'}>Price{arrow('price')}</th>
+            <th class="text-right px-3 py-1.5 font-normal whitespace-nowrap" title={mode === 'aggregate' ? '% of the aggregate\'s fills that were market orders (crossed / aggressor); the rest were passive limit (maker)' : 'Market = crossed the book (aggressor/taker); Limit = resting order filled (maker)'}>{mode === 'aggregate' ? '% Mkt' : 'Order'}</th>
             {#if mode === 'normal'}
               <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('pnl')}>PnL{arrow('pnl')}</th>
             {:else}
@@ -283,8 +286,12 @@
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-200">{fmtUsd(r.value)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{r.price ? r.price.toPrecision(5) : ''}</td>
               {#if mode === 'normal'}
+                <td class="px-3 py-1 text-right whitespace-nowrap">
+                  <span class="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded border {r.crossed ? 'border-amber-800 text-amber-400' : 'border-sky-800 text-sky-400'}">{r.crossed ? 'Market' : 'Limit'}</span>
+                </td>
                 <td class="px-3 py-1 text-right font-mono tabular-nums {(r.closed_pnl ?? 0) > 0 ? 'text-emerald-400' : (r.closed_pnl ?? 0) < 0 ? 'text-rose-400' : 'text-zinc-600'}">{r.closed_pnl ? fmtUsd(r.closed_pnl) : '—'}</td>
               {:else}
+                <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-300">{(r.count ?? 0) > 0 ? `${Math.round(100 * (r.crossed_count ?? 0) / (r.count ?? 1))}%` : '—'}</td>
                 <td class="px-3 py-1 text-right font-mono tabular-nums text-zinc-400">{r.count ?? ''}</td>
               {/if}
             </tr>
