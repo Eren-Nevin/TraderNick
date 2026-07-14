@@ -6,6 +6,8 @@
   import { timezoneStore, tzShortLabel } from '$lib/stores/timezone.svelte';
   import { pagesStore } from '$lib/stores/pages.svelte';
   import { walletPinsStore } from '$lib/stores/walletPins.svelte';
+  import { tokenShortlistStore } from '$lib/stores/tokenShortlist.svelte';
+  import TokenShortlist from '$lib/components/TokenShortlist.svelte';
 
   let collapsed = $state(false);
 
@@ -27,6 +29,7 @@
     timezoneStore.hydrate();
     pagesStore.hydrate();
     walletPinsStore.hydrate();
+    tokenShortlistStore.hydrate();
   });
 
   function activePage(): string | null {
@@ -244,6 +247,14 @@
       {collapsed ? '+' : '+ Add page'}
     </button>
   </nav>
+
+  <!-- =========================================================
+       Token Shortlist: static tool pinned above Wallets/Filters (the Pages nav
+       above scrolls under it). Hidden when the sidebar is collapsed (too narrow).
+       ========================================================= -->
+  {#if !collapsed}
+    <TokenShortlist />
+  {/if}
 
   <!-- =========================================================
        Wallets: jump-to-address + pinned wallets / groups.
