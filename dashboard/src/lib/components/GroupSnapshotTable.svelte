@@ -46,10 +46,8 @@
     const t = (r.n_long ?? 0) + (r.n_short ?? 0);
     return t ? (r.n_long ?? 0) / t : null;
   };
-  const lsRatio = (r: Row) => {
-    const f = lsFrac(r);
-    return f == null ? 'N/A' : Math.round(100 * f) + '%';
-  };
+  // "<longs>/<shorts>" — the raw wallet counts shown beside the net.
+  const lsCounts = (r: Row) => `${r.n_long ?? 0}/${r.n_short ?? 0}`;
   const sv = (r: Row, k: string): number | string =>
     k === 'token' ? r.token
       : k === 'net' || k === 'side' ? netUsd(r)
@@ -138,7 +136,7 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('unrealized_pnl')} title="Σ unrealized PnL">uPnL{arrow('unrealized_pnl')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('long_usd')} title="Σ long positions ($); count in ()">Longs{arrow('long_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('short_usd')} title="Σ short positions ($); count in ()">Shorts{arrow('short_usd')}</th>
-            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('netlong')} title="# long − # short wallets; () = long / (long + short) as %. Sorts by the %.">Net Long{arrow('netlong')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('netlong')} title="# long − # short wallets; () = longs/shorts wallet counts. Sorts by the long share.">Net Long{arrow('netlong')}</th>
           </tr>
         </thead>
         <tbody>
@@ -156,7 +154,7 @@
               <td class="px-3 py-1 text-right font-mono tabular-nums {r.unrealized_pnl > 0 ? 'text-emerald-400' : r.unrealized_pnl < 0 ? 'text-rose-400' : 'text-zinc-500'}">{fmtUsd(r.unrealized_pnl)}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-emerald-400 whitespace-nowrap">{r.n_long ? `${fmtUsd(r.long_usd)} (${r.n_long})` : '—'}</td>
               <td class="px-3 py-1 text-right font-mono tabular-nums text-rose-400 whitespace-nowrap">{r.n_short ? `${fmtUsd(r.short_usd)} (${r.n_short})` : '—'}</td>
-              <td class="px-3 py-1 text-right font-mono tabular-nums whitespace-nowrap {netLong(r) > 0 ? 'text-emerald-400' : netLong(r) < 0 ? 'text-rose-400' : 'text-zinc-500'}">{netLong(r) > 0 ? '+' : ''}{netLong(r)} <span class="text-zinc-500">({lsRatio(r)})</span></td>
+              <td class="px-3 py-1 text-right font-mono tabular-nums whitespace-nowrap {netLong(r) > 0 ? 'text-emerald-400' : netLong(r) < 0 ? 'text-rose-400' : 'text-zinc-500'}">{netLong(r) > 0 ? '+' : ''}{netLong(r)} <span class="text-zinc-500">({lsCounts(r)})</span></td>
             </tr>
           {/each}
         </tbody>
