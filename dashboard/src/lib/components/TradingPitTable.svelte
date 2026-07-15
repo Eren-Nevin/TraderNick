@@ -220,7 +220,7 @@
       {#if overviewRows.length === 0}
         <div class="h-full flex items-center justify-center text-zinc-500">No fills in window</div>
       {:else}
-        <table class="w-full">
+        <table class="w-full freeze-first-col">
           <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
             <tr>
               <th class="text-left px-2 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onOvSort('token')}>Token{ovArrow('token')}</th>

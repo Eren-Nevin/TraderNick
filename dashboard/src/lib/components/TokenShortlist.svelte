@@ -49,6 +49,21 @@
     if (tokenShortlistStore.add(sym, side)) selected = '';
   }
 
+  /** First roster token matching the current input — prefix first (so 'PE' →
+   *  'PENDLE'), else substring. Enter completes the input to it. */
+  function firstMatch(): string | null {
+    const s = selected.trim().toUpperCase();
+    if (!s) return null;
+    return roster.find((t) => t.startsWith(s)) ?? roster.find((t) => t.includes(s)) ?? null;
+  }
+
+  function onInputKey(e: KeyboardEvent) {
+    if (e.key !== 'Enter') return;
+    e.preventDefault();
+    const m = firstMatch();
+    if (m) selected = m;
+  }
+
   function considerShort(e: CustomEvent<DndEvent<Item>>) {
     shortItems = e.detail.items;
   }
@@ -89,7 +104,7 @@
       bind:value={selected}
       placeholder="Token…"
       aria-label="Token to shortlist"
-      onkeydown={(e) => { if (e.key === 'Enter') { e.preventDefault(); } }}
+      onkeydown={onInputKey}
       class="flex-1 min-w-0 bg-zinc-900 border border-zinc-700 rounded px-1.5 py-1 text-xs uppercase text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-zinc-500"
     />
     <datalist id="tokenShortlistRoster">

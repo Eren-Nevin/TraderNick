@@ -195,10 +195,9 @@
     {:else if (rows as Row[]).length === 0}
       <div class="h-full flex items-center justify-center text-zinc-500">No tokens</div>
     {:else}
-      <table class="w-full">
+      <table class="w-full freeze-first-col">
         <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
           <tr>
-            <th class="text-left px-3 py-1.5 font-normal">#</th>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none"
               onclick={() => onSort('token')}>Token{sortArrow('token')}</th>
             {#each COLS as c (c.key)}
@@ -208,11 +207,10 @@
           </tr>
         </thead>
         <tbody>
-          {#each sortedRows as r, idx (r.token)}
+          {#each sortedRows as r (r.token)}
             <tr class="border-b border-zinc-900 hover:bg-zinc-900/50 cursor-pointer"
               onclick={() => onTokenClick(String(r.token))}
               title="Open the position book for {r.token}">
-              <td class="px-3 py-1 text-zinc-500">{idx + 1}</td>
               <td class="px-3 py-1 font-medium text-zinc-100">{r.token}</td>
               {#each COLS as c (c.key)}
                 {#if c.kind === 'positions_delta'}

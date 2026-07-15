@@ -126,7 +126,7 @@
     {:else if sorted.length === 0}
       <div class="h-full flex items-center justify-center text-zinc-500 px-4 text-center">The group holds no position in{search ? ` ${search}` : ' any matching token'} for the current filters.</div>
     {:else}
-      <table class="w-full">
+      <table class="w-full freeze-first-col">
         <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
           <tr>
             <th class="text-left px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('token')}>Token{arrow('token')}</th>

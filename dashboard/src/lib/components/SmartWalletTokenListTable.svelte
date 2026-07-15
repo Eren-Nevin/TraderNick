@@ -227,7 +227,7 @@
   {:else if (rows as Row[]).length === 0}
     <div class="h-full flex items-center justify-center text-zinc-500">No tokens held by this wallet set</div>
   {:else}
-    <table class="w-full">
+    <table class="w-full freeze-first-col">
       <thead class="sticky top-0 bg-zinc-950 text-zinc-500 border-b border-zinc-800">
         <tr>
           <th class="text-left px-3 py-1.5 font-normal">#</th>
