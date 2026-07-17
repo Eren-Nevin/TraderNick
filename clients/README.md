@@ -18,6 +18,10 @@ from tradernick_data_provider import DataProviderClient
 The server URL passed to the constructor is the only thing you need to
 change at the call site.
 
+> **📖 Full usage guide:** see [`USAGE.md`](USAGE.md) — an exhaustive reference
+> covering every namespace, query builder, filter, snapshot operation, and the
+> unsupported surface. It ships inside the installed package.
+
 ## Install
 
 ```sh

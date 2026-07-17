@@ -1,6 +1,6 @@
 [project]
 name = "tradernick-data-provider"
-version = "0.5.0"
+version = "0.5.1"
 description = "Python client for the TraderNick data_provider service. Drop-in compatible with horatio-data-provider (same DataProviderClient API; only the import path changes)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,9 +33,12 @@ asyncio_mode = "auto"
 
 [tool.hatch.build.targets.wheel]
 packages = ["tradernick_data_provider"]
+# Ship the full usage guide inside the installed package so `pip install` users
+# have it on disk (readable via importlib.resources on the package).
+force-include = { "USAGE.md" = "tradernick_data_provider/USAGE.md" }
 
 [tool.hatch.build.targets.sdist]
-include = ["tradernick_data_provider", "README.md", "pyproject.toml"]
+include = ["tradernick_data_provider", "README.md", "USAGE.md", "pyproject.toml"]
 
 [build-system]
 requires = ["hatchling"]
