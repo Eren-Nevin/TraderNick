@@ -77,10 +77,58 @@ class LongShortRatiosQuery(CacheableQuery):
         )
 
 
+# --- Binance SPOT ----------------------------------------------------------
+# TN-exclusive: the spot market is a fully separate dataset from perp/futures.
+# Same populated shapes as the perp ohlcv / raw_trades, so these mirror the
+# perp query classes and only differ in the server path (/binance/spot/...).
+class SpotOHLCVQuery(CacheableQuery):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str, window: str):
+        super().__init__(session, base_url, {"token": token, "window": window})
+
+    async def _fetch_table(self) -> pa.Table:
+        return await fetch_table(
+            self._session, self._base_url + "/binance/spot/ohlcv/read", self._body
+        )
+
+
+class SpotRawTradesQuery(CacheableQuery):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
+        super().__init__(session, base_url, {"token": token})
+
+    def add_symbol(self, enabled: bool = True) -> Self:
+        self._body["add_symbol"] = enabled
+        return self
+
+    def with_id(self) -> Self:
+        """Include the trade id column in results (excluded by default)."""
+        self._body["with_id"] = True
+        return self
+
+    async def _fetch_table(self) -> pa.Table:
+        return await fetch_table(
+            self._session, self._base_url + "/binance/spot/raw_trades/read", self._body
+        )
+
+
+class BinanceSpotNamespace:
+    """`client.binance.spot` — spot-market ohlcv + raw trades."""
+
+    def __init__(self, session: httpx.AsyncClient, base_url: str):
+        self._session = session
+        self._base_url = base_url
+
+    def ohlcv(self, token: str, window: str) -> SpotOHLCVQuery:
+        return SpotOHLCVQuery(self._session, self._base_url, token, window)
+
+    def raw_trades(self, token: str) -> SpotRawTradesQuery:
+        return SpotRawTradesQuery(self._session, self._base_url, token)
+
+
 class BinanceNamespace:
     def __init__(self, session: httpx.AsyncClient, base_url: str):
         self._session = session
         self._base_url = base_url
+        self.spot = BinanceSpotNamespace(session, base_url)
 
     def raw_trades(self, token: str) -> RawTradesQuery:
         return RawTradesQuery(self._session, self._base_url, token)

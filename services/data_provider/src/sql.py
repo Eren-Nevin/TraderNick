@@ -91,10 +91,14 @@ def window_seconds(window: str) -> int:
 # Binance
 # ===========================================================================
 
-def binance_ohlcv(token: str, window: str, since: str, until: str) -> tuple[str, dict[str, Any]]:
+def binance_ohlcv(token: str, window: str, since: str, until: str,
+                  *, table: str = 'binance_ohlcv_1m') -> tuple[str, dict[str, Any]]:
     """Horatio populated shape:
        time(ms,UTC), token, open, close, high, low, volume,
        buyer_taker_volume, seller_taker_volume, trade_count(Int64).
+
+    `table` selects the source: the default perp `binance_ohlcv_1m`, or the
+    spot `binance_spot_ohlcv_1m` (identical schema) via `binance_spot_ohlcv`.
     """
     secs = window_seconds(window)
     params: dict[str, Any] = {
@@ -108,7 +112,7 @@ def binance_ohlcv(token: str, window: str, since: str, until: str) -> tuple[str,
                 {_time_ms()}, token, open, close, high, low, volume,
                 buyer_taker_volume, seller_taker_volume,
                 toInt64(trade_count) AS trade_count
-            FROM tradernick.binance_ohlcv_1m FINAL
+            FROM tradernick.{table} FINAL
             WHERE token = {{token:String}}
               AND time >= toDateTime({{since:String}})
               AND time <  toDateTime({{until:String}})
@@ -136,7 +140,7 @@ def binance_ohlcv(token: str, window: str, since: str, until: str) -> tuple[str,
                 sum(buyer_taker_volume)     AS buyer_taker_volume,
                 sum(seller_taker_volume)    AS seller_taker_volume,
                 toInt64(sum(trade_count))   AS trade_count
-            FROM tradernick.binance_ohlcv_1m FINAL
+            FROM tradernick.{table} FINAL
             WHERE token = {{token:String}}
               AND time >= toDateTime({{since:String}})
               AND time <  toDateTime({{until:String}})
@@ -166,19 +170,38 @@ def binance_funding_rate(token: str, since: str, until: str) -> tuple[str, dict[
 
 
 def binance_raw_trades(token: str, since: str, until: str,
-                       *, with_id: bool = False) -> tuple[str, dict[str, Any]]:
+                       *, with_id: bool = False,
+                       table: str = 'binance_raw_trades') -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(ms,UTC), token, amount, price, buy). When
-    `with_id=True` an `id` column is included as the last position."""
+    `with_id=True` an `id` column is included as the last position.
+
+    `table` selects the source: the default perp `binance_raw_trades`, or the
+    spot `binance_raw_spot_trades` (identical schema) via `binance_spot_raw_trades`.
+    """
     extra = ', id' if with_id else ''
     sql = f"""
         SELECT {_time_ms()}, token, amount, price, buy{extra}
-        FROM tradernick.binance_raw_trades FINAL
+        FROM tradernick.{table} FINAL
         WHERE token = {{token:String}}
           AND time >= toDateTime64({{since:String}}, 3)
           AND time <  toDateTime64({{until:String}}, 3)
         ORDER BY time, id
     """
     return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
+
+
+# Binance SPOT — same builders, pointed at the spot tables. The spot schema is
+# byte-identical to perp (see clickhouse/init/01_schema.sql), so the SQL and
+# the empty-frame templates are shared; only the source table differs.
+def binance_spot_ohlcv(token: str, window: str, since: str, until: str) -> tuple[str, dict[str, Any]]:
+    return binance_ohlcv(token, window, since, until, table='binance_spot_ohlcv_1m')
+
+
+def binance_spot_raw_trades(token: str, since: str, until: str,
+                            *, with_id: bool = False) -> tuple[str, dict[str, Any]]:
+    return binance_raw_trades(
+        token, since, until, with_id=with_id, table='binance_raw_spot_trades',
+    )
 
 
 def binance_book_depth(token: str, since: str, until: str) -> tuple[str, dict[str, Any]]:

@@ -46,6 +46,18 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**0.5.0 — Binance spot markets + erc20 `min_amount` fix + first test suite.**
+- **`client.binance.spot.{ohlcv, raw_trades}`** — the Binance *spot* market, a
+  fully separate dataset from perp/futures. Same shapes as the perp
+  `binance.{ohlcv, raw_trades}`; `raw_trades` keeps `add_symbol` / `with_id`.
+- **Fix:** `evm.erc20.transfers([...]).min_amount(x)` now resolves server-side.
+  The client routed `.min_amount()` to `/evm/erc20_transfers/read/min`, but that
+  alias was never registered on the server (it 404'd). erc20 is now in the
+  `/read` + `/read/min` alias set alongside native/tron/btc transfers.
+- **Tests:** a `pytest` suite (`clients/tests/`) — respx-mocked unit tests for
+  body/path construction + response transforms, plus an env-gated live
+  integration tier (`-m integration`, needs `DATA_PROVIDER_URL`).
+
 **0.4.0 — Transfer wallet selection + multi-network `as_parquet` lands.**
 - All transfer queries (`evm.erc20`, `evm.native_transfers`, `tron.native`,
   `tron.trc20`, `btc.native`) now accept full Horatio wallet-selection
@@ -78,6 +90,10 @@ on 2026-06-07:
 What works:
 - `binance.{ohlcv, raw_trades, book_depth, open_interest, funding_rate,
   long_short_ratios}` (with `with_id`, `add_symbol`)
+- `binance.spot.{ohlcv, raw_trades}` — spot market (separate from perp)
+- maintenance: `binance.{flush,compact}_{raw_trades,ohlcv,exchange}`,
+  `client.cache.{flush, compact, dedup, migrate_time}`,
+  `client.jobs.{list, get, cancel, wait, submit}`
 - `evm.aave.{deposit, withdraw, borrow, repay, flashloan, liquidation}`
   with `involving`, `exclude_involving`, `eth_market_type`
 - `evm.uniswap.{swap, deposit, withdraw, collect}` — V3
@@ -103,12 +119,19 @@ TN-exclusive (since 0.3.0):
 - `evm.aerodrome.basic.{swaps, deposits, withdrawals, claims}` with
   optional `stable` flag
 
-Not yet exposed:
+Not yet exposed / unsupported:
+- `.aggregate(...)` — present on every builder (Horatio parity) but the server
+  has **no aggregate read route**, so it 404s. Aggregate client-side from the
+  raw `.as_polars()` frame for now; a server-side aggregate is a future release.
+- `client.btc.mined()` — no server route/table yet (TN doesn't ingest Bitcoin
+  coinbase payouts); calling it 404s.
 - `evm.{stader, threshold}` — dropped in 0.4.0 (TN doesn't ingest the
   upstream yet); re-add when ingestion lands
-- `gmx.*` namespace planned for a future release (GMX has ~10 per-event
-  schemas; bigger lift)
-- `hyperliquid.{sends, spot_transfers}` — return empty schemas
+- `gmx.*` namespace — not planned (out of scope for this platform)
+- `hyperliquid.{sends, spot_transfers}` — exposed but hollow: DeFiStream
+  provides them ("Tier 3") but TN doesn't ingest them yet, so the endpoints
+  return the correct empty schema (0 rows). A follow-up will add the CH tables
+  + ingestion streams and make them return real data.
 - `client.scan_parquet` only honors address-based `local_*` filters;
   label/category/entity variants are wired but no-op without
   wallet_labels co-mounted on the snapshot.

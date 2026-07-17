@@ -408,7 +408,8 @@ async def evm_aave(request: Request):
     return await _maybe_save_or_return(df, body, f'{network}_aave_{event}.parquet')
 
 
-@app.post('/evm/erc20_transfers/read')
+# Registered (both /read and /read/min) via the alias loop below, alongside the
+# other transfer handlers — Horatio routes to /read/min when .min_amount() is set.
 async def evm_erc20_transfers(request: Request):
     body = request.json or {}
     try:
@@ -463,6 +464,52 @@ async def binance_raw_trades(request: Request):
     if add_symbol:
         df = df.with_columns(pl.lit(token).alias('symbol'))
     return await _maybe_save_or_return(df, body, f'binance_{token}_raw_trades.parquet')
+
+
+# --- Binance SPOT reads --------------------------------------------------
+# Spot ohlcv / raw_trades share the perp schema + empty templates; only the
+# source table differs (see sql.binance_spot_*). Mirror the perp handlers.
+@app.post('/binance/spot/ohlcv/read')
+async def binance_spot_ohlcv(request: Request):
+    body = request.json or {}
+    try:
+        _require(body, 'token', 'window', 'since', 'until')
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    token, window = body['token'], body['window']
+    since, until = body['since'], body['until']
+    try:
+        sql, params = sql_b.binance_spot_ohlcv(token, window, since, until)
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    df = await query_polars(sql, params)
+    if df.is_empty():
+        df = _EMPTY_OHLCV_FULL
+    return await _maybe_save_or_return(df, body, f'binance_spot_{token}_ohlcv_{window}.parquet')
+
+
+@app.post('/binance/spot/raw_trades/read')
+async def binance_spot_raw_trades(request: Request):
+    body = request.json or {}
+    try:
+        _require(body, 'token', 'since', 'until')
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
+    token = body['token']
+    with_id = bool(body.get('with_id', False))
+    add_symbol = bool(body.get('add_symbol', False))
+    sql, params = sql_b.binance_spot_raw_trades(
+        token, body['since'], body['until'], with_id=with_id,
+    )
+    df = await query_polars(sql, params)
+    if df.is_empty():
+        df = (
+            _EMPTY_RAW_TRADES_FULL.with_columns(pl.lit(None).cast(pl.Int64).alias('id'))
+            if with_id else _EMPTY_RAW_TRADES_FULL
+        )
+    if add_symbol:
+        df = df.with_columns(pl.lit(token).alias('symbol'))
+    return await _maybe_save_or_return(df, body, f'binance_spot_{token}_raw_trades.parquet')
 
 
 @app.post('/binance/book_depth/read')
@@ -861,6 +908,7 @@ async def evm_lido(request: Request):
 # share the same handler (the SQL builder already reads `min_amount` from
 # the body); two URLs → one func → distinct route names.
 for _func, _base in (
+    (evm_erc20_transfers, '/evm/erc20_transfers'),
     (evm_native_transfers, '/evm/native_transfers'),
     (tron_native_transfers, '/tron/native_transfers'),
     (tron_trc20_transfers, '/tron/trc20_transfers'),
