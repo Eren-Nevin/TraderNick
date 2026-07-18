@@ -231,8 +231,8 @@ Chainables (in addition to `.time_range()`):
 
 | Method | Effect |
 |---|---|
-| `.tokens(*symbols)` | restrict to tokens, e.g. `.tokens("BTC", "ETH")` |
-| `.wallets(*addresses)` | restrict to wallet addresses |
+| `.tokens(*symbols)` | restrict to tokens — varargs or a list: `.tokens("BTC", "ETH")` or `.tokens(["BTC", "ETH"])` |
+| `.wallets(*addresses)` | restrict to wallet addresses (varargs or a list) |
 | `.window(size)` | candle/window size, e.g. `.window("1h")` |
 | `.per_token(flag=True)` | per-token breakdown |
 | `.skip_hip3(flag=True)` | exclude HIP-3 markets |
@@ -735,6 +735,9 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **0.7.1** — `hyperliquid.tokens()` / `.wallets()` now accept a list as well as
+  varargs (`.tokens(["BTC","ETH"])` == `.tokens("BTC","ETH")`); a bare list no
+  longer nests silently.
 - **0.7.0** — **BREAKING: unified filter API.** One wallet-filter surface (§9.2)
   used by both reads and `scan_parquet`; every filter accepts `str | list[str]`.
   The `local_*` methods are **removed** — use the unprefixed methods everywhere

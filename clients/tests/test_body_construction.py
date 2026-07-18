@@ -97,6 +97,16 @@ async def test_binance_spot_raw_trades_path_and_flags(client, monkeypatch):
 # ---------------------------------------------------------------------------
 # Hyperliquid — chainables + paths
 # ---------------------------------------------------------------------------
+def test_hyperliquid_tokens_wallets_accept_varargs_or_list(client):
+    # varargs, a single list, and a single value all flatten the same way.
+    assert client.hyperliquid.fills().tokens("BTC", "ETH")._body["tokens"] == ["BTC", "ETH"]
+    assert client.hyperliquid.fills().tokens(["BTC", "ETH"])._body["tokens"] == ["BTC", "ETH"]
+    assert client.hyperliquid.fills().tokens("BTC")._body["tokens"] == ["BTC"]
+    assert client.hyperliquid.fills().tokens(*["BTC", "ETH"])._body["tokens"] == ["BTC", "ETH"]
+    # wallets behaves identically
+    assert client.hyperliquid.trade_history().wallets(["0x1", "0x2"])._body["wallets"] == ["0x1", "0x2"]
+
+
 def test_hyperliquid_chainables(client):
     q = (client.hyperliquid.fills()
          .tokens("BTC", "ETH").wallets("0xabc").window("1h")

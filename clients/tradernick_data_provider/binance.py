@@ -12,6 +12,16 @@ if TYPE_CHECKING:
     from typing import Self
 
 
+def _flatten(args: tuple) -> list[str]:
+    """Normalize varargs-or-list into a flat list of strings, so
+    ``f("BTC", "ETH")``, ``f(["BTC", "ETH"])`` and ``f("BTC")`` all yield the
+    same ``["BTC", ...]`` (a bare list no longer nests into ``[[...]]``)."""
+    out: list[str] = []
+    for a in args:
+        out.extend(a if isinstance(a, (list, tuple)) else [a])
+    return out
+
+
 class RawTradesQuery(CacheableQuery):
     def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
         super().__init__(session, base_url, {"token": token})
@@ -202,14 +212,17 @@ class HyperliquidQuery(CacheableQuery):
         super().__init__(session, base_url, {})
         self._hl_path = path
 
-    def tokens(self, *symbols: str) -> Self:
-        """Filter by HL token symbol(s). Accepts one or more."""
-        self._body["tokens"] = list(symbols)
+    def tokens(self, *symbols: str | list[str]) -> Self:
+        """Filter by HL token symbol(s). Accepts varargs or a list —
+        ``.tokens("BTC", "ETH")``, ``.tokens(["BTC", "ETH"])``, and
+        ``.tokens("BTC")`` all work."""
+        self._body["tokens"] = _flatten(symbols)
         return self
 
-    def wallets(self, *addresses: str) -> Self:
-        """Filter by wallet address(es). Accepts one or more."""
-        self._body["wallets"] = list(addresses)
+    def wallets(self, *addresses: str | list[str]) -> Self:
+        """Filter by wallet address(es). Accepts varargs or a list (same forms
+        as :meth:`tokens`)."""
+        self._body["wallets"] = _flatten(addresses)
         return self
 
     def window(self, size: str) -> Self:
