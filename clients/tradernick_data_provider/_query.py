@@ -321,14 +321,10 @@ class BaseQuery(_WalletFilters):
 
 
 class CacheableQuery(BaseQuery):
-    def cache(self, cache_type: str = "append") -> Self:
-        self._body["cache"] = True
-        self._body["cache_type"] = cache_type
-        return self
-
-    def parallel(self) -> Self:
-        self._body["parallel"] = True
-        return self
+    # Structural base kept for the query hierarchy. The old ``.cache()`` /
+    # ``.parallel()`` methods were Horatio-era no-ops (data_provider reads live
+    # from ClickHouse — there's no per-route cache to populate) and were removed.
+    pass
 
 
 class EventQuery(CacheableQuery):

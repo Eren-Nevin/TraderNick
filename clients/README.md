@@ -3,7 +3,7 @@
 Python client for the TraderNick `data_provider` service. Drop-in
 compatible with [`horatio-data-provider`](https://pypi.org/project/horatio-data-provider/):
 same `DataProviderClient` class, same namespaces (`evm`, `tron`, `btc`,
-`binance`, `hyperliquid`, `wallets`, `cache`, `jobs`), same chainable
+`binance`, `hyperliquid`, `wallets`, `jobs`), same chainable
 builder methods, same `as_pandas()` / `as_polars()` / `as_parquet()`
 terminators. The only visible difference is the import path.
 
@@ -49,6 +49,11 @@ ClickHouse instead of DeFiStream, so reads stay sub-second on tables
 where Horatio has to pay a fresh upstream fetch.
 
 ## Status
+
+**0.8.0 — Removed Horatio-era no-ops.** Query `.cache()` / `.parallel()`, the
+`client.cache.*` namespace, and all per-namespace `flush` / `compact` / `dedup`
+maintenance methods are gone — they did nothing (data_provider reads live from
+ClickHouse). Delete any such calls.
 
 **0.7.0 — Unified filter API (BREAKING).** One wallet-selection filter surface,
 used by both transfer reads **and** `scan_parquet`. The `local_*` methods are
@@ -110,9 +115,7 @@ What works:
 - `binance.{ohlcv, raw_trades, book_depth, open_interest, funding_rate,
   long_short_ratios}` (with `with_id`, `add_symbol`)
 - `binance.spot.{ohlcv, raw_trades}` — spot market (separate from perp)
-- maintenance: `binance.{flush,compact}_{raw_trades,ohlcv,exchange}`,
-  `client.cache.{flush, compact, dedup, migrate_time}`,
-  `client.jobs.{list, get, cancel, wait, submit}`
+- `client.jobs.{list, get, cancel, wait, submit}` — ingestion job queue
 - `evm.aave.{deposit, withdraw, borrow, repay, flashloan, liquidation}`
   with `involving`, `exclude_involving`, `eth_market_type`
 - `evm.uniswap.{swap, deposit, withdraw, collect}` — V3

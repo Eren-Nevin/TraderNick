@@ -158,54 +158,6 @@ class BinanceNamespace:
     def long_short_ratios(self, token: str) -> LongShortRatiosQuery:
         return LongShortRatiosQuery(self._session, self._base_url, token)
 
-    async def flush_raw_trades(self, token: str | None = None) -> None:
-        body = {}
-        if token is not None:
-            body["token"] = token
-        await self._session.post(self._base_url + "/binance/raw_trades/flush", json=body)
-
-    async def flush_ohlcv(self, token: str | None = None, window: str | None = None) -> None:
-        body = {}
-        if token is not None:
-            body["token"] = token
-        if window is not None:
-            body["window"] = window
-        await self._session.post(self._base_url + "/binance/ohlcv/flush", json=body)
-
-    async def flush_exchange(
-        self, endpoint: str | None = None, token: str | None = None
-    ) -> None:
-        body = {}
-        if endpoint is not None:
-            body["endpoint"] = endpoint
-        if token is not None:
-            body["token"] = token
-        await self._session.post(self._base_url + "/binance/exchange/flush", json=body)
-
-    async def compact_raw_trades(self, token: str | None = None) -> None:
-        body = {}
-        if token is not None:
-            body["token"] = token
-        await self._session.post(self._base_url + "/binance/raw_trades/compact", json=body)
-
-    async def compact_ohlcv(self, token: str | None = None, window: str | None = None) -> None:
-        body = {}
-        if token is not None:
-            body["token"] = token
-        if window is not None:
-            body["window"] = window
-        await self._session.post(self._base_url + "/binance/ohlcv/compact", json=body)
-
-    async def compact_exchange(
-        self, endpoint: str | None = None, token: str | None = None
-    ) -> None:
-        body = {}
-        if endpoint is not None:
-            body["endpoint"] = endpoint
-        if token is not None:
-            body["token"] = token
-        await self._session.post(self._base_url + "/binance/exchange/compact", json=body)
-
 
 class HyperliquidQuery(CacheableQuery):
     def __init__(self, session: httpx.AsyncClient, base_url: str, path: str):

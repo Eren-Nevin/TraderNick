@@ -55,33 +55,3 @@ class BtcNamespace:
     def mined(self) -> BtcMinedQuery:
         """Return a query builder for coinbase (block-reward) payouts. No sender column."""
         return BtcMinedQuery(self._session, self._base_url)
-
-    async def flush_native_transfers(self, network: str | None = None) -> None:
-        await self._native.flush(network=network)
-
-    async def flush_native_transfers_aggregate(
-        self,
-        network: str | None = None,
-        group_by: str | None = None,
-        period: str | None = None,
-    ) -> None:
-        await self._native.flush_aggregate(
-            network=network, group_by=group_by, period=period,
-        )
-
-    async def compact_native_transfers(self, network: str | None = None) -> dict:
-        return await self._native.compact(network=network)
-
-    async def compact_native_transfers_aggregate(
-        self,
-        network: str | None = None,
-        group_by: str | None = None,
-        period: str | None = None,
-    ) -> dict:
-        return await self._native.compact_aggregate(
-            network=network, group_by=group_by, period=period,
-        )
-
-    async def dedup_native_transfers(self, network: str | None = None,
-                                       *, dry_run: bool = False) -> dict:
-        return await self._native.dedup(network=network, dry_run=dry_run)

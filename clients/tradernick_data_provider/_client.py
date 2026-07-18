@@ -33,7 +33,6 @@ from .binance import BinanceNamespace, HyperliquidNamespace
 from .btc import BtcNamespace
 from .evm import EvmNamespace
 from .jobs import JobsNamespace
-from .protocols import CacheNamespace
 from .tron import TronNamespace
 from .wallets import WalletsNamespace
 
@@ -45,7 +44,6 @@ class DataProviderClient:
     binance: BinanceNamespace
     hyperliquid: HyperliquidNamespace
     wallets: WalletsNamespace
-    cache: CacheNamespace
     jobs: JobsNamespace
 
     def __init__(self, url: str):
@@ -57,7 +55,6 @@ class DataProviderClient:
         self.binance = BinanceNamespace(self._session, self._url)
         self.hyperliquid = HyperliquidNamespace(self._session, self._url)
         self.wallets = WalletsNamespace(self._session, self._url)
-        self.cache = CacheNamespace(self._session, self._url)
         self.jobs = JobsNamespace(self._session, self._url)
 
     async def health(self) -> bool:

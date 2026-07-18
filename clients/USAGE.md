@@ -17,7 +17,7 @@ raw upstream fetch would be slow.
 It is **drop-in compatible** with
 [`horatio-data-provider`](https://pypi.org/project/horatio-data-provider/): the
 class is `DataProviderClient`, the namespaces (`evm`, `tron`, `btc`, `binance`,
-`hyperliquid`, `wallets`, `cache`, `jobs`) match, and the chainable builders +
+`hyperliquid`, `wallets`, `jobs`) match, and the chainable builders +
 `as_pandas()` / `as_polars()` / `as_parquet()` terminators are identical. To
 migrate from Horatio you change **one import** and the **server URL**:
 
@@ -197,13 +197,6 @@ trades  = await s.raw_trades("BTC").with_id().add_symbol() \
 ```
 
 Column shapes are identical to their perp counterparts.
-
-### 7.3 Binance maintenance (rarely needed)
-
-These trigger server-side cache/compaction ops and return `None` or a status
-dict; most users never call them:
-`flush_raw_trades`, `flush_ohlcv`, `flush_exchange`, `compact_raw_trades`,
-`compact_ohlcv`, `compact_exchange`.
 
 ---
 
@@ -596,9 +589,7 @@ addrs = await client.wallets.addresses(categories="CEX", entities=["Binance"])
 
 ---
 
-## 14. Jobs & cache (admin)
-
-### 14.1 `client.jobs`
+## 14. Jobs (admin) — `client.jobs`
 
 Proxies the ingestion job queue:
 
@@ -610,14 +601,10 @@ final = await client.jobs.wait(job_id, poll_interval=2.0, timeout=None)  # poll 
 await client.jobs.submit(path, body=None)               # generic POST helper
 ```
 
-### 14.2 `client.cache`
-
-```python
-await client.cache.flush()                    # -> None
-await client.cache.compact()                  # -> dict
-await client.cache.dedup(dry_run=False)       # -> {job_id, status}
-await client.cache.migrate_time()             # -> dict
-```
+> **Removed in 0.8.0:** the `client.cache.*` namespace, the per-namespace
+> `flush` / `compact` / `dedup` maintenance methods, and query `.cache()` /
+> `.parallel()` — all were Horatio-era no-ops (data_provider reads live from
+> ClickHouse, which manages its own caches and ReplacingMergeTree merges).
 
 ---
 
@@ -735,6 +722,10 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **0.8.0** — removed the Horatio-era **no-ops**: query `.cache()` / `.parallel()`,
+  the `client.cache.*` namespace, and all per-namespace `flush` / `compact` /
+  `dedup` maintenance methods. They did nothing (data_provider reads live from
+  ClickHouse). If you called them, just delete the calls.
 - **0.7.1** — `hyperliquid.tokens()` / `.wallets()` now accept a list as well as
   varargs (`.tokens(["BTC","ETH"])` == `.tokens("BTC","ETH")`); a bare list no
   longer nests silently.
