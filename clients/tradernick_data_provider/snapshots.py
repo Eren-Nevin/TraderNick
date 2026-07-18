@@ -20,20 +20,26 @@ import polars as pl
 from datetime import datetime
 
 from ._http import DataProviderHTTPError
-from ._query import _LocalFiltersMixin, _to_timestamp
+from ._query import _WalletFilters, _to_timestamp
 
 if TYPE_CHECKING:
     from typing import Self
 
 
-class ScanParquetQuery(_LocalFiltersMixin):
-    """Lazy-scan a saved snapshot, applying ``local_*`` filters on the server.
+class ScanParquetQuery(_WalletFilters):
+    """Lazy-scan a saved snapshot, filtering it server-side.
+
+    Uses the SAME wallet-selection filter surface as the read queries
+    (``involving`` / ``sender`` / ``receiver`` + ``_label`` / ``_entity`` /
+    ``_category`` / ``_groups`` + ``exclude_*``, all ``str | list[str]``). On a
+    scan the server resolves each selection to member addresses and filters the
+    snapshot in DuckDB, so category/entity/group filters actually apply here
+    (they reduce to an address set).
 
     Terminal calls:
         ``as_polars()`` → ``pl.DataFrame``
         ``as_pandas()`` → ``pd.DataFrame``
-        ``as_parquet(new_key)`` → server-side write under ``new_key`` (bytes
-            never leave the server; uses ``LazyFrame.sink_parquet``)
+        ``as_parquet(new_key)`` → server-side write under ``new_key``
     """
 
     def __init__(self, session: httpx.AsyncClient, base_url: str, key: str,
@@ -59,6 +65,14 @@ class ScanParquetQuery(_LocalFiltersMixin):
         passed at construction time."""
         self._body["since"] = _to_timestamp(since)
         self._body["until"] = _to_timestamp(until)
+        return self
+
+    def min_amount(self, amount: float) -> "Self":
+        self._body["min_amount"] = amount
+        return self
+
+    def max_amount(self, amount: float) -> "Self":
+        self._body["max_amount"] = amount
         return self
 
     async def _post(self) -> bytes:

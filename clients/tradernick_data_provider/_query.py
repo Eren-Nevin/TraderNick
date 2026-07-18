@@ -36,105 +36,78 @@ def _to_timestamp(date: datetime | str | int) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-class _LocalFiltersMixin:
-    """24 ``local_*`` methods that accumulate filter steps into
-    ``self._body['local_filters']``. Used by both transfer queries (where
-    filters apply post-fetch on the server) and the new
-    ``ScanParquetQuery`` (where they apply via a lazy scan on the server).
+def _as_list(values: str | list[str]) -> list[str]:
+    """Normalize a str-or-list filter argument to a list of strings.
+    A single string is wrapped; a list passes through (validated)."""
+    if isinstance(values, str):
+        return [values]
+    out = list(values)
+    if not all(isinstance(v, str) for v in out):
+        raise TypeError("filter values must be a string or a list of strings")
+    return out
 
-    Filter rules:
-      - Each call appends one sequential ``df.filter(...)`` step.
-      - Within a single call, ``values`` is union-ed (any-of).
-      - ``involving_*`` matches sender OR receiver.
-      - ``exclude_*`` negates the predicate.
-      - Address lookups are case-insensitive on entity/category/label terms;
-        EVM ``0x…`` addresses get lowercased per-row in the lazy plan,
-        TRON/BTC pass through unchanged.
-    """
+
+class _WalletFilters:
+    """The single wallet-selection filter surface, shared by transfer **read**
+    queries and by ``ScanParquetQuery``. The same method name works in both
+    places — on a read builder the filter is pushed into ClickHouse; on a scan
+    builder the server resolves it to member addresses and filters the snapshot
+    in DuckDB.
+
+    Every method accepts a single value or a list (``str | list[str]``) and
+    matches *any* of the values. ``involving`` matches sender OR receiver;
+    ``exclude_*`` negates. Dimensions: raw address, ``_label``/``_entity``
+    (synonyms — TN tags wallets with an ``entity``), ``_category``, ``_groups``.
+    Values are matched case-insensitively server-side."""
 
     _body: dict   # set by the concrete subclass
 
-    def _add_local_filter(self, op: str, values: list[str]):
-        if not isinstance(values, (list, tuple, set)) or not all(isinstance(v, str) for v in values):
-            raise TypeError(f"{op}: values must be a list of strings")
-        if not values:
-            return self
-        steps = self._body.setdefault("local_filters", [])
-        steps.append({"op": op, "values": list(values)})
+    def _f(self, key: str, values: str | list[str]) -> Self:
+        # Last-write-wins per (role, dimension) key; pass a list for "any of".
+        # An empty selection is a no-op (the key is left unset).
+        v = _as_list(values)
+        if v:
+            self._body[key] = v
         return self
 
     # involving (sender OR receiver)
-    def local_involving(self, addresses: list[str]):              return self._add_local_filter("involving", addresses)
-    def local_involving_labels(self, labels: list[str]):          return self._add_local_filter("involving_labels", labels)
-    def local_involving_categories(self, categories: list[str]):  return self._add_local_filter("involving_categories", categories)
-    def local_involving_entities(self, entities: list[str]):      return self._add_local_filter("involving_entities", entities)
+    def involving(self, v: str | list[str]) -> Self:                  return self._f("involving", v)
+    def involving_label(self, v: str | list[str]) -> Self:            return self._f("involving_label", v)
+    def involving_entity(self, v: str | list[str]) -> Self:           return self._f("involving_label", v)
+    def involving_category(self, v: str | list[str]) -> Self:         return self._f("involving_category", v)
+    def involving_groups(self, v: str | list[str]) -> Self:           return self._f("involving_groups", v)
+    def exclude_involving(self, v: str | list[str]) -> Self:          return self._f("exclude_involving", v)
+    def exclude_involving_label(self, v: str | list[str]) -> Self:    return self._f("exclude_involving_label", v)
+    def exclude_involving_entity(self, v: str | list[str]) -> Self:   return self._f("exclude_involving_label", v)
+    def exclude_involving_category(self, v: str | list[str]) -> Self: return self._f("exclude_involving_category", v)
+    def exclude_involving_groups(self, v: str | list[str]) -> Self:   return self._f("exclude_involving_groups", v)
 
     # sender
-    def local_sender(self, addresses: list[str]):              return self._add_local_filter("sender", addresses)
-    def local_sender_labels(self, labels: list[str]):          return self._add_local_filter("sender_labels", labels)
-    def local_sender_categories(self, categories: list[str]):  return self._add_local_filter("sender_categories", categories)
-    def local_sender_entities(self, entities: list[str]):      return self._add_local_filter("sender_entities", entities)
+    def sender(self, v: str | list[str]) -> Self:                     return self._f("sender", v)
+    def sender_label(self, v: str | list[str]) -> Self:               return self._f("sender_label", v)
+    def sender_entity(self, v: str | list[str]) -> Self:              return self._f("sender_label", v)
+    def sender_category(self, v: str | list[str]) -> Self:            return self._f("sender_category", v)
+    def sender_groups(self, v: str | list[str]) -> Self:              return self._f("sender_groups", v)
+    def exclude_sender(self, v: str | list[str]) -> Self:             return self._f("exclude_sender", v)
+    def exclude_sender_label(self, v: str | list[str]) -> Self:       return self._f("exclude_sender_label", v)
+    def exclude_sender_entity(self, v: str | list[str]) -> Self:      return self._f("exclude_sender_label", v)
+    def exclude_sender_category(self, v: str | list[str]) -> Self:    return self._f("exclude_sender_category", v)
+    def exclude_sender_groups(self, v: str | list[str]) -> Self:      return self._f("exclude_sender_groups", v)
 
     # receiver
-    def local_receiver(self, addresses: list[str]):              return self._add_local_filter("receiver", addresses)
-    def local_receiver_labels(self, labels: list[str]):          return self._add_local_filter("receiver_labels", labels)
-    def local_receiver_categories(self, categories: list[str]):  return self._add_local_filter("receiver_categories", categories)
-    def local_receiver_entities(self, entities: list[str]):      return self._add_local_filter("receiver_entities", entities)
-
-    # exclude variants
-    def local_exclude_involving(self, addresses: list[str]):              return self._add_local_filter("exclude_involving", addresses)
-    def local_exclude_involving_labels(self, labels: list[str]):          return self._add_local_filter("exclude_involving_labels", labels)
-    def local_exclude_involving_categories(self, categories: list[str]):  return self._add_local_filter("exclude_involving_categories", categories)
-    def local_exclude_involving_entities(self, entities: list[str]):      return self._add_local_filter("exclude_involving_entities", entities)
-
-    def local_exclude_sender(self, addresses: list[str]):              return self._add_local_filter("exclude_sender", addresses)
-    def local_exclude_sender_labels(self, labels: list[str]):          return self._add_local_filter("exclude_sender_labels", labels)
-    def local_exclude_sender_categories(self, categories: list[str]):  return self._add_local_filter("exclude_sender_categories", categories)
-    def local_exclude_sender_entities(self, entities: list[str]):      return self._add_local_filter("exclude_sender_entities", entities)
-
-    def local_exclude_receiver(self, addresses: list[str]):              return self._add_local_filter("exclude_receiver", addresses)
-    def local_exclude_receiver_labels(self, labels: list[str]):          return self._add_local_filter("exclude_receiver_labels", labels)
-    def local_exclude_receiver_categories(self, categories: list[str]):  return self._add_local_filter("exclude_receiver_categories", categories)
-    def local_exclude_receiver_entities(self, entities: list[str]):      return self._add_local_filter("exclude_receiver_entities", entities)
-
-    # groups (a named wallet set; match any of several). Unlike category/entity
-    # local filters, these DO work server-side — a group resolves to an address
-    # set, which the snapshot/scan path filters on directly.
-    def local_involving_groups(self, groups: list[str]):              return self._add_local_filter("involving_groups", groups)
-    def local_sender_groups(self, groups: list[str]):                 return self._add_local_filter("sender_groups", groups)
-    def local_receiver_groups(self, groups: list[str]):               return self._add_local_filter("receiver_groups", groups)
-    def local_exclude_involving_groups(self, groups: list[str]):      return self._add_local_filter("exclude_involving_groups", groups)
-    def local_exclude_sender_groups(self, groups: list[str]):         return self._add_local_filter("exclude_sender_groups", groups)
-    def local_exclude_receiver_groups(self, groups: list[str]):       return self._add_local_filter("exclude_receiver_groups", groups)
+    def receiver(self, v: str | list[str]) -> Self:                   return self._f("receiver", v)
+    def receiver_label(self, v: str | list[str]) -> Self:             return self._f("receiver_label", v)
+    def receiver_entity(self, v: str | list[str]) -> Self:            return self._f("receiver_label", v)
+    def receiver_category(self, v: str | list[str]) -> Self:          return self._f("receiver_category", v)
+    def receiver_groups(self, v: str | list[str]) -> Self:            return self._f("receiver_groups", v)
+    def exclude_receiver(self, v: str | list[str]) -> Self:           return self._f("exclude_receiver", v)
+    def exclude_receiver_label(self, v: str | list[str]) -> Self:     return self._f("exclude_receiver_label", v)
+    def exclude_receiver_entity(self, v: str | list[str]) -> Self:    return self._f("exclude_receiver_label", v)
+    def exclude_receiver_category(self, v: str | list[str]) -> Self:  return self._f("exclude_receiver_category", v)
+    def exclude_receiver_groups(self, v: str | list[str]) -> Self:    return self._f("exclude_receiver_groups", v)
 
 
-class _GroupFiltersMixin:
-    """Direct, list-valued wallet-group filters for transfer queries
-    (sender / receiver + exclude). `involving_groups` lives on BaseQuery so it's
-    shared with every query. A group is a named wallet set resolved server-side;
-    pass one or several group names. Mirrors the ``*_category`` direct filters
-    but list-valued."""
-
-    _body: dict  # set by the concrete subclass
-
-    def sender_groups(self, groups: list[str]) -> Self:
-        self._body["sender_groups"] = list(groups)
-        return self
-
-    def receiver_groups(self, groups: list[str]) -> Self:
-        self._body["receiver_groups"] = list(groups)
-        return self
-
-    def exclude_sender_groups(self, groups: list[str]) -> Self:
-        self._body["exclude_sender_groups"] = list(groups)
-        return self
-
-    def exclude_receiver_groups(self, groups: list[str]) -> Self:
-        self._body["exclude_receiver_groups"] = list(groups)
-        return self
-
-
-class BaseQuery(_LocalFiltersMixin):
+class BaseQuery(_WalletFilters):
     def __init__(self, session: httpx.AsyncClient, base_url: str, body: dict):
         self._session = session
         self._base_url = base_url
@@ -181,39 +154,8 @@ class BaseQuery(_LocalFiltersMixin):
         self._body["until"] = _to_timestamp(until)
         return self
 
-    def involving(self, address: str) -> Self:
-        self._body["involving"] = address
-        return self
-
-    def involving_label(self, label: str) -> Self:
-        self._body["involving_label"] = label
-        return self
-
-    def involving_category(self, category: str) -> Self:
-        self._body["involving_category"] = category
-        return self
-
-    def exclude_involving(self, address: str) -> Self:
-        self._body["exclude_involving"] = address
-        return self
-
-    def exclude_involving_label(self, label: str) -> Self:
-        self._body["exclude_involving_label"] = label
-        return self
-
-    def exclude_involving_category(self, category: str) -> Self:
-        self._body["exclude_involving_category"] = category
-        return self
-
-    # groups (sender OR receiver in any of the named wallet sets). List-valued —
-    # a single group or several. Resolved to member addresses server-side.
-    def involving_groups(self, groups: list[str]) -> Self:
-        self._body["involving_groups"] = list(groups)
-        return self
-
-    def exclude_involving_groups(self, groups: list[str]) -> Self:
-        self._body["exclude_involving_groups"] = list(groups)
-        return self
+    # Wallet-selection filters (involving / sender / receiver + label/entity/
+    # category/groups + exclude_*) come from _WalletFilters.
 
     def wallet_namespace(self, ns: str) -> Self:
         self._body["wallet_namespace"] = ns
@@ -232,9 +174,6 @@ class BaseQuery(_LocalFiltersMixin):
         self._body["group_by"] = group_by
         self._body["period"] = period
         return self
-
-    # ---- local_wallets filters ----------------------------------------------
-    # Inherited from _LocalFiltersMixin (defined below) — see its docstring.
 
     async def as_pandas(self) -> pd.DataFrame:
         table = await self._fetch_table()

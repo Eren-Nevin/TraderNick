@@ -7,7 +7,7 @@ import httpx
 import pyarrow as pa
 
 from ._http import fetch_table
-from ._query import BaseQuery, CacheableQuery, EventQuery, _GroupFiltersMixin
+from ._query import BaseQuery, CacheableQuery, EventQuery
 
 if TYPE_CHECKING:
     from typing import Self
@@ -301,7 +301,7 @@ class LidoNamespace:
 # false impression the namespace was live. Re-add when ingestion lands.
 
 
-class NativeTransfersQuery(CacheableQuery, _GroupFiltersMixin):
+class NativeTransfersQuery(CacheableQuery):
     _PROTOCOL = "native_transfers"
 
     def __init__(self, session: httpx.AsyncClient, base_url: str):
@@ -316,54 +316,7 @@ class NativeTransfersQuery(CacheableQuery, _GroupFiltersMixin):
         self._body["max_amount"] = amount
         return self
 
-    def sender(self, address: str) -> Self:
-        self._body["sender"] = address
-        return self
-
-    def receiver(self, address: str) -> Self:
-        self._body["receiver"] = address
-        return self
-
-    def sender_label(self, label: str) -> Self:
-        self._body["sender_label"] = label
-        return self
-
-    def sender_category(self, category: str) -> Self:
-        self._body["sender_category"] = category
-        return self
-
-    def receiver_label(self, label: str) -> Self:
-        self._body["receiver_label"] = label
-        return self
-
-    def receiver_category(self, category: str) -> Self:
-        self._body["receiver_category"] = category
-        return self
-
-    def exclude_sender(self, address: str) -> Self:
-        self._body["exclude_sender"] = address
-        return self
-
-    def exclude_sender_label(self, label: str) -> Self:
-        self._body["exclude_sender_label"] = label
-        return self
-
-    def exclude_sender_category(self, category: str) -> Self:
-        self._body["exclude_sender_category"] = category
-        return self
-
-    def exclude_receiver(self, address: str) -> Self:
-        self._body["exclude_receiver"] = address
-        return self
-
-    def exclude_receiver_label(self, label: str) -> Self:
-        self._body["exclude_receiver_label"] = label
-        return self
-
-    def exclude_receiver_category(self, category: str) -> Self:
-        self._body["exclude_receiver_category"] = category
-        return self
-
+    # Wallet-selection filters inherited from _WalletFilters.
     def _resolve_path(self) -> str:
         if self._body.get("aggregate"):
             return "/evm/native_transfers/aggregate"
@@ -474,7 +427,7 @@ class NativeNamespace:
         return resp.json()
 
 
-class TronNativeTransfersQuery(CacheableQuery, _GroupFiltersMixin):
+class TronNativeTransfersQuery(CacheableQuery):
     _PROTOCOL = "tron_native_transfers"
 
     def __init__(self, session: httpx.AsyncClient, base_url: str):
@@ -489,54 +442,7 @@ class TronNativeTransfersQuery(CacheableQuery, _GroupFiltersMixin):
         self._body["max_amount"] = amount
         return self
 
-    def sender(self, address: str) -> Self:
-        self._body["sender"] = address
-        return self
-
-    def receiver(self, address: str) -> Self:
-        self._body["receiver"] = address
-        return self
-
-    def sender_label(self, label: str) -> Self:
-        self._body["sender_label"] = label
-        return self
-
-    def sender_category(self, category: str) -> Self:
-        self._body["sender_category"] = category
-        return self
-
-    def receiver_label(self, label: str) -> Self:
-        self._body["receiver_label"] = label
-        return self
-
-    def receiver_category(self, category: str) -> Self:
-        self._body["receiver_category"] = category
-        return self
-
-    def exclude_sender(self, address: str) -> Self:
-        self._body["exclude_sender"] = address
-        return self
-
-    def exclude_sender_label(self, label: str) -> Self:
-        self._body["exclude_sender_label"] = label
-        return self
-
-    def exclude_sender_category(self, category: str) -> Self:
-        self._body["exclude_sender_category"] = category
-        return self
-
-    def exclude_receiver(self, address: str) -> Self:
-        self._body["exclude_receiver"] = address
-        return self
-
-    def exclude_receiver_label(self, label: str) -> Self:
-        self._body["exclude_receiver_label"] = label
-        return self
-
-    def exclude_receiver_category(self, category: str) -> Self:
-        self._body["exclude_receiver_category"] = category
-        return self
-
+    # Wallet-selection filters inherited from _WalletFilters.
     def _resolve_path(self) -> str:
         if self._body.get("aggregate"):
             return "/tron/native_transfers/aggregate"
@@ -629,7 +535,7 @@ class TronNativeNamespace:
         return resp.json()
 
 
-class BitcoinNativeTransfersQuery(CacheableQuery, _GroupFiltersMixin):
+class BitcoinNativeTransfersQuery(CacheableQuery):
     _PROTOCOL = "bitcoin_native_transfers"
 
     def __init__(self, session: httpx.AsyncClient, base_url: str):
@@ -644,54 +550,7 @@ class BitcoinNativeTransfersQuery(CacheableQuery, _GroupFiltersMixin):
         self._body["max_amount"] = amount
         return self
 
-    def sender(self, address: str) -> Self:
-        self._body["sender"] = address
-        return self
-
-    def receiver(self, address: str) -> Self:
-        self._body["receiver"] = address
-        return self
-
-    def sender_label(self, label: str) -> Self:
-        self._body["sender_label"] = label
-        return self
-
-    def sender_category(self, category: str) -> Self:
-        self._body["sender_category"] = category
-        return self
-
-    def receiver_label(self, label: str) -> Self:
-        self._body["receiver_label"] = label
-        return self
-
-    def receiver_category(self, category: str) -> Self:
-        self._body["receiver_category"] = category
-        return self
-
-    def exclude_sender(self, address: str) -> Self:
-        self._body["exclude_sender"] = address
-        return self
-
-    def exclude_sender_label(self, label: str) -> Self:
-        self._body["exclude_sender_label"] = label
-        return self
-
-    def exclude_sender_category(self, category: str) -> Self:
-        self._body["exclude_sender_category"] = category
-        return self
-
-    def exclude_receiver(self, address: str) -> Self:
-        self._body["exclude_receiver"] = address
-        return self
-
-    def exclude_receiver_label(self, label: str) -> Self:
-        self._body["exclude_receiver_label"] = label
-        return self
-
-    def exclude_receiver_category(self, category: str) -> Self:
-        self._body["exclude_receiver_category"] = category
-        return self
-
+    # Wallet-selection filters inherited from _WalletFilters.
     def _resolve_path(self) -> str:
         if self._body.get("aggregate"):
             return "/btc/native_transfers/aggregate"

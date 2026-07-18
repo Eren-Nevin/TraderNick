@@ -23,16 +23,10 @@ class BtcMinedQuery(CacheableQuery):
         super().__init__(session, base_url, {'network': 'BITCOIN'})
         self._min_amount = None
 
+    # receiver / receiver_label (and the rest of the wallet-selection surface)
+    # are inherited from _WalletFilters.
     def min_amount(self, amount: float) -> Self:
         self._min_amount = amount
-        return self
-
-    def receiver(self, address: str) -> Self:
-        self._body["receiver"] = address
-        return self
-
-    def receiver_label(self, label: str) -> Self:
-        self._body["receiver_label"] = label
         return self
 
     def _resolve_path(self) -> str:

@@ -7,8 +7,15 @@ from typing import TYPE_CHECKING, Any
 import httpx
 import pandas as pd
 import polars as pl
+import pyarrow.parquet as pq
 
 from .exceptions import DataProviderHTTPError
+
+
+def _as_list(v):
+    if v is None:
+        return None
+    return [v] if isinstance(v, str) else list(v)
 
 if TYPE_CHECKING:
     from typing import Self
@@ -69,6 +76,40 @@ class WalletsNamespace:
         resp = await self._session.get(self._base_url + "/wallets", params=params)
         data = await _handle_json(resp)
         return data.get("wallets", [])
+
+    async def addresses(
+        self,
+        *,
+        groups: str | list[str] | None = None,
+        categories: str | list[str] | None = None,
+        entities: str | list[str] | None = None,
+        labels: str | list[str] | None = None,
+        addresses: str | list[str] | None = None,
+    ) -> list[str]:
+        """Resolve a wallet selection to the matching addresses (lowercased).
+
+        The union of every wallet in any of the given ``groups`` /
+        ``categories`` / ``entities`` (``labels`` is a synonym for
+        ``entities``), plus any raw ``addresses`` passed through. This is the
+        same resolver the ``scan_parquet`` filters use under the hood, exposed
+        directly so you can inspect or reuse a wallet set.
+        """
+        body: dict[str, Any] = {}
+        for name, val in (
+            ("groups", groups), ("categories", categories),
+            ("entities", entities), ("labels", labels), ("addresses", addresses),
+        ):
+            lst = _as_list(val)
+            if lst:
+                body[name] = lst
+        resp = await self._session.post(
+            self._base_url + "/wallets/addresses", json=body, timeout=None,
+        )
+        if not resp.is_success:
+            await _handle_json(resp)  # raises
+        table = pq.read_table(io.BytesIO(resp.content))
+        col = "address" if "address" in table.column_names else table.column_names[0]
+        return table.column(col).to_pylist()
 
     async def get(self, address: str) -> dict | None:
         """Fetch a single wallet label by address. Returns ``None`` if not found."""

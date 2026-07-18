@@ -184,6 +184,8 @@ def register(app: Sanic) -> None:
             'exclude_sender_label', 'exclude_receiver_label', 'exclude_involving_label',
             'sender_category', 'receiver_category', 'involving_category',
             'exclude_sender_category', 'exclude_receiver_category', 'exclude_involving_category',
+            'sender_groups', 'receiver_groups', 'involving_groups',
+            'exclude_sender_groups', 'exclude_receiver_groups', 'exclude_involving_groups',
             'min_amount', 'max_amount',
         )
         filters = {k: body.get(k) for k in filter_keys}
@@ -266,11 +268,8 @@ def register(app: Sanic) -> None:
         if not body.get('include_zero_amounts') and 'amount' in combined.columns:
             combined = combined.filter(pl.col('amount') != 0)
 
-        local_filters = body.get('local_filters') or []
-        if local_filters:
-            local_filters = await _expand_group_filters(local_filters)
-            combined = _apply_local_filters_lazy(combined.lazy(), local_filters).collect()
-
+        # Wallet-selection filters were already applied at the SQL level by
+        # `_build` (via _transfers_filters). No post-fetch step needed.
         if 'time' in combined.columns:
             combined = combined.sort('time')
 
@@ -285,20 +284,17 @@ def register(app: Sanic) -> None:
 
     @app.post('/snapshots/scan')
     async def snapshots_scan(request: Request):
-        """Lazy-filter a snapshot via polars and either stream the result
-        as parquet bytes or persist it under `save_key`.
+        """Filter a saved snapshot server-side; stream the result as parquet
+        bytes or persist it under `save_key`.
 
-        Body:
-          {
-            "key": "<source key>",
-            "engine": "polars" | "duckdb",
-            "since": ISO?, "until": ISO?,
-            "local_filters": [{"op": "...", "values": [...]}, ...],
-            "save_key": "<target key>"?,
-          }
-
-        DuckDB engine is accepted but currently falls through to polars —
-        it's a perf optimization, not a behavior change.
+        Body accepts the same wallet-selection filter keys as the transfer
+        reads (``involving``/``sender``/``receiver`` + ``_label``/``_category``/
+        ``_groups`` + ``exclude_*``, each ``str|list``) plus ``since``/``until``
+        and ``min_amount``/``max_amount``. Each wallet-selection filter is
+        resolved to member addresses (ClickHouse) and applied against the
+        snapshot in DuckDB — the snapshot parquet is one table, each resolved
+        address set another. Filters referencing columns the snapshot lacks
+        (e.g. sender/receiver on a non-transfer snapshot) are skipped.
         """
         body = request.json or {}
         key = body.get('key')
@@ -311,152 +307,151 @@ def register(app: Sanic) -> None:
         if not os.path.isfile(src):
             return response.json({'error': f'snapshot not found: {key}'}, status=404)
 
-        lf = pl.scan_parquet(src)
-        since, until = body.get('since'), body.get('until')
-        if 'time' in lf.collect_schema().names():
-            if since:
-                lf = lf.filter(pl.col('time') >= pl.lit(since).str.to_datetime())
-            if until:
-                lf = lf.filter(pl.col('time') <  pl.lit(until).str.to_datetime())
-
-        lf = _apply_local_filters_lazy(lf, await _expand_group_filters(body.get('local_filters') or []))
+        # Resolve every wallet-selection filter in the body to an address set
+        # (one CH query per filter; run concurrently).
+        async def _resolve(role, exclude, dim, values):
+            return (role, exclude, await _resolve_dim_addresses(dim, values))
+        tasks = [
+            _resolve(role, exclude, dim, body[bkey])
+            for bkey, (role, exclude, dim) in _FILTER_KEYS.items()
+            if body.get(bkey)
+        ]
+        specs = list(await asyncio.gather(*tasks)) if tasks else []
 
         save_key = body.get('save_key')
+        dst = None
         if save_key:
             try:
                 dst = _snap_path(app, save_key)
             except ValueError as e:
                 return response.json({'error': str(e)}, status=400)
-            lf.sink_parquet(dst)
+
+        try:
+            data = await asyncio.to_thread(
+                _duckdb_scan, src, specs,
+                body.get('since'), body.get('until'),
+                body.get('min_amount'), body.get('max_amount'), dst,
+            )
+        except Exception as e:  # noqa: BLE001
+            log.exception('snapshots.scan duckdb failed')
+            return response.json({'error': f'scan failed: {e}'}, status=500)
+
+        if save_key:
             return response.json({'saved': True, 'key': _safe_key(save_key)})
-
-        df = lf.collect()
-        buf = io.BytesIO()
-        df.write_parquet(buf)
-        return response.raw(
-            buf.getvalue(), content_type='application/octet-stream',
-        )
+        return response.raw(data, content_type='application/octet-stream')
 
 
-# Group local_filters ops → the address op they reduce to once resolved. A
-# "group" is a named wallet set (tradernick.wallet_groups / wallet_pins). The
-# snapshot parquet has no group column, so we resolve group NAMES → member
-# addresses via ClickHouse, then apply the plain address filter in polars. This
-# is why group local_filters actually work (unlike category/entity ones, which
-# stay no-ops — a group is just an address set).
-_GROUP_OP_TO_ADDR = {
-    'sender_groups': 'sender',
-    'receiver_groups': 'receiver',
-    'involving_groups': 'involving',
-    'exclude_sender_groups': 'exclude_sender',
-    'exclude_receiver_groups': 'exclude_receiver',
-    'exclude_involving_groups': 'exclude_involving',
-}
-_INCLUSIVE_GROUP_OPS = {'sender_groups', 'receiver_groups', 'involving_groups'}
-# A value no real address can equal — used so an inclusive filter on a group
-# with zero members matches nothing (is_in([sentinel])), instead of being
-# skipped (which would match everything).
-_EMPTY_GROUP_SENTINEL = '\x00__empty_group__'
+# ---------------------------------------------------------------------------
+# Snapshot scan: resolve wallet-selection filters → addresses (ClickHouse),
+# then filter the snapshot in DuckDB (snapshot + address sets as tables).
+# ---------------------------------------------------------------------------
+
+# body filter key → (column role, exclude?, dimension). address = the values
+# themselves; label(entity)/category/groups resolve to addresses via CH.
+_ROLES = ('sender', 'receiver', 'involving')
+_DIMS = {'': 'address', '_label': 'entity', '_category': 'category', '_groups': 'groups'}
+_FILTER_KEYS: dict[str, tuple[str, bool, str]] = {}
+for _role in _ROLES:
+    for _suf, _dim in _DIMS.items():
+        _FILTER_KEYS[f'{_role}{_suf}'] = (_role, False, _dim)
+        _FILTER_KEYS[f'exclude_{_role}{_suf}'] = (_role, True, _dim)
 
 
-async def _resolve_group_addresses(names: list[str], user_id: str = 'local') -> list[str]:
-    """Resolve group NAMES → the lowercased member addresses, from
-    tradernick.wallet_pins / wallet_groups (ReplacingMergeTree, FINAL +
-    deleted=0), scoped to `user_id`. Case-insensitive on the group name."""
-    lowered = [str(n).lower() for n in names if n]
+async def _resolve_dim_addresses(dim: str, values) -> list[str]:
+    """Resolve a wallet selection to lowercased member addresses:
+      address  → the values themselves (already addresses)
+      entity   → tradernick.wallets by entity tag
+      category → tradernick.wallets by category (array membership)
+      groups   → tradernick.wallet_pins / wallet_groups (user_id 'local')
+    """
+    if values is None:
+        return []
+    vals = values if isinstance(values, (list, tuple)) else [values]
+    lowered = [str(v).lower() for v in vals if v is not None and str(v) != '']
     if not lowered:
         return []
-    df = await query_polars(
-        'SELECT DISTINCT lower(address) AS address '
-        'FROM tradernick.wallet_pins FINAL '
-        'WHERE user_id = {u:String} AND deleted = 0 '
-        'AND group_id IN ('
-        'SELECT group_id FROM tradernick.wallet_groups FINAL '
-        'WHERE user_id = {u:String} AND deleted = 0 AND lower(name) IN {names:Array(String)})',
-        {'u': user_id, 'names': lowered},
-    )
-    if df.is_empty():
+    if dim == 'address':
+        return lowered
+    if dim == 'entity':
+        sql = ("SELECT DISTINCT lower(address) AS a FROM tradernick.wallets FINAL "
+               "WHERE lower(coalesce(entity, '')) IN {v:Array(String)}")
+    elif dim == 'category':
+        sql = ("SELECT DISTINCT lower(address) AS a FROM tradernick.wallets FINAL "
+               "WHERE hasAny(arrayMap(c -> lower(c), categories), {v:Array(String)})")
+    elif dim == 'groups':
+        sql = ("SELECT DISTINCT lower(p.address) AS a FROM tradernick.wallet_pins p FINAL "
+               "WHERE p.user_id = 'local' AND p.deleted = 0 AND p.group_id IN ("
+               "SELECT group_id FROM tradernick.wallet_groups FINAL "
+               "WHERE user_id = 'local' AND deleted = 0 AND lower(name) IN {v:Array(String)})")
+    else:
         return []
-    return df['address'].to_list()
+    df = await query_polars(sql, {'v': lowered})
+    return [] if df.is_empty() else df['a'].to_list()
 
 
-async def _expand_group_filters(steps: list[dict]) -> list[dict]:
-    """Rewrite any `*_groups` local_filter step into its address-op equivalent
-    by resolving the group names to member addresses. Non-group steps pass
-    through unchanged."""
-    out: list[dict] = []
-    for step in steps:
-        op = step.get('op')
-        if op in _GROUP_OP_TO_ADDR:
-            addrs = await _resolve_group_addresses(step.get('values') or [])
-            if not addrs and op in _INCLUSIVE_GROUP_OPS:
-                addrs = [_EMPTY_GROUP_SENTINEL]  # inclusive + empty → match nothing
-            out.append({'op': _GROUP_OP_TO_ADDR[op], 'values': addrs})
-        else:
-            out.append(step)
-    return out
+def _duck_ts(s: str) -> str:
+    """ISO 'YYYY-MM-DDTHH:MM:SSZ' → DuckDB-parseable 'YYYY-MM-DD HH:MM:SS'."""
+    return str(s).replace('T', ' ').replace('Z', '').strip()
 
 
-def _apply_local_filters_lazy(lf: pl.LazyFrame, steps: list[dict]) -> pl.LazyFrame:
-    """Server-side polars lazy implementation of Horatio's `local_*` filters.
+def _sql_lit(s: str) -> str:
+    return str(s).replace("'", "''")
 
-    Each step is `{"op": <op>, "values": [...]}`. Phase 2 supports the
-    address-and-label predicates that don't require a wallet metadata
-    join — the entity/category/label variants need wallet_labels columns
-    available on the snapshot, which most do not.
-    """
-    schema = lf.collect_schema().names()
 
-    def lower_col(name: str) -> pl.Expr | None:
-        if name not in schema:
+def _duckdb_scan(src, specs, since, until, min_amount, max_amount, dst):
+    """Filter a snapshot parquet in DuckDB. `specs` = list of
+    (role, exclude, addresses). Returns parquet bytes, or writes to `dst` and
+    returns None. Runs in a worker thread (sync DuckDB) via asyncio.to_thread."""
+    import duckdb
+    import pyarrow as pa
+
+    con = duckdb.connect()
+    try:
+        con.execute("SET TimeZone='UTC'")  # snapshot time cols are UTC
+        cols = con.execute(
+            "SELECT * FROM read_parquet(?) LIMIT 0", [src]
+        ).fetch_arrow_table().column_names
+        has = {c: (c in cols) for c in ('sender', 'receiver', 'time', 'amount')}
+
+        preds: list[str] = []
+        params: list = []
+        for i, (role, exclude, addrs) in enumerate(specs):
+            con.register(
+                f'sel_{i}',
+                pa.table({'address': pa.array([a.lower() for a in addrs], type=pa.string())}),
+            )
+            sub = f'SELECT address FROM sel_{i}'
+            parts = []
+            if role in ('sender', 'involving') and has['sender']:
+                parts.append(f'lower(sender) IN ({sub})')
+            if role in ('receiver', 'involving') and has['receiver']:
+                parts.append(f'lower(receiver) IN ({sub})')
+            if not parts:
+                continue  # snapshot lacks these columns → filter is a no-op
+            if role == 'involving':
+                joined = (' OR '.join(parts) if not exclude
+                          else ' AND '.join(f'NOT ({p})' for p in parts))
+                preds.append(f'({joined})')
+            else:
+                preds.append(f'NOT ({parts[0]})' if exclude else parts[0])
+
+        if since and has['time']:
+            preds.append('time >= ?'); params.append(_duck_ts(since))
+        if until and has['time']:
+            preds.append('time < ?'); params.append(_duck_ts(until))
+        if min_amount is not None and has['amount']:
+            preds.append('amount >= ?'); params.append(float(min_amount))
+        if max_amount is not None and has['amount']:
+            preds.append('amount <= ?'); params.append(float(max_amount))
+
+        where = (' WHERE ' + ' AND '.join(preds)) if preds else ''
+        base = f"SELECT * FROM read_parquet('{_sql_lit(src)}'){where}"
+        if dst:
+            con.execute(f"COPY ({base}) TO '{_sql_lit(dst)}' (FORMAT PARQUET)", params)
             return None
-        return pl.col(name).str.to_lowercase()
-
-    for step in steps:
-        op = step.get('op')
-        values = [str(v).lower() for v in step.get('values', [])]
-        if not op or not values:
-            continue
-        if op in ('involving',):
-            preds = []
-            s = lower_col('sender')
-            r = lower_col('receiver')
-            if s is not None:
-                preds.append(s.is_in(values))
-            if r is not None:
-                preds.append(r.is_in(values))
-            if preds:
-                lf = lf.filter(pl.any_horizontal(preds))
-        elif op == 'exclude_involving':
-            preds = []
-            s = lower_col('sender')
-            r = lower_col('receiver')
-            if s is not None:
-                preds.append(~s.is_in(values))
-            if r is not None:
-                preds.append(~r.is_in(values))
-            if preds:
-                lf = lf.filter(pl.all_horizontal(preds))
-        elif op == 'sender':
-            s = lower_col('sender')
-            if s is not None:
-                lf = lf.filter(s.is_in(values))
-        elif op == 'exclude_sender':
-            s = lower_col('sender')
-            if s is not None:
-                lf = lf.filter(~s.is_in(values))
-        elif op == 'receiver':
-            r = lower_col('receiver')
-            if r is not None:
-                lf = lf.filter(r.is_in(values))
-        elif op == 'exclude_receiver':
-            r = lower_col('receiver')
-            if r is not None:
-                lf = lf.filter(~r.is_in(values))
-        else:
-            # Label/category/entity variants — no-op until wallet_labels
-            # is exposed alongside the snapshot. Skipping is correct
-            # behavior per Horatio (filter that finds no columns to match
-            # against is a no-op, not an error).
-            log.debug('local_filter %s — skipped (no matching columns)', op)
-    return lf
+        tbl = con.execute(base, params).fetch_arrow_table()
+        buf = io.BytesIO()
+        pq.write_table(tbl, buf)
+        return buf.getvalue()
+    finally:
+        con.close()

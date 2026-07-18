@@ -50,14 +50,20 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
-**0.6.0 — Wallet-group filters.** `group` is now a filter dimension parallel to
-categories/labels, on every transfer query — **list-valued** (one group or
-several), resolved server-side against live group membership:
-- Direct: `.involving_groups([...])`, `.sender_groups([...])`,
-  `.receiver_groups([...])` + `.exclude_*` variants (transfer reads).
-- Local: `.local_*_groups([...])` for snapshots/`scan_parquet` — and unlike the
-  category/entity `local_*` filters, groups actually filter (a group reduces to
-  an address set). See [`USAGE.md`](USAGE.md) "Wallet groups".
+**0.7.0 — Unified filter API (BREAKING).** One wallet-selection filter surface,
+used by both transfer reads **and** `scan_parquet`. The `local_*` methods are
+**removed** — use the unprefixed methods everywhere; every filter accepts
+`str | list[str]`:
+- `.involving/.sender/.receiver` + `_label`/`_entity`/`_category`/`_groups` +
+  `exclude_*`. On a read they push into ClickHouse; on a `scan_parquet` the
+  server resolves the selection to member addresses and filters the snapshot in
+  **DuckDB** — so **category/entity filters now work on snapshots** too.
+- New `client.wallets.addresses(groups=/categories=/entities=/...)` → resolve a
+  selection to its addresses. See [`USAGE.md`](USAGE.md) §9.2 & §12.4.
+- Migration: `.local_involving_categories([...])` → `.involving_category([...])`;
+  scalar calls like `.sender("0x…")` still work (now also take a list).
+
+**0.6.0 — Wallet-group filters** (list-valued, resolved server-side).
 
 **0.5.0 — Binance spot markets + erc20 `min_amount` fix + first test suite.**
 - **`client.binance.spot.{ohlcv, raw_trades}`** — the Binance *spot* market, a
@@ -112,17 +118,17 @@ What works:
 - `evm.uniswap.{swap, deposit, withdraw, collect}` — V3
 - `evm.lido.{deposit, withdrawal_request, withdrawal_claimed,
   l2_deposit, l2_withdrawal_request}`
-- `evm.erc20.transfers`, `evm.native_transfers` with full filter set
-  (sender / receiver / involving / exclude_* / min_amount / max_amount)
-- wallet-group filters on all transfer queries: `involving_groups` /
-  `sender_groups` / `receiver_groups` + `exclude_*` (list-valued) and
-  `local_*_groups` for snapshots
+- `evm.erc20.transfers`, `evm.native_transfers` with the unified wallet-filter
+  surface: `involving`/`sender`/`receiver` + `_label`/`_entity`/`_category`/
+  `_groups` + `exclude_*` (all `str | list`) + `min_amount`/`max_amount`
 - `tron.{native, trc20}.transfers`, `btc.native.transfers`
 - `hyperliquid.{ohlcv, trades, fills, funding, transfers, vaults,
   trade_history, position_history}`
-- `client.{wallets.list, wallets.get, wallets.upsert, wallets.delete}`
+- `client.wallets.{list, get, upsert, delete, addresses}` — `addresses(...)`
+  resolves a group/category/entity selection to its addresses
 - `client.{load_parquet, scan_parquet, list_snapshots, delete_snapshot,
-  as_parquet}` — server-side parquet snapshots with `local_*` filters
+  as_parquet}` — snapshots; `scan_parquet` filters with the SAME wallet-filter
+  surface (resolved to addresses + DuckDB, so category/entity work on snapshots)
 - `client.jobs.{list, get, cancel}` — proxies to the ingestion job queue
 
 TN-exclusive (since 0.3.0):
@@ -148,10 +154,11 @@ Not yet exposed / unsupported:
   provides them ("Tier 3") but TN doesn't ingest them yet, so the endpoints
   return the correct empty schema (0 rows). A follow-up will add the CH tables
   + ingestion streams and make them return real data.
-- `client.scan_parquet` only honors address-based `local_*` filters;
-  label/category/entity variants are wired but no-op without
-  wallet_labels co-mounted on the snapshot.
 
 ## Compatibility
 
-Drop-in compatible with horatio-data-provider 4.x.
+Broadly Horatio-shaped (same `DataProviderClient`, namespaces, and
+`as_pandas`/`as_polars`/`as_parquet` terminators). As of **0.7.0** the wallet
+filter surface diverges from Horatio: the `local_*` methods are gone and filters
+are unified + `str | list`-valued (see [`USAGE.md`](USAGE.md) §9.2). Reads and
+snapshot scans share one filter surface.

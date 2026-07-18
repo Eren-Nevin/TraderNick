@@ -151,3 +151,24 @@ async def test_group_exclude_nonexistent_group_is_noop(live_client):
                   .exclude_involving_groups(["__no_such_group__"])
                   .time_range(SINCE, UNTIL).as_polars())
     assert excl.height == base.height
+
+
+# --- scan_parquet: the same filter surface works on a snapshot (DuckDB) -----
+async def test_scan_parquet_filters_a_snapshot(live_client):
+    key = "__it_scan_filters__"
+    await (live_client.evm.erc20.transfers(["USDC"]).network("ethereum")
+           .time_range(SINCE, UNTIL).as_parquet(key))
+    try:
+        full = await live_client.load_parquet(key)
+        # category filter now applies on a scan (was a no-op pre-0.7.0)
+        cat = await live_client.scan_parquet(key).sender_category("CEX").as_polars()
+        assert cat.height <= full.height
+        # include + exclude partition the snapshot on the same selection
+        inc = await live_client.scan_parquet(key).involving_category("CEX").as_polars()
+        exc = await live_client.scan_parquet(key).exclude_involving_category("CEX").as_polars()
+        assert inc.height + exc.height == full.height
+        # nonexistent selection → empty
+        none = await live_client.scan_parquet(key).involving_groups(["__nope__"]).as_polars()
+        assert none.height == 0
+    finally:
+        await live_client.delete_snapshot(key)

@@ -16,6 +16,7 @@ Horatio wire contract:
 
 from __future__ import annotations
 
+import io
 import logging
 import os
 
@@ -76,6 +77,37 @@ def register(app: Sanic) -> None:
         """
         df = await query_polars(sql, sql_params)
         return response.json({'wallets': df.to_dicts()})
+
+    @app.post('/wallets/addresses')
+    async def wallets_addresses(request: Request):
+        """Resolve a wallet selection → the matching addresses, returned as
+        parquet (single `address` column, distinct, lowercased).
+
+        Body: {groups?, categories?, entities?, labels?, addresses?} — each a
+        string or list. The result is the UNION across every given dimension
+        (`labels` is a synonym for `entities`). Shares the per-dimension
+        resolver with the snapshot-scan filter pipeline.
+        """
+        from .snapshots import _resolve_dim_addresses  # shared resolver
+        body = request.json or {}
+        addrs: set[str] = set()
+        for dim, keys in (
+            ('address', ('addresses',)),
+            ('entity', ('entities', 'labels')),
+            ('category', ('categories',)),
+            ('groups', ('groups',)),
+        ):
+            vals: list = []
+            for k in keys:
+                v = body.get(k)
+                if v:
+                    vals.extend(v if isinstance(v, (list, tuple)) else [v])
+            if vals:
+                addrs.update(await _resolve_dim_addresses(dim, vals))
+        out = pl.DataFrame({'address': sorted(addrs)}, schema={'address': pl.Utf8})
+        buf = io.BytesIO()
+        out.write_parquet(buf)
+        return response.raw(buf.getvalue(), content_type='application/octet-stream')
 
     @app.get('/wallets/<address>')
     async def wallets_get(request: Request, address: str):

@@ -7,7 +7,7 @@ import httpx
 import pyarrow as pa
 
 from ._http import fetch_table
-from ._query import CacheableQuery, _GroupFiltersMixin
+from ._query import CacheableQuery
 
 if TYPE_CHECKING:
     from typing import Self
@@ -28,67 +28,21 @@ def _validate_tokens(tokens) -> list[str]:
     return out
 
 
-class ERC20TransfersQuery(CacheableQuery, _GroupFiltersMixin):
+class ERC20TransfersQuery(CacheableQuery):
     _PROTOCOL = "erc20_transfers"
 
     def __init__(self, session: httpx.AsyncClient, base_url: str, tokens: list[str]):
         super().__init__(session, base_url, {"tokens": _validate_tokens(tokens)})
         self._min_amount = None
 
+    # Wallet-selection filters (sender/receiver/involving + label/entity/
+    # category/groups + exclude_*) are inherited from _WalletFilters.
     def min_amount(self, amount: float) -> Self:
         self._min_amount = amount
         return self
 
     def max_amount(self, amount: float) -> Self:
         self._body["max_amount"] = amount
-        return self
-
-    def sender(self, address: str) -> Self:
-        self._body["sender"] = address
-        return self
-
-    def receiver(self, address: str) -> Self:
-        self._body["receiver"] = address
-        return self
-
-    def sender_label(self, label: str) -> Self:
-        self._body["sender_label"] = label
-        return self
-
-    def sender_category(self, category: str) -> Self:
-        self._body["sender_category"] = category
-        return self
-
-    def receiver_label(self, label: str) -> Self:
-        self._body["receiver_label"] = label
-        return self
-
-    def receiver_category(self, category: str) -> Self:
-        self._body["receiver_category"] = category
-        return self
-
-    def exclude_sender(self, address: str) -> Self:
-        self._body["exclude_sender"] = address
-        return self
-
-    def exclude_sender_label(self, label: str) -> Self:
-        self._body["exclude_sender_label"] = label
-        return self
-
-    def exclude_sender_category(self, category: str) -> Self:
-        self._body["exclude_sender_category"] = category
-        return self
-
-    def exclude_receiver(self, address: str) -> Self:
-        self._body["exclude_receiver"] = address
-        return self
-
-    def exclude_receiver_label(self, label: str) -> Self:
-        self._body["exclude_receiver_label"] = label
-        return self
-
-    def exclude_receiver_category(self, category: str) -> Self:
-        self._body["exclude_receiver_category"] = category
         return self
 
     def _resolve_path(self) -> str:
@@ -120,67 +74,20 @@ class ERC20TransfersQuery(CacheableQuery, _GroupFiltersMixin):
         return await fetch_table(self._session, self._base_url + path, self._body)
 
 
-class TRC20TransfersQuery(CacheableQuery, _GroupFiltersMixin):
+class TRC20TransfersQuery(CacheableQuery):
     _PROTOCOL = "trc20_transfers"
 
     def __init__(self, session: httpx.AsyncClient, base_url: str, tokens: list[str]):
         super().__init__(session, base_url, {"tokens": _validate_tokens(tokens)})
         self._min_amount = None
 
+    # Wallet-selection filters inherited from _WalletFilters.
     def min_amount(self, amount: float) -> Self:
         self._min_amount = amount
         return self
 
     def max_amount(self, amount: float) -> Self:
         self._body["max_amount"] = amount
-        return self
-
-    def sender(self, address: str) -> Self:
-        self._body["sender"] = address
-        return self
-
-    def receiver(self, address: str) -> Self:
-        self._body["receiver"] = address
-        return self
-
-    def sender_label(self, label: str) -> Self:
-        self._body["sender_label"] = label
-        return self
-
-    def sender_category(self, category: str) -> Self:
-        self._body["sender_category"] = category
-        return self
-
-    def receiver_label(self, label: str) -> Self:
-        self._body["receiver_label"] = label
-        return self
-
-    def receiver_category(self, category: str) -> Self:
-        self._body["receiver_category"] = category
-        return self
-
-    def exclude_sender(self, address: str) -> Self:
-        self._body["exclude_sender"] = address
-        return self
-
-    def exclude_sender_label(self, label: str) -> Self:
-        self._body["exclude_sender_label"] = label
-        return self
-
-    def exclude_sender_category(self, category: str) -> Self:
-        self._body["exclude_sender_category"] = category
-        return self
-
-    def exclude_receiver(self, address: str) -> Self:
-        self._body["exclude_receiver"] = address
-        return self
-
-    def exclude_receiver_label(self, label: str) -> Self:
-        self._body["exclude_receiver_label"] = label
-        return self
-
-    def exclude_receiver_category(self, category: str) -> Self:
-        self._body["exclude_receiver_category"] = category
         return self
 
     def _resolve_path(self) -> str:

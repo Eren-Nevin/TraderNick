@@ -430,75 +430,85 @@ def _transfers_filters(params: dict[str, Any], where: list[str], *,
     even on the 971M-row transfers table — the test for the dashboard's
     exchange-flow rollup is the same pattern.
     """
-    if sender:
-        params['sender'] = sender.lower()
-        where.append('lower(sender) = {sender:String}')
-    if receiver:
-        params['receiver'] = receiver.lower()
-        where.append('lower(receiver) = {receiver:String}')
-    if involving:
-        params['involving'] = involving.lower()
-        where.append('(lower(sender) = {involving:String} OR lower(receiver) = {involving:String})')
-    if exclude_sender:
-        params['exclude_sender'] = exclude_sender.lower()
-        where.append('lower(sender) != {exclude_sender:String}')
-    if exclude_receiver:
-        params['exclude_receiver'] = exclude_receiver.lower()
-        where.append('lower(receiver) != {exclude_receiver:String}')
-    if exclude_involving:
-        params['exclude_involving'] = exclude_involving.lower()
-        where.append('(lower(sender) != {exclude_involving:String} AND lower(receiver) != {exclude_involving:String})')
+    # Every wallet-selection filter is list-valued (match ANY of the values).
+    # A bare string is accepted and wrapped. Empty → the clause is skipped.
+    def _nl(v):
+        if v is None:
+            return None
+        vals = v if isinstance(v, (list, tuple)) else [v]
+        out = [str(x).lower() for x in vals if x is not None and str(x) != '']
+        return out or None
 
-    # ----- label (entity) ----------------------------------------------------
-    if sender_label:
-        params['sender_label'] = sender_label.lower()
-        where.append("coalesce(sender_entity, '') = {sender_label:String}")
-    if receiver_label:
-        params['receiver_label'] = receiver_label.lower()
-        where.append("coalesce(receiver_entity, '') = {receiver_label:String}")
-    if involving_label:
-        params['involving_label'] = involving_label.lower()
+    # ----- address (IN / NOT IN) ---------------------------------------------
+    if (v := _nl(sender)):
+        params['sender'] = v
+        where.append('lower(sender) IN {sender:Array(String)}')
+    if (v := _nl(receiver)):
+        params['receiver'] = v
+        where.append('lower(receiver) IN {receiver:Array(String)}')
+    if (v := _nl(involving)):
+        params['involving'] = v
+        where.append('(lower(sender) IN {involving:Array(String)} OR lower(receiver) IN {involving:Array(String)})')
+    if (v := _nl(exclude_sender)):
+        params['exclude_sender'] = v
+        where.append('lower(sender) NOT IN {exclude_sender:Array(String)}')
+    if (v := _nl(exclude_receiver)):
+        params['exclude_receiver'] = v
+        where.append('lower(receiver) NOT IN {exclude_receiver:Array(String)}')
+    if (v := _nl(exclude_involving)):
+        params['exclude_involving'] = v
+        where.append('(lower(sender) NOT IN {exclude_involving:Array(String)} AND lower(receiver) NOT IN {exclude_involving:Array(String)})')
+
+    # ----- label (entity) — IN / NOT IN over the entity column ----------------
+    if (v := _nl(sender_label)):
+        params['sender_label'] = v
+        where.append("coalesce(sender_entity, '') IN {sender_label:Array(String)}")
+    if (v := _nl(receiver_label)):
+        params['receiver_label'] = v
+        where.append("coalesce(receiver_entity, '') IN {receiver_label:Array(String)}")
+    if (v := _nl(involving_label)):
+        params['involving_label'] = v
         where.append(
-            "(coalesce(sender_entity, '') = {involving_label:String} "
-            "OR coalesce(receiver_entity, '') = {involving_label:String})"
+            "(coalesce(sender_entity, '') IN {involving_label:Array(String)} "
+            "OR coalesce(receiver_entity, '') IN {involving_label:Array(String)})"
         )
-    if exclude_sender_label:
-        params['exclude_sender_label'] = exclude_sender_label.lower()
-        where.append("coalesce(sender_entity, '') != {exclude_sender_label:String}")
-    if exclude_receiver_label:
-        params['exclude_receiver_label'] = exclude_receiver_label.lower()
-        where.append("coalesce(receiver_entity, '') != {exclude_receiver_label:String}")
-    if exclude_involving_label:
-        params['exclude_involving_label'] = exclude_involving_label.lower()
+    if (v := _nl(exclude_sender_label)):
+        params['exclude_sender_label'] = v
+        where.append("coalesce(sender_entity, '') NOT IN {exclude_sender_label:Array(String)}")
+    if (v := _nl(exclude_receiver_label)):
+        params['exclude_receiver_label'] = v
+        where.append("coalesce(receiver_entity, '') NOT IN {exclude_receiver_label:Array(String)}")
+    if (v := _nl(exclude_involving_label)):
+        params['exclude_involving_label'] = v
         where.append(
-            "(coalesce(sender_entity, '') != {exclude_involving_label:String} "
-            "AND coalesce(receiver_entity, '') != {exclude_involving_label:String})"
+            "(coalesce(sender_entity, '') NOT IN {exclude_involving_label:Array(String)} "
+            "AND coalesce(receiver_entity, '') NOT IN {exclude_involving_label:Array(String)})"
         )
 
-    # ----- category ----------------------------------------------------------
-    if sender_category:
-        params['sender_category'] = sender_category.lower()
-        where.append('has(sender_categories, {sender_category:String})')
-    if receiver_category:
-        params['receiver_category'] = receiver_category.lower()
-        where.append('has(receiver_categories, {receiver_category:String})')
-    if involving_category:
-        params['involving_category'] = involving_category.lower()
+    # ----- category — hasAny / NOT hasAny over the categories array -----------
+    if (v := _nl(sender_category)):
+        params['sender_category'] = v
+        where.append('hasAny(sender_categories, {sender_category:Array(String)})')
+    if (v := _nl(receiver_category)):
+        params['receiver_category'] = v
+        where.append('hasAny(receiver_categories, {receiver_category:Array(String)})')
+    if (v := _nl(involving_category)):
+        params['involving_category'] = v
         where.append(
-            '(has(sender_categories, {involving_category:String}) '
-            'OR has(receiver_categories, {involving_category:String}))'
+            '(hasAny(sender_categories, {involving_category:Array(String)}) '
+            'OR hasAny(receiver_categories, {involving_category:Array(String)}))'
         )
-    if exclude_sender_category:
-        params['exclude_sender_category'] = exclude_sender_category.lower()
-        where.append('NOT has(sender_categories, {exclude_sender_category:String})')
-    if exclude_receiver_category:
-        params['exclude_receiver_category'] = exclude_receiver_category.lower()
-        where.append('NOT has(receiver_categories, {exclude_receiver_category:String})')
-    if exclude_involving_category:
-        params['exclude_involving_category'] = exclude_involving_category.lower()
+    if (v := _nl(exclude_sender_category)):
+        params['exclude_sender_category'] = v
+        where.append('NOT hasAny(sender_categories, {exclude_sender_category:Array(String)})')
+    if (v := _nl(exclude_receiver_category)):
+        params['exclude_receiver_category'] = v
+        where.append('NOT hasAny(receiver_categories, {exclude_receiver_category:Array(String)})')
+    if (v := _nl(exclude_involving_category)):
+        params['exclude_involving_category'] = v
         where.append(
-            '(NOT has(sender_categories, {exclude_involving_category:String}) '
-            'AND NOT has(receiver_categories, {exclude_involving_category:String}))'
+            '(NOT hasAny(sender_categories, {exclude_involving_category:Array(String)}) '
+            'AND NOT hasAny(receiver_categories, {exclude_involving_category:Array(String)}))'
         )
 
     # ----- group ----------------------------------------------------------
@@ -519,28 +529,28 @@ def _transfers_filters(params: dict[str, Any], where: list[str], *,
             'AND lower(name) IN {' + pname + ':Array(String)})'
         )
 
-    if any(g for g in (sender_groups, receiver_groups, involving_groups,
-                       exclude_sender_groups, exclude_receiver_groups,
-                       exclude_involving_groups)):
+    _sg, _rg, _ig = _nl(sender_groups), _nl(receiver_groups), _nl(involving_groups)
+    _xsg, _xrg, _xig = _nl(exclude_sender_groups), _nl(exclude_receiver_groups), _nl(exclude_involving_groups)
+    if any((_sg, _rg, _ig, _xsg, _xrg, _xig)):
         params['group_user_id'] = 'local'
-    if sender_groups:
-        params['sender_groups'] = [g.lower() for g in sender_groups]
+    if _sg:
+        params['sender_groups'] = _sg
         where.append(f'lower(sender) IN ({_group_members("sender_groups")})')
-    if receiver_groups:
-        params['receiver_groups'] = [g.lower() for g in receiver_groups]
+    if _rg:
+        params['receiver_groups'] = _rg
         where.append(f'lower(receiver) IN ({_group_members("receiver_groups")})')
-    if involving_groups:
-        params['involving_groups'] = [g.lower() for g in involving_groups]
+    if _ig:
+        params['involving_groups'] = _ig
         sub = _group_members("involving_groups")
         where.append(f'(lower(sender) IN ({sub}) OR lower(receiver) IN ({sub}))')
-    if exclude_sender_groups:
-        params['exclude_sender_groups'] = [g.lower() for g in exclude_sender_groups]
+    if _xsg:
+        params['exclude_sender_groups'] = _xsg
         where.append(f'lower(sender) NOT IN ({_group_members("exclude_sender_groups")})')
-    if exclude_receiver_groups:
-        params['exclude_receiver_groups'] = [g.lower() for g in exclude_receiver_groups]
+    if _xrg:
+        params['exclude_receiver_groups'] = _xrg
         where.append(f'lower(receiver) NOT IN ({_group_members("exclude_receiver_groups")})')
-    if exclude_involving_groups:
-        params['exclude_involving_groups'] = [g.lower() for g in exclude_involving_groups]
+    if _xig:
+        params['exclude_involving_groups'] = _xig
         sub = _group_members("exclude_involving_groups")
         where.append(f'(lower(sender) NOT IN ({sub}) AND lower(receiver) NOT IN ({sub}))')
 

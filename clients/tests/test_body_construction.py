@@ -178,26 +178,38 @@ def test_with_network_false_survives_auto(client):
 
 
 # ---------------------------------------------------------------------------
-# local_* filters — accumulation + validation
+# Unified wallet filters — set body keys, accept str | list, no local_filters
 # ---------------------------------------------------------------------------
-def test_local_filters_accumulate_in_order(client):
+def test_wallet_filters_set_body_keys(client):
     q = (client.evm.erc20.transfers(["USDC"])
-         .local_involving_labels(["Binance"])
-         .local_exclude_sender_categories(["Hot-Wallet"]))
-    assert q._body["local_filters"] == [
-        {"op": "involving_labels", "values": ["Binance"]},
-        {"op": "exclude_sender_categories", "values": ["Hot-Wallet"]},
-    ]
+         .involving_label(["Binance"])
+         .exclude_sender_category(["Hot-Wallet"]))
+    assert q._body["involving_label"] == ["Binance"]
+    assert q._body["exclude_sender_category"] == ["Hot-Wallet"]
+    assert "local_filters" not in q._body  # local_* concept is gone
 
 
-def test_local_filter_rejects_non_list(client):
+def test_wallet_filter_accepts_str_or_list(client):
+    # A bare string is wrapped; a list passes through.
+    assert client.evm.erc20.transfers(["USDC"]).involving("0xabc")._body["involving"] == ["0xabc"]
+    assert client.evm.erc20.transfers(["USDC"]).involving(["0x1", "0x2"])._body["involving"] == ["0x1", "0x2"]
+    assert client.evm.erc20.transfers(["USDC"]).sender_category("CEX")._body["sender_category"] == ["CEX"]
+
+
+def test_wallet_filter_entity_is_label_synonym(client):
+    a = client.evm.erc20.transfers(["USDC"]).sender_entity("Binance")._body
+    b = client.evm.erc20.transfers(["USDC"]).sender_label("Binance")._body
+    assert a["sender_label"] == ["Binance"] == b["sender_label"]
+
+
+def test_wallet_filter_rejects_non_string(client):
     with pytest.raises(TypeError):
-        client.evm.erc20.transfers(["USDC"]).local_involving("0xabc")  # not a list
+        client.evm.erc20.transfers(["USDC"]).involving([123])  # non-string in list
 
 
-def test_local_filter_empty_list_is_noop(client):
-    q = client.evm.erc20.transfers(["USDC"]).local_involving([])
-    assert "local_filters" not in q._body
+def test_wallet_filter_empty_is_noop(client):
+    q = client.evm.erc20.transfers(["USDC"]).involving([])
+    assert "involving" not in q._body
 
 
 # ---------------------------------------------------------------------------
@@ -235,7 +247,7 @@ def test_aerodrome_namespaces(client):
 
 
 # ---------------------------------------------------------------------------
-# Wallet groups — direct (list-valued) + local filters
+# Wallet groups (list-valued; same surface on read + scan builders)
 # ---------------------------------------------------------------------------
 def test_involving_groups_direct(client):
     q = client.evm.erc20.transfers(["USDC"]).involving_groups(["Whales", "CEX"])
@@ -267,16 +279,22 @@ def test_group_filters_on_every_transfer_type(client):
         assert q.involving_groups(["H"])._body["involving_groups"] == ["H"]
 
 
-def test_local_group_ops(client):
+def test_scan_uses_same_filter_surface(client):
+    # The scan builder has the SAME wallet-filter methods as a read builder,
+    # setting the same body keys (server resolves + filters the snapshot).
     q = (client.scan_parquet("snap")
-         .local_receiver_groups(["Whales"])
-         .local_exclude_involving_groups(["CEX"]))
-    assert q._body["local_filters"] == [
-        {"op": "receiver_groups", "values": ["Whales"]},
-        {"op": "exclude_involving_groups", "values": ["CEX"]},
-    ]
+         .receiver_groups(["Whales"])
+         .sender_category("CEX")
+         .exclude_involving_groups(["CEX"])
+         .min_amount(1000))
+    assert q._body["receiver_groups"] == ["Whales"]
+    assert q._body["sender_category"] == ["CEX"]
+    assert q._body["exclude_involving_groups"] == ["CEX"]
+    assert q._body["min_amount"] == 1000
+    assert "local_filters" not in q._body
 
 
-def test_local_groups_reject_non_list(client):
+def test_scan_filter_accepts_str_or_list(client):
+    assert client.scan_parquet("snap").sender_groups("Whales")._body["sender_groups"] == ["Whales"]
     with pytest.raises(TypeError):
-        client.scan_parquet("snap").local_sender_groups("Whales")  # must be a list
+        client.scan_parquet("snap").sender_groups([123])  # non-string in list

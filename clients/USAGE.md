@@ -273,20 +273,8 @@ fans out across networks (§11).
 client.evm.erc20.transfers(tokens: list[str])   # tokens MUST be a list
 ```
 
-`transfers()` returns a builder with the full transfer-filter surface:
-
-| Filter | Meaning |
-|---|---|
-| `.min_amount(x)` / `.max_amount(x)` | amount bounds |
-| `.sender(addr)` / `.receiver(addr)` | exact address |
-| `.sender_label(l)` / `.receiver_label(l)` | wallet label |
-| `.sender_category(c)` / `.receiver_category(c)` | wallet category |
-| `.exclude_sender(addr)` / `.exclude_receiver(addr)` | exclude address |
-| `.exclude_sender_label(l)` / `.exclude_receiver_label(l)` | exclude by label |
-| `.exclude_sender_category(c)` / `.exclude_receiver_category(c)` | exclude by category |
-
-Plus the base `.involving(addr)` / `.involving_label(l)` / `.involving_category(c)`
-and their `.exclude_involving*` variants (match sender **or** receiver).
+`transfers()` returns a builder with the wallet-filter surface described in
+**§9.2 Wallet filters** below.
 
 ```python
 # USDC transfers >= $1,000,000 on Ethereum
@@ -295,84 +283,65 @@ big = await (client.evm.erc20.transfers(["USDC"])
              .min_amount(1_000_000)
              .time_range("2026-07-10", "2026-07-11")
              .as_polars())
-
-# everything touching Binance-labeled wallets, excluding hot wallets
-flow = await (client.evm.erc20.transfers(["USDC", "USDT"])
-              .network("ethereum")
-              .involving_label("Binance")
-              .exclude_sender_category("Hot-Wallet")
-              .time_range("2026-07-10", "2026-07-11")
-              .as_polars())
 ```
 
 > **Common mistake:** `transfers("USDC")` (a bare string) raises `TypeError`.
 > Always pass a list: `transfers(["USDC"])`.
 
-### 9.2 Native transfers — `client.evm.native_transfers()`
+### 9.2 Wallet filters (one surface, everywhere)
 
-Same filter surface as ERC-20 transfers (`min_amount`, `sender`/`receiver`
-+`_label`/`_category`, `exclude_*`, `involving*`).
+There is **one** wallet-selection filter surface, shared by every transfer
+query (`evm.erc20`, `evm.native_transfers`, `tron.trc20`,
+`tron.native_transfers`, `btc.native_transfers`) **and** by `scan_parquet`
+(§12.4). The same method behaves by context:
 
-```python
-eth = await (client.evm.native_transfers()
-             .network("ethereum")
-             .min_amount(100)
-             .time_range("2026-07-10", "2026-07-11")
-             .as_polars())
-```
+- On a **read** → pushed into ClickHouse (indexed, efficient).
+- On a **`scan_parquet`** → the server resolves the selection to member
+  addresses and filters the snapshot in DuckDB.
 
-### 9.2b Wallet groups (all transfer queries)
+Every filter accepts **`str | list[str]`** (a single value or "any of"), across
+three roles × four dimensions, plus `exclude_` variants:
 
-A **group** is a named set of wallet addresses (maintained on the dashboard's
-`/wallets` page). It's a filter dimension parallel to categories/labels, but
-**list-valued** — filter on one group or several. Group filtering is resolved
-server-side against the live group membership, so it always reflects the current
-groups (no snapshot/rematerialize step).
+| | address | label / entity | category | group |
+|---|---|---|---|---|
+| **involving** (sender OR receiver) | `.involving(v)` | `.involving_label(v)` / `.involving_entity(v)` | `.involving_category(v)` | `.involving_groups(v)` |
+| **sender** | `.sender(v)` | `.sender_label(v)` / `.sender_entity(v)` | `.sender_category(v)` | `.sender_groups(v)` |
+| **receiver** | `.receiver(v)` | `.receiver_label(v)` / `.receiver_entity(v)` | `.receiver_category(v)` | `.receiver_groups(v)` |
+| **exclude** | `.exclude_<role>(v)` | `.exclude_<role>_label(v)` | `.exclude_<role>_category(v)` | `.exclude_<role>_groups(v)` |
 
-Available on every transfer query — `evm.erc20`, `evm.native_transfers`,
-`tron.trc20`, `tron.native_transfers`, `btc.native_transfers`:
+Plus amount bounds: `.min_amount(x)` / `.max_amount(x)`.
 
-| Method | Meaning |
-|---|---|
-| `.involving_groups([...])` | sender OR receiver in any of the named groups |
-| `.sender_groups([...])` / `.receiver_groups([...])` | sender / receiver in any group |
-| `.exclude_involving_groups([...])` | neither sender nor receiver in the groups |
-| `.exclude_sender_groups([...])` / `.exclude_receiver_groups([...])` | exclude by side |
+Dimensions:
+- **address** — raw wallet address.
+- **label / entity** — synonyms; the wallet's `entity` tag (e.g. `"Binance"`).
+- **category** — a wallet category (e.g. `"CEX"`, `"Hot-Wallet"`).
+- **groups** — one or more named wallet **groups** (from the dashboard's
+  `/wallets` page), resolved to their member addresses.
 
-```python
-# USDC transfers touching the "Whales" or "Smart-Money" groups
-df = await (client.evm.erc20.transfers(["USDC"])
-            .network("ethereum")
-            .involving_groups(["Whales", "Smart-Money"])
-            .time_range("2026-07-10", "2026-07-11")
-            .as_polars())
-
-# native ETH flowing OUT OF a group, excluding a CEX group on the receiving side
-df = await (client.evm.native_transfers()
-            .network("ethereum")
-            .sender_groups(["Whales"])
-            .exclude_receiver_groups(["CEX"])
-            .time_range("2026-07-10", "2026-07-11")
-            .as_polars())
-```
-
-On saved **snapshots** the same filter is available as `local_*_groups`
-(list-valued) — and unlike the category/entity `local_*` filters, groups
-actually work there, because a group reduces to an address set:
+All values are matched case-insensitively. `exclude_involving` means *neither*
+side matches.
 
 ```python
-df = await (client.scan_parquet("usdc_flows")
-            .local_receiver_groups(["Whales"])
-            .as_polars())
+# whales OR smart-money, excluding hot wallets, over $1M
+flow = await (client.evm.erc20.transfers(["USDC", "USDT"])
+              .network("ethereum")
+              .involving_groups(["Whales", "Smart-Money"])
+              .exclude_sender_category("Hot-Wallet")
+              .involving_label("Binance")
+              .min_amount(1_000_000)
+              .time_range("2026-07-10", "2026-07-11")
+              .as_polars())
 ```
 
 Notes:
-- Group names are **case-insensitive**. An inclusive filter on a group with no
-  members (or a nonexistent group) returns 0 rows; an exclude filter on such a
-  group is a no-op.
-- Groups are scoped to the local user (no multi-user auth yet).
-- The special **Default** group may not match — it's synthesized in the UI and
-  may lack a stored record.
+- Group / category / entity names are **case-insensitive**. An inclusive filter
+  that resolves to no addresses returns 0 rows; an exclude of an empty selection
+  is a no-op.
+- Groups are scoped to the local user (no multi-user auth yet). The special
+  **Default** group may not match — it's synthesized in the UI and may lack a
+  stored record.
+- **Resolving a selection yourself:** `client.wallets.addresses(...)` returns
+  the addresses a selection resolves to (see §13).
 
 ### 9.3 Aave — `client.evm.aave`
 
@@ -570,39 +539,37 @@ keys = await client.list_snapshots()          # -> ["btc_spot_july", ...]
 await client.delete_snapshot("btc_spot_july")
 ```
 
-### 12.4 Scan — lazy server-side filtering — `client.scan_parquet(key, ...)`
+### 12.4 Scan — filter a saved snapshot — `client.scan_parquet(key, ...)`
 
-Returns a builder that pushes `local_*` filters down to the server (DuckDB engine
-by default) so only matching rows come back. Chain `local_*` filters, then a
-terminator (`as_polars` / `as_pandas` / `as_parquet(new_key)`):
+Uses the **same wallet-filter surface** as the reads (§9.2) — `involving` /
+`sender` / `receiver` + `_label`/`_entity`/`_category`/`_groups` + `exclude_*`,
+each `str | list`, plus `.min_amount()` / `.max_amount()` and `.time_range()`.
+Chain filters, then a terminator (`as_polars` / `as_pandas` / `as_parquet`):
 
 ```python
 df = await (client.scan_parquet("usdc_flows_july")
-            .local_involving_labels(["Binance"])
-            .local_exclude_sender_categories(["Hot-Wallet"])
+            .involving_label("Binance")
+            .exclude_sender_category("Hot-Wallet")
+            .sender_groups(["Whales"])
             .as_polars())
 
-# re-save the filtered subset as a new snapshot
+# re-save the filtered subset as a new snapshot (bytes never leave the server)
 await (client.scan_parquet("usdc_flows_july")
-       .local_involving_entities(["Binance"])
-       .as_parquet("usdc_binance_only"))
+       .involving_groups(["Whales"])
+       .as_parquet("usdc_whales_only"))
 ```
 
-`scan_parquet` options: `since`, `until`, `engine='duckdb'|'polars'`,
-`normalize_addresses=None` (auto).
+How it works: the server resolves each selection (group / category / entity) to
+member addresses via ClickHouse, then filters the snapshot in **DuckDB** (the
+snapshot parquet as one table, each address set as another). Unlike older
+versions, **category / entity filters now apply on a scan** — they reduce to an
+address set. Only the matching subset is returned; the snapshot never leaves the
+server.
 
-**`local_*` filter methods** (24 total; also usable directly on transfer read
-queries): `local_involving[_labels|_categories|_entities]`,
-`local_sender[...]`, `local_receiver[...]`, and every `local_exclude_*`
-variant. Each takes a **list of strings** and appends one filter step
-(union within a call).
+`scan_parquet` options: `since`, `until`, `engine`, `normalize_addresses`.
 
-> **Caveat:** the label/category/entity `local_*` filters only take effect when
-> `wallet_labels` are co-mounted with the snapshot on the server. The
-> **address-based** filters (`local_involving([...])`, `local_sender([...])`,
-> `local_receiver([...])`) always work — prefer those if unsure. The
-> **`local_*_groups`** filters also always work (a group resolves to an address
-> set server-side).
+> A filter that references a column the snapshot doesn't have (e.g.
+> `sender_category` on a binance-ohlcv snapshot) is a harmless no-op.
 
 ---
 
@@ -614,6 +581,17 @@ rows = await client.wallets.list(category="CEX", entity=None, search=None,
 one  = await client.wallets.get("0xabc...")              # -> dict | None (None on 404)
 await client.wallets.upsert(df_or_bytes)                 # pandas/polars DF or parquet bytes
 await client.wallets.delete("0xabc...")
+```
+
+**Resolve a selection → addresses** — `client.wallets.addresses(...)` returns the
+addresses a wallet selection resolves to (the same resolver the `scan_parquet`
+filters use). The result is the **union** across every given dimension
+(`labels` is a synonym for `entities`):
+
+```python
+addrs = await client.wallets.addresses(groups=["Whales", "Smart-Money"])
+addrs = await client.wallets.addresses(categories="CEX", entities=["Binance"])
+# -> ["0xabc...", "0xdef...", ...]  (distinct, lowercased)
 ```
 
 ---
@@ -757,9 +735,16 @@ asyncio.run(main())
 
 ## 19. Version notes
 
-- **0.6.0** — **wallet-group filters** on all transfer queries: direct
-  `.involving_groups()/.sender_groups()/.receiver_groups()` + `.exclude_*`, and
-  `local_*_groups` for snapshots. List-valued, name-based, resolved server-side.
+- **0.7.0** — **BREAKING: unified filter API.** One wallet-filter surface (§9.2)
+  used by both reads and `scan_parquet`; every filter accepts `str | list[str]`.
+  The `local_*` methods are **removed** — use the unprefixed methods everywhere
+  (on a read they push into ClickHouse; on a scan the server resolves the
+  selection to addresses and filters the snapshot in DuckDB, so category/entity
+  filters now work on snapshots). Added `client.wallets.addresses(...)`.
+  Migration: `.local_involving_categories([...])` → `.involving_category([...])`,
+  `.sender("0x…")` still works (now also accepts a list), etc.
+- **0.6.0** — wallet-group filters on all transfer queries (list-valued,
+  name-based, resolved server-side).
 - **0.5.1** — ships this usage guide inside the package (docs only).
 - **0.5.0** — added `binance.spot.{ohlcv, raw_trades}`; fixed
   `evm.erc20.transfers(...).min_amount(...)` (previously 404'd); first test suite.
