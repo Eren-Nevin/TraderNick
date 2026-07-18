@@ -43,8 +43,8 @@ write into ClickHouse and are supervised by the admin server.
 - **tradernick\_admin** — admin-role worker (wallet-label parquet, batch CRUD).
 - **data\_server** — read-only Sanic serving every dashboard endpoint (perps,
   DEX, lending, staking, flows, groups, wallet pins, leaderboards).
-- **data\_provider** — standalone query API (`:10005`) with a
-  [horatio-compatible](clients/README.md) Python client (`tradernick-data-provider`).
+- **data\_provider** — standalone query API (`:10005`) with a Python client
+  (`tradernick-data-provider`, on PyPI). See [Query client](#query-client-tradernick-data-provider).
 - **dashboard** — SvelteKit 2 / Svelte 5 / Tailwind 4 / D3. SSR-rendered; all
   data\_server / admin\_server access is proxied server-side.
 
@@ -117,6 +117,70 @@ curl -u admin:change_me -X POST http://localhost:10001/jobs/backfill/hyperliquid
      -H 'content-type: application/json' \
      -d '{"since":"2026-07-01T00:00:00Z"}'
 ```
+
+## Query client (`tradernick-data-provider`)
+
+An async Python client for `data_provider`, published on PyPI. Reads come back as
+polars/pandas; queries are fluent builders terminated by `as_polars()` /
+`as_pandas()` / `as_parquet(key)`. Full reference: **[clients/USAGE.md](clients/USAGE.md)**.
+
+```sh
+pip install tradernick-data-provider
+```
+
+```python
+import asyncio
+from tradernick_data_provider import DataProviderClient
+
+async def main():
+    async with DataProviderClient("http://localhost:10005") as c:
+        df = await c.binance.spot.ohlcv("BTC", "1h") \
+            .time_range("2026-07-01", "2026-07-08").as_polars()
+        print(df)
+
+asyncio.run(main())
+```
+
+### Unified wallet-filter API (v0.7.0)
+
+Transfer queries (`evm.erc20` / `evm.native_transfers` / `tron.*` / `btc.*`) and
+snapshot scans share **one** wallet-selection filter surface. Every filter takes
+`str | list[str]` (a single value or "any of"), across three roles × four
+dimensions, plus `exclude_` variants and `min_amount` / `max_amount`:
+
+| role \ dimension | address | label / entity | category | group |
+|---|---|---|---|---|
+| `involving` (sender OR receiver) | `.involving(v)` | `.involving_label(v)` | `.involving_category(v)` | `.involving_groups(v)` |
+| `sender` | `.sender(v)` | `.sender_label(v)` | `.sender_category(v)` | `.sender_groups(v)` |
+| `receiver` | `.receiver(v)` | `.receiver_label(v)` | `.receiver_category(v)` | `.receiver_groups(v)` |
+
+- **address** = raw wallet; **label/entity** = the wallet's `entity` tag;
+  **category** = a wallet category; **group** = a named wallet group (from the
+  `/wallets` page). All matched case-insensitively.
+- The **same method is context-dependent**: on a read it's pushed into
+  ClickHouse; on a `scan_parquet` the server resolves the selection to member
+  addresses and filters the snapshot in DuckDB (so category/entity/group filters
+  work on snapshots too).
+
+```python
+# reads: whales OR smart-money, excluding hot wallets, over $1M
+flow = await (c.evm.erc20.transfers(["USDC", "USDT"]).network("ethereum")
+              .involving_groups(["Whales", "Smart-Money"])
+              .exclude_sender_category("Hot-Wallet")
+              .min_amount(1_000_000)
+              .time_range("2026-07-10", "2026-07-11").as_polars())
+
+# same filters, applied to a saved snapshot
+sub = await c.scan_parquet("usdc_flows").sender_groups(["Whales"]).as_polars()
+
+# resolve a selection to its addresses
+addrs = await c.wallets.addresses(groups=["Whales"], categories="CEX")
+```
+
+Also: `binance.{ohlcv, raw_trades, book_depth, funding_rate, ...}` +
+`binance.spot.*`, `hyperliquid.{fills, trade_history, ...}`, `evm.{aave, uniswap,
+lido, spark, morpho, aerodrome}`, snapshots (`as_parquet` / `load_parquet` /
+`scan_parquet`), and `wallets` / `jobs` / `cache`.
 
 ## Operations
 
