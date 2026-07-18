@@ -7,7 +7,7 @@ import httpx
 import pyarrow as pa
 
 from ._http import fetch_table
-from ._query import CacheableQuery
+from ._query import CacheableQuery, _GroupFiltersMixin
 
 if TYPE_CHECKING:
     from typing import Self
@@ -28,7 +28,7 @@ def _validate_tokens(tokens) -> list[str]:
     return out
 
 
-class ERC20TransfersQuery(CacheableQuery):
+class ERC20TransfersQuery(CacheableQuery, _GroupFiltersMixin):
     _PROTOCOL = "erc20_transfers"
 
     def __init__(self, session: httpx.AsyncClient, base_url: str, tokens: list[str]):
@@ -120,7 +120,7 @@ class ERC20TransfersQuery(CacheableQuery):
         return await fetch_table(self._session, self._base_url + path, self._body)
 
 
-class TRC20TransfersQuery(CacheableQuery):
+class TRC20TransfersQuery(CacheableQuery, _GroupFiltersMixin):
     _PROTOCOL = "trc20_transfers"
 
     def __init__(self, session: httpx.AsyncClient, base_url: str, tokens: list[str]):

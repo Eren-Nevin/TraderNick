@@ -391,6 +391,12 @@ def _transfers_filters(params: dict[str, Any], where: list[str], *,
                        exclude_sender_category: str | None = None,
                        exclude_receiver_category: str | None = None,
                        exclude_involving_category: str | None = None,
+                       sender_groups: list[str] | None = None,
+                       receiver_groups: list[str] | None = None,
+                       involving_groups: list[str] | None = None,
+                       exclude_sender_groups: list[str] | None = None,
+                       exclude_receiver_groups: list[str] | None = None,
+                       exclude_involving_groups: list[str] | None = None,
                        min_amount: float | None = None,
                        max_amount: float | None = None) -> None:
     """Mutate `where`/`params` with the wallet-selection filters the
@@ -494,6 +500,49 @@ def _transfers_filters(params: dict[str, Any], where: list[str], *,
             '(NOT has(sender_categories, {exclude_involving_category:String}) '
             'AND NOT has(receiver_categories, {exclude_involving_category:String}))'
         )
+
+    # ----- group ----------------------------------------------------------
+    # A "group" is a named wallet set from tradernick.wallet_groups /
+    # wallet_pins (address↔group membership), scoped to user_id 'local'.
+    # Resolved to member addresses at query time via an inline subquery — no
+    # materialized column, so edits to a group take effect immediately. The
+    # filter values are group NAMES (case-insensitive); each is list-valued
+    # (match any of several groups). Semantics mirror the address filters:
+    # involving = sender OR receiver, exclude = NOT IN.
+    def _group_members(pname: str) -> str:
+        return (
+            'SELECT lower(address) FROM tradernick.wallet_pins FINAL '
+            'WHERE user_id = {group_user_id:String} AND deleted = 0 '
+            'AND group_id IN ('
+            'SELECT group_id FROM tradernick.wallet_groups FINAL '
+            'WHERE user_id = {group_user_id:String} AND deleted = 0 '
+            'AND lower(name) IN {' + pname + ':Array(String)})'
+        )
+
+    if any(g for g in (sender_groups, receiver_groups, involving_groups,
+                       exclude_sender_groups, exclude_receiver_groups,
+                       exclude_involving_groups)):
+        params['group_user_id'] = 'local'
+    if sender_groups:
+        params['sender_groups'] = [g.lower() for g in sender_groups]
+        where.append(f'lower(sender) IN ({_group_members("sender_groups")})')
+    if receiver_groups:
+        params['receiver_groups'] = [g.lower() for g in receiver_groups]
+        where.append(f'lower(receiver) IN ({_group_members("receiver_groups")})')
+    if involving_groups:
+        params['involving_groups'] = [g.lower() for g in involving_groups]
+        sub = _group_members("involving_groups")
+        where.append(f'(lower(sender) IN ({sub}) OR lower(receiver) IN ({sub}))')
+    if exclude_sender_groups:
+        params['exclude_sender_groups'] = [g.lower() for g in exclude_sender_groups]
+        where.append(f'lower(sender) NOT IN ({_group_members("exclude_sender_groups")})')
+    if exclude_receiver_groups:
+        params['exclude_receiver_groups'] = [g.lower() for g in exclude_receiver_groups]
+        where.append(f'lower(receiver) NOT IN ({_group_members("exclude_receiver_groups")})')
+    if exclude_involving_groups:
+        params['exclude_involving_groups'] = [g.lower() for g in exclude_involving_groups]
+        sub = _group_members("exclude_involving_groups")
+        where.append(f'(lower(sender) NOT IN ({sub}) AND lower(receiver) NOT IN ({sub}))')
 
     if min_amount is not None:
         params['min_amount'] = float(min_amount)

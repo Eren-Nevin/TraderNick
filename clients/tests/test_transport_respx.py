@@ -157,3 +157,26 @@ async def test_health(client, respx_mock):
     respx_mock.get(BASE_URL + "/health").mock(
         return_value=httpx.Response(200, json={"status": "ok"}, headers=JSON_HEADERS))
     assert await client.health() is True
+
+
+# ---------------------------------------------------------------------------
+# Wallet-group filters reach the request as list-valued body keys
+# ---------------------------------------------------------------------------
+async def test_involving_groups_reaches_request(client, respx_mock):
+    route = respx_mock.post(BASE_URL + "/evm/erc20_transfers/read").mock(
+        return_value=_parquet_response(ohlcv_table(1)))
+    await (client.evm.erc20.transfers(["USDC"]).network("ethereum")
+           .involving_groups(["Whales", "CEX"])
+           .time_range("2026-07-10", "2026-07-11").as_polars())
+    body = json.loads(route.calls.last.request.content)
+    assert body["involving_groups"] == ["Whales", "CEX"]
+
+
+async def test_exclude_sender_groups_reaches_request(client, respx_mock):
+    route = respx_mock.post(BASE_URL + "/evm/native_transfers/read").mock(
+        return_value=_parquet_response(ohlcv_table(1)))
+    await (client.evm.native_transfers().network("ethereum")
+           .exclude_sender_groups(["CEX"])
+           .time_range("2026-07-10", "2026-07-11").as_polars())
+    body = json.loads(route.calls.last.request.content)
+    assert body["exclude_sender_groups"] == ["CEX"]

@@ -232,3 +232,51 @@ def test_aerodrome_namespaces(client):
     basic = client.evm.aerodrome.basic.swaps("WETH", "USDC", stable=True)
     assert conc._body["tick_spacing"] == 100
     assert basic._body["stable"] is True
+
+
+# ---------------------------------------------------------------------------
+# Wallet groups — direct (list-valued) + local filters
+# ---------------------------------------------------------------------------
+def test_involving_groups_direct(client):
+    q = client.evm.erc20.transfers(["USDC"]).involving_groups(["Whales", "CEX"])
+    assert q._body["involving_groups"] == ["Whales", "CEX"]
+
+
+def test_sender_receiver_groups_direct(client):
+    q = (client.evm.native_transfers()
+         .sender_groups(["A"]).receiver_groups(["B"])
+         .exclude_sender_groups(["C"]).exclude_receiver_groups(["D"])
+         .exclude_involving_groups(["E"]))
+    assert q._body["sender_groups"] == ["A"]
+    assert q._body["receiver_groups"] == ["B"]
+    assert q._body["exclude_sender_groups"] == ["C"]
+    assert q._body["exclude_receiver_groups"] == ["D"]
+    assert q._body["exclude_involving_groups"] == ["E"]
+
+
+def test_group_filters_on_every_transfer_type(client):
+    builders = [
+        client.evm.erc20.transfers(["USDC"]),
+        client.evm.native_transfers(),
+        client.tron.trc20.transfers(["USDT"]),
+        client.tron.native_transfers(),
+        client.btc.native_transfers(),
+    ]
+    for q in builders:
+        assert q.sender_groups(["G"])._body["sender_groups"] == ["G"]
+        assert q.involving_groups(["H"])._body["involving_groups"] == ["H"]
+
+
+def test_local_group_ops(client):
+    q = (client.scan_parquet("snap")
+         .local_receiver_groups(["Whales"])
+         .local_exclude_involving_groups(["CEX"]))
+    assert q._body["local_filters"] == [
+        {"op": "receiver_groups", "values": ["Whales"]},
+        {"op": "exclude_involving_groups", "values": ["CEX"]},
+    ]
+
+
+def test_local_groups_reject_non_list(client):
+    with pytest.raises(TypeError):
+        client.scan_parquet("snap").local_sender_groups("Whales")  # must be a list

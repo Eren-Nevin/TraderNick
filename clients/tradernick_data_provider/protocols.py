@@ -7,7 +7,7 @@ import httpx
 import pyarrow as pa
 
 from ._http import fetch_table
-from ._query import BaseQuery, CacheableQuery, EventQuery
+from ._query import BaseQuery, CacheableQuery, EventQuery, _GroupFiltersMixin
 
 if TYPE_CHECKING:
     from typing import Self
@@ -301,7 +301,7 @@ class LidoNamespace:
 # false impression the namespace was live. Re-add when ingestion lands.
 
 
-class NativeTransfersQuery(CacheableQuery):
+class NativeTransfersQuery(CacheableQuery, _GroupFiltersMixin):
     _PROTOCOL = "native_transfers"
 
     def __init__(self, session: httpx.AsyncClient, base_url: str):
@@ -474,7 +474,7 @@ class NativeNamespace:
         return resp.json()
 
 
-class TronNativeTransfersQuery(CacheableQuery):
+class TronNativeTransfersQuery(CacheableQuery, _GroupFiltersMixin):
     _PROTOCOL = "tron_native_transfers"
 
     def __init__(self, session: httpx.AsyncClient, base_url: str):
@@ -629,7 +629,7 @@ class TronNativeNamespace:
         return resp.json()
 
 
-class BitcoinNativeTransfersQuery(CacheableQuery):
+class BitcoinNativeTransfersQuery(CacheableQuery, _GroupFiltersMixin):
     _PROTOCOL = "bitcoin_native_transfers"
 
     def __init__(self, session: httpx.AsyncClient, base_url: str):

@@ -321,6 +321,59 @@ eth = await (client.evm.native_transfers()
              .as_polars())
 ```
 
+### 9.2b Wallet groups (all transfer queries)
+
+A **group** is a named set of wallet addresses (maintained on the dashboard's
+`/wallets` page). It's a filter dimension parallel to categories/labels, but
+**list-valued** — filter on one group or several. Group filtering is resolved
+server-side against the live group membership, so it always reflects the current
+groups (no snapshot/rematerialize step).
+
+Available on every transfer query — `evm.erc20`, `evm.native_transfers`,
+`tron.trc20`, `tron.native_transfers`, `btc.native_transfers`:
+
+| Method | Meaning |
+|---|---|
+| `.involving_groups([...])` | sender OR receiver in any of the named groups |
+| `.sender_groups([...])` / `.receiver_groups([...])` | sender / receiver in any group |
+| `.exclude_involving_groups([...])` | neither sender nor receiver in the groups |
+| `.exclude_sender_groups([...])` / `.exclude_receiver_groups([...])` | exclude by side |
+
+```python
+# USDC transfers touching the "Whales" or "Smart-Money" groups
+df = await (client.evm.erc20.transfers(["USDC"])
+            .network("ethereum")
+            .involving_groups(["Whales", "Smart-Money"])
+            .time_range("2026-07-10", "2026-07-11")
+            .as_polars())
+
+# native ETH flowing OUT OF a group, excluding a CEX group on the receiving side
+df = await (client.evm.native_transfers()
+            .network("ethereum")
+            .sender_groups(["Whales"])
+            .exclude_receiver_groups(["CEX"])
+            .time_range("2026-07-10", "2026-07-11")
+            .as_polars())
+```
+
+On saved **snapshots** the same filter is available as `local_*_groups`
+(list-valued) — and unlike the category/entity `local_*` filters, groups
+actually work there, because a group reduces to an address set:
+
+```python
+df = await (client.scan_parquet("usdc_flows")
+            .local_receiver_groups(["Whales"])
+            .as_polars())
+```
+
+Notes:
+- Group names are **case-insensitive**. An inclusive filter on a group with no
+  members (or a nonexistent group) returns 0 rows; an exclude filter on such a
+  group is a no-op.
+- Groups are scoped to the local user (no multi-user auth yet).
+- The special **Default** group may not match — it's synthesized in the UI and
+  may lack a stored record.
+
 ### 9.3 Aave — `client.evm.aave`
 
 Six events, each a method returning a builder. Extra chainable
@@ -547,7 +600,9 @@ variant. Each takes a **list of strings** and appends one filter step
 > **Caveat:** the label/category/entity `local_*` filters only take effect when
 > `wallet_labels` are co-mounted with the snapshot on the server. The
 > **address-based** filters (`local_involving([...])`, `local_sender([...])`,
-> `local_receiver([...])`) always work — prefer those if unsure.
+> `local_receiver([...])`) always work — prefer those if unsure. The
+> **`local_*_groups`** filters also always work (a group resolves to an address
+> set server-side).
 
 ---
 
@@ -702,6 +757,9 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **0.6.0** — **wallet-group filters** on all transfer queries: direct
+  `.involving_groups()/.sender_groups()/.receiver_groups()` + `.exclude_*`, and
+  `local_*_groups` for snapshots. List-valued, name-based, resolved server-side.
 - **0.5.1** — ships this usage guide inside the package (docs only).
 - **0.5.0** — added `binance.spot.{ohlcv, raw_trades}`; fixed
   `evm.erc20.transfers(...).min_amount(...)` (previously 404'd); first test suite.

@@ -132,3 +132,22 @@ async def test_hyperliquid_spot_transfers_empty_contract(live_client):
     df = await live_client.hyperliquid.spot_transfers().time_range(SINCE, UNTIL).as_polars()
     assert df.height == 0
     assert {"sender", "destination", "token", "amount"} <= set(df.columns)
+
+
+# --- wallet-group filter (empty-set semantics are deterministic) ----------
+async def test_group_filter_nonexistent_group_is_empty(live_client):
+    # A group with no members: an inclusive filter must match nothing.
+    df = await (live_client.evm.erc20.transfers(["USDC"]).network("ethereum")
+                .involving_groups(["__no_such_group__"])
+                .time_range(SINCE, UNTIL).as_polars())
+    assert df.height == 0
+
+
+async def test_group_exclude_nonexistent_group_is_noop(live_client):
+    # Excluding an empty group changes nothing → same rows as no group filter.
+    base = await (live_client.evm.erc20.transfers(["USDC"]).network("ethereum")
+                  .time_range(SINCE, UNTIL).as_polars())
+    excl = await (live_client.evm.erc20.transfers(["USDC"]).network("ethereum")
+                  .exclude_involving_groups(["__no_such_group__"])
+                  .time_range(SINCE, UNTIL).as_polars())
+    assert excl.height == base.height

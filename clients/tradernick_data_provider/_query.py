@@ -97,6 +97,42 @@ class _LocalFiltersMixin:
     def local_exclude_receiver_categories(self, categories: list[str]):  return self._add_local_filter("exclude_receiver_categories", categories)
     def local_exclude_receiver_entities(self, entities: list[str]):      return self._add_local_filter("exclude_receiver_entities", entities)
 
+    # groups (a named wallet set; match any of several). Unlike category/entity
+    # local filters, these DO work server-side — a group resolves to an address
+    # set, which the snapshot/scan path filters on directly.
+    def local_involving_groups(self, groups: list[str]):              return self._add_local_filter("involving_groups", groups)
+    def local_sender_groups(self, groups: list[str]):                 return self._add_local_filter("sender_groups", groups)
+    def local_receiver_groups(self, groups: list[str]):               return self._add_local_filter("receiver_groups", groups)
+    def local_exclude_involving_groups(self, groups: list[str]):      return self._add_local_filter("exclude_involving_groups", groups)
+    def local_exclude_sender_groups(self, groups: list[str]):         return self._add_local_filter("exclude_sender_groups", groups)
+    def local_exclude_receiver_groups(self, groups: list[str]):       return self._add_local_filter("exclude_receiver_groups", groups)
+
+
+class _GroupFiltersMixin:
+    """Direct, list-valued wallet-group filters for transfer queries
+    (sender / receiver + exclude). `involving_groups` lives on BaseQuery so it's
+    shared with every query. A group is a named wallet set resolved server-side;
+    pass one or several group names. Mirrors the ``*_category`` direct filters
+    but list-valued."""
+
+    _body: dict  # set by the concrete subclass
+
+    def sender_groups(self, groups: list[str]) -> Self:
+        self._body["sender_groups"] = list(groups)
+        return self
+
+    def receiver_groups(self, groups: list[str]) -> Self:
+        self._body["receiver_groups"] = list(groups)
+        return self
+
+    def exclude_sender_groups(self, groups: list[str]) -> Self:
+        self._body["exclude_sender_groups"] = list(groups)
+        return self
+
+    def exclude_receiver_groups(self, groups: list[str]) -> Self:
+        self._body["exclude_receiver_groups"] = list(groups)
+        return self
+
 
 class BaseQuery(_LocalFiltersMixin):
     def __init__(self, session: httpx.AsyncClient, base_url: str, body: dict):
@@ -167,6 +203,16 @@ class BaseQuery(_LocalFiltersMixin):
 
     def exclude_involving_category(self, category: str) -> Self:
         self._body["exclude_involving_category"] = category
+        return self
+
+    # groups (sender OR receiver in any of the named wallet sets). List-valued —
+    # a single group or several. Resolved to member addresses server-side.
+    def involving_groups(self, groups: list[str]) -> Self:
+        self._body["involving_groups"] = list(groups)
+        return self
+
+    def exclude_involving_groups(self, groups: list[str]) -> Self:
+        self._body["exclude_involving_groups"] = list(groups)
         return self
 
     def wallet_namespace(self, ns: str) -> Self:

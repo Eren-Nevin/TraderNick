@@ -575,6 +575,8 @@ def _transfer_filter_kwargs(body: dict) -> dict:
         'exclude_sender_label', 'exclude_receiver_label', 'exclude_involving_label',
         'sender_category', 'receiver_category', 'involving_category',
         'exclude_sender_category', 'exclude_receiver_category', 'exclude_involving_category',
+        'sender_groups', 'receiver_groups', 'involving_groups',
+        'exclude_sender_groups', 'exclude_receiver_groups', 'exclude_involving_groups',
         'min_amount', 'max_amount',
     )
     return {k: body.get(k) for k in keys}

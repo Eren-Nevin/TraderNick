@@ -268,6 +268,7 @@ def register(app: Sanic) -> None:
 
         local_filters = body.get('local_filters') or []
         if local_filters:
+            local_filters = await _expand_group_filters(local_filters)
             combined = _apply_local_filters_lazy(combined.lazy(), local_filters).collect()
 
         if 'time' in combined.columns:
@@ -318,7 +319,7 @@ def register(app: Sanic) -> None:
             if until:
                 lf = lf.filter(pl.col('time') <  pl.lit(until).str.to_datetime())
 
-        lf = _apply_local_filters_lazy(lf, body.get('local_filters') or [])
+        lf = _apply_local_filters_lazy(lf, await _expand_group_filters(body.get('local_filters') or []))
 
         save_key = body.get('save_key')
         if save_key:
@@ -335,6 +336,65 @@ def register(app: Sanic) -> None:
         return response.raw(
             buf.getvalue(), content_type='application/octet-stream',
         )
+
+
+# Group local_filters ops → the address op they reduce to once resolved. A
+# "group" is a named wallet set (tradernick.wallet_groups / wallet_pins). The
+# snapshot parquet has no group column, so we resolve group NAMES → member
+# addresses via ClickHouse, then apply the plain address filter in polars. This
+# is why group local_filters actually work (unlike category/entity ones, which
+# stay no-ops — a group is just an address set).
+_GROUP_OP_TO_ADDR = {
+    'sender_groups': 'sender',
+    'receiver_groups': 'receiver',
+    'involving_groups': 'involving',
+    'exclude_sender_groups': 'exclude_sender',
+    'exclude_receiver_groups': 'exclude_receiver',
+    'exclude_involving_groups': 'exclude_involving',
+}
+_INCLUSIVE_GROUP_OPS = {'sender_groups', 'receiver_groups', 'involving_groups'}
+# A value no real address can equal — used so an inclusive filter on a group
+# with zero members matches nothing (is_in([sentinel])), instead of being
+# skipped (which would match everything).
+_EMPTY_GROUP_SENTINEL = '\x00__empty_group__'
+
+
+async def _resolve_group_addresses(names: list[str], user_id: str = 'local') -> list[str]:
+    """Resolve group NAMES → the lowercased member addresses, from
+    tradernick.wallet_pins / wallet_groups (ReplacingMergeTree, FINAL +
+    deleted=0), scoped to `user_id`. Case-insensitive on the group name."""
+    lowered = [str(n).lower() for n in names if n]
+    if not lowered:
+        return []
+    df = await query_polars(
+        'SELECT DISTINCT lower(address) AS address '
+        'FROM tradernick.wallet_pins FINAL '
+        'WHERE user_id = {u:String} AND deleted = 0 '
+        'AND group_id IN ('
+        'SELECT group_id FROM tradernick.wallet_groups FINAL '
+        'WHERE user_id = {u:String} AND deleted = 0 AND lower(name) IN {names:Array(String)})',
+        {'u': user_id, 'names': lowered},
+    )
+    if df.is_empty():
+        return []
+    return df['address'].to_list()
+
+
+async def _expand_group_filters(steps: list[dict]) -> list[dict]:
+    """Rewrite any `*_groups` local_filter step into its address-op equivalent
+    by resolving the group names to member addresses. Non-group steps pass
+    through unchanged."""
+    out: list[dict] = []
+    for step in steps:
+        op = step.get('op')
+        if op in _GROUP_OP_TO_ADDR:
+            addrs = await _resolve_group_addresses(step.get('values') or [])
+            if not addrs and op in _INCLUSIVE_GROUP_OPS:
+                addrs = [_EMPTY_GROUP_SENTINEL]  # inclusive + empty → match nothing
+            out.append({'op': _GROUP_OP_TO_ADDR[op], 'values': addrs})
+        else:
+            out.append(step)
+    return out
 
 
 def _apply_local_filters_lazy(lf: pl.LazyFrame, steps: list[dict]) -> pl.LazyFrame:

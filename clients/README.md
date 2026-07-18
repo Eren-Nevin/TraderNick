@@ -50,6 +50,15 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**0.6.0 — Wallet-group filters.** `group` is now a filter dimension parallel to
+categories/labels, on every transfer query — **list-valued** (one group or
+several), resolved server-side against live group membership:
+- Direct: `.involving_groups([...])`, `.sender_groups([...])`,
+  `.receiver_groups([...])` + `.exclude_*` variants (transfer reads).
+- Local: `.local_*_groups([...])` for snapshots/`scan_parquet` — and unlike the
+  category/entity `local_*` filters, groups actually filter (a group reduces to
+  an address set). See [`USAGE.md`](USAGE.md) "Wallet groups".
+
 **0.5.0 — Binance spot markets + erc20 `min_amount` fix + first test suite.**
 - **`client.binance.spot.{ohlcv, raw_trades}`** — the Binance *spot* market, a
   fully separate dataset from perp/futures. Same shapes as the perp
@@ -105,6 +114,9 @@ What works:
   l2_deposit, l2_withdrawal_request}`
 - `evm.erc20.transfers`, `evm.native_transfers` with full filter set
   (sender / receiver / involving / exclude_* / min_amount / max_amount)
+- wallet-group filters on all transfer queries: `involving_groups` /
+  `sender_groups` / `receiver_groups` + `exclude_*` (list-valued) and
+  `local_*_groups` for snapshots
 - `tron.{native, trc20}.transfers`, `btc.native.transfers`
 - `hyperliquid.{ohlcv, trades, fills, funding, transfers, vaults,
   trade_history, position_history}`
