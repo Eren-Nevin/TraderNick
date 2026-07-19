@@ -148,7 +148,7 @@ What works:
   `positions` (requires `.window()`, a 15m multiple) returns downsampled position
   snapshots, or `.aggregate()` for the per-`(token, window)` open-position book
   from snapshots (side/net_size/counts/sizes/avg_entry, optional
-  `.pos_recency_hrs()` staleness filter), or `.aggregate_change()` for the
+  `.aggregate(pos_recency_hrs=n)` staleness filter), or `.aggregate_change()` for the
   fills-based action-flow frame (opened/increased/decreased/closed long/short,
   flips, net_pos_change/flip/flow)
 - `client.wallets.{list, get, upsert, delete, addresses}` — `addresses(...)`

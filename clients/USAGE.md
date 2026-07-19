@@ -230,7 +230,6 @@ Chainables (in addition to `.time_range()`):
 | `.window(size)` | bucket size — **only on `ohlcv()`, `positions()`, `realized_performance()`**. e.g. `.window("1h")`. `realized_performance`: min 15m. `positions`: **required**, a 15m multiple. |
 | `.aggregate(flag=True)` | per-**(token, window)** totals (drops `wallet`). **`realized_performance()`**: SUMs PnL/volume metrics, **requires** `.wallets()`/`.wallet_groups()`. **`positions()`**: the open-position **book** from snapshots (side/net_size/counts/sizes/avg_entry), wallets optional. |
 | `.aggregate_change(flag=True)` | **`positions()` only** — per-**(token, window)** position-**action** `$` flow from fills (opened/increased/decreased/closed long/short, flips, net_pos_change/flip/flow). Wallets optional. |
-| `.pos_recency_hrs(n)` | **`positions().aggregate()` only** — drop **stale** positions: keep a position only if the wallet traded that token within `n` hours of the snapshot. |
 | `.per_token(flag=True)` | per-token breakdown |
 | `.skip_hip3(flag=True)` | exclude HIP-3 markets |
 | `.market_type(t)` | e.g. `"perp"` / `"spot"` |
@@ -314,8 +313,8 @@ fee, exact_avg_price`.
 
 **2. Snapshot aggregate** (`.aggregate()`) — per-`(token, window)` **open-position
 book** built from snapshots (mirrors the Group Snapshot view). `size` is `$`
-notional. Optional `.pos_recency_hrs(n)` drops **stale** positions (keeps a
-position only if the wallet had a fill in that token within `n` hours of the
+notional. Pass `.aggregate(pos_recency_hrs=n)` to drop **stale** positions (keeps
+a position only if the wallet had a fill in that token within `n` hours of the
 snapshot). Columns:
 
   | Column | Meaning |
@@ -348,8 +347,8 @@ snaps = await hl.positions().tokens("BTC").wallets("0xabc...") \
     .window("1h").time_range("2026-07-18", "2026-07-19").as_polars()
 
 # 2. hourly open-position book for BTC across all wallets, non-stale (24h)
-book = await hl.positions().tokens("BTC").window("1h").aggregate() \
-    .pos_recency_hrs(24).time_range("2026-07-18", "2026-07-19").as_polars()
+book = await hl.positions().tokens("BTC").window("1h") \
+    .aggregate(pos_recency_hrs=24).time_range("2026-07-18", "2026-07-19").as_polars()
 # -> time, token, side, net_size, total_count, longs/shorts_size+count, avg_entry
 
 # 3. a wallet GROUP's hourly position-action $ flow for BTC

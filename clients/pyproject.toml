@@ -1,6 +1,6 @@
 [project]
 name = "tradernick-data-provider"
-version = "0.13.0"
+version = "0.13.1"
 description = "Python client for the TraderNick data_provider service. Drop-in compatible with horatio-data-provider (same DataProviderClient API; only the import path changes)."
 readme = "README.md"
 requires-python = ">=3.10"

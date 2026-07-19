@@ -282,15 +282,22 @@ class _HLPositionsQuery(_HLPerfQuery):
     ``.aggregate()`` and ``.aggregate_change()`` are mutually exclusive; if both
     are set, ``aggregate_change`` wins (server-side)."""
 
-    def aggregate(self: _T, enabled: bool = True) -> _T:
+    def aggregate(self: _T, enabled: bool = True, *,
+                  pos_recency_hrs: int | None = None) -> _T:
         """**Snapshot** aggregate: per-(token, window) OPEN-position book from
         position snapshots. Returns: ``side`` (from sign of ``net_size``),
         ``net_size`` (longs_size − shorts_size, ``$``), ``total_count``,
         ``longs_size``/``longs_count``, ``shorts_size``/``shorts_count``, and
         ``avg_entry`` (``$``-size-weighted). ``$`` = notional. ``.wallets()`` /
         ``.wallet_groups()`` optional (only ``.tokens()`` → all wallets holding
-        them). Pair with :meth:`pos_recency_hrs` to drop stale positions."""
+        them).
+
+        ``pos_recency_hrs`` (optional int): drop STALE positions — keep a position
+        only if the wallet had a fill in that token within this many hours of the
+        snapshot. Omit → every open position regardless of age."""
         self._body["aggregate"] = enabled
+        if pos_recency_hrs is not None:
+            self._body["pos_recency_hrs"] = pos_recency_hrs
         return self
 
     def aggregate_change(self: _T, enabled: bool = True) -> _T:
@@ -303,13 +310,6 @@ class _HLPositionsQuery(_HLPerfQuery):
         start. ``.wallets()`` / ``.wallet_groups()`` optional (only ``.tokens()`` →
         ALL wallets for the selected token(s))."""
         self._body["aggregate_change"] = enabled
-        return self
-
-    def pos_recency_hrs(self: _T, hours: int) -> _T:
-        """**`.aggregate()` (snapshot) only** — drop STALE positions: keep a position
-        only if the wallet had a fill in that token within ``hours`` of the snapshot.
-        Omit to include every open position regardless of age."""
-        self._body["pos_recency_hrs"] = hours
         return self
 
 
@@ -370,7 +370,7 @@ class HyperliquidNamespace:
           funding, fee, exact_avg_price.
         - **Snapshot aggregate** (``.aggregate()``): per-(token, window) OPEN-position
           book from snapshots — side/net_size/counts/sizes/avg_entry (see
-          :meth:`_HLPositionsQuery.aggregate`; optional ``.pos_recency_hrs()``).
+          :meth:`_HLPositionsQuery.aggregate`; optional ``pos_recency_hrs=`` arg).
         - **Change aggregate** (``.aggregate_change()``): per-(token, window)
           position-action ``$`` flow from fills (see
           :meth:`_HLPositionsQuery.aggregate_change`).

@@ -163,11 +163,13 @@ def test_positions_aggregate_and_window(client):
     hl = client.hyperliquid
     # positions is its own distinct builder type
     assert type(hl.positions()).__name__ != type(hl.realized_performance()).__name__
-    # snapshot aggregate → aggregate flag
-    snap = hl.positions().tokens("BTC").window("1h").aggregate().pos_recency_hrs(24)
+    # snapshot aggregate → aggregate flag; pos_recency_hrs is an arg to .aggregate()
+    snap = hl.positions().tokens("BTC").window("1h").aggregate(pos_recency_hrs=24)
     assert snap._body["aggregate"] is True
     assert snap._body["pos_recency_hrs"] == 24
     assert snap._body["window"] == "1h"
+    # omitting it → no pos_recency_hrs in the body
+    assert "pos_recency_hrs" not in hl.positions().window("1h").aggregate()._body
     # change aggregate → separate aggregate_change flag
     chg = hl.positions().wallet_groups("Whales").window("1h").aggregate_change()
     assert chg._body["aggregate_change"] is True
