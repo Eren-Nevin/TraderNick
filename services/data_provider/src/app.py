@@ -341,6 +341,33 @@ _EMPTY_HL_POSITIONS_SNAP_AGG = pl.DataFrame(schema={
     'avg_entry': pl.Float64,
 })
 
+# Dust-rounding: aggregated $ metrics can carry tiny float-cancellation residuals
+# (e.g. a net_flow of -1e-9 when the wallet set is balanced). Snap |x| < $0.001 to
+# 0 so callers don't see meaningless dust. Applied ONLY to summed $ metric columns
+# — never prices / funding rates / coin amounts / counts, which can be legitimately
+# smaller than 0.001.
+_DUST_EPS = 1e-3
+_POSITIONS_CHANGE_AGG_DOLLAR_COLS = [
+    'opened_long', 'opened_short', 'increased_long', 'decreased_long',
+    'increased_short', 'decreased_short', 'closed_long', 'closed_short',
+    'flip_ls', 'flip_sl', 'net_pos_change', 'net_flip', 'net_flow',
+]
+_POSITIONS_SNAP_AGG_DOLLAR_COLS = ['net_size', 'longs_size', 'shorts_size']
+_REALIZED_PERF_DOLLAR_COLS = [
+    'pnl', 'fees', 'net_pnl', 'funding', 'volume', 'buy_volume', 'sell_volume',
+]
+
+
+def _snap_dust(df: pl.DataFrame, cols) -> pl.DataFrame:
+    """Round each of `cols` (if present) to 0 where |value| < $0.001."""
+    present = [c for c in cols if c in df.columns]
+    if not present:
+        return df
+    return df.with_columns([
+        pl.when(pl.col(c).abs() < _DUST_EPS).then(pl.lit(0.0)).otherwise(pl.col(c)).alias(c)
+        for c in present
+    ])
+
 
 def _cast_time_ms_utc(df: pl.DataFrame) -> pl.DataFrame:
     """Force `time` column to Datetime('ms', UTC) so clients see the
@@ -842,6 +869,7 @@ async def hyperliquid_realized_performance(request: Request):
     df = await query_polars(sql, params)
     if df.is_empty():
         df = _EMPTY_REALIZED_PERF_AGG if aggregate else _EMPTY_REALIZED_PERF
+    df = _snap_dust(df, _REALIZED_PERF_DOLLAR_COLS)
     return await _maybe_save_or_return(df, body, 'hyperliquid_realized_performance.parquet')
 
 
@@ -915,6 +943,10 @@ async def hyperliquid_positions(request: Request):
             df = _EMPTY_HL_POSITIONS_SNAP_AGG
         else:
             df = _EMPTY_HL_POSITIONS
+    if aggregate_change:
+        df = _snap_dust(df, _POSITIONS_CHANGE_AGG_DOLLAR_COLS)
+    elif aggregate:
+        df = _snap_dust(df, _POSITIONS_SNAP_AGG_DOLLAR_COLS)
     return await _maybe_save_or_return(df, body, 'hyperliquid_positions.parquet')
 
 

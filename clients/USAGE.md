@@ -341,6 +341,11 @@ position-**action** flow in **`$` notional** (`price × size`), computed from
   | `net_flip` | `flip_sl − flip_ls` (net flips into long) |
   | `net_flow` | full directional net: `(open/inc long + close/dec short + flip S→L) − (open/inc short + close/dec long + flip L→S)` |
 
+> **Dust rounding:** aggregated `$` metrics (the `positions` aggregates and
+> `realized_performance` metrics) are snapped to `0` when `|value| < $0.001`, so a
+> balanced wallet set shows `net_flow = 0` rather than float-cancellation dust like
+> `-1e-9`. Prices, funding rates and coin amounts are never snapped.
+
 ```python
 # 1. position snapshots resampled to hourly (last-in-hour, time = hour start)
 snaps = await hl.positions().tokens("BTC").wallets("0xabc...") \
