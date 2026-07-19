@@ -50,6 +50,12 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**0.11.0 — Hyperliquid wallet groups + aggregate.** `.wallet_groups(...)` on every
+wallet-aware HL endpoint (group names → member addresses, unions with `.wallets()`);
+`ohlcv()` no longer exposes `.wallets()` (market-wide; was a no-op);
+`realized_performance().aggregate()` sums across the selected wallets → one row per
+`(token, window)`.
+
 **0.10.0 — `realized_performance` (was `trade_history`).** Renamed; now exposes the
 `funding` column and an optional `.window("15m"+)` that returns **per-window
 realized** PnL/fees/funding/volume (from fills+funding, window-start aligned)

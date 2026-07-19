@@ -313,6 +313,8 @@ _EMPTY_REALIZED_PERF = pl.DataFrame(schema={
     'volume': pl.Float64, 'buy_volume': pl.Float64, 'sell_volume': pl.Float64,
     'trade_count': pl.Int64,
 })
+# aggregate mode drops the per-wallet column (rows are per token+window).
+_EMPTY_REALIZED_PERF_AGG = _EMPTY_REALIZED_PERF.drop('wallet')
 _EMPTY_HL_POSITION_HISTORY = pl.DataFrame(schema={
     'time': pl.Datetime('us', 'UTC'), 'wallet': pl.Utf8, 'token': pl.Utf8,
     'side': pl.Utf8, 'amount': pl.Float64, 'avg_entry': pl.Float64,
@@ -674,6 +676,7 @@ def _hl_kwargs(body: dict, *, allow_tokens: bool = True,
         out['tokens'] = body.get('tokens') or None
     if allow_wallets:
         out['wallets'] = body.get('wallets') or None
+        out['wallet_groups'] = body.get('wallet_groups') or None
     return out
 
 
@@ -753,6 +756,7 @@ async def hyperliquid_transfers(request: Request):
         return response.json({'error': str(e)}, status=400)
     sql, params = sql_b.hl_transfers(
         body['since'], body['until'], wallets=body.get('wallets') or None,
+        wallet_groups=body.get('wallet_groups') or None,
     )
     df = await query_polars(sql, params)
     if df.is_empty():
@@ -769,6 +773,7 @@ async def hyperliquid_vaults(request: Request):
         return response.json({'error': str(e)}, status=400)
     sql, params = sql_b.hl_vaults(
         body['since'], body['until'], wallets=body.get('wallets') or None,
+        wallet_groups=body.get('wallet_groups') or None,
     )
     df = await query_polars(sql, params)
     if df.is_empty():
@@ -783,9 +788,15 @@ async def hyperliquid_realized_performance(request: Request):
         _require(body, 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    if not (body.get('tokens') or body.get('wallets')):
+    if not (body.get('tokens') or body.get('wallets') or body.get('wallet_groups')):
         return response.json(
-            {'error': 'realized_performance requires `tokens` or `wallets`'}, status=400,
+            {'error': 'realized_performance requires `tokens`, `wallets`, or `wallet_groups`'},
+            status=400,
+        )
+    aggregate = bool(body.get('aggregate'))
+    if aggregate and not (body.get('wallets') or body.get('wallet_groups')):
+        return response.json(
+            {'error': 'aggregate requires `wallets` or `wallet_groups`'}, status=400,
         )
     window = body.get('window')
     try:
@@ -795,6 +806,8 @@ async def hyperliquid_realized_performance(request: Request):
                 body['since'], body['until'], window,
                 tokens=body.get('tokens') or None,
                 wallets=body.get('wallets') or None,
+                wallet_groups=body.get('wallet_groups') or None,
+                aggregate=aggregate,
             )
         else:
             # Snapshot (absolute-cumulative daily) mode.
@@ -802,13 +815,15 @@ async def hyperliquid_realized_performance(request: Request):
                 body['since'], body['until'],
                 tokens=body.get('tokens') or None,
                 wallets=body.get('wallets') or None,
+                wallet_groups=body.get('wallet_groups') or None,
+                aggregate=aggregate,
                 limit=body.get('limit'),
             )
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
     df = await query_polars(sql, params)
     if df.is_empty():
-        df = _EMPTY_REALIZED_PERF
+        df = _EMPTY_REALIZED_PERF_AGG if aggregate else _EMPTY_REALIZED_PERF
     return await _maybe_save_or_return(df, body, 'hyperliquid_realized_performance.parquet')
 
 
@@ -819,14 +834,16 @@ async def hyperliquid_position_history(request: Request):
         _require(body, 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    if not (body.get('tokens') or body.get('wallets')):
+    if not (body.get('tokens') or body.get('wallets') or body.get('wallet_groups')):
         return response.json(
-            {'error': 'position_history requires `tokens` or `wallets`'}, status=400,
+            {'error': 'position_history requires `tokens`, `wallets`, or `wallet_groups`'},
+            status=400,
         )
     sql, params = sql_b.hl_position_history(
         body['since'], body['until'],
         tokens=body.get('tokens') or None,
         wallets=body.get('wallets') or None,
+        wallet_groups=body.get('wallet_groups') or None,
         window=body.get('window'),
         limit=body.get('limit'),
     )

@@ -135,9 +135,35 @@ def test_hyperliquid_transfers_vaults_not_token_scoped(client):
     assert hasattr(client.hyperliquid.fills(), "tokens")
 
 
+def test_hyperliquid_wallet_scoping_and_groups(client):
+    hl = client.hyperliquid
+    # ohlcv is market-wide → NO .wallets()/.wallet_groups()
+    assert not hasattr(hl.ohlcv(), "wallets")
+    assert not hasattr(hl.ohlcv(), "wallet_groups")
+    # every wallet-aware endpoint has BOTH .wallets() and .wallet_groups()
+    for name in ("fills", "trades", "funding", "transfers", "vaults",
+                 "realized_performance", "position_history"):
+        q = getattr(hl, name)()
+        assert hasattr(q, "wallets") and hasattr(q, "wallet_groups"), name
+    # .wallet_groups() accepts str or list and combines with .wallets()
+    q = hl.fills().wallets("0x1").wallet_groups("Whales")
+    assert q._body["wallets"] == ["0x1"] and q._body["wallet_groups"] == ["Whales"]
+    assert hl.realized_performance().wallet_groups(["A", "B"])._body["wallet_groups"] == ["A", "B"]
+
+
+def test_realized_performance_aggregate(client):
+    hl = client.hyperliquid
+    # .aggregate() only on realized_performance; sets the flag
+    rp = hl.realized_performance().wallet_groups("Whales").aggregate()
+    assert rp._body["aggregate"] is True
+    assert hl.realized_performance().wallets("0x1").aggregate(False)._body["aggregate"] is False
+    # position_history does not expose the realized-perf aggregate flag semantics
+    assert type(hl.position_history()).__name__ != type(hl.realized_performance()).__name__
+
+
 def test_hyperliquid_chainables(client):
-    # .window() lives on the windowed endpoints (ohlcv/position_history)
-    q = (client.hyperliquid.ohlcv()
+    # realized_performance has tokens + wallets + window
+    q = (client.hyperliquid.realized_performance()
          .tokens("BTC", "ETH").wallets("0xabc").window("1h")
          .per_token().market_type("perp").limit(50))
     assert q._body["tokens"] == ["BTC", "ETH"]

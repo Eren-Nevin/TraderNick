@@ -693,15 +693,42 @@ def btc_native_transfers(
 # row-level events; the bucketed MV-backed endpoints stay at ms.
 # ===========================================================================
 
+def _wallet_group_members_sql(pname: str) -> str:
+    """Subquery → lowercased member addresses of the named wallet groups
+    (tradernick.wallet_pins / wallet_groups, user_id 'local'). `pname` is the
+    Array(String) param holding the lowercased group names. Shares the resolver
+    shape with the transfers group filter."""
+    return (
+        'SELECT lower(address) FROM tradernick.wallet_pins FINAL '
+        'WHERE user_id = {group_user_id:String} AND deleted = 0 '
+        'AND group_id IN ('
+        'SELECT group_id FROM tradernick.wallet_groups FINAL '
+        'WHERE user_id = {group_user_id:String} AND deleted = 0 '
+        'AND lower(name) IN {' + pname + ':Array(String)})'
+    )
+
+
 def _hl_token_wallet_filters(params: dict[str, Any], where: list[str], *,
                              tokens: list[str] | None = None,
-                             wallets: list[str] | None = None) -> None:
+                             wallets: list[str] | None = None,
+                             wallet_groups: list[str] | None = None,
+                             wallet_col: str = 'wallet') -> None:
+    """Token + wallet filters for HL reads. `wallets` matches addresses; the new
+    `wallet_groups` matches members of the named groups (resolved via subquery).
+    When both are given the wallet clause is their UNION."""
     if tokens:
         params['tokens'] = list(tokens)
         where.append('token IN {tokens:Array(String)}')
+    clauses: list[str] = []
     if wallets:
         params['wallets'] = [w.lower() for w in wallets]
-        where.append('lower(wallet) IN {wallets:Array(String)}')
+        clauses.append(f'lower({wallet_col}) IN {{wallets:Array(String)}}')
+    if wallet_groups:
+        params['wallet_groups'] = [g.lower() for g in wallet_groups]
+        params['group_user_id'] = 'local'
+        clauses.append(f'lower({wallet_col}) IN ({_wallet_group_members_sql("wallet_groups")})')
+    if clauses:
+        where.append('(' + ' OR '.join(clauses) + ')')
 
 
 def hl_ohlcv(since: str, until: str, *, tokens: list[str] | None = None,
@@ -762,9 +789,11 @@ def hl_ohlcv(since: str, until: str, *, tokens: list[str] | None = None,
 
 
 def hl_trades(since: str, until: str, *, tokens: list[str] | None = None,
-              wallets: list[str] | None = None) -> tuple[str, dict[str, Any]]:
+              wallets: list[str] | None = None,
+              wallet_groups: list[str] | None = None) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(us,UTC), token, price, amount, buy, id,
-    buyer_wallet, seller_wallet, block_number)."""
+    buyer_wallet, seller_wallet, block_number). A trade matches if the wallet is
+    on EITHER side (buyer OR seller); `wallet_groups` matches group members."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
         'time >= toDateTime64({since:String}, 3)',
@@ -773,10 +802,20 @@ def hl_trades(since: str, until: str, *, tokens: list[str] | None = None,
     if tokens:
         params['tokens'] = list(tokens)
         where.append('token IN {tokens:Array(String)}')
+    # Match on either side (buyer/seller), by explicit wallets and/or group members.
+    wallet_clauses: list[str] = []
     if wallets:
         params['wallets'] = [w.lower() for w in wallets]
-        where.append('(lower(buyer_wallet) IN {wallets:Array(String)} '
-                     'OR lower(seller_wallet) IN {wallets:Array(String)})')
+        wallet_clauses.append('lower(buyer_wallet) IN {wallets:Array(String)} '
+                              'OR lower(seller_wallet) IN {wallets:Array(String)}')
+    if wallet_groups:
+        params['wallet_groups'] = [g.lower() for g in wallet_groups]
+        params['group_user_id'] = 'local'
+        sub = _wallet_group_members_sql('wallet_groups')
+        wallet_clauses.append(f'lower(buyer_wallet) IN ({sub}) '
+                              f'OR lower(seller_wallet) IN ({sub})')
+    if wallet_clauses:
+        where.append('(' + ' OR '.join(wallet_clauses) + ')')
     sql = f"""
         SELECT {_time_us()}, token, price, amount, buy, id,
                buyer_wallet, seller_wallet, block_number
@@ -796,6 +835,7 @@ HL_FILLS_EXTRA_COLS = ('fee_token', 'builder_fee', 'crossed', 'tid', 'oid', 'has
 
 def hl_fills(since: str, until: str, *, tokens: list[str] | None = None,
              wallets: list[str] | None = None,
+             wallet_groups: list[str] | None = None,
              extra_cols: bool = False) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (block_number, block_time, time(us,UTC), wallet, token,
     price, size, side, dir, start_position, closed_pnl, fee[, fee_token,
@@ -808,7 +848,7 @@ def hl_fills(since: str, until: str, *, tokens: list[str] | None = None,
         'time >= toDateTime64({since:String}, 3)',
         'time <  toDateTime64({until:String}, 3)',
     ]
-    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets)
+    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
     extra = (
         ', fee_token, builder_fee, toBool(crossed) AS crossed, tid, oid, hash'
         if extra_cols else ''
@@ -827,7 +867,8 @@ def hl_fills(since: str, until: str, *, tokens: list[str] | None = None,
 
 
 def hl_funding(since: str, until: str, *, tokens: list[str] | None = None,
-               wallets: list[str] | None = None) -> tuple[str, dict[str, Any]]:
+               wallets: list[str] | None = None,
+               wallet_groups: list[str] | None = None) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(us,UTC), token, wallet, rate, amount,
     position_amount, block_number)."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
@@ -835,7 +876,7 @@ def hl_funding(since: str, until: str, *, tokens: list[str] | None = None,
         'time >= toDateTime64({since:String}, 3)',
         'time <  toDateTime64({until:String}, 3)',
     ]
-    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets)
+    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
     sql = f"""
         SELECT {_time_us()}, token, wallet, rate, amount,
                position_amount, block_number
@@ -847,7 +888,8 @@ def hl_funding(since: str, until: str, *, tokens: list[str] | None = None,
 
 
 def hl_transfers(since: str, until: str, *,
-                 wallets: list[str] | None = None) -> tuple[str, dict[str, Any]]:
+                 wallets: list[str] | None = None,
+                 wallet_groups: list[str] | None = None) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(us,UTC), wallet, direction, amount, is_finalized,
     block_number)."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
@@ -855,9 +897,7 @@ def hl_transfers(since: str, until: str, *,
         'time >= toDateTime64({since:String}, 3)',
         'time <  toDateTime64({until:String}, 3)',
     ]
-    if wallets:
-        params['wallets'] = [w.lower() for w in wallets]
-        where.append('lower(wallet) IN {wallets:Array(String)}')
+    _hl_token_wallet_filters(params, where, wallets=wallets, wallet_groups=wallet_groups)
     sql = f"""
         SELECT {_time_us()}, wallet, direction, amount,
                toBool(is_finalized) AS is_finalized, block_number
@@ -869,7 +909,8 @@ def hl_transfers(since: str, until: str, *,
 
 
 def hl_vaults(since: str, until: str, *,
-              wallets: list[str] | None = None) -> tuple[str, dict[str, Any]]:
+              wallets: list[str] | None = None,
+              wallet_groups: list[str] | None = None) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(us,UTC), vault, wallet, action, amount,
     commission, fee, block_number)."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
@@ -877,9 +918,7 @@ def hl_vaults(since: str, until: str, *,
         'time >= toDateTime64({since:String}, 3)',
         'time <  toDateTime64({until:String}, 3)',
     ]
-    if wallets:
-        params['wallets'] = [w.lower() for w in wallets]
-        where.append('lower(wallet) IN {wallets:Array(String)}')
+    _hl_token_wallet_filters(params, where, wallets=wallets, wallet_groups=wallet_groups)
     sql = f"""
         SELECT {_time_us()}, vault, wallet, action, amount,
                commission, fee, block_number
@@ -898,6 +937,8 @@ REALIZED_PERF_COLS = ('time', 'wallet', 'token', 'pnl', 'fees', 'net_pnl',
 def hl_realized_performance(since: str, until: str, *,
                             tokens: list[str] | None = None,
                             wallets: list[str] | None = None,
+                            wallet_groups: list[str] | None = None,
+                            aggregate: bool = False,
                             limit: int | None = None) -> tuple[str, dict[str, Any]]:
     """Snapshot mode: raw DAILY **absolute-cumulative** rows from hl_trade_history
     (running totals from the wallet's inception). Columns: REALIZED_PERF_COLS.
@@ -908,19 +949,44 @@ def hl_realized_performance(since: str, until: str, *,
     `time = T` mean "cumulative of everything strictly before T", so a row at
     `D 00:00` excludes day D and `snapshot@(D+1) − snapshot@(D)` = day D's
     realized activity (consistent with windowed mode). The since/until filter
-    applies to the shifted time."""
+    applies to the shifted time.
+
+    `aggregate=True` SUMs every metric across the selected wallets, grouped by
+    (token, day) — one row per (token, day) instead of per (wallet, token, day).
+    The `wallet` column is dropped."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
         '(time + INTERVAL 1 DAY) >= toDateTime64({since:String}, 3)',
         '(time + INTERVAL 1 DAY) <  toDateTime64({until:String}, 3)',
     ]
-    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets)
+    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
     limit_clause = ''
     if limit is not None:
         params['limit'] = int(limit)
         limit_clause = 'LIMIT {limit:UInt32}'
+    time_expr = "toDateTime64(time + INTERVAL 1 DAY, 6, 'UTC')"
+    if aggregate:
+        # Inner subquery computes the shifted `time` (+ FINAL dedup); the outer
+        # sums per (token, day). Grouping by the projected alias avoids the
+        # "column not under aggregate" ambiguity of grouping by the raw expr.
+        return (f"""
+            SELECT time, token,
+                   sum(pnl) AS pnl, sum(fees) AS fees, sum(net_pnl) AS net_pnl,
+                   sum(funding) AS funding, sum(volume) AS volume,
+                   sum(buy_volume) AS buy_volume, sum(sell_volume) AS sell_volume,
+                   toInt64(sum(trade_count)) AS trade_count
+            FROM (
+                SELECT {time_expr} AS time, token, pnl, fees, net_pnl, funding,
+                       volume, buy_volume, sell_volume, trade_count
+                FROM tradernick.hl_trade_history FINAL
+                WHERE {' AND '.join(where)}
+            )
+            GROUP BY time, token
+            ORDER BY time, token
+            {limit_clause}
+        """, params)
     sql = f"""
-        SELECT toDateTime64(time + INTERVAL 1 DAY, 6, 'UTC') AS time,
+        SELECT {time_expr} AS time,
                wallet, token, pnl, fees, net_pnl, funding,
                volume, buy_volume, sell_volume,
                toInt64(trade_count) AS trade_count
@@ -934,12 +1000,17 @@ def hl_realized_performance(since: str, until: str, *,
 
 def hl_realized_performance_windowed(since: str, until: str, window: str, *,
                                      tokens: list[str] | None = None,
-                                     wallets: list[str] | None = None) -> tuple[str, dict[str, Any]]:
+                                     wallets: list[str] | None = None,
+                                     wallet_groups: list[str] | None = None,
+                                     aggregate: bool = False) -> tuple[str, dict[str, Any]]:
     """Windowed (relative) mode: **per-window realized** metrics computed from
     hl_fills + hl_funding, bucketed by the window's START (start-aligned by
     construction). Same columns as snapshot mode. A (wallet, token, window) row
     is emitted when the window has ≥1 fill OR any funding (funding-only windows
     appear with pnl/volume=0). Minimum window is 15m.
+
+    `aggregate=True` SUMs across the selected wallets → one row per (token,
+    window); the `wallet` column is dropped (group by token instead of wallet).
 
     Verified to reconcile exactly with the daily snapshot deltas."""
     secs = window_seconds(window)
@@ -950,13 +1021,17 @@ def hl_realized_performance_windowed(since: str, until: str, window: str, *,
         'time >= toDateTime64({since:String}, 3)',
         'time <  toDateTime64({until:String}, 3)',
     ]
-    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets)
+    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
     wsql = ' AND '.join(where)
+    # aggregate → group/join by (token, w); otherwise by (wallet, token, w).
+    grp = 'token' if aggregate else 'wallet, token'
+    join_keys = 'token, w' if aggregate else 'wallet, token, w'
+    wallet_sel = '' if aggregate else 'wallet, '
     # `secs` is a validated int → safe to inline (INTERVAL doesn't take a param).
     sql = f"""
         WITH
           f AS (
-            SELECT wallet, token,
+            SELECT {grp},
                    toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
                    sum(closed_pnl)                 AS pnl,
                    sum(fee)                        AS fees,
@@ -966,23 +1041,23 @@ def hl_realized_performance_windowed(since: str, until: str, window: str, *,
                    toInt64(count())                AS trade_count
             FROM tradernick.hl_fills FINAL
             WHERE {wsql}
-            GROUP BY wallet, token, w
+            GROUP BY {grp}, w
           ),
           g AS (
-            SELECT wallet, token,
+            SELECT {grp},
                    toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
                    sum(amount) AS funding
             FROM tradernick.hl_funding FINAL
             WHERE {wsql}
-            GROUP BY wallet, token, w
+            GROUP BY {grp}, w
           )
         SELECT
             toDateTime64(w, 6, 'UTC') AS time,
-            wallet, token,
+            {wallet_sel}token,
             pnl, fees, (pnl - fees) AS net_pnl, funding,
             volume, buy_volume, sell_volume, trade_count
-        FROM f FULL OUTER JOIN g USING (wallet, token, w)
-        ORDER BY time, wallet, token
+        FROM f FULL OUTER JOIN g USING ({join_keys})
+        ORDER BY time, {wallet_sel}token
     """
     return sql, params
 
@@ -990,6 +1065,7 @@ def hl_realized_performance_windowed(since: str, until: str, window: str, *,
 def hl_position_history(since: str, until: str, *,
                         tokens: list[str] | None = None,
                         wallets: list[str] | None = None,
+                        wallet_groups: list[str] | None = None,
                         window: str | None = None,
                         limit: int | None = None) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(us,UTC), wallet, token, side, amount, avg_entry,
@@ -1000,7 +1076,7 @@ def hl_position_history(since: str, until: str, *,
         'time >= toDateTime64({since:String}, 3)',
         'time <  toDateTime64({until:String}, 3)',
     ]
-    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets)
+    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
     limit_clause = ''
     if limit is not None:
         params['limit'] = int(limit)

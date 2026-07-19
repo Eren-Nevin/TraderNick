@@ -159,20 +159,54 @@ class BinanceNamespace:
         return LongShortRatiosQuery(self._session, self._base_url, token)
 
 
-class _HyperliquidBaseQuery(CacheableQuery):
-    """Hyperliquid read builder for endpoints that are NOT token-scoped
-    (``transfers``, ``vaults`` — those tables have no ``token`` column). No
-    ``.tokens()`` here; the token-scoped endpoints use :class:`HyperliquidQuery`."""
+# Hyperliquid builders compose their chainables from capability mixins, since the
+# endpoints differ in which filters make sense: tokens (all but transfers/vaults),
+# wallets (all but ohlcv), window (ohlcv / position_history / realized_performance).
+class _HLTokensMixin:
+    _body: dict
+
+    def tokens(self, *symbols: str | list[str]) -> Self:
+        """Filter by HL token symbol(s). Varargs or a list —
+        ``.tokens("BTC", "ETH")`` / ``.tokens(["BTC", "ETH"])`` / ``.tokens("BTC")``."""
+        self._body["tokens"] = _flatten(symbols)
+        return self
+
+
+class _HLWalletsMixin:
+    _body: dict
+
+    def wallets(self, *addresses: str | list[str]) -> Self:
+        """Filter by wallet address(es). Varargs or a list."""
+        self._body["wallets"] = _flatten(addresses)
+        return self
+
+    def wallet_groups(self, *groups: str | list[str]) -> Self:
+        """Filter by wallet **group** name(s) — the server resolves each group to
+        its member addresses and matches like :meth:`wallets`. Varargs or a list;
+        available wherever ``.wallets()`` is. Combines with ``.wallets()`` as a
+        union (wallet in the list OR in any of the groups)."""
+        self._body["wallet_groups"] = _flatten(groups)
+        return self
+
+
+class _HLWindowMixin:
+    _body: dict
+
+    def window(self, size: str) -> Self:
+        """Bucket/snapshot size, e.g. ``'5m'`` / ``'1h'`` (ohlcv candles;
+        position_history cadence; realized_performance windows, min 15m)."""
+        self._body["window"] = size
+        return self
+
+
+class _HLBaseQuery(CacheableQuery):
+    """Common Hyperliquid read builder — the always-available chainables. The
+    per-endpoint capability mixins (tokens / wallets / window) are added by the
+    concrete subclasses below."""
 
     def __init__(self, session: httpx.AsyncClient, base_url: str, path: str):
         super().__init__(session, base_url, {})
         self._hl_path = path
-
-    def wallets(self, *addresses: str | list[str]) -> Self:
-        """Filter by wallet address(es). Accepts varargs or a list (same forms
-        as :meth:`tokens`)."""
-        self._body["wallets"] = _flatten(addresses)
-        return self
 
     def per_token(self, flag: bool = True) -> Self:
         self._body["per_token"] = flag
@@ -192,9 +226,8 @@ class _HyperliquidBaseQuery(CacheableQuery):
         return self
 
     def with_extra_cols(self, enabled: bool = True) -> Self:
-        """Include the extra per-fill columns that ``fills()`` drops by default
-        (``fee_token``, ``builder_fee``, ``crossed``, ``tid``, ``oid``,
-        ``hash``). No effect on the other Hyperliquid reads."""
+        """``fills()`` only — include the columns it drops by default
+        (``fee_token``, ``builder_fee``, ``crossed``, ``tid``, ``oid``, ``hash``)."""
         self._body["extra_cols"] = enabled
         return self
 
@@ -202,26 +235,33 @@ class _HyperliquidBaseQuery(CacheableQuery):
         return await fetch_table(self._session, self._base_url + self._hl_path, self._body)
 
 
-class HyperliquidQuery(_HyperliquidBaseQuery):
-    """Token-scoped Hyperliquid read builder (fills, trades, funding,
-    trade_history, …) — adds ``.tokens()``."""
-
-    def tokens(self, *symbols: str | list[str]) -> Self:
-        """Filter by HL token symbol(s). Accepts varargs or a list —
-        ``.tokens("BTC", "ETH")``, ``.tokens(["BTC", "ETH"])``, and
-        ``.tokens("BTC")`` all work."""
-        self._body["tokens"] = _flatten(symbols)
-        return self
+class _HLWalletQuery(_HLBaseQuery, _HLWalletsMixin):
+    """Wallet-scoped, no token column: ``transfers`` / ``vaults``."""
 
 
-class _WindowedHyperliquidQuery(HyperliquidQuery):
-    """Token-scoped + windowed builder — only ``ohlcv()`` and
-    ``position_history()`` bucket by ``window``."""
+class HyperliquidQuery(_HLBaseQuery, _HLTokensMixin, _HLWalletsMixin):
+    """Token + wallet scoped: ``fills`` / ``trades`` / ``funding`` /
+    ``sends`` / ``spot_transfers``."""
 
-    def window(self, size: str) -> Self:
-        """Bucket/snapshot size, e.g. ``'5m'`` / ``'1h'`` (ohlcv candles,
-        position_history snapshot cadence)."""
-        self._body["window"] = size
+
+class _HLOhlcvQuery(_HLBaseQuery, _HLTokensMixin, _HLWindowMixin):
+    """Token + window, NOT wallet-scoped (candles are market-wide): ``ohlcv``."""
+
+
+class _HLPerfQuery(_HLOhlcvQuery, _HLWalletsMixin):
+    """Token + wallet + window: ``position_history``."""
+
+
+class _HLRealizedPerfQuery(_HLPerfQuery):
+    """``realized_performance`` — adds ``.aggregate()``."""
+
+    def aggregate(self, enabled: bool = True) -> Self:
+        """Collapse the per-wallet rows into **per-(token, window)** group totals
+        — SUM of every metric (pnl, fees, net_pnl, funding, volume, buy/sell
+        volume, trade_count) across the selected wallets. Works in both snapshot
+        and windowed modes. **Requires** ``.wallets()`` or ``.wallet_groups()``.
+        The ``wallet`` column is dropped from the result."""
+        self._body["aggregate"] = enabled
         return self
 
 
@@ -236,20 +276,20 @@ class HyperliquidNamespace:
     def trades(self) -> HyperliquidQuery:
         return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/trades/read")
 
-    def ohlcv(self) -> _WindowedHyperliquidQuery:
-        """Candles; use ``.window("1h")`` for the bucket size."""
-        return _WindowedHyperliquidQuery(self._session, self._base_url, "/hyperliquid/ohlcv/read")
+    def ohlcv(self) -> _HLOhlcvQuery:
+        """Candles (market-wide). Token-scoped + ``.window("1h")``; NOT wallet-scoped."""
+        return _HLOhlcvQuery(self._session, self._base_url, "/hyperliquid/ohlcv/read")
 
     def funding(self) -> HyperliquidQuery:
         return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/funding/read")
 
-    def transfers(self) -> _HyperliquidBaseQuery:
-        """Ledger transfers in/out of HL. Not token-scoped (no ``.tokens()``)."""
-        return _HyperliquidBaseQuery(self._session, self._base_url, "/hyperliquid/transfers/read")
+    def transfers(self) -> _HLWalletQuery:
+        """Ledger transfers in/out of HL. Wallet-scoped (no ``.tokens()``)."""
+        return _HLWalletQuery(self._session, self._base_url, "/hyperliquid/transfers/read")
 
-    def vaults(self) -> _HyperliquidBaseQuery:
-        """Vault deposits/withdrawals. Not token-scoped (no ``.tokens()``)."""
-        return _HyperliquidBaseQuery(self._session, self._base_url, "/hyperliquid/vaults/read")
+    def vaults(self) -> _HLWalletQuery:
+        """Vault deposits/withdrawals. Wallet-scoped (no ``.tokens()``)."""
+        return _HLWalletQuery(self._session, self._base_url, "/hyperliquid/vaults/read")
 
     def sends(self) -> HyperliquidQuery:
         return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/sends/read")
@@ -257,9 +297,9 @@ class HyperliquidNamespace:
     def spot_transfers(self) -> HyperliquidQuery:
         return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/spot_transfers/read")
 
-    def realized_performance(self) -> _WindowedHyperliquidQuery:
+    def realized_performance(self) -> _HLPerfQuery:
         """Realized PnL / fees / funding / volume per wallet-token. Requires
-        ``tokens`` or ``wallets``.
+        ``tokens`` or ``wallets`` (or ``wallet_groups``).
 
         - **Snapshot mode** (no ``.window()``): raw DAILY absolute-cumulative
           rows (running totals from inception; ``time`` is start-aligned).
@@ -267,9 +307,10 @@ class HyperliquidNamespace:
           metrics from fills+funding, stamped at the window start. Min 15m.
 
         Columns: time, wallet, token, pnl, fees, net_pnl, funding, volume,
-        buy_volume, sell_volume, trade_count."""
-        return _WindowedHyperliquidQuery(self._session, self._base_url, "/hyperliquid/realized_performance/read")
+        buy_volume, sell_volume, trade_count. ``.aggregate()`` sums across the
+        selected wallets → per-(token, window) totals (drops ``wallet``)."""
+        return _HLRealizedPerfQuery(self._session, self._base_url, "/hyperliquid/realized_performance/read")
 
-    def position_history(self) -> _WindowedHyperliquidQuery:
+    def position_history(self) -> _HLPerfQuery:
         """Carry-forward position snapshots per ``.window(...)``. Requires ``tokens`` or ``wallets``."""
-        return _WindowedHyperliquidQuery(self._session, self._base_url, "/hyperliquid/position_history/read")
+        return _HLPerfQuery(self._session, self._base_url, "/hyperliquid/position_history/read")

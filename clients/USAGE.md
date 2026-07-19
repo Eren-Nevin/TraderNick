@@ -224,9 +224,11 @@ Chainables (in addition to `.time_range()`):
 
 | Method | Effect |
 |---|---|
-| `.tokens(*symbols)` | restrict to tokens — varargs or a list: `.tokens("BTC", "ETH")` or `.tokens(["BTC", "ETH"])`. **Not on `transfers()` / `vaults()`** (no token column). |
-| `.wallets(*addresses)` | restrict to wallet addresses (varargs or a list) |
+| `.tokens(*symbols)` | restrict to tokens — varargs or a list. **Not on `transfers()` / `vaults()`** (no token column). |
+| `.wallets(*addresses)` | restrict to wallet addresses (varargs or a list). Matches `wallet` (or buyer **or** seller for `trades()`). **Not on `ohlcv()`** (candles are market-wide). |
+| `.wallet_groups(*groups)` | like `.wallets()` but pass **group name(s)** — resolved to member addresses server-side. Available wherever `.wallets()` is; unions with `.wallets()`. |
 | `.window(size)` | bucket size — **only on `ohlcv()`, `position_history()`, `realized_performance()`**. e.g. `.window("1h")` (realized_performance: min 15m) |
+| `.aggregate(flag=True)` | **`realized_performance()` only** — SUM metrics across the selected wallets → one row per **(token, window)** (drops `wallet`). **Requires** `.wallets()` or `.wallet_groups()`. |
 | `.per_token(flag=True)` | per-token breakdown |
 | `.skip_hip3(flag=True)` | exclude HIP-3 markets |
 | `.market_type(t)` | e.g. `"perp"` / `"spot"` |
@@ -279,7 +281,17 @@ side of each fill).
 h = await hl.realized_performance().wallets("0xabc...").tokens("BTC") \
     .window("1h").time_range("2026-07-01", "2026-07-02").as_polars()
 # columns are period deltas; time = each hour's start
+
+# a whole wallet GROUP, AGGREGATED to one row per (token, hour):
+agg = await hl.realized_performance().wallet_groups("Whales").tokens("BTC") \
+    .window("1h").aggregate().time_range("2026-07-01", "2026-07-02").as_polars()
+# -> time, token, pnl, fees, net_pnl, funding, volume, buy/sell_volume, trade_count
+#    (summed across the group's wallets; no `wallet` column)
 ```
+
+`.aggregate()` sums every metric across the selected wallets, one row per
+`(token, window)` — requires `.wallets()` or `.wallet_groups()` (aggregating an
+unbounded set is rejected). Works in snapshot mode too (per token+day).
 
 > **Tip:** for a single window's total, sum the windowed rows (or diff two
 > snapshots). Only reach for `fills` when you need per-trade detail.
@@ -756,6 +768,12 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **0.11.0** — Hyperliquid wallet filtering: **`.wallet_groups(...)`** on every
+  wallet-aware endpoint (pass group names; resolved to member addresses server-side,
+  unions with `.wallets()`); **`ohlcv()` drops `.wallets()`** (candles are market-wide
+  — it was a silent no-op); and **`realized_performance().aggregate()`** sums metrics
+  across the selected wallets → one row per `(token, window)` (requires
+  `.wallets()`/`.wallet_groups()`).
 - **0.10.0** — `hyperliquid.trade_history()` → **`realized_performance()`** (renamed).
   Adds the `funding` column and an optional **`.window("15m"+)`** for per-window
   realized metrics (fills+funding, window-start aligned) vs the default daily
