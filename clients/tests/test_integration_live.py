@@ -71,6 +71,61 @@ async def test_hyperliquid_transfers(live_client):
     assert df.height >= 0  # populated table, but a 5-min window may be sparse
 
 
+# --- positions: downsample + snapshot-aggregate + change-aggregate --------
+# positions requires a 15m-multiple window; a 1h window over this range buckets
+# to one slot at :00.
+POS_SINCE, POS_UNTIL = "2026-07-10T00:00:00Z", "2026-07-10T01:00:00Z"
+
+
+async def test_positions_downsample(live_client):
+    df = await live_client.hyperliquid.positions().tokens("BTC").window("1h") \
+        .time_range(POS_SINCE, POS_UNTIL).as_polars()
+    assert df.height > 0
+    assert {"time", "wallet", "token", "side", "size", "avg_entry"} <= set(df.columns)
+    # start-aligned: every downsampled row is stamped at the window start (:00)
+    assert df["time"].dt.minute().unique().to_list() == [0]
+
+
+async def test_positions_snapshot_aggregate(live_client):
+    df = await live_client.hyperliquid.positions().tokens("BTC").window("1h") \
+        .aggregate().time_range(POS_SINCE, POS_UNTIL).as_polars()
+    assert df.height > 0
+    assert set(df.columns) == {
+        "time", "token", "side", "net_size", "total_count",
+        "longs_size", "longs_count", "shorts_size", "shorts_count", "avg_entry",
+    }
+    r = df.row(0, named=True)
+    assert r["total_count"] == r["longs_count"] + r["shorts_count"]
+    assert abs(r["net_size"] - (r["longs_size"] - r["shorts_size"])) < 1.0
+    assert r["side"] == ("long" if r["net_size"] > 0 else "short" if r["net_size"] < 0 else "flat")
+
+
+async def test_positions_change_aggregate_and_dust(live_client):
+    df = await live_client.hyperliquid.positions().tokens("BTC").window("1h") \
+        .aggregate_change().time_range(POS_SINCE, POS_UNTIL).as_polars()
+    assert df.height > 0
+    dollar_cols = [
+        "opened_long", "opened_short", "increased_long", "decreased_long",
+        "increased_short", "decreased_short", "closed_long", "closed_short",
+        "flip_ls", "flip_sl", "net_pos_change", "net_flip", "net_flow",
+    ]
+    assert set(dollar_cols) <= set(df.columns)
+    r = df.row(0, named=True)
+    # net_flip reconciles with its definition
+    assert abs(r["net_flip"] - (r["flip_sl"] - r["flip_ls"])) < 1.0
+    # dust-rounding: no aggregated $ value sits in the (0, $0.001) dust band
+    for c in dollar_cols:
+        for v in df[c].to_list():
+            assert v == 0.0 or abs(v) >= 1e-3, f"{c} has dust {v}"
+
+
+async def test_positions_requires_window(live_client):
+    from tradernick_data_provider.exceptions import DataProviderHTTPError
+    with pytest.raises(DataProviderHTTPError):
+        await live_client.hyperliquid.positions().tokens("BTC") \
+            .time_range(POS_SINCE, POS_UNTIL).as_polars()
+
+
 # --- the erc20 /read/min fix, live ----------------------------------------
 async def test_erc20_min_amount_no_longer_404s(live_client):
     # Before the fix this raised (route unregistered). Now it must return a frame.

@@ -834,6 +834,31 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **1.0.0** — First stable release; the public API is now considered stable.
+  Consolidates the `0.12`–`0.13` line: the `hyperliquid.positions()` endpoint
+  (below), the IDE/jedi fluent-builder fix, and `$`-metric dust rounding. No API
+  change vs `0.13.2`.
+- **0.13.2** — Aggregated `$` metrics are snapped to `0` when `|value| < $0.001`
+  (kills float-cancellation dust like a `-1e-9` `net_flow` on a balanced wallet
+  set). Prices / funding rates / coin amounts / counts are never snapped.
+- **0.13.1** — `positions().aggregate()` takes `pos_recency_hrs=` as a keyword arg
+  (was a separate `.pos_recency_hrs()` chain call).
+- **0.13.0** — `positions`: renamed the fills-based aggregate to
+  **`.aggregate_change()`**, and **`.aggregate()`** is now the snapshot
+  open-position book (side / net_size / counts / sizes / avg_entry), with an
+  optional `pos_recency_hrs=` staleness filter. Neither aggregate requires a
+  wallet set (tokens-only → all wallets).
+- **0.12.1** — `positions().aggregate()` (change-aggregate) no longer requires
+  `.wallets()`/`.wallet_groups()` — with only `.tokens()` it covers all wallets.
+- **0.12.0** — `hyperliquid.position_history()` → **`positions()`** (renamed).
+  `.window()` is now **required** (a 15m multiple); default mode downsamples the
+  position snapshots to the window (last-in-window, start-aligned), and
+  `.aggregate()` returns the per-`(token, window)` fills action-flow frame.
+- **0.11.2 / 0.11.3** — IDE/jedi fix: the fluent builders use the explicit
+  self-type TypeVar idiom (`def m(self: _T, ...) -> _T`) instead of `Self`, which
+  jedi follows through the mixin hierarchy so chained calls keep autocompleting;
+  dropped the `typing_extensions` dependency. `0.11.3` corrected stale `scan_parquet`
+  docstrings.
 - **0.11.1** — typing/IDE fix: import `Self` from `typing_extensions` (stdlib
   `typing.Self` is 3.11+ only, but the package supports 3.10), so editors, jedi,
   and type checkers follow the fluent builders' chained return types on every

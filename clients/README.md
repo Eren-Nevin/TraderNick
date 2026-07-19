@@ -50,6 +50,22 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**1.0.0 — First stable release.** The public API is now considered stable.
+Consolidates the `0.12`–`0.13` line: the `hyperliquid.positions()` endpoint,
+IDE/jedi fluent-builder resolution, and `$`-metric dust rounding.
+
+**0.13.0 — `positions` (was `position_history`).** Requires `.window()` (a 15m
+multiple). Default mode downsamples the position snapshots to the window; the
+snapshot **`.aggregate()`** returns the per-`(token, window)` open-position book
+(side / net_size / counts / sizes / avg_entry, optional `pos_recency_hrs=`
+staleness filter); **`.aggregate_change()`** returns the fills-based action-flow
+frame (opened/increased/decreased/closed long/short, flips, net_pos_change/flip/flow).
+`0.13.2` snaps aggregated `$` metrics under `$0.001` to `0`.
+
+**0.11.2 — IDE/jedi fluent-builder fix.** The chained query builders resolve to
+their concrete types in editors/jedi (self-type TypeVar idiom), so
+`.tokens(...).wallets(...)` keeps autocompleting; no external dependency.
+
 **0.11.0 — Hyperliquid wallet groups + aggregate.** `.wallet_groups(...)` on every
 wallet-aware HL endpoint (group names → member addresses, unions with `.wallets()`);
 `ohlcv()` no longer exposes `.wallets()` (market-wide; was a no-op);
