@@ -228,7 +228,7 @@ Chainables (in addition to `.time_range()`):
 | `.wallets(*addresses)` | restrict to wallet addresses (varargs or a list). Matches `wallet` (or buyer **or** seller for `trades()`). **Not on `ohlcv()`** (candles are market-wide). |
 | `.wallet_groups(*groups)` | like `.wallets()` but pass **group name(s)** — resolved to member addresses server-side. Available wherever `.wallets()` is; unions with `.wallets()`. |
 | `.window(size)` | bucket size — **only on `ohlcv()`, `positions()`, `realized_performance()`**. e.g. `.window("1h")`. `realized_performance`: min 15m. `positions`: **required**, a 15m multiple. |
-| `.aggregate(flag=True)` | **`realized_performance()` and `positions()`** — collapse per-wallet rows into per-**(token, window)** totals across the selected wallets (drops `wallet`). **Requires** `.wallets()` or `.wallet_groups()`. For `realized_performance` it SUMs the PnL/volume metrics; for `positions` it returns a **different action-flow frame** (see §on positions). |
+| `.aggregate(flag=True)` | **`realized_performance()` and `positions()`** — collapse per-wallet rows into per-**(token, window)** totals (drops `wallet`). For `realized_performance` it SUMs the PnL/volume metrics and **requires** `.wallets()`/`.wallet_groups()`; for `positions` it returns a **different action-flow frame** (see §on positions) and `.wallets()`/`.wallet_groups()` are **optional** (with only `.tokens()` it covers all wallets). |
 | `.per_token(flag=True)` | per-token breakdown |
 | `.skip_hip3(flag=True)` | exclude HIP-3 markets |
 | `.market_type(t)` | e.g. `"perp"` / `"spot"` |
@@ -307,10 +307,11 @@ unbounded set is rejected). Works in snapshot mode too (per token+day).
   snapshot produces no row; no carry-forward). Columns: `time, wallet, token,
   side, amount, avg_entry, opened_at, mark_price, size, unrealized_pnl, funding,
   fee, exact_avg_price`.
-- **Aggregate mode** (`.aggregate()`, needs `.wallets()`/`.wallet_groups()`) —
-  a **different frame**: per-`(token, window)` position-**action** flow in **`$`
-  notional** (`price × size`), computed from fills and classified by each fill's
-  transition. Columns:
+- **Aggregate mode** (`.aggregate()`) — a **different frame**: per-`(token,
+  window)` position-**action** flow in **`$` notional** (`price × size`),
+  computed from fills and classified by each fill's transition. `.wallets()` /
+  `.wallet_groups()` are **optional** here — with only `.tokens()` it aggregates
+  over **all** wallets for those tokens. Columns:
 
   | Column | Meaning (all `$` notional) |
   |---|---|

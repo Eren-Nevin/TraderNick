@@ -1166,7 +1166,8 @@ def hl_positions_aggregate(since: str, until: str, window: str, *,
       net_flow       = full directional net: (open/inc long + close/dec short + flip S→L)
                        − (open/inc short + close/dec long + flip L→S).
 
-    `window` required (15m multiple). Requires `wallets` or `wallet_groups`."""
+    `window` required (15m multiple). `wallets`/`wallet_groups` are OPTIONAL —
+    with only `tokens` it aggregates over ALL wallets for those tokens."""
     secs = _positions_window_secs(window)
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [

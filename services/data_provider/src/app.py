@@ -855,11 +855,11 @@ async def hyperliquid_positions(request: Request):
             {'error': 'positions requires `window` (a 15m multiple, e.g. "15m", "1h")'},
             status=400,
         )
+    # Unlike realized_performance, positions aggregate does NOT require a wallet
+    # set — with only `tokens` it aggregates the action-flow over ALL wallets for
+    # those tokens. The general tokens/wallets/wallet_groups guard above still
+    # bounds the fills scan.
     aggregate = bool(body.get('aggregate'))
-    if aggregate and not (body.get('wallets') or body.get('wallet_groups')):
-        return response.json(
-            {'error': 'aggregate requires `wallets` or `wallet_groups`'}, status=400,
-        )
     try:
         if aggregate:
             # Fills-based per-(token, window) position-action flow ($ notional).

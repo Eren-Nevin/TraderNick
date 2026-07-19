@@ -283,7 +283,8 @@ class _HLPositionsQuery(_HLPerfQuery):
         ``increased_short``/``decreased_short``/``closed_long``/``closed_short``/
         ``flip_ls``/``flip_sl`` + ``net_pos_change`` (inc_long+dec_short−inc_short−dec_long),
         ``net_flip`` (flip_sl−flip_ls), and ``net_flow`` (full directional net). Time is
-        the window start. **Requires** ``.wallets()`` or ``.wallet_groups()``."""
+        the window start. ``.wallets()`` / ``.wallet_groups()`` are OPTIONAL — with just
+        ``.tokens()`` it aggregates over ALL wallets for the selected token(s)."""
         self._body["aggregate"] = enabled
         return self
 
@@ -344,6 +345,7 @@ class HyperliquidNamespace:
           side, amount, avg_entry, opened_at, mark_price, size, unrealized_pnl,
           funding, fee, exact_avg_price.
         - **Aggregate mode** (``.aggregate()``): per-(token, window) position-action
-          ``$`` flow across the selected wallets, from fills (see
-          :meth:`_HLPositionsQuery.aggregate`). Requires ``wallets``/``wallet_groups``."""
+          ``$`` flow across wallets, from fills (see
+          :meth:`_HLPositionsQuery.aggregate`). ``wallets``/``wallet_groups`` optional —
+          with only ``tokens`` it covers ALL wallets for those tokens."""
         return _HLPositionsQuery(self._session, self._base_url, "/hyperliquid/positions/read")
