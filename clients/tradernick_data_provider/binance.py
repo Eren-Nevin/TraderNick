@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import httpx
 import pyarrow as pa
@@ -8,9 +8,13 @@ import pyarrow as pa
 from ._http import fetch_table
 from ._query import CacheableQuery
 
-if TYPE_CHECKING:
-    from typing_extensions import Self
 
+
+
+# Self-type TypeVar for fluent-builder chaining. Equivalent to typing.Self
+# (PEP 673) but the explicit self-type form is what jedi/IDE completion
+# follows correctly through the mixin/base hierarchy.
+_T = TypeVar("_T")
 
 def _flatten(args: tuple) -> list[str]:
     """Normalize varargs-or-list into a flat list of strings, so
@@ -26,11 +30,11 @@ class RawTradesQuery(CacheableQuery):
     def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
         super().__init__(session, base_url, {"token": token})
 
-    def add_symbol(self, enabled: bool = True) -> Self:
+    def add_symbol(self: _T, enabled: bool = True) -> _T:
         self._body["add_symbol"] = enabled
         return self
 
-    def with_id(self) -> Self:
+    def with_id(self: _T) -> _T:
         """Include the trade id column in results (excluded by default)."""
         self._body["with_id"] = True
         return self
@@ -105,11 +109,11 @@ class SpotRawTradesQuery(CacheableQuery):
     def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
         super().__init__(session, base_url, {"token": token})
 
-    def add_symbol(self, enabled: bool = True) -> Self:
+    def add_symbol(self: _T, enabled: bool = True) -> _T:
         self._body["add_symbol"] = enabled
         return self
 
-    def with_id(self) -> Self:
+    def with_id(self: _T) -> _T:
         """Include the trade id column in results (excluded by default)."""
         self._body["with_id"] = True
         return self
@@ -165,7 +169,7 @@ class BinanceNamespace:
 class _HLTokensMixin:
     _body: dict
 
-    def tokens(self, *symbols: str | list[str]) -> Self:
+    def tokens(self: _T, *symbols: str | list[str]) -> _T:
         """Filter by HL token symbol(s). Varargs or a list —
         ``.tokens("BTC", "ETH")`` / ``.tokens(["BTC", "ETH"])`` / ``.tokens("BTC")``."""
         self._body["tokens"] = _flatten(symbols)
@@ -175,12 +179,12 @@ class _HLTokensMixin:
 class _HLWalletsMixin:
     _body: dict
 
-    def wallets(self, *addresses: str | list[str]) -> Self:
+    def wallets(self: _T, *addresses: str | list[str]) -> _T:
         """Filter by wallet address(es). Varargs or a list."""
         self._body["wallets"] = _flatten(addresses)
         return self
 
-    def wallet_groups(self, *groups: str | list[str]) -> Self:
+    def wallet_groups(self: _T, *groups: str | list[str]) -> _T:
         """Filter by wallet **group** name(s) — the server resolves each group to
         its member addresses and matches like :meth:`wallets`. Varargs or a list;
         available wherever ``.wallets()`` is. Combines with ``.wallets()`` as a
@@ -192,7 +196,7 @@ class _HLWalletsMixin:
 class _HLWindowMixin:
     _body: dict
 
-    def window(self, size: str) -> Self:
+    def window(self: _T, size: str) -> _T:
         """Bucket/snapshot size, e.g. ``'5m'`` / ``'1h'`` (ohlcv candles;
         position_history cadence; realized_performance windows, min 15m)."""
         self._body["window"] = size
@@ -208,24 +212,24 @@ class _HLBaseQuery(CacheableQuery):
         super().__init__(session, base_url, {})
         self._hl_path = path
 
-    def per_token(self, flag: bool = True) -> Self:
+    def per_token(self: _T, flag: bool = True) -> _T:
         self._body["per_token"] = flag
         return self
 
-    def skip_hip3(self, flag: bool = True) -> Self:
+    def skip_hip3(self: _T, flag: bool = True) -> _T:
         """Exclude HIP3 (stock/commodity) markets when ``True``; server default when omitted."""
         self._body["skip_hip3"] = flag
         return self
 
-    def market_type(self, t: str) -> Self:
+    def market_type(self: _T, t: str) -> _T:
         self._body["market_type"] = t
         return self
 
-    def limit(self, n: int) -> Self:
+    def limit(self: _T, n: int) -> _T:
         self._body["limit"] = n
         return self
 
-    def with_extra_cols(self, enabled: bool = True) -> Self:
+    def with_extra_cols(self: _T, enabled: bool = True) -> _T:
         """``fills()`` only — include the columns it drops by default
         (``fee_token``, ``builder_fee``, ``crossed``, ``tid``, ``oid``, ``hash``)."""
         self._body["extra_cols"] = enabled
@@ -255,7 +259,7 @@ class _HLPerfQuery(_HLOhlcvQuery, _HLWalletsMixin):
 class _HLRealizedPerfQuery(_HLPerfQuery):
     """``realized_performance`` — adds ``.aggregate()``."""
 
-    def aggregate(self, enabled: bool = True) -> Self:
+    def aggregate(self: _T, enabled: bool = True) -> _T:
         """Collapse the per-wallet rows into **per-(token, window)** group totals
         — SUM of every metric (pnl, fees, net_pnl, funding, volume, buy/sell
         volume, trade_count) across the selected wallets. Works in both snapshot

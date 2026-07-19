@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import httpx
 import pyarrow as pa
@@ -9,12 +9,16 @@ import pyarrow as pa
 from ._http import fetch_table
 from ._query import BaseQuery, CacheableQuery, EventQuery
 
-if TYPE_CHECKING:
-    from typing_extensions import Self
 
+
+
+# Self-type TypeVar for fluent-builder chaining. Equivalent to typing.Self
+# (PEP 673) but the explicit self-type form is what jedi/IDE completion
+# follows correctly through the mixin/base hierarchy.
+_T = TypeVar("_T")
 
 class AaveEventQuery(EventQuery):
-    def eth_market_type(self, market_type: str) -> Self:
+    def eth_market_type(self: _T, market_type: str) -> _T:
         self._body["eth_market_type"] = market_type
         return self
 
@@ -108,11 +112,11 @@ class NativeTransfersQuery(CacheableQuery):
         super().__init__(session, base_url, {})
         self._min_amount = None
 
-    def min_amount(self, amount: float) -> Self:
+    def min_amount(self: _T, amount: float) -> _T:
         self._min_amount = amount
         return self
 
-    def max_amount(self, amount: float) -> Self:
+    def max_amount(self: _T, amount: float) -> _T:
         self._body["max_amount"] = amount
         return self
 
@@ -162,11 +166,11 @@ class TronNativeTransfersQuery(CacheableQuery):
         super().__init__(session, base_url, {})
         self._min_amount = None
 
-    def min_amount(self, amount: float) -> Self:
+    def min_amount(self: _T, amount: float) -> _T:
         self._min_amount = amount
         return self
 
-    def max_amount(self, amount: float) -> Self:
+    def max_amount(self: _T, amount: float) -> _T:
         self._body["max_amount"] = amount
         return self
 
@@ -216,11 +220,11 @@ class BitcoinNativeTransfersQuery(CacheableQuery):
         super().__init__(session, base_url, {})
         self._min_amount = None
 
-    def min_amount(self, amount: float) -> Self:
+    def min_amount(self: _T, amount: float) -> _T:
         self._min_amount = amount
         return self
 
-    def max_amount(self, amount: float) -> Self:
+    def max_amount(self: _T, amount: float) -> _T:
         self._body["max_amount"] = amount
         return self
 

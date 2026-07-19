@@ -17,18 +17,22 @@ Pass `.market_id('<hex>')` to filter to a specific Morpho market.
 """
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import httpx
 
 from ._query import EventQuery
 
-if TYPE_CHECKING:
-    from typing_extensions import Self
 
+
+
+# Self-type TypeVar for fluent-builder chaining. Equivalent to typing.Self
+# (PEP 673) but the explicit self-type form is what jedi/IDE completion
+# follows correctly through the mixin/base hierarchy.
+_T = TypeVar("_T")
 
 class MorphoEventQuery(EventQuery):
-    def market_id(self, mid: str) -> Self:
+    def market_id(self: _T, mid: str) -> _T:
         """Restrict to a single Morpho market (hex id)."""
         self._body['market_id'] = mid
         return self

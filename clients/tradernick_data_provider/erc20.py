@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import httpx
 import pyarrow as pa
@@ -9,9 +9,13 @@ import pyarrow as pa
 from ._http import fetch_table
 from ._query import CacheableQuery
 
-if TYPE_CHECKING:
-    from typing_extensions import Self
 
+
+
+# Self-type TypeVar for fluent-builder chaining. Equivalent to typing.Self
+# (PEP 673) but the explicit self-type form is what jedi/IDE completion
+# follows correctly through the mixin/base hierarchy.
+_T = TypeVar("_T")
 
 def _validate_tokens(tokens) -> list[str]:
     # A bare str passed as `tokens` iterates char-by-char downstream, producing
@@ -37,11 +41,11 @@ class ERC20TransfersQuery(CacheableQuery):
 
     # Wallet-selection filters (sender/receiver/involving + label/entity/
     # category/groups + exclude_*) are inherited from _WalletFilters.
-    def min_amount(self, amount: float) -> Self:
+    def min_amount(self: _T, amount: float) -> _T:
         self._min_amount = amount
         return self
 
-    def max_amount(self, amount: float) -> Self:
+    def max_amount(self: _T, amount: float) -> _T:
         self._body["max_amount"] = amount
         return self
 
@@ -82,11 +86,11 @@ class TRC20TransfersQuery(CacheableQuery):
         self._min_amount = None
 
     # Wallet-selection filters inherited from _WalletFilters.
-    def min_amount(self, amount: float) -> Self:
+    def min_amount(self: _T, amount: float) -> _T:
         self._min_amount = amount
         return self
 
-    def max_amount(self, amount: float) -> Self:
+    def max_amount(self: _T, amount: float) -> _T:
         self._body["max_amount"] = amount
         return self
 

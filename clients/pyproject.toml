@@ -1,6 +1,6 @@
 [project]
 name = "tradernick-data-provider"
-version = "0.11.1"
+version = "0.11.2"
 description = "Python client for the TraderNick data_provider service. Drop-in compatible with horatio-data-provider (same DataProviderClient API; only the import path changes)."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -23,12 +23,11 @@ dependencies = [
     "pandas>=2.0",
     "polars>=1.0",
     "pytz>=2023.3",
-    # `Self` return-type on the fluent builders comes from typing_extensions
-    # (stdlib `typing.Self` only exists on 3.11+; requires-python is >=3.10). It
-    # re-exports Self on every version, so we import it unconditionally and depend
-    # on it unconditionally so IDEs/jedi can resolve the chained-return
-    # annotations. Tiny, pure-python, used only for type checking.
-    "typing_extensions>=4.0",
+    # No typing_extensions needed: the fluent builders use the explicit self-type
+    # TypeVar idiom (`def m(self: _T, ...) -> _T`) rather than PEP 673 `Self`.
+    # It's type-checker-equivalent to Self but, unlike Self, jedi/IDE completion
+    # follows it correctly through the mixin/base hierarchy — so chained calls
+    # like `.tokens(...).wallets(...)` keep autocompleting. Pure stdlib TypeVar.
 ]
 
 [project.optional-dependencies]

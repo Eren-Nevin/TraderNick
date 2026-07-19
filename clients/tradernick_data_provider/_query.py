@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import httpx
 import pandas as pd
@@ -10,8 +10,12 @@ import pyarrow as pa
 
 from ._http import fetch_table
 
-if TYPE_CHECKING:
-    from typing_extensions import Self
+
+
+# Self-type TypeVar for fluent-builder chaining. Equivalent to typing.Self
+# (PEP 673) but the explicit self-type form is what jedi/IDE completion
+# follows correctly through the mixin/base hierarchy.
+_T = TypeVar("_T")
 
 _TIME_COL = "timestamp"
 
@@ -62,7 +66,7 @@ class _WalletFilters:
 
     _body: dict   # set by the concrete subclass
 
-    def _f(self, key: str, values: str | list[str]) -> Self:
+    def _f(self: _T, key: str, values: str | list[str]) -> _T:
         # Last-write-wins per (role, dimension) key; pass a list for "any of".
         # An empty selection is a no-op (the key is left unset).
         v = _as_list(values)
@@ -71,40 +75,40 @@ class _WalletFilters:
         return self
 
     # involving (sender OR receiver)
-    def involving(self, v: str | list[str]) -> Self:                  return self._f("involving", v)
-    def involving_label(self, v: str | list[str]) -> Self:            return self._f("involving_label", v)
-    def involving_entity(self, v: str | list[str]) -> Self:           return self._f("involving_label", v)
-    def involving_category(self, v: str | list[str]) -> Self:         return self._f("involving_category", v)
-    def involving_groups(self, v: str | list[str]) -> Self:           return self._f("involving_groups", v)
-    def exclude_involving(self, v: str | list[str]) -> Self:          return self._f("exclude_involving", v)
-    def exclude_involving_label(self, v: str | list[str]) -> Self:    return self._f("exclude_involving_label", v)
-    def exclude_involving_entity(self, v: str | list[str]) -> Self:   return self._f("exclude_involving_label", v)
-    def exclude_involving_category(self, v: str | list[str]) -> Self: return self._f("exclude_involving_category", v)
-    def exclude_involving_groups(self, v: str | list[str]) -> Self:   return self._f("exclude_involving_groups", v)
+    def involving(self: _T, v: str | list[str]) -> _T:                  return self._f("involving", v)
+    def involving_label(self: _T, v: str | list[str]) -> _T:            return self._f("involving_label", v)
+    def involving_entity(self: _T, v: str | list[str]) -> _T:           return self._f("involving_label", v)
+    def involving_category(self: _T, v: str | list[str]) -> _T:         return self._f("involving_category", v)
+    def involving_groups(self: _T, v: str | list[str]) -> _T:           return self._f("involving_groups", v)
+    def exclude_involving(self: _T, v: str | list[str]) -> _T:          return self._f("exclude_involving", v)
+    def exclude_involving_label(self: _T, v: str | list[str]) -> _T:    return self._f("exclude_involving_label", v)
+    def exclude_involving_entity(self: _T, v: str | list[str]) -> _T:   return self._f("exclude_involving_label", v)
+    def exclude_involving_category(self: _T, v: str | list[str]) -> _T: return self._f("exclude_involving_category", v)
+    def exclude_involving_groups(self: _T, v: str | list[str]) -> _T:   return self._f("exclude_involving_groups", v)
 
     # sender
-    def sender(self, v: str | list[str]) -> Self:                     return self._f("sender", v)
-    def sender_label(self, v: str | list[str]) -> Self:               return self._f("sender_label", v)
-    def sender_entity(self, v: str | list[str]) -> Self:              return self._f("sender_label", v)
-    def sender_category(self, v: str | list[str]) -> Self:            return self._f("sender_category", v)
-    def sender_groups(self, v: str | list[str]) -> Self:              return self._f("sender_groups", v)
-    def exclude_sender(self, v: str | list[str]) -> Self:             return self._f("exclude_sender", v)
-    def exclude_sender_label(self, v: str | list[str]) -> Self:       return self._f("exclude_sender_label", v)
-    def exclude_sender_entity(self, v: str | list[str]) -> Self:      return self._f("exclude_sender_label", v)
-    def exclude_sender_category(self, v: str | list[str]) -> Self:    return self._f("exclude_sender_category", v)
-    def exclude_sender_groups(self, v: str | list[str]) -> Self:      return self._f("exclude_sender_groups", v)
+    def sender(self: _T, v: str | list[str]) -> _T:                     return self._f("sender", v)
+    def sender_label(self: _T, v: str | list[str]) -> _T:               return self._f("sender_label", v)
+    def sender_entity(self: _T, v: str | list[str]) -> _T:              return self._f("sender_label", v)
+    def sender_category(self: _T, v: str | list[str]) -> _T:            return self._f("sender_category", v)
+    def sender_groups(self: _T, v: str | list[str]) -> _T:              return self._f("sender_groups", v)
+    def exclude_sender(self: _T, v: str | list[str]) -> _T:             return self._f("exclude_sender", v)
+    def exclude_sender_label(self: _T, v: str | list[str]) -> _T:       return self._f("exclude_sender_label", v)
+    def exclude_sender_entity(self: _T, v: str | list[str]) -> _T:      return self._f("exclude_sender_label", v)
+    def exclude_sender_category(self: _T, v: str | list[str]) -> _T:    return self._f("exclude_sender_category", v)
+    def exclude_sender_groups(self: _T, v: str | list[str]) -> _T:      return self._f("exclude_sender_groups", v)
 
     # receiver
-    def receiver(self, v: str | list[str]) -> Self:                   return self._f("receiver", v)
-    def receiver_label(self, v: str | list[str]) -> Self:             return self._f("receiver_label", v)
-    def receiver_entity(self, v: str | list[str]) -> Self:            return self._f("receiver_label", v)
-    def receiver_category(self, v: str | list[str]) -> Self:          return self._f("receiver_category", v)
-    def receiver_groups(self, v: str | list[str]) -> Self:            return self._f("receiver_groups", v)
-    def exclude_receiver(self, v: str | list[str]) -> Self:           return self._f("exclude_receiver", v)
-    def exclude_receiver_label(self, v: str | list[str]) -> Self:     return self._f("exclude_receiver_label", v)
-    def exclude_receiver_entity(self, v: str | list[str]) -> Self:    return self._f("exclude_receiver_label", v)
-    def exclude_receiver_category(self, v: str | list[str]) -> Self:  return self._f("exclude_receiver_category", v)
-    def exclude_receiver_groups(self, v: str | list[str]) -> Self:    return self._f("exclude_receiver_groups", v)
+    def receiver(self: _T, v: str | list[str]) -> _T:                   return self._f("receiver", v)
+    def receiver_label(self: _T, v: str | list[str]) -> _T:             return self._f("receiver_label", v)
+    def receiver_entity(self: _T, v: str | list[str]) -> _T:            return self._f("receiver_label", v)
+    def receiver_category(self: _T, v: str | list[str]) -> _T:          return self._f("receiver_category", v)
+    def receiver_groups(self: _T, v: str | list[str]) -> _T:            return self._f("receiver_groups", v)
+    def exclude_receiver(self: _T, v: str | list[str]) -> _T:           return self._f("exclude_receiver", v)
+    def exclude_receiver_label(self: _T, v: str | list[str]) -> _T:     return self._f("exclude_receiver_label", v)
+    def exclude_receiver_entity(self: _T, v: str | list[str]) -> _T:    return self._f("exclude_receiver_label", v)
+    def exclude_receiver_category(self: _T, v: str | list[str]) -> _T:  return self._f("exclude_receiver_category", v)
+    def exclude_receiver_groups(self: _T, v: str | list[str]) -> _T:    return self._f("exclude_receiver_groups", v)
 
 
 class BaseQuery(_WalletFilters):
@@ -113,7 +117,7 @@ class BaseQuery(_WalletFilters):
         self._base_url = base_url
         self._body = body
 
-    def network(self, n: str | list[str]) -> Self:
+    def network(self: _T, n: str | list[str]) -> _T:
         # EVM-class endpoints accept a list to fan out per-network. The cache
         # is keyed per-network on the server, so each chain reads/writes its
         # own partition independently. The combined result is concatenated
@@ -126,11 +130,11 @@ class BaseQuery(_WalletFilters):
             self._body["network"] = n
         return self
 
-    def with_network(self, enabled: bool = True) -> Self:
+    def with_network(self: _T, enabled: bool = True) -> _T:
         self._body["with_network"] = enabled
         return self
 
-    def include_zero_amounts(self, enabled: bool = True) -> Self:
+    def include_zero_amounts(self: _T, enabled: bool = True) -> _T:
         """Keep rows where amount == 0 in the result. By default these
         are filtered out — they're typically token-approval-style noise
         that inflates row counts without representing real flow.
@@ -149,7 +153,7 @@ class BaseQuery(_WalletFilters):
         if len(nets) > 1 and "with_network" not in self._body:
             self._body["with_network"] = True
 
-    def time_range(self, since: datetime | str | int, until: datetime | str | int) -> Self:
+    def time_range(self: _T, since: datetime | str | int, until: datetime | str | int) -> _T:
         self._body["since"] = _to_timestamp(since)
         self._body["until"] = _to_timestamp(until)
         return self
@@ -157,19 +161,19 @@ class BaseQuery(_WalletFilters):
     # Wallet-selection filters (involving / sender / receiver + label/entity/
     # category/groups + exclude_*) come from _WalletFilters.
 
-    def wallet_namespace(self, ns: str) -> Self:
+    def wallet_namespace(self: _T, ns: str) -> _T:
         self._body["wallet_namespace"] = ns
         return self
 
-    def with_value(self) -> Self:
+    def with_value(self: _T) -> _T:
         self._body["with_value"] = True
         return self
 
-    def verbose(self) -> Self:
+    def verbose(self: _T) -> _T:
         self._body["verbose"] = True
         return self
 
-    def aggregate(self, group_by: str = "time", period: str = "1h") -> Self:
+    def aggregate(self: _T, group_by: str = "time", period: str = "1h") -> _T:
         self._body["aggregate"] = True
         self._body["group_by"] = group_by
         self._body["period"] = period

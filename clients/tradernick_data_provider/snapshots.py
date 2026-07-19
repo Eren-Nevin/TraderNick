@@ -10,7 +10,7 @@ bounded by the result size rather than the full snapshot size.
 from __future__ import annotations
 
 import io
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeVar
 
 import httpx
 import pandas as pd
@@ -22,9 +22,13 @@ from datetime import datetime
 from ._http import DataProviderHTTPError
 from ._query import _WalletFilters, _to_timestamp
 
-if TYPE_CHECKING:
-    from typing_extensions import Self
 
+
+
+# Self-type TypeVar for fluent-builder chaining. Equivalent to typing.Self
+# (PEP 673) but the explicit self-type form is what jedi/IDE completion
+# follows correctly through the mixin/base hierarchy.
+_T = TypeVar("_T")
 
 class ScanParquetQuery(_WalletFilters):
     """Lazy-scan a saved snapshot, filtering it server-side.
@@ -60,18 +64,18 @@ class ScanParquetQuery(_WalletFilters):
         if normalize_addresses is not None:
             self._body["normalize_addresses"] = bool(normalize_addresses)
 
-    def time_range(self, since, until) -> "Self":
+    def time_range(self: _T, since, until) -> _T:
         """Set ``[since, until)`` on the chain. Overrides any range
         passed at construction time."""
         self._body["since"] = _to_timestamp(since)
         self._body["until"] = _to_timestamp(until)
         return self
 
-    def min_amount(self, amount: float) -> "Self":
+    def min_amount(self: _T, amount: float) -> _T:
         self._body["min_amount"] = amount
         return self
 
-    def max_amount(self, amount: float) -> "Self":
+    def max_amount(self: _T, amount: float) -> _T:
         self._body["max_amount"] = amount
         return self
 

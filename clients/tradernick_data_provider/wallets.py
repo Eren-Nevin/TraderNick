@@ -17,8 +17,6 @@ def _as_list(v):
         return None
     return [v] if isinstance(v, str) else list(v)
 
-if TYPE_CHECKING:
-    from typing_extensions import Self
 
 
 def _to_parquet_bytes(data: pd.DataFrame | pl.DataFrame | bytes) -> bytes:

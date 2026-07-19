@@ -1,12 +1,15 @@
 import io
 from datetime import datetime
-from typing import Literal, Optional, Union
+from typing import TYPE_CHECKING, Literal, Optional, Union
 
 import httpx
 import polars as pl
 
 from ._http import load_parquet_bytes, list_snapshots, delete_snapshot
 from ._query import _to_timestamp
+
+if TYPE_CHECKING:
+    from .snapshots import ScanParquetQuery
 
 
 def _to_datetime(date: datetime | str | int) -> datetime:
@@ -94,7 +97,7 @@ class DataProviderClient:
                      since: Optional[Union[datetime, str, int]] = None,
                      until: Optional[Union[datetime, str, int]] = None,
                      engine: Literal['polars', 'duckdb'] = 'duckdb',
-                     normalize_addresses: Optional[bool] = None):
+                     normalize_addresses: Optional[bool] = None) -> "ScanParquetQuery":
         """Lazy-scan a saved snapshot with ``local_*`` filters applied
         server-side. Returns a ``ScanParquetQuery`` builder. Chain
         ``local_*`` filter methods then call a terminal ``as_polars()`` /

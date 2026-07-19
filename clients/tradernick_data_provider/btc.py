@@ -4,6 +4,7 @@ Exposed as ``client.btc`` on :class:`DataProviderClient`. Targets the
 server's ``/btc/...`` HTTP routes.
 """
 from __future__ import annotations
+from typing import TypeVar
 
 import httpx
 import pyarrow as pa
@@ -12,9 +13,10 @@ from ._http import fetch_table
 from ._query import CacheableQuery
 from .protocols import BitcoinNativeNamespace, BitcoinNativeTransfersQuery
 
-if __import__('typing').TYPE_CHECKING:
-    from typing_extensions import Self
-
+# Self-type TypeVar for fluent-builder chaining. Equivalent to typing.Self
+# (PEP 673) but the explicit self-type form is what jedi/IDE completion
+# follows correctly through the mixin/base hierarchy.
+_T = TypeVar("_T")
 
 class BtcMinedQuery(CacheableQuery):
     """Query builder for Bitcoin coinbase (block-reward) payouts."""
@@ -25,7 +27,7 @@ class BtcMinedQuery(CacheableQuery):
 
     # receiver / receiver_label (and the rest of the wallet-selection surface)
     # are inherited from _WalletFilters.
-    def min_amount(self, amount: float) -> Self:
+    def min_amount(self: _T, amount: float) -> _T:
         self._min_amount = amount
         return self
 
