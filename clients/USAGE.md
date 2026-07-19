@@ -215,7 +215,7 @@ hl.funding()            # funding
 hl.transfers()          # ledger transfers — NOT token-scoped (no .tokens())
 hl.vaults()             # vault data     — NOT token-scoped (no .tokens())
 hl.realized_performance()  # PnL/fees/funding/volume per wallet-token; needs tokens/wallets
-hl.position_history()   # position snapshots — needs tokens/wallets
+hl.positions()          # position snapshots (downsampled) OR .aggregate() action-flow; REQUIRES .window()
 hl.sends()              # EXPOSED BUT EMPTY (see §16)
 hl.spot_transfers()     # EXPOSED BUT EMPTY (see §16)
 ```
@@ -227,8 +227,8 @@ Chainables (in addition to `.time_range()`):
 | `.tokens(*symbols)` | restrict to tokens — varargs or a list. **Not on `transfers()` / `vaults()`** (no token column). |
 | `.wallets(*addresses)` | restrict to wallet addresses (varargs or a list). Matches `wallet` (or buyer **or** seller for `trades()`). **Not on `ohlcv()`** (candles are market-wide). |
 | `.wallet_groups(*groups)` | like `.wallets()` but pass **group name(s)** — resolved to member addresses server-side. Available wherever `.wallets()` is; unions with `.wallets()`. |
-| `.window(size)` | bucket size — **only on `ohlcv()`, `position_history()`, `realized_performance()`**. e.g. `.window("1h")` (realized_performance: min 15m) |
-| `.aggregate(flag=True)` | **`realized_performance()` only** — SUM metrics across the selected wallets → one row per **(token, window)** (drops `wallet`). **Requires** `.wallets()` or `.wallet_groups()`. |
+| `.window(size)` | bucket size — **only on `ohlcv()`, `positions()`, `realized_performance()`**. e.g. `.window("1h")`. `realized_performance`: min 15m. `positions`: **required**, a 15m multiple. |
+| `.aggregate(flag=True)` | **`realized_performance()` and `positions()`** — collapse per-wallet rows into per-**(token, window)** totals across the selected wallets (drops `wallet`). **Requires** `.wallets()` or `.wallet_groups()`. For `realized_performance` it SUMs the PnL/volume metrics; for `positions` it returns a **different action-flow frame** (see §on positions). |
 | `.per_token(flag=True)` | per-token breakdown |
 | `.skip_hip3(flag=True)` | exclude HIP-3 markets |
 | `.market_type(t)` | e.g. `"perp"` / `"spot"` |
@@ -295,6 +295,44 @@ unbounded set is rejected). Works in snapshot mode too (per token+day).
 
 > **Tip:** for a single window's total, sum the windowed rows (or diff two
 > snapshots). Only reach for `fills` when you need per-trade detail.
+
+### `positions` — downsampled snapshots vs aggregate action-flow
+
+`positions()` **requires `.window()`** (a 15m multiple, e.g. `"15m"` / `"1h"` /
+`"4h"`) and `tokens`/`wallets`/`wallet_groups`. Two modes:
+
+- **Snapshot mode** (no `.aggregate()`) — the position-state snapshots
+  **downsampled** to the window: the **last snapshot in each window** per
+  `(wallet, token)`, stamped at the **window start** (sparse — a window with no
+  snapshot produces no row; no carry-forward). Columns: `time, wallet, token,
+  side, amount, avg_entry, opened_at, mark_price, size, unrealized_pnl, funding,
+  fee, exact_avg_price`.
+- **Aggregate mode** (`.aggregate()`, needs `.wallets()`/`.wallet_groups()`) —
+  a **different frame**: per-`(token, window)` position-**action** flow in **`$`
+  notional** (`price × size`), computed from fills and classified by each fill's
+  transition. Columns:
+
+  | Column | Meaning (all `$` notional) |
+  |---|---|
+  | `opened_long` / `opened_short` | flat → long / short |
+  | `increased_long` / `increased_short` | added to an existing long / short |
+  | `decreased_long` / `decreased_short` | partial close of a long / short |
+  | `closed_long` / `closed_short` | long / short → flat |
+  | `flip_ls` / `flip_sl` | long → short / short → long |
+  | `net_pos_change` | `increased_long + decreased_short − increased_short − decreased_long` (directional inc/dec flow; excludes opens/closes/flips) |
+  | `net_flip` | `flip_sl − flip_ls` (net flips into long) |
+  | `net_flow` | full directional net: `(open/inc long + close/dec short + flip S→L) − (open/inc short + close/dec long + flip L→S)` |
+
+```python
+# position snapshots resampled to hourly (last-in-hour, time = hour start)
+snaps = await hl.positions().tokens("BTC").wallets("0xabc...") \
+    .window("1h").time_range("2026-07-18", "2026-07-19").as_polars()
+
+# a wallet GROUP's hourly position-action $ flow for BTC
+flow = await hl.positions().tokens("BTC").wallet_groups("Whales") \
+    .window("1h").aggregate().time_range("2026-07-18", "2026-07-19").as_polars()
+# -> time, token, opened_long, ..., flip_sl, net_pos_change, net_flip, net_flow
+```
 
 ---
 

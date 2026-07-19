@@ -165,7 +165,7 @@ class BinanceNamespace:
 
 # Hyperliquid builders compose their chainables from capability mixins, since the
 # endpoints differ in which filters make sense: tokens (all but transfers/vaults),
-# wallets (all but ohlcv), window (ohlcv / position_history / realized_performance).
+# wallets (all but ohlcv), window (ohlcv / positions / realized_performance).
 class _HLTokensMixin:
     _body: dict
 
@@ -198,7 +198,7 @@ class _HLWindowMixin:
 
     def window(self: _T, size: str) -> _T:
         """Bucket/snapshot size, e.g. ``'5m'`` / ``'1h'`` (ohlcv candles;
-        position_history cadence; realized_performance windows, min 15m)."""
+        positions window, 15m multiple; realized_performance windows, min 15m)."""
         self._body["window"] = size
         return self
 
@@ -253,7 +253,7 @@ class _HLOhlcvQuery(_HLBaseQuery, _HLTokensMixin, _HLWindowMixin):
 
 
 class _HLPerfQuery(_HLOhlcvQuery, _HLWalletsMixin):
-    """Token + wallet + window: ``position_history``."""
+    """Token + wallet + window base for ``realized_performance`` / ``positions``."""
 
 
 class _HLRealizedPerfQuery(_HLPerfQuery):
@@ -265,6 +265,25 @@ class _HLRealizedPerfQuery(_HLPerfQuery):
         volume, trade_count) across the selected wallets. Works in both snapshot
         and windowed modes. **Requires** ``.wallets()`` or ``.wallet_groups()``.
         The ``wallet`` column is dropped from the result."""
+        self._body["aggregate"] = enabled
+        return self
+
+
+class _HLPositionsQuery(_HLPerfQuery):
+    """``positions`` — token + wallet + REQUIRED window; adds ``.aggregate()``.
+
+    ``.window(...)`` is required (a 15m multiple, e.g. ``'15m'`` / ``'1h'`` / ``'4h'``).
+    Without ``.aggregate()`` it returns the position-state snapshots downsampled to
+    the window (last snapshot per window, start-aligned)."""
+
+    def aggregate(self: _T, enabled: bool = True) -> _T:
+        """Switch to **aggregate** mode: per-(token, window) position-ACTION flow
+        (``$`` notional) across the selected wallets, from fills. Returns a DIFFERENT
+        frame: ``opened_long``/``opened_short``/``increased_long``/``decreased_long``/
+        ``increased_short``/``decreased_short``/``closed_long``/``closed_short``/
+        ``flip_ls``/``flip_sl`` + ``net_pos_change`` (inc_long+dec_short−inc_short−dec_long),
+        ``net_flip`` (flip_sl−flip_ls), and ``net_flow`` (full directional net). Time is
+        the window start. **Requires** ``.wallets()`` or ``.wallet_groups()``."""
         self._body["aggregate"] = enabled
         return self
 
@@ -315,6 +334,16 @@ class HyperliquidNamespace:
         selected wallets → per-(token, window) totals (drops ``wallet``)."""
         return _HLRealizedPerfQuery(self._session, self._base_url, "/hyperliquid/realized_performance/read")
 
-    def position_history(self) -> _HLPerfQuery:
-        """Carry-forward position snapshots per ``.window(...)``. Requires ``tokens`` or ``wallets``."""
-        return _HLPerfQuery(self._session, self._base_url, "/hyperliquid/position_history/read")
+    def positions(self) -> _HLPositionsQuery:
+        """Hyperliquid positions, per REQUIRED ``.window(...)`` (a 15m multiple).
+        Requires ``tokens``, ``wallets``, or ``wallet_groups``.
+
+        - **Snapshot mode** (no ``.aggregate()``): position-state snapshots
+          DOWNSAMPLED to the window — the last snapshot in each window, stamped at
+          the window start (sparse; no carry-forward). Columns: time, wallet, token,
+          side, amount, avg_entry, opened_at, mark_price, size, unrealized_pnl,
+          funding, fee, exact_avg_price.
+        - **Aggregate mode** (``.aggregate()``): per-(token, window) position-action
+          ``$`` flow across the selected wallets, from fills (see
+          :meth:`_HLPositionsQuery.aggregate`). Requires ``wallets``/``wallet_groups``."""
+        return _HLPositionsQuery(self._session, self._base_url, "/hyperliquid/positions/read")

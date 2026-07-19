@@ -1062,15 +1062,31 @@ def hl_realized_performance_windowed(since: str, until: str, window: str, *,
     return sql, params
 
 
-def hl_position_history(since: str, until: str, *,
-                        tokens: list[str] | None = None,
-                        wallets: list[str] | None = None,
-                        wallet_groups: list[str] | None = None,
-                        window: str | None = None,
-                        limit: int | None = None) -> tuple[str, dict[str, Any]]:
-    """Horatio shape: (time(us,UTC), wallet, token, side, amount, avg_entry,
+def _positions_window_secs(window: str) -> int:
+    """positions windows must be a whole multiple of 15m (>= 15m). The 15m floor
+    matches the position-snapshot cadence (so downsample buckets line up with the
+    snapshots), and aggregate mode uses the same contract for symmetry."""
+    secs = window_seconds(window)
+    if secs < 900 or secs % 900 != 0:
+        raise ValueError("positions window must be a multiple of 15m (e.g. '15m', '1h', '4h')")
+    return secs
+
+
+def hl_positions(since: str, until: str, window: str, *,
+                 tokens: list[str] | None = None,
+                 wallets: list[str] | None = None,
+                 wallet_groups: list[str] | None = None,
+                 limit: int | None = None) -> tuple[str, dict[str, Any]]:
+    """Snapshot mode (DOWNSAMPLED): the raw hl_position_history position-state
+    snapshots resampled to `window`. Per (wallet, token) we keep the LAST snapshot
+    within each window and stamp it at the window START (start-aligned, like
+    realized_performance windowed). Sparse: a (wallet, token, window) row appears
+    only when that window contains a snapshot (no carry-forward).
+
+    Horatio shape: (time(us,UTC), wallet, token, side, amount, avg_entry,
     opened_at(string!), mark_price, size, unrealized_pnl, funding, fee,
-    exact_avg_price(bool)). `opened_at` is a string per Horatio."""
+    exact_avg_price(bool)). `window` is required and must be a 15m multiple."""
+    secs = _positions_window_secs(window)
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
         'time >= toDateTime64({since:String}, 3)',
@@ -1081,15 +1097,119 @@ def hl_position_history(since: str, until: str, *,
     if limit is not None:
         params['limit'] = int(limit)
         limit_clause = 'LIMIT {limit:UInt32}'
+    # `secs` is a validated int → safe to inline (INTERVAL doesn't take a param).
+    # Inner subquery exposes raw snapshot time as `t` and the window as `w` so the
+    # outer argMax(_, t) unambiguously picks the last snapshot in each window.
     sql = f"""
-        SELECT {_time_us()}, wallet, token, side, amount, avg_entry,
-               toString(opened_at) AS opened_at,
-               mark_price, size, unrealized_pnl, funding, fee,
-               toBool(exact_avg_price) AS exact_avg_price
-        FROM tradernick.hl_position_history FINAL
-        WHERE {' AND '.join(where)}
+        SELECT
+            toDateTime64(w, 6, 'UTC') AS time,
+            wallet, token,
+            argMax(side, t)                       AS side,
+            argMax(amount, t)                     AS amount,
+            argMax(avg_entry, t)                  AS avg_entry,
+            toString(argMax(opened_at, t))        AS opened_at,
+            argMax(mark_price, t)                 AS mark_price,
+            argMax(size, t)                       AS size,
+            argMax(unrealized_pnl, t)             AS unrealized_pnl,
+            argMax(funding, t)                    AS funding,
+            argMax(fee, t)                        AS fee,
+            toBool(argMax(exact_avg_price, t))    AS exact_avg_price
+        FROM (
+            SELECT time AS t,
+                   toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
+                   wallet, token, side, amount, avg_entry, opened_at,
+                   mark_price, size, unrealized_pnl, funding, fee, exact_avg_price
+            FROM tradernick.hl_position_history FINAL
+            WHERE {' AND '.join(where)}
+        )
+        GROUP BY wallet, token, w
         ORDER BY time, wallet, token
         {limit_clause}
+    """
+    return sql, params
+
+
+# Fill → position-action classification, replicated from the data_server Trading
+# Pit (`_TP_TYPE_SQL`). `dir` + signed `start_position` + size fully determine the
+# transition; a Close that lands the end-position at ~0 is a full close, else a
+# partial decrease. Flips are their own `dir`.
+_HL_FILL_ACTION_SQL = """multiIf(
+    dir = 'Open Long'  AND start_position = 0, 'open_long',
+    dir = 'Open Long', 'inc_long',
+    dir = 'Open Short' AND start_position = 0, 'open_short',
+    dir = 'Open Short', 'inc_short',
+    dir = 'Close Long'  AND abs(start_position + if(side = 'B', size, -size)) < 1e-6 * abs(start_position), 'close_long',
+    dir = 'Close Long', 'dec_long',
+    dir = 'Close Short' AND abs(start_position + if(side = 'B', size, -size)) < 1e-6 * abs(start_position), 'close_short',
+    dir = 'Close Short', 'dec_short',
+    dir = 'Long > Short', 'flip_ls',
+    dir = 'Short > Long', 'flip_sl',
+    'other')"""
+
+
+def hl_positions_aggregate(since: str, until: str, window: str, *,
+                           tokens: list[str] | None = None,
+                           wallets: list[str] | None = None,
+                           wallet_groups: list[str] | None = None) -> tuple[str, dict[str, Any]]:
+    """Aggregate mode: per-(token, window) position-ACTION flow across the selected
+    wallets, computed from hl_fills (NOT snapshots). Each fill is classified by its
+    `dir`+`start_position` transition (open/increase/decrease/close a long/short;
+    flip L→S / S→L) and valued at its `$ notional` (price*size); the window is
+    start-aligned (bucketed at its start). Columns (all $ notional):
+
+      opened_long, opened_short, increased_long, decreased_long,
+      increased_short, decreased_short, closed_long, closed_short,
+      flip_ls (L→S), flip_sl (S→L),
+      net_pos_change = increased_long + decreased_short − increased_short − decreased_long
+                       (directional inc/dec flow; excludes opens/closes/flips),
+      net_flip       = flip_sl − flip_ls (net flips into long),
+      net_flow       = full directional net: (open/inc long + close/dec short + flip S→L)
+                       − (open/inc short + close/dec long + flip L→S).
+
+    `window` required (15m multiple). Requires `wallets` or `wallet_groups`."""
+    secs = _positions_window_secs(window)
+    params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
+    where = [
+        'time >= toDateTime64({since:String}, 3)',
+        'time <  toDateTime64({until:String}, 3)',
+    ]
+    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
+    # `secs` is a validated int → safe to inline. 3 levels: classify fills → sum
+    # each action's $ per (token, window) → derive the net_* columns from those sums.
+    sql = f"""
+        SELECT
+            time, token,
+            opened_long, opened_short, increased_long, decreased_long,
+            increased_short, decreased_short, closed_long, closed_short,
+            flip_ls, flip_sl,
+            (increased_long + decreased_short - increased_short - decreased_long) AS net_pos_change,
+            (flip_sl - flip_ls) AS net_flip,
+            (opened_long + increased_long + closed_short + decreased_short + flip_sl
+             - opened_short - increased_short - closed_long - decreased_long - flip_ls) AS net_flow
+        FROM (
+            SELECT
+                toDateTime64(w, 6, 'UTC') AS time, token,
+                sumIf(v, ty = 'open_long')   AS opened_long,
+                sumIf(v, ty = 'open_short')  AS opened_short,
+                sumIf(v, ty = 'inc_long')    AS increased_long,
+                sumIf(v, ty = 'dec_long')    AS decreased_long,
+                sumIf(v, ty = 'inc_short')   AS increased_short,
+                sumIf(v, ty = 'dec_short')   AS decreased_short,
+                sumIf(v, ty = 'close_long')  AS closed_long,
+                sumIf(v, ty = 'close_short') AS closed_short,
+                sumIf(v, ty = 'flip_ls')     AS flip_ls,
+                sumIf(v, ty = 'flip_sl')     AS flip_sl
+            FROM (
+                SELECT token,
+                       toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
+                       price * size AS v,
+                       {_HL_FILL_ACTION_SQL} AS ty
+                FROM tradernick.hl_fills FINAL
+                WHERE {' AND '.join(where)}
+            )
+            GROUP BY token, w
+        )
+        ORDER BY time, token
     """
     return sql, params
 

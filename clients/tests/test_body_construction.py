@@ -117,7 +117,7 @@ def test_hyperliquid_fills_with_extra_cols(client):
 
 def test_hyperliquid_window_scoping(client):
     hl = client.hyperliquid
-    for name in ("ohlcv", "position_history", "realized_performance"):
+    for name in ("ohlcv", "positions", "realized_performance"):
         assert hasattr(getattr(hl, name)(), "window"), f"{name} should have .window()"
     for name in ("fills", "trades", "funding", "transfers", "vaults"):
         assert not hasattr(getattr(hl, name)(), "window"), f"{name} should not have .window()"
@@ -142,7 +142,7 @@ def test_hyperliquid_wallet_scoping_and_groups(client):
     assert not hasattr(hl.ohlcv(), "wallet_groups")
     # every wallet-aware endpoint has BOTH .wallets() and .wallet_groups()
     for name in ("fills", "trades", "funding", "transfers", "vaults",
-                 "realized_performance", "position_history"):
+                 "realized_performance", "positions"):
         q = getattr(hl, name)()
         assert hasattr(q, "wallets") and hasattr(q, "wallet_groups"), name
     # .wallet_groups() accepts str or list and combines with .wallets()
@@ -153,12 +153,24 @@ def test_hyperliquid_wallet_scoping_and_groups(client):
 
 def test_realized_performance_aggregate(client):
     hl = client.hyperliquid
-    # .aggregate() only on realized_performance; sets the flag
+    # .aggregate() sets the flag on realized_performance
     rp = hl.realized_performance().wallet_groups("Whales").aggregate()
     assert rp._body["aggregate"] is True
     assert hl.realized_performance().wallets("0x1").aggregate(False)._body["aggregate"] is False
-    # position_history does not expose the realized-perf aggregate flag semantics
-    assert type(hl.position_history()).__name__ != type(hl.realized_performance()).__name__
+
+
+def test_positions_aggregate_and_window(client):
+    hl = client.hyperliquid
+    # positions has .aggregate() too, but is its own distinct builder type
+    assert type(hl.positions()).__name__ != type(hl.realized_performance()).__name__
+    pos = hl.positions().wallet_groups("Whales").window("1h").aggregate()
+    assert pos._body["aggregate"] is True
+    assert pos._body["window"] == "1h"
+    # positions is token + wallet + window scoped
+    q = hl.positions().tokens("BTC").wallets("0xabc").window("15m")
+    assert q._body["tokens"] == ["BTC"]
+    assert q._body["wallets"] == ["0xabc"]
+    assert q._body["window"] == "15m"
 
 
 def test_hyperliquid_chainables(client):
@@ -184,7 +196,7 @@ def test_hyperliquid_chainables(client):
     (lambda hl: hl.sends(), "/hyperliquid/sends/read"),
     (lambda hl: hl.spot_transfers(), "/hyperliquid/spot_transfers/read"),
     (lambda hl: hl.realized_performance(), "/hyperliquid/realized_performance/read"),
-    (lambda hl: hl.position_history(), "/hyperliquid/position_history/read"),
+    (lambda hl: hl.positions(), "/hyperliquid/positions/read"),
 ])
 @pytest.mark.asyncio
 async def test_hyperliquid_paths(client, monkeypatch, factory, path):

@@ -143,8 +143,11 @@ What works:
   `_groups` + `exclude_*` (all `str | list`) + `min_amount`/`max_amount`
 - `tron.{native, trc20}.transfers`, `btc.native.transfers`
 - `hyperliquid.{ohlcv, trades, fills, funding, transfers, vaults,
-  realized_performance, position_history}` — `realized_performance` has snapshot
-  (cumulative) + windowed (`.window("15m"+)`, per-window realized) modes
+  realized_performance, positions}` — `realized_performance` has snapshot
+  (cumulative) + windowed (`.window("15m"+)`, per-window realized) modes;
+  `positions` (requires `.window()`, a 15m multiple) returns downsampled position
+  snapshots, or with `.aggregate()` a per-`(token, window)` action-flow frame
+  (opened/increased/decreased/closed long/short, flips, net_pos_change/flip/flow)
 - `client.wallets.{list, get, upsert, delete, addresses}` — `addresses(...)`
   resolves a group/category/entity selection to its addresses
 - `client.{load_parquet, scan_parquet, list_snapshots, delete_snapshot,
