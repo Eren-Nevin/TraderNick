@@ -228,7 +228,9 @@ Chainables (in addition to `.time_range()`):
 | `.wallets(*addresses)` | restrict to wallet addresses (varargs or a list). Matches `wallet` (or buyer **or** seller for `trades()`). **Not on `ohlcv()`** (candles are market-wide). |
 | `.wallet_groups(*groups)` | like `.wallets()` but pass **group name(s)** — resolved to member addresses server-side. Available wherever `.wallets()` is; unions with `.wallets()`. |
 | `.window(size)` | bucket size — **only on `ohlcv()`, `positions()`, `realized_performance()`**. e.g. `.window("1h")`. `realized_performance`: min 15m. `positions`: **required**, a 15m multiple. |
-| `.aggregate(flag=True)` | **`realized_performance()` and `positions()`** — collapse per-wallet rows into per-**(token, window)** totals (drops `wallet`). For `realized_performance` it SUMs the PnL/volume metrics and **requires** `.wallets()`/`.wallet_groups()`; for `positions` it returns a **different action-flow frame** (see §on positions) and `.wallets()`/`.wallet_groups()` are **optional** (with only `.tokens()` it covers all wallets). |
+| `.aggregate(flag=True)` | per-**(token, window)** totals (drops `wallet`). **`realized_performance()`**: SUMs PnL/volume metrics, **requires** `.wallets()`/`.wallet_groups()`. **`positions()`**: the open-position **book** from snapshots (side/net_size/counts/sizes/avg_entry), wallets optional. |
+| `.aggregate_change(flag=True)` | **`positions()` only** — per-**(token, window)** position-**action** `$` flow from fills (opened/increased/decreased/closed long/short, flips, net_pos_change/flip/flow). Wallets optional. |
+| `.pos_recency_hrs(n)` | **`positions().aggregate()` only** — drop **stale** positions: keep a position only if the wallet traded that token within `n` hours of the snapshot. |
 | `.per_token(flag=True)` | per-token breakdown |
 | `.skip_hip3(flag=True)` | exclude HIP-3 markets |
 | `.market_type(t)` | e.g. `"perp"` / `"spot"` |
@@ -296,22 +298,38 @@ unbounded set is rejected). Works in snapshot mode too (per token+day).
 > **Tip:** for a single window's total, sum the windowed rows (or diff two
 > snapshots). Only reach for `fills` when you need per-trade detail.
 
-### `positions` — downsampled snapshots vs aggregate action-flow
+### `positions` — snapshots, snapshot-aggregate, change-aggregate
 
 `positions()` **requires `.window()`** (a 15m multiple, e.g. `"15m"` / `"1h"` /
-`"4h"`) and `tokens`/`wallets`/`wallet_groups`. Two modes:
+`"4h"`) and `tokens`/`wallets`/`wallet_groups`. **Three** modes. For both
+aggregates `.wallets()`/`.wallet_groups()` are **optional** — with only
+`.tokens()` they cover **all** wallets for those tokens.
 
-- **Snapshot mode** (no `.aggregate()`) — the position-state snapshots
-  **downsampled** to the window: the **last snapshot in each window** per
-  `(wallet, token)`, stamped at the **window start** (sparse — a window with no
-  snapshot produces no row; no carry-forward). Columns: `time, wallet, token,
-  side, amount, avg_entry, opened_at, mark_price, size, unrealized_pnl, funding,
-  fee, exact_avg_price`.
-- **Aggregate mode** (`.aggregate()`) — a **different frame**: per-`(token,
-  window)` position-**action** flow in **`$` notional** (`price × size`),
-  computed from fills and classified by each fill's transition. `.wallets()` /
-  `.wallet_groups()` are **optional** here — with only `.tokens()` it aggregates
-  over **all** wallets for those tokens. Columns:
+**1. Downsampled snapshots** (no aggregate) — the position-state snapshots
+**downsampled** to the window: the **last snapshot in each window** per
+`(wallet, token)`, stamped at the **window start** (sparse — a window with no
+snapshot produces no row; no carry-forward). Columns: `time, wallet, token,
+side, amount, avg_entry, opened_at, mark_price, size, unrealized_pnl, funding,
+fee, exact_avg_price`.
+
+**2. Snapshot aggregate** (`.aggregate()`) — per-`(token, window)` **open-position
+book** built from snapshots (mirrors the Group Snapshot view). `size` is `$`
+notional. Optional `.pos_recency_hrs(n)` drops **stale** positions (keeps a
+position only if the wallet had a fill in that token within `n` hours of the
+snapshot). Columns:
+
+  | Column | Meaning |
+  |---|---|
+  | `side` | `long`/`short`/`flat` — sign of `net_size` |
+  | `net_size` | `longs_size − shorts_size` (`$`) |
+  | `total_count` | # open positions (`longs_count + shorts_count`) |
+  | `longs_size` / `shorts_size` | Σ `$` size on each side |
+  | `longs_count` / `shorts_count` | # positions on each side |
+  | `avg_entry` | `Σ(size·avg_entry)/Σ(size)` — `$`-size-weighted over all positions |
+
+**3. Change aggregate** (`.aggregate_change()`) — per-`(token, window)`
+position-**action** flow in **`$` notional** (`price × size`), computed from
+**fills** and classified by each fill's transition. Columns:
 
   | Column | Meaning (all `$` notional) |
   |---|---|
@@ -325,13 +343,18 @@ unbounded set is rejected). Works in snapshot mode too (per token+day).
   | `net_flow` | full directional net: `(open/inc long + close/dec short + flip S→L) − (open/inc short + close/dec long + flip L→S)` |
 
 ```python
-# position snapshots resampled to hourly (last-in-hour, time = hour start)
+# 1. position snapshots resampled to hourly (last-in-hour, time = hour start)
 snaps = await hl.positions().tokens("BTC").wallets("0xabc...") \
     .window("1h").time_range("2026-07-18", "2026-07-19").as_polars()
 
-# a wallet GROUP's hourly position-action $ flow for BTC
+# 2. hourly open-position book for BTC across all wallets, non-stale (24h)
+book = await hl.positions().tokens("BTC").window("1h").aggregate() \
+    .pos_recency_hrs(24).time_range("2026-07-18", "2026-07-19").as_polars()
+# -> time, token, side, net_size, total_count, longs/shorts_size+count, avg_entry
+
+# 3. a wallet GROUP's hourly position-action $ flow for BTC
 flow = await hl.positions().tokens("BTC").wallet_groups("Whales") \
-    .window("1h").aggregate().time_range("2026-07-18", "2026-07-19").as_polars()
+    .window("1h").aggregate_change().time_range("2026-07-18", "2026-07-19").as_polars()
 # -> time, token, opened_long, ..., flip_sl, net_pos_change, net_flip, net_flow
 ```
 

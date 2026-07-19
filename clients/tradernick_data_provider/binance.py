@@ -270,22 +270,46 @@ class _HLRealizedPerfQuery(_HLPerfQuery):
 
 
 class _HLPositionsQuery(_HLPerfQuery):
-    """``positions`` — token + wallet + REQUIRED window; adds ``.aggregate()``.
+    """``positions`` — token + wallet + REQUIRED window; three modes.
 
     ``.window(...)`` is required (a 15m multiple, e.g. ``'15m'`` / ``'1h'`` / ``'4h'``).
-    Without ``.aggregate()`` it returns the position-state snapshots downsampled to
-    the window (last snapshot per window, start-aligned)."""
+
+    - default (no aggregate): the position-state snapshots downsampled to the
+      window (last snapshot per window, start-aligned).
+    - ``.aggregate()``: per-(token, window) OPEN-position book from snapshots.
+    - ``.aggregate_change()``: per-(token, window) position-ACTION flow from fills.
+
+    ``.aggregate()`` and ``.aggregate_change()`` are mutually exclusive; if both
+    are set, ``aggregate_change`` wins (server-side)."""
 
     def aggregate(self: _T, enabled: bool = True) -> _T:
-        """Switch to **aggregate** mode: per-(token, window) position-ACTION flow
-        (``$`` notional) across the selected wallets, from fills. Returns a DIFFERENT
-        frame: ``opened_long``/``opened_short``/``increased_long``/``decreased_long``/
-        ``increased_short``/``decreased_short``/``closed_long``/``closed_short``/
-        ``flip_ls``/``flip_sl`` + ``net_pos_change`` (inc_long+dec_short−inc_short−dec_long),
-        ``net_flip`` (flip_sl−flip_ls), and ``net_flow`` (full directional net). Time is
-        the window start. ``.wallets()`` / ``.wallet_groups()`` are OPTIONAL — with just
-        ``.tokens()`` it aggregates over ALL wallets for the selected token(s)."""
+        """**Snapshot** aggregate: per-(token, window) OPEN-position book from
+        position snapshots. Returns: ``side`` (from sign of ``net_size``),
+        ``net_size`` (longs_size − shorts_size, ``$``), ``total_count``,
+        ``longs_size``/``longs_count``, ``shorts_size``/``shorts_count``, and
+        ``avg_entry`` (``$``-size-weighted). ``$`` = notional. ``.wallets()`` /
+        ``.wallet_groups()`` optional (only ``.tokens()`` → all wallets holding
+        them). Pair with :meth:`pos_recency_hrs` to drop stale positions."""
         self._body["aggregate"] = enabled
+        return self
+
+    def aggregate_change(self: _T, enabled: bool = True) -> _T:
+        """**Change** aggregate: per-(token, window) position-ACTION flow (``$``
+        notional) from fills. Returns a DIFFERENT frame: ``opened_long``/
+        ``opened_short``/``increased_long``/``decreased_long``/``increased_short``/
+        ``decreased_short``/``closed_long``/``closed_short``/``flip_ls``/``flip_sl``
+        + ``net_pos_change`` (inc_long+dec_short−inc_short−dec_long), ``net_flip``
+        (flip_sl−flip_ls), and ``net_flow`` (full directional net). Time is the window
+        start. ``.wallets()`` / ``.wallet_groups()`` optional (only ``.tokens()`` →
+        ALL wallets for the selected token(s))."""
+        self._body["aggregate_change"] = enabled
+        return self
+
+    def pos_recency_hrs(self: _T, hours: int) -> _T:
+        """**`.aggregate()` (snapshot) only** — drop STALE positions: keep a position
+        only if the wallet had a fill in that token within ``hours`` of the snapshot.
+        Omit to include every open position regardless of age."""
+        self._body["pos_recency_hrs"] = hours
         return self
 
 
@@ -344,8 +368,13 @@ class HyperliquidNamespace:
           the window start (sparse; no carry-forward). Columns: time, wallet, token,
           side, amount, avg_entry, opened_at, mark_price, size, unrealized_pnl,
           funding, fee, exact_avg_price.
-        - **Aggregate mode** (``.aggregate()``): per-(token, window) position-action
-          ``$`` flow across wallets, from fills (see
-          :meth:`_HLPositionsQuery.aggregate`). ``wallets``/``wallet_groups`` optional —
-          with only ``tokens`` it covers ALL wallets for those tokens."""
+        - **Snapshot aggregate** (``.aggregate()``): per-(token, window) OPEN-position
+          book from snapshots — side/net_size/counts/sizes/avg_entry (see
+          :meth:`_HLPositionsQuery.aggregate`; optional ``.pos_recency_hrs()``).
+        - **Change aggregate** (``.aggregate_change()``): per-(token, window)
+          position-action ``$`` flow from fills (see
+          :meth:`_HLPositionsQuery.aggregate_change`).
+
+        Both aggregates: ``wallets``/``wallet_groups`` optional — with only ``tokens``
+        they cover ALL wallets for those tokens."""
         return _HLPositionsQuery(self._session, self._base_url, "/hyperliquid/positions/read")

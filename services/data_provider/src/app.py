@@ -322,8 +322,8 @@ _EMPTY_HL_POSITIONS = pl.DataFrame(schema={
     'unrealized_pnl': pl.Float64, 'funding': pl.Float64, 'fee': pl.Float64,
     'exact_avg_price': pl.Boolean,
 })
-# aggregate mode: per-(token, window) position-action $ flow (no wallet column).
-_EMPTY_HL_POSITIONS_AGG = pl.DataFrame(schema={
+# change-aggregate mode: per-(token, window) position-action $ flow (no wallet column).
+_EMPTY_HL_POSITIONS_CHANGE_AGG = pl.DataFrame(schema={
     'time': pl.Datetime('us', 'UTC'), 'token': pl.Utf8,
     'opened_long': pl.Float64, 'opened_short': pl.Float64,
     'increased_long': pl.Float64, 'decreased_long': pl.Float64,
@@ -331,6 +331,14 @@ _EMPTY_HL_POSITIONS_AGG = pl.DataFrame(schema={
     'closed_long': pl.Float64, 'closed_short': pl.Float64,
     'flip_ls': pl.Float64, 'flip_sl': pl.Float64,
     'net_pos_change': pl.Float64, 'net_flip': pl.Float64, 'net_flow': pl.Float64,
+})
+# snapshot-aggregate mode: per-(token, window) open-position book (no wallet column).
+_EMPTY_HL_POSITIONS_SNAP_AGG = pl.DataFrame(schema={
+    'time': pl.Datetime('us', 'UTC'), 'token': pl.Utf8, 'side': pl.Utf8,
+    'net_size': pl.Float64, 'total_count': pl.Int64,
+    'longs_size': pl.Float64, 'longs_count': pl.Int64,
+    'shorts_size': pl.Float64, 'shorts_count': pl.Int64,
+    'avg_entry': pl.Float64,
 })
 
 
@@ -855,19 +863,38 @@ async def hyperliquid_positions(request: Request):
             {'error': 'positions requires `window` (a 15m multiple, e.g. "15m", "1h")'},
             status=400,
         )
-    # Unlike realized_performance, positions aggregate does NOT require a wallet
-    # set — with only `tokens` it aggregates the action-flow over ALL wallets for
-    # those tokens. The general tokens/wallets/wallet_groups guard above still
-    # bounds the fills scan.
-    aggregate = bool(body.get('aggregate'))
+    # Neither aggregate mode requires a wallet set — with only `tokens` they cover
+    # ALL wallets for those tokens. The general tokens/wallets/wallet_groups guard
+    # above still bounds the scan.
+    aggregate_change = bool(body.get('aggregate_change'))  # fills action-flow
+    aggregate = bool(body.get('aggregate'))                # snapshot position book
+    recency = body.get('pos_recency_hrs')
+    if recency is not None:
+        try:
+            recency = int(recency)
+            if recency <= 0:
+                raise ValueError
+        except (TypeError, ValueError):
+            return response.json(
+                {'error': '`pos_recency_hrs` must be a positive integer'}, status=400,
+            )
     try:
-        if aggregate:
+        if aggregate_change:
             # Fills-based per-(token, window) position-action flow ($ notional).
-            sql, params = sql_b.hl_positions_aggregate(
+            sql, params = sql_b.hl_positions_change_aggregate(
                 body['since'], body['until'], window,
                 tokens=body.get('tokens') or None,
                 wallets=body.get('wallets') or None,
                 wallet_groups=body.get('wallet_groups') or None,
+            )
+        elif aggregate:
+            # Snapshot-based per-(token, window) open-position book.
+            sql, params = sql_b.hl_positions_snapshot_aggregate(
+                body['since'], body['until'], window,
+                tokens=body.get('tokens') or None,
+                wallets=body.get('wallets') or None,
+                wallet_groups=body.get('wallet_groups') or None,
+                pos_recency_hrs=recency,
             )
         else:
             # Position snapshots downsampled to `window` (last-in-window, start-aligned).
@@ -882,7 +909,12 @@ async def hyperliquid_positions(request: Request):
         return response.json({'error': str(e)}, status=400)
     df = await query_polars(sql, params)
     if df.is_empty():
-        df = _EMPTY_HL_POSITIONS_AGG if aggregate else _EMPTY_HL_POSITIONS
+        if aggregate_change:
+            df = _EMPTY_HL_POSITIONS_CHANGE_AGG
+        elif aggregate:
+            df = _EMPTY_HL_POSITIONS_SNAP_AGG
+        else:
+            df = _EMPTY_HL_POSITIONS
     return await _maybe_save_or_return(df, body, 'hyperliquid_positions.parquet')
 
 

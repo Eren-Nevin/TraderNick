@@ -1147,12 +1147,12 @@ _HL_FILL_ACTION_SQL = """multiIf(
     'other')"""
 
 
-def hl_positions_aggregate(since: str, until: str, window: str, *,
-                           tokens: list[str] | None = None,
-                           wallets: list[str] | None = None,
-                           wallet_groups: list[str] | None = None) -> tuple[str, dict[str, Any]]:
-    """Aggregate mode: per-(token, window) position-ACTION flow across the selected
-    wallets, computed from hl_fills (NOT snapshots). Each fill is classified by its
+def hl_positions_change_aggregate(since: str, until: str, window: str, *,
+                                  tokens: list[str] | None = None,
+                                  wallets: list[str] | None = None,
+                                  wallet_groups: list[str] | None = None) -> tuple[str, dict[str, Any]]:
+    """Change-aggregate mode: per-(token, window) position-ACTION flow across the
+    selected wallets, computed from hl_fills (NOT snapshots). Each fill is classified by its
     `dir`+`start_position` transition (open/increase/decrease/close a long/short;
     flip L→S / S→L) and valued at its `$ notional` (price*size); the window is
     start-aligned (bucketed at its start). Columns (all $ notional):
@@ -1209,6 +1209,98 @@ def hl_positions_aggregate(since: str, until: str, window: str, *,
                 WHERE {' AND '.join(where)}
             )
             GROUP BY token, w
+        )
+        ORDER BY time, token
+    """
+    return sql, params
+
+
+def hl_positions_snapshot_aggregate(since: str, until: str, window: str, *,
+                                    tokens: list[str] | None = None,
+                                    wallets: list[str] | None = None,
+                                    wallet_groups: list[str] | None = None,
+                                    pos_recency_hrs: int | None = None) -> tuple[str, dict[str, Any]]:
+    """Snapshot-aggregate mode: per-(token, window) book of the OPEN positions,
+    from hl_position_history snapshots (NOT fills). Downsamples to the window (last
+    snapshot per wallet-token), then aggregates across wallets. Mirrors the
+    data_server Group Snapshot: `size` is $ notional, entry is $-size-weighted.
+    Columns (one row per token+window; time = window start):
+
+      side         — 'long'/'short'/'flat' from the sign of net_size,
+      net_size     — longs_size − shorts_size ($),
+      total_count  — # open positions (longs_count + shorts_count),
+      longs_size / shorts_size   — Σ $ size on each side,
+      longs_count / shorts_count — # positions on each side,
+      avg_entry    — Σ(size*avg_entry)/Σ(size), $-size-weighted over all positions.
+
+    `pos_recency_hrs` (optional int): drop STALE positions — keep a position only
+    if the wallet had a fill in that token within this many hours of the snapshot
+    (ASOF last-fill ≤ snapshot time). Omit → every open position regardless of age.
+
+    `window` required (15m multiple). `wallets`/`wallet_groups` optional (only
+    `tokens` → all wallets holding those tokens)."""
+    secs = _positions_window_secs(window)
+    params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
+    tw: list[str] = []
+    _hl_token_wallet_filters(params, tw, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
+    tw_and = (' AND ' + ' AND '.join(tw)) if tw else ''
+    pos_where = ('time >= toDateTime64({since:String}, 3) '
+                 'AND time <  toDateTime64({until:String}, 3)' + tw_and)
+    # Downsample: the LAST snapshot per (wallet, token, window). `signed` = coin
+    # amount signed by side; `sz` = $ notional; `snap_t` = that snapshot's time.
+    pos_cte = f"""
+        SELECT wallet, token, w,
+               argMax(amount, t) * if(argMax(side, t) = 'long', 1, -1) AS signed,
+               argMax(size, t)      AS sz,
+               argMax(avg_entry, t) AS entry,
+               max(t)               AS snap_t
+        FROM (
+            SELECT time AS t, toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
+                   wallet, token, side, amount, size, avg_entry
+            FROM tradernick.hl_position_history FINAL
+            WHERE {pos_where}
+        )
+        GROUP BY wallet, token, w
+        HAVING abs(signed) > 1e-9
+    """
+    if pos_recency_hrs is not None:
+        params['recency'] = int(pos_recency_hrs) * 3600
+        # ASOF: last fill (in that token) at or before the snapshot; keep only if
+        # within `recency` of it. Scan fills back an extra `recency` before `since`
+        # so a position whose last change preceded the range still resolves.
+        fills_where = ('time >= toDateTime64({since:String}, 3) - toIntervalSecond({recency:UInt32}) '
+                       'AND time < toDateTime64({until:String}, 3)' + tw_and)
+        src = f"""
+            SELECT p.token AS token, p.w AS w, p.signed AS signed, p.sz AS sz, p.entry AS entry
+            FROM ( {pos_cte} ) p
+            ASOF LEFT JOIN (
+                SELECT wallet, token, time AS ft
+                FROM tradernick.hl_fills FINAL
+                WHERE {fills_where}
+            ) fl ON p.wallet = fl.wallet AND p.token = fl.token AND fl.ft <= p.snap_t
+            WHERE fl.ft >= p.snap_t - toIntervalSecond({{recency:UInt32}})
+        """
+    else:
+        src = f"SELECT token, w, signed, sz, entry FROM ( {pos_cte} )"
+    # Aggregate per (token, window); derive net/side/total in the outer projection.
+    sql = f"""
+        SELECT
+            time, token,
+            if(net_size > 0, 'long', if(net_size < 0, 'short', 'flat')) AS side,
+            net_size,
+            (longs_count + shorts_count) AS total_count,
+            longs_size, longs_count, shorts_size, shorts_count, avg_entry
+        FROM (
+            SELECT
+                toDateTime64(w, 6, 'UTC') AS time, token,
+                sumIf(sz, signed > 0)               AS longs_size,
+                sumIf(sz, signed < 0)               AS shorts_size,
+                toInt64(countIf(signed > 0))        AS longs_count,
+                toInt64(countIf(signed < 0))        AS shorts_count,
+                (sumIf(sz, signed > 0) - sumIf(sz, signed < 0)) AS net_size,
+                sum(sz * entry) / nullIf(sum(sz), 0) AS avg_entry
+            FROM ( {src} )
+            GROUP BY time, token
         )
         ORDER BY time, token
     """

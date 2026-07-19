@@ -161,11 +161,17 @@ def test_realized_performance_aggregate(client):
 
 def test_positions_aggregate_and_window(client):
     hl = client.hyperliquid
-    # positions has .aggregate() too, but is its own distinct builder type
+    # positions is its own distinct builder type
     assert type(hl.positions()).__name__ != type(hl.realized_performance()).__name__
-    pos = hl.positions().wallet_groups("Whales").window("1h").aggregate()
-    assert pos._body["aggregate"] is True
-    assert pos._body["window"] == "1h"
+    # snapshot aggregate → aggregate flag
+    snap = hl.positions().tokens("BTC").window("1h").aggregate().pos_recency_hrs(24)
+    assert snap._body["aggregate"] is True
+    assert snap._body["pos_recency_hrs"] == 24
+    assert snap._body["window"] == "1h"
+    # change aggregate → separate aggregate_change flag
+    chg = hl.positions().wallet_groups("Whales").window("1h").aggregate_change()
+    assert chg._body["aggregate_change"] is True
+    assert "aggregate" not in chg._body
     # positions is token + wallet + window scoped
     q = hl.positions().tokens("BTC").wallets("0xabc").window("15m")
     assert q._body["tokens"] == ["BTC"]
