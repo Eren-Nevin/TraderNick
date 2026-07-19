@@ -212,8 +212,8 @@ hl.fills()              # individual fills (maker/taker, price, side)
 hl.trades()             # trades
 hl.ohlcv()              # candles
 hl.funding()            # funding
-hl.transfers()          # ledger transfers (populated)
-hl.vaults()             # vault data
+hl.transfers()          # ledger transfers — NOT token-scoped (no .tokens())
+hl.vaults()             # vault data     — NOT token-scoped (no .tokens())
 hl.trade_history()      # PRE-AGGREGATED PnL/volume — fast path; needs tokens/wallets
 hl.position_history()   # position snapshots — needs tokens/wallets
 hl.sends()              # EXPOSED BUT EMPTY (see §16)
@@ -224,25 +224,32 @@ Chainables (in addition to `.time_range()`):
 
 | Method | Effect |
 |---|---|
-| `.tokens(*symbols)` | restrict to tokens — varargs or a list: `.tokens("BTC", "ETH")` or `.tokens(["BTC", "ETH"])` |
+| `.tokens(*symbols)` | restrict to tokens — varargs or a list: `.tokens("BTC", "ETH")` or `.tokens(["BTC", "ETH"])`. **Not on `transfers()` / `vaults()`** (no token column). |
 | `.wallets(*addresses)` | restrict to wallet addresses (varargs or a list) |
 | `.window(size)` | candle/window size, e.g. `.window("1h")` |
 | `.per_token(flag=True)` | per-token breakdown |
 | `.skip_hip3(flag=True)` | exclude HIP-3 markets |
 | `.market_type(t)` | e.g. `"perp"` / `"spot"` |
 | `.limit(n)` | cap rows |
+| `.with_extra_cols()` | **`fills()` only** — include the columns it drops by default: `fee_token`, `builder_fee`, `crossed`, `tid`, `oid`, `hash` |
 
 Examples:
 
 ```python
+# fills — by default drops fee_token/builder_fee/crossed/tid/oid/hash
 fills = await hl.fills().tokens("BTC").time_range(
+    "2026-07-10T00:00:00Z", "2026-07-10T00:01:00Z").as_polars()
+
+# ...pass .with_extra_cols() to keep them
+fills_full = await hl.fills().tokens("BTC").with_extra_cols().time_range(
     "2026-07-10T00:00:00Z", "2026-07-10T00:01:00Z").as_polars()
 
 # trade_history REQUIRES tokens or wallets (guards a full-table scan)
 pnl = await hl.trade_history().wallets("0xabc...").time_range(
     "2026-07-01", "2026-07-08").as_polars()
 
-positions = await hl.position_history().tokens("BTC", "ETH").time_range(
+# transfers / vaults are wallet-scoped only (no .tokens())
+vaults = await hl.vaults().wallets("0xabc...").time_range(
     "2026-07-10", "2026-07-11").as_polars()
 ```
 
@@ -722,6 +729,11 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **0.9.0** — `hyperliquid.fills()` now **drops** `fee_token`, `builder_fee`,
+  `crossed`, `tid`, `oid`, `hash` by default (server-side) — pass
+  `.with_extra_cols()` to keep them. And `transfers()` / `vaults()` are no longer
+  token-scoped: `.tokens()` is removed from them (it was a silent no-op — those
+  tables have no `token` column); filter them by `.wallets()`.
 - **0.8.0** — removed the Horatio-era **no-ops**: query `.cache()` / `.parallel()`,
   the `client.cache.*` namespace, and all per-namespace `flush` / `compact` /
   `dedup` maintenance methods. They did nothing (data_provider reads live from

@@ -291,6 +291,8 @@ _EMPTY_HL_FILLS = pl.DataFrame(schema={
     'fee': pl.Float64, 'fee_token': pl.Utf8, 'builder_fee': pl.Float64,
     'crossed': pl.Boolean, 'tid': pl.Int64, 'oid': pl.Int64, 'hash': pl.Utf8,
 })
+# Default fills projection drops HL_FILLS_EXTRA_COLS (opt in via extra_cols).
+_EMPTY_HL_FILLS_CORE = _EMPTY_HL_FILLS.drop(list(sql_b.HL_FILLS_EXTRA_COLS))
 _EMPTY_HL_FUNDING = pl.DataFrame(schema={
     'time': pl.Datetime('us', 'UTC'), 'token': pl.Utf8, 'wallet': pl.Utf8,
     'rate': pl.Float64, 'amount': pl.Float64, 'position_amount': pl.Float64,
@@ -716,12 +718,13 @@ async def hyperliquid_fills(request: Request):
         _require(body, 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
+    extra_cols = bool(body.get('extra_cols'))
     sql, params = sql_b.hl_fills(
-        body['since'], body['until'], **_hl_kwargs(body),
+        body['since'], body['until'], extra_cols=extra_cols, **_hl_kwargs(body),
     )
     df = await query_polars(sql, params)
     if df.is_empty():
-        df = _EMPTY_HL_FILLS
+        df = _EMPTY_HL_FILLS if extra_cols else _EMPTY_HL_FILLS_CORE
     return await _maybe_save_or_return(df, body, 'hyperliquid_fills.parquet')
 
 

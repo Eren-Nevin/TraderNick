@@ -107,6 +107,24 @@ def test_hyperliquid_tokens_wallets_accept_varargs_or_list(client):
     assert client.hyperliquid.trade_history().wallets(["0x1", "0x2"])._body["wallets"] == ["0x1", "0x2"]
 
 
+def test_hyperliquid_fills_with_extra_cols(client):
+    # fills drops fee_token/builder_fee/crossed/tid/oid/hash by default;
+    # .with_extra_cols() opts back in via the extra_cols body flag.
+    assert "extra_cols" not in client.hyperliquid.fills()._body
+    assert client.hyperliquid.fills().with_extra_cols()._body["extra_cols"] is True
+    assert client.hyperliquid.fills().with_extra_cols(False)._body["extra_cols"] is False
+
+
+def test_hyperliquid_transfers_vaults_not_token_scoped(client):
+    # transfers/vaults have no token column → no .tokens() (it was a silent no-op)
+    assert not hasattr(client.hyperliquid.transfers(), "tokens")
+    assert not hasattr(client.hyperliquid.vaults(), "tokens")
+    # but wallets still filters them
+    assert client.hyperliquid.transfers().wallets("0xabc")._body["wallets"] == ["0xabc"]
+    # token-scoped endpoints keep .tokens()
+    assert hasattr(client.hyperliquid.fills(), "tokens")
+
+
 def test_hyperliquid_chainables(client):
     q = (client.hyperliquid.fills()
          .tokens("BTC", "ETH").wallets("0xabc").window("1h")

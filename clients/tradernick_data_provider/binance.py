@@ -159,17 +159,14 @@ class BinanceNamespace:
         return LongShortRatiosQuery(self._session, self._base_url, token)
 
 
-class HyperliquidQuery(CacheableQuery):
+class _HyperliquidBaseQuery(CacheableQuery):
+    """Hyperliquid read builder for endpoints that are NOT token-scoped
+    (``transfers``, ``vaults`` — those tables have no ``token`` column). No
+    ``.tokens()`` here; the token-scoped endpoints use :class:`HyperliquidQuery`."""
+
     def __init__(self, session: httpx.AsyncClient, base_url: str, path: str):
         super().__init__(session, base_url, {})
         self._hl_path = path
-
-    def tokens(self, *symbols: str | list[str]) -> Self:
-        """Filter by HL token symbol(s). Accepts varargs or a list —
-        ``.tokens("BTC", "ETH")``, ``.tokens(["BTC", "ETH"])``, and
-        ``.tokens("BTC")`` all work."""
-        self._body["tokens"] = _flatten(symbols)
-        return self
 
     def wallets(self, *addresses: str | list[str]) -> Self:
         """Filter by wallet address(es). Accepts varargs or a list (same forms
@@ -199,8 +196,27 @@ class HyperliquidQuery(CacheableQuery):
         self._body["limit"] = n
         return self
 
+    def with_extra_cols(self, enabled: bool = True) -> Self:
+        """Include the extra per-fill columns that ``fills()`` drops by default
+        (``fee_token``, ``builder_fee``, ``crossed``, ``tid``, ``oid``,
+        ``hash``). No effect on the other Hyperliquid reads."""
+        self._body["extra_cols"] = enabled
+        return self
+
     async def _fetch_table(self) -> pa.Table:
         return await fetch_table(self._session, self._base_url + self._hl_path, self._body)
+
+
+class HyperliquidQuery(_HyperliquidBaseQuery):
+    """Token-scoped Hyperliquid read builder (fills, trades, ohlcv, funding,
+    trade_history, position_history, …) — adds ``.tokens()``."""
+
+    def tokens(self, *symbols: str | list[str]) -> Self:
+        """Filter by HL token symbol(s). Accepts varargs or a list —
+        ``.tokens("BTC", "ETH")``, ``.tokens(["BTC", "ETH"])``, and
+        ``.tokens("BTC")`` all work."""
+        self._body["tokens"] = _flatten(symbols)
+        return self
 
 
 class HyperliquidNamespace:
@@ -220,11 +236,13 @@ class HyperliquidNamespace:
     def funding(self) -> HyperliquidQuery:
         return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/funding/read")
 
-    def transfers(self) -> HyperliquidQuery:
-        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/transfers/read")
+    def transfers(self) -> _HyperliquidBaseQuery:
+        """Ledger transfers in/out of HL. Not token-scoped (no ``.tokens()``)."""
+        return _HyperliquidBaseQuery(self._session, self._base_url, "/hyperliquid/transfers/read")
 
-    def vaults(self) -> HyperliquidQuery:
-        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/vaults/read")
+    def vaults(self) -> _HyperliquidBaseQuery:
+        """Vault deposits/withdrawals. Not token-scoped (no ``.tokens()``)."""
+        return _HyperliquidBaseQuery(self._session, self._base_url, "/hyperliquid/vaults/read")
 
     def sends(self) -> HyperliquidQuery:
         return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/sends/read")

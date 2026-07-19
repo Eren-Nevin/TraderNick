@@ -50,6 +50,11 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**0.9.0 — Leaner Hyperliquid reads.** `fills()` drops `fee_token`, `builder_fee`,
+`crossed`, `tid`, `oid`, `hash` by default (add `.with_extra_cols()` to keep
+them); `transfers()` / `vaults()` are wallet-scoped only — `.tokens()` removed
+(it was a no-op; no token column).
+
 **0.8.0 — Removed Horatio-era no-ops.** Query `.cache()` / `.parallel()`, the
 `client.cache.*` namespace, and all per-namespace `flush` / `compact` / `dedup`
 maintenance methods are gone — they did nothing (data_provider reads live from

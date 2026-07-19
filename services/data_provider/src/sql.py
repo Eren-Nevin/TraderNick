@@ -787,24 +787,38 @@ def hl_trades(since: str, until: str, *, tokens: list[str] | None = None,
     return sql, params
 
 
+# The columns dropped from a fills read by default (opt back in with
+# `extra_cols=True` — the client's `.with_extra_cols()`). Rarely needed and the
+# bulkiest per row (`hash` is a 66-char string), so skipping them keeps the
+# fills firehose lean.
+HL_FILLS_EXTRA_COLS = ('fee_token', 'builder_fee', 'crossed', 'tid', 'oid', 'hash')
+
+
 def hl_fills(since: str, until: str, *, tokens: list[str] | None = None,
-             wallets: list[str] | None = None) -> tuple[str, dict[str, Any]]:
+             wallets: list[str] | None = None,
+             extra_cols: bool = False) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (block_number, block_time, time(us,UTC), wallet, token,
-    price, size, side, dir, start_position, closed_pnl, fee, fee_token,
-    builder_fee, crossed, tid, oid, hash). block_time also us-precision."""
+    price, size, side, dir, start_position, closed_pnl, fee[, fee_token,
+    builder_fee, crossed, tid, oid, hash]). block_time also us-precision.
+
+    The bracketed tail (``HL_FILLS_EXTRA_COLS``) is dropped unless
+    ``extra_cols=True``."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
         'time >= toDateTime64({since:String}, 3)',
         'time <  toDateTime64({until:String}, 3)',
     ]
     _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets)
+    extra = (
+        ', fee_token, builder_fee, toBool(crossed) AS crossed, tid, oid, hash'
+        if extra_cols else ''
+    )
     sql = f"""
         SELECT block_number,
                {_time_us('block_time')},
                {_time_us()},
                wallet, token, price, size,
-               side, dir, start_position, closed_pnl, fee, fee_token,
-               builder_fee, toBool(crossed) AS crossed, tid, oid, hash
+               side, dir, start_position, closed_pnl, fee{extra}
         FROM tradernick.hl_fills FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, tid, wallet
