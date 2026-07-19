@@ -11,7 +11,7 @@ import pyarrow as pa
 from ._http import fetch_table
 
 if TYPE_CHECKING:
-    from typing import Self
+    from typing_extensions import Self
 
 _TIME_COL = "timestamp"
 

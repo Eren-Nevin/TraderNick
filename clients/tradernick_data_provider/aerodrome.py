@@ -22,7 +22,7 @@ import httpx
 from ._query import EventQuery
 
 if TYPE_CHECKING:
-    from typing import Self
+    from typing_extensions import Self
 
 
 class _AeroEventQuery(EventQuery):

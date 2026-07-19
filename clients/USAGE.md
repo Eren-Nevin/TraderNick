@@ -768,6 +768,12 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **0.11.1** — typing/IDE fix: import `Self` from `typing_extensions` (stdlib
+  `typing.Self` is 3.11+ only, but the package supports 3.10), so editors, jedi,
+  and type checkers follow the fluent builders' chained return types on every
+  supported Python. Added the `typing_extensions` dependency; fixed `wallets`
+  annotations that were shadowed by the `.list` method name. (`py.typed` already
+  shipped.) No API change.
 - **0.11.0** — Hyperliquid wallet filtering: **`.wallet_groups(...)`** on every
   wallet-aware endpoint (pass group names; resolved to member addresses server-side,
   unions with `.wallets()`); **`ohlcv()` drops `.wallets()`** (candles are market-wide

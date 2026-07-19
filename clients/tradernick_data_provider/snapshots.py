@@ -23,7 +23,7 @@ from ._http import DataProviderHTTPError
 from ._query import _WalletFilters, _to_timestamp
 
 if TYPE_CHECKING:
-    from typing import Self
+    from typing_extensions import Self
 
 
 class ScanParquetQuery(_WalletFilters):

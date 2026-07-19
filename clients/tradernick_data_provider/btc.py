@@ -13,7 +13,7 @@ from ._query import CacheableQuery
 from .protocols import BitcoinNativeNamespace, BitcoinNativeTransfersQuery
 
 if __import__('typing').TYPE_CHECKING:
-    from typing import Self
+    from typing_extensions import Self
 
 
 class BtcMinedQuery(CacheableQuery):

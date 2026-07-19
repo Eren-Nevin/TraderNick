@@ -10,7 +10,7 @@ from ._http import fetch_table
 from ._query import BaseQuery, CacheableQuery, EventQuery
 
 if TYPE_CHECKING:
-    from typing import Self
+    from typing_extensions import Self
 
 
 class AaveEventQuery(EventQuery):

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import io
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, List
 
 import httpx
 import pandas as pd
@@ -18,7 +18,7 @@ def _as_list(v):
     return [v] if isinstance(v, str) else list(v)
 
 if TYPE_CHECKING:
-    from typing import Self
+    from typing_extensions import Self
 
 
 def _to_parquet_bytes(data: pd.DataFrame | pl.DataFrame | bytes) -> bytes:
@@ -64,7 +64,7 @@ class WalletsNamespace:
         search: str | None = None,
         limit: int = 100,
         offset: int = 0,
-    ) -> list[dict]:
+    ) -> List[dict]:
         """List wallet labels with optional server-side filters."""
         params: dict[str, Any] = {"limit": limit, "offset": offset}
         if category is not None:
@@ -80,12 +80,12 @@ class WalletsNamespace:
     async def addresses(
         self,
         *,
-        groups: str | list[str] | None = None,
-        categories: str | list[str] | None = None,
-        entities: str | list[str] | None = None,
-        labels: str | list[str] | None = None,
-        addresses: str | list[str] | None = None,
-    ) -> list[str]:
+        groups: str | List[str] | None = None,
+        categories: str | List[str] | None = None,
+        entities: str | List[str] | None = None,
+        labels: str | List[str] | None = None,
+        addresses: str | List[str] | None = None,
+    ) -> List[str]:
         """Resolve a wallet selection to the matching addresses (lowercased).
 
         The union of every wallet in any of the given ``groups`` /
