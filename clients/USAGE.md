@@ -214,7 +214,7 @@ hl.ohlcv()              # candles
 hl.funding()            # funding
 hl.transfers()          # ledger transfers — NOT token-scoped (no .tokens())
 hl.vaults()             # vault data     — NOT token-scoped (no .tokens())
-hl.trade_history()      # PRE-AGGREGATED PnL/volume — fast path; needs tokens/wallets
+hl.realized_performance()  # PnL/fees/funding/volume per wallet-token; needs tokens/wallets
 hl.position_history()   # position snapshots — needs tokens/wallets
 hl.sends()              # EXPOSED BUT EMPTY (see §16)
 hl.spot_transfers()     # EXPOSED BUT EMPTY (see §16)
@@ -226,7 +226,7 @@ Chainables (in addition to `.time_range()`):
 |---|---|
 | `.tokens(*symbols)` | restrict to tokens — varargs or a list: `.tokens("BTC", "ETH")` or `.tokens(["BTC", "ETH"])`. **Not on `transfers()` / `vaults()`** (no token column). |
 | `.wallets(*addresses)` | restrict to wallet addresses (varargs or a list) |
-| `.window(size)` | candle/window size, e.g. `.window("1h")` |
+| `.window(size)` | bucket size — **only on `ohlcv()`, `position_history()`, `realized_performance()`**. e.g. `.window("1h")` (realized_performance: min 15m) |
 | `.per_token(flag=True)` | per-token breakdown |
 | `.skip_hip3(flag=True)` | exclude HIP-3 markets |
 | `.market_type(t)` | e.g. `"perp"` / `"spot"` |
@@ -244,18 +244,45 @@ fills = await hl.fills().tokens("BTC").time_range(
 fills_full = await hl.fills().tokens("BTC").with_extra_cols().time_range(
     "2026-07-10T00:00:00Z", "2026-07-10T00:01:00Z").as_polars()
 
-# trade_history REQUIRES tokens or wallets (guards a full-table scan)
-pnl = await hl.trade_history().wallets("0xabc...").time_range(
+# realized_performance REQUIRES tokens or wallets. No .window() → daily
+# absolute-cumulative snapshots; .window("15m"+) → per-window realized deltas.
+snap = await hl.realized_performance().wallets("0xabc...").time_range(
     "2026-07-01", "2026-07-08").as_polars()
+win  = await hl.realized_performance().wallets("0xabc...").window("1h").time_range(
+    "2026-07-01", "2026-07-02").as_polars()
 
 # transfers / vaults are wallet-scoped only (no .tokens())
 vaults = await hl.vaults().wallets("0xabc...").time_range(
     "2026-07-10", "2026-07-11").as_polars()
 ```
 
-> **Performance rule:** for PnL / volume / leaderboard questions use
-> `trade_history` (pre-aggregated). Only reach for `fills` when you need
-> per-trade detail (price, side, order id).
+### `realized_performance` — snapshot vs windowed
+
+Columns: `time, wallet, token, pnl, fees, net_pnl, funding, volume, buy_volume,
+sell_volume, trade_count`. `net_pnl = pnl − fees` (funding is a **separate**
+column). `volume = buy_volume + sell_volume` (two-sided notional; buy/sell = the
+side of each fill).
+
+- **Snapshot mode** (no `.window()`) — raw **daily absolute-cumulative** rows:
+  each metric is a running total from the dataset's inception. `time` is
+  **start-aligned**: a row at `D 00:00` is the cumulative through the *start* of
+  day D (excludes day D), so `snapshot@(D+1) − snapshot@(D)` = day D's realized
+  activity. `time` is a full `Datetime` (00:00) so it merges cleanly.
+- **Windowed mode** (`.window("15m"+)`, **min 15m**) — **per-window realized**
+  (relative) metrics, computed from fills + funding and stamped at the **window
+  start**. A `(wallet, token, window)` row appears when the window had ≥1 trade
+  **or** any funding (funding-only windows show `pnl/volume=0, funding≠0`). Sum
+  over a day reconciles exactly with the snapshot delta.
+
+```python
+# realized PnL/volume/funding of a wallet in 1h buckets
+h = await hl.realized_performance().wallets("0xabc...").tokens("BTC") \
+    .window("1h").time_range("2026-07-01", "2026-07-02").as_polars()
+# columns are period deltas; time = each hour's start
+```
+
+> **Tip:** for a single window's total, sum the windowed rows (or diff two
+> snapshots). Only reach for `fills` when you need per-trade detail.
 
 ---
 
@@ -729,6 +756,11 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **0.10.0** — `hyperliquid.trade_history()` → **`realized_performance()`** (renamed).
+  Adds the `funding` column and an optional **`.window("15m"+)`** for per-window
+  realized metrics (fills+funding, window-start aligned) vs the default daily
+  cumulative snapshots. Snapshot `time` is now **start-aligned** (`D 00:00` row
+  excludes day D; `snap@(D+1)−snap@(D)` = day D). `trade_history()` removed.
 - **0.9.0** — `hyperliquid.fills()` now **drops** `fee_token`, `builder_fee`,
   `crossed`, `tid`, `oid`, `hash` by default (server-side) — pass
   `.with_extra_cols()` to keep them. And `transfers()` / `vaults()` are no longer

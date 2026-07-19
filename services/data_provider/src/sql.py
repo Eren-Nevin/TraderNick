@@ -890,24 +890,29 @@ def hl_vaults(since: str, until: str, *,
     return sql, params
 
 
-def hl_trade_history(since: str, until: str, *,
-                     tokens: list[str] | None = None,
-                     wallets: list[str] | None = None,
-                     limit: int | None = None) -> tuple[str, dict[str, Any]]:
-    """Horatio shape: (time(us,UTC), wallet, token, pnl, fees, net_pnl,
-    volume, buy_volume, sell_volume, trade_count(Int64)).
+# Column set shared by both realized_performance modes (snapshot + windowed).
+REALIZED_PERF_COLS = ('time', 'wallet', 'token', 'pnl', 'fees', 'net_pnl',
+                      'funding', 'volume', 'buy_volume', 'sell_volume', 'trade_count')
 
-    NOTE (2026-06 semantics change): rows are now DAILY snapshots whose metric
-    columns are ABSOLUTE — cumulative from the wallet's inception, not per-bucket
-    deltas. To get a window's realized value, diff two snapshots
-    (snapshot(until) − snapshot(since)); for sub-day precision add the
-    hl_fills / hl_funding tail since the last daily snapshot. This is a raw
-    passthrough (no aggregation), so it faithfully returns those absolute daily
-    rows — downstream Horatio consumers must apply the diff themselves."""
+
+def hl_realized_performance(since: str, until: str, *,
+                            tokens: list[str] | None = None,
+                            wallets: list[str] | None = None,
+                            limit: int | None = None) -> tuple[str, dict[str, Any]]:
+    """Snapshot mode: raw DAILY **absolute-cumulative** rows from hl_trade_history
+    (running totals from the wallet's inception). Columns: REALIZED_PERF_COLS.
+    `net_pnl = pnl − fees`; `funding` is separate.
+
+    `time` is shifted **+1 day** to be START-ALIGNED: the raw table stamps a row
+    at `D 00:00` but its cumulative already includes day D. Shifting makes
+    `time = T` mean "cumulative of everything strictly before T", so a row at
+    `D 00:00` excludes day D and `snapshot@(D+1) − snapshot@(D)` = day D's
+    realized activity (consistent with windowed mode). The since/until filter
+    applies to the shifted time."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
-        'time >= toDateTime64({since:String}, 3)',
-        'time <  toDateTime64({until:String}, 3)',
+        '(time + INTERVAL 1 DAY) >= toDateTime64({since:String}, 3)',
+        '(time + INTERVAL 1 DAY) <  toDateTime64({until:String}, 3)',
     ]
     _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets)
     limit_clause = ''
@@ -915,13 +920,69 @@ def hl_trade_history(since: str, until: str, *,
         params['limit'] = int(limit)
         limit_clause = 'LIMIT {limit:UInt32}'
     sql = f"""
-        SELECT {_time_us()}, wallet, token, pnl, fees, net_pnl,
+        SELECT toDateTime64(time + INTERVAL 1 DAY, 6, 'UTC') AS time,
+               wallet, token, pnl, fees, net_pnl, funding,
                volume, buy_volume, sell_volume,
                toInt64(trade_count) AS trade_count
         FROM tradernick.hl_trade_history FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, wallet, token
         {limit_clause}
+    """
+    return sql, params
+
+
+def hl_realized_performance_windowed(since: str, until: str, window: str, *,
+                                     tokens: list[str] | None = None,
+                                     wallets: list[str] | None = None) -> tuple[str, dict[str, Any]]:
+    """Windowed (relative) mode: **per-window realized** metrics computed from
+    hl_fills + hl_funding, bucketed by the window's START (start-aligned by
+    construction). Same columns as snapshot mode. A (wallet, token, window) row
+    is emitted when the window has ≥1 fill OR any funding (funding-only windows
+    appear with pnl/volume=0). Minimum window is 15m.
+
+    Verified to reconcile exactly with the daily snapshot deltas."""
+    secs = window_seconds(window)
+    if secs < 900:
+        raise ValueError("realized_performance window must be >= 15m")
+    params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
+    where = [
+        'time >= toDateTime64({since:String}, 3)',
+        'time <  toDateTime64({until:String}, 3)',
+    ]
+    _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets)
+    wsql = ' AND '.join(where)
+    # `secs` is a validated int → safe to inline (INTERVAL doesn't take a param).
+    sql = f"""
+        WITH
+          f AS (
+            SELECT wallet, token,
+                   toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
+                   sum(closed_pnl)                 AS pnl,
+                   sum(fee)                        AS fees,
+                   sum(price * size)               AS volume,
+                   sumIf(price * size, side = 'B') AS buy_volume,
+                   sumIf(price * size, side = 'A') AS sell_volume,
+                   toInt64(count())                AS trade_count
+            FROM tradernick.hl_fills FINAL
+            WHERE {wsql}
+            GROUP BY wallet, token, w
+          ),
+          g AS (
+            SELECT wallet, token,
+                   toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
+                   sum(amount) AS funding
+            FROM tradernick.hl_funding FINAL
+            WHERE {wsql}
+            GROUP BY wallet, token, w
+          )
+        SELECT
+            toDateTime64(w, 6, 'UTC') AS time,
+            wallet, token,
+            pnl, fees, (pnl - fees) AS net_pnl, funding,
+            volume, buy_volume, sell_volume, trade_count
+        FROM f FULL OUTER JOIN g USING (wallet, token, w)
+        ORDER BY time, wallet, token
     """
     return sql, params
 

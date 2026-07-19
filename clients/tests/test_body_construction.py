@@ -104,7 +104,7 @@ def test_hyperliquid_tokens_wallets_accept_varargs_or_list(client):
     assert client.hyperliquid.fills().tokens("BTC")._body["tokens"] == ["BTC"]
     assert client.hyperliquid.fills().tokens(*["BTC", "ETH"])._body["tokens"] == ["BTC", "ETH"]
     # wallets behaves identically
-    assert client.hyperliquid.trade_history().wallets(["0x1", "0x2"])._body["wallets"] == ["0x1", "0x2"]
+    assert client.hyperliquid.realized_performance().wallets(["0x1", "0x2"])._body["wallets"] == ["0x1", "0x2"]
 
 
 def test_hyperliquid_fills_with_extra_cols(client):
@@ -113,6 +113,16 @@ def test_hyperliquid_fills_with_extra_cols(client):
     assert "extra_cols" not in client.hyperliquid.fills()._body
     assert client.hyperliquid.fills().with_extra_cols()._body["extra_cols"] is True
     assert client.hyperliquid.fills().with_extra_cols(False)._body["extra_cols"] is False
+
+
+def test_hyperliquid_window_scoping(client):
+    hl = client.hyperliquid
+    for name in ("ohlcv", "position_history", "realized_performance"):
+        assert hasattr(getattr(hl, name)(), "window"), f"{name} should have .window()"
+    for name in ("fills", "trades", "funding", "transfers", "vaults"):
+        assert not hasattr(getattr(hl, name)(), "window"), f"{name} should not have .window()"
+    assert hl.ohlcv().window("1h")._body["window"] == "1h"
+    assert hl.realized_performance().window("15m")._body["window"] == "15m"
 
 
 def test_hyperliquid_transfers_vaults_not_token_scoped(client):
@@ -126,7 +136,8 @@ def test_hyperliquid_transfers_vaults_not_token_scoped(client):
 
 
 def test_hyperliquid_chainables(client):
-    q = (client.hyperliquid.fills()
+    # .window() lives on the windowed endpoints (ohlcv/position_history)
+    q = (client.hyperliquid.ohlcv()
          .tokens("BTC", "ETH").wallets("0xabc").window("1h")
          .per_token().market_type("perp").limit(50))
     assert q._body["tokens"] == ["BTC", "ETH"]
@@ -146,7 +157,7 @@ def test_hyperliquid_chainables(client):
     (lambda hl: hl.vaults(), "/hyperliquid/vaults/read"),
     (lambda hl: hl.sends(), "/hyperliquid/sends/read"),
     (lambda hl: hl.spot_transfers(), "/hyperliquid/spot_transfers/read"),
-    (lambda hl: hl.trade_history(), "/hyperliquid/trade_history/read"),
+    (lambda hl: hl.realized_performance(), "/hyperliquid/realized_performance/read"),
     (lambda hl: hl.position_history(), "/hyperliquid/position_history/read"),
 ])
 @pytest.mark.asyncio

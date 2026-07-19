@@ -50,6 +50,12 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**0.10.0 — `realized_performance` (was `trade_history`).** Renamed; now exposes the
+`funding` column and an optional `.window("15m"+)` that returns **per-window
+realized** PnL/fees/funding/volume (from fills+funding, window-start aligned)
+instead of the daily cumulative snapshots. Snapshot `time` is now **start-aligned**
+(a row at `D 00:00` excludes day D). `trade_history()` is removed.
+
 **0.9.0 — Leaner Hyperliquid reads.** `fills()` drops `fee_token`, `builder_fee`,
 `crossed`, `tid`, `oid`, `hash` by default (add `.with_extra_cols()` to keep
 them); `transfers()` / `vaults()` are wallet-scoped only — `.tokens()` removed
@@ -131,7 +137,8 @@ What works:
   `_groups` + `exclude_*` (all `str | list`) + `min_amount`/`max_amount`
 - `tron.{native, trc20}.transfers`, `btc.native.transfers`
 - `hyperliquid.{ohlcv, trades, fills, funding, transfers, vaults,
-  trade_history, position_history}`
+  realized_performance, position_history}` — `realized_performance` has snapshot
+  (cumulative) + windowed (`.window("15m"+)`, per-window realized) modes
 - `client.wallets.{list, get, upsert, delete, addresses}` — `addresses(...)`
   resolves a group/category/entity selection to its addresses
 - `client.{load_parquet, scan_parquet, list_snapshots, delete_snapshot,

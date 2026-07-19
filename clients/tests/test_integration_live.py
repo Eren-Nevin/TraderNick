@@ -100,7 +100,7 @@ def _providers(c):
         "binance.funding":    c.binance.funding_rate("BTC"),
         "binance.oi":         c.binance.open_interest("BTC"),
         "binance.lsr":        c.binance.long_short_ratios("BTC"),
-        "hl.trade_history":   c.hyperliquid.trade_history().tokens("BTC"),
+        "hl.realized_performance": c.hyperliquid.realized_performance().tokens("BTC"),
         "hl.funding":         c.hyperliquid.funding().tokens("BTC"),
     }
 
@@ -110,7 +110,7 @@ PROVIDER_NAMES = [
     "morpho.borrows", "aero.conc.swaps", "aero.basic.swaps", "erc20.transfers",
     "native.transfers", "tron.native", "tron.trc20", "btc.native",
     "binance.funding", "binance.oi", "binance.lsr",
-    "hl.trade_history", "hl.funding",
+    "hl.realized_performance", "hl.funding",
 ]
 
 

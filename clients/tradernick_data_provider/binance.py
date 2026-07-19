@@ -174,11 +174,6 @@ class _HyperliquidBaseQuery(CacheableQuery):
         self._body["wallets"] = _flatten(addresses)
         return self
 
-    def window(self, size: str) -> Self:
-        """Bucket size for trade_history/position_history/ohlcv (e.g. ``'5m'``, ``'1h'``)."""
-        self._body["window"] = size
-        return self
-
     def per_token(self, flag: bool = True) -> Self:
         self._body["per_token"] = flag
         return self
@@ -208,14 +203,25 @@ class _HyperliquidBaseQuery(CacheableQuery):
 
 
 class HyperliquidQuery(_HyperliquidBaseQuery):
-    """Token-scoped Hyperliquid read builder (fills, trades, ohlcv, funding,
-    trade_history, position_history, …) — adds ``.tokens()``."""
+    """Token-scoped Hyperliquid read builder (fills, trades, funding,
+    trade_history, …) — adds ``.tokens()``."""
 
     def tokens(self, *symbols: str | list[str]) -> Self:
         """Filter by HL token symbol(s). Accepts varargs or a list —
         ``.tokens("BTC", "ETH")``, ``.tokens(["BTC", "ETH"])``, and
         ``.tokens("BTC")`` all work."""
         self._body["tokens"] = _flatten(symbols)
+        return self
+
+
+class _WindowedHyperliquidQuery(HyperliquidQuery):
+    """Token-scoped + windowed builder — only ``ohlcv()`` and
+    ``position_history()`` bucket by ``window``."""
+
+    def window(self, size: str) -> Self:
+        """Bucket/snapshot size, e.g. ``'5m'`` / ``'1h'`` (ohlcv candles,
+        position_history snapshot cadence)."""
+        self._body["window"] = size
         return self
 
 
@@ -230,8 +236,9 @@ class HyperliquidNamespace:
     def trades(self) -> HyperliquidQuery:
         return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/trades/read")
 
-    def ohlcv(self) -> HyperliquidQuery:
-        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/ohlcv/read")
+    def ohlcv(self) -> _WindowedHyperliquidQuery:
+        """Candles; use ``.window("1h")`` for the bucket size."""
+        return _WindowedHyperliquidQuery(self._session, self._base_url, "/hyperliquid/ohlcv/read")
 
     def funding(self) -> HyperliquidQuery:
         return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/funding/read")
@@ -250,10 +257,19 @@ class HyperliquidNamespace:
     def spot_transfers(self) -> HyperliquidQuery:
         return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/spot_transfers/read")
 
-    def trade_history(self) -> HyperliquidQuery:
-        """Pre-aggregated PnL/volume per wallet-token-window. Requires ``tokens`` or ``wallets``."""
-        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/trade_history/read")
+    def realized_performance(self) -> _WindowedHyperliquidQuery:
+        """Realized PnL / fees / funding / volume per wallet-token. Requires
+        ``tokens`` or ``wallets``.
 
-    def position_history(self) -> HyperliquidQuery:
-        """Carry-forward position snapshots per window. Requires ``tokens`` or ``wallets``."""
-        return HyperliquidQuery(self._session, self._base_url, "/hyperliquid/position_history/read")
+        - **Snapshot mode** (no ``.window()``): raw DAILY absolute-cumulative
+          rows (running totals from inception; ``time`` is start-aligned).
+        - **Windowed mode** (``.window("15m"+)``): per-window *realized* (relative)
+          metrics from fills+funding, stamped at the window start. Min 15m.
+
+        Columns: time, wallet, token, pnl, fees, net_pnl, funding, volume,
+        buy_volume, sell_volume, trade_count."""
+        return _WindowedHyperliquidQuery(self._session, self._base_url, "/hyperliquid/realized_performance/read")
+
+    def position_history(self) -> _WindowedHyperliquidQuery:
+        """Carry-forward position snapshots per ``.window(...)``. Requires ``tokens`` or ``wallets``."""
+        return _WindowedHyperliquidQuery(self._session, self._base_url, "/hyperliquid/position_history/read")

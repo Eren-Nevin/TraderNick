@@ -307,9 +307,9 @@ _EMPTY_HL_VAULTS = pl.DataFrame(schema={
     'action': pl.Utf8, 'amount': pl.Float64, 'commission': pl.Float64,
     'fee': pl.Float64, 'block_number': pl.Int64,
 })
-_EMPTY_HL_TRADE_HISTORY = pl.DataFrame(schema={
+_EMPTY_REALIZED_PERF = pl.DataFrame(schema={
     'time': pl.Datetime('us', 'UTC'), 'wallet': pl.Utf8, 'token': pl.Utf8,
-    'pnl': pl.Float64, 'fees': pl.Float64, 'net_pnl': pl.Float64,
+    'pnl': pl.Float64, 'fees': pl.Float64, 'net_pnl': pl.Float64, 'funding': pl.Float64,
     'volume': pl.Float64, 'buy_volume': pl.Float64, 'sell_volume': pl.Float64,
     'trade_count': pl.Int64,
 })
@@ -776,8 +776,8 @@ async def hyperliquid_vaults(request: Request):
     return await _maybe_save_or_return(df, body, 'hyperliquid_vaults.parquet')
 
 
-@app.post('/hyperliquid/trade_history/read')
-async def hyperliquid_trade_history(request: Request):
+@app.post('/hyperliquid/realized_performance/read')
+async def hyperliquid_realized_performance(request: Request):
     body = request.json or {}
     try:
         _require(body, 'since', 'until')
@@ -785,18 +785,31 @@ async def hyperliquid_trade_history(request: Request):
         return response.json({'error': str(e)}, status=400)
     if not (body.get('tokens') or body.get('wallets')):
         return response.json(
-            {'error': 'trade_history requires `tokens` or `wallets`'}, status=400,
+            {'error': 'realized_performance requires `tokens` or `wallets`'}, status=400,
         )
-    sql, params = sql_b.hl_trade_history(
-        body['since'], body['until'],
-        tokens=body.get('tokens') or None,
-        wallets=body.get('wallets') or None,
-        limit=body.get('limit'),
-    )
+    window = body.get('window')
+    try:
+        if window:
+            # Windowed (relative) mode: per-window realized metrics from fills+funding.
+            sql, params = sql_b.hl_realized_performance_windowed(
+                body['since'], body['until'], window,
+                tokens=body.get('tokens') or None,
+                wallets=body.get('wallets') or None,
+            )
+        else:
+            # Snapshot (absolute-cumulative daily) mode.
+            sql, params = sql_b.hl_realized_performance(
+                body['since'], body['until'],
+                tokens=body.get('tokens') or None,
+                wallets=body.get('wallets') or None,
+                limit=body.get('limit'),
+            )
+    except ValueError as e:
+        return response.json({'error': str(e)}, status=400)
     df = await query_polars(sql, params)
     if df.is_empty():
-        df = _EMPTY_HL_TRADE_HISTORY
-    return await _maybe_save_or_return(df, body, 'hyperliquid_trade_history.parquet')
+        df = _EMPTY_REALIZED_PERF
+    return await _maybe_save_or_return(df, body, 'hyperliquid_realized_performance.parquet')
 
 
 @app.post('/hyperliquid/position_history/read')
