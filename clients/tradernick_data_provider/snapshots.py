@@ -1,7 +1,9 @@
 """Snapshot-side fluent builders.
 
-Right now exposes ``ScanParquetQuery`` — accumulates ``local_*`` filter
-steps and dispatches them server-side via ``POST /snapshots/scan``.
+Right now exposes ``ScanParquetQuery`` — accumulates wallet-filter steps
+(the same ``involving`` / ``sender`` / ``receiver`` + ``exclude_*`` surface
+as the read queries) and dispatches them server-side via
+``POST /snapshots/scan``.
 The server lazily scans the snapshot with ``pl.scan_parquet`` so only
 the filtered subset is collected and returned, keeping client RAM
 bounded by the result size rather than the full snapshot size.

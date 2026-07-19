@@ -98,10 +98,12 @@ class DataProviderClient:
                      until: Optional[Union[datetime, str, int]] = None,
                      engine: Literal['polars', 'duckdb'] = 'duckdb',
                      normalize_addresses: Optional[bool] = None) -> "ScanParquetQuery":
-        """Lazy-scan a saved snapshot with ``local_*`` filters applied
-        server-side. Returns a ``ScanParquetQuery`` builder. Chain
-        ``local_*`` filter methods then call a terminal ``as_polars()`` /
-        ``as_pandas()`` / ``as_parquet(new_key)``.
+        """Lazy-scan a saved snapshot with wallet filters applied
+        server-side. Returns a ``ScanParquetQuery`` builder. Chain the same
+        filter methods as the read queries (``involving`` / ``sender`` /
+        ``receiver`` + ``_label`` / ``_entity`` / ``_category`` / ``_groups``
+        + ``exclude_*``, all ``str | list[str]``) then call a terminal
+        ``as_polars()`` / ``as_pandas()`` / ``as_parquet(new_key)``.
 
         ``engine``:
           - ``'duckdb'`` (default): server mounts the snapshot + wallets
@@ -119,8 +121,8 @@ class DataProviderClient:
         Example::
 
             df = await client.scan_parquet('huge_snapshot') \\
-                .local_exclude_sender_categories(['Hot-Wallet','Cold-Wallet']) \\
-                .local_involving_entities(['Binance']) \\
+                .exclude_sender_category(['Hot-Wallet', 'Cold-Wallet']) \\
+                .involving_entity('Binance') \\
                 .as_polars()
         """
         from .snapshots import ScanParquetQuery
