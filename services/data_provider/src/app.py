@@ -331,6 +331,7 @@ _EMPTY_HL_POSITIONS_CHANGE_AGG = pl.DataFrame(schema={
     'closed_long': pl.Float64, 'closed_short': pl.Float64,
     'flip_ls': pl.Float64, 'flip_sl': pl.Float64,
     'net_pos_change': pl.Float64, 'net_flip': pl.Float64, 'net_flow': pl.Float64,
+    'abs_flow': pl.Float64,
 })
 # snapshot-aggregate mode: per-(token, window) open-position book (no wallet column).
 _EMPTY_HL_POSITIONS_SNAP_AGG = pl.DataFrame(schema={
@@ -350,7 +351,7 @@ _DUST_EPS = 1e-3
 _POSITIONS_CHANGE_AGG_DOLLAR_COLS = [
     'opened_long', 'opened_short', 'increased_long', 'decreased_long',
     'increased_short', 'decreased_short', 'closed_long', 'closed_short',
-    'flip_ls', 'flip_sl', 'net_pos_change', 'net_flip', 'net_flow',
+    'flip_ls', 'flip_sl', 'net_pos_change', 'net_flip', 'net_flow', 'abs_flow',
 ]
 _POSITIONS_SNAP_AGG_DOLLAR_COLS = ['net_size', 'longs_size', 'shorts_size']
 _REALIZED_PERF_DOLLAR_COLS = [

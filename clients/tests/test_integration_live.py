@@ -107,12 +107,18 @@ async def test_positions_change_aggregate_and_dust(live_client):
     dollar_cols = [
         "opened_long", "opened_short", "increased_long", "decreased_long",
         "increased_short", "decreased_short", "closed_long", "closed_short",
-        "flip_ls", "flip_sl", "net_pos_change", "net_flip", "net_flow",
+        "flip_ls", "flip_sl", "net_pos_change", "net_flip", "net_flow", "abs_flow",
     ]
     assert set(dollar_cols) <= set(df.columns)
     r = df.row(0, named=True)
     # net_flip reconciles with its definition
     assert abs(r["net_flip"] - (r["flip_sl"] - r["flip_ls"])) < 1.0
+    # abs_flow is the gross sum of all ten action columns, and dominates net_flow
+    action_cols = ["opened_long", "opened_short", "increased_long", "decreased_long",
+                   "increased_short", "decreased_short", "closed_long", "closed_short",
+                   "flip_ls", "flip_sl"]
+    assert abs(r["abs_flow"] - sum(r[c] for c in action_cols)) < 1.0
+    assert r["abs_flow"] >= abs(r["net_flow"]) - 1.0
     # dust-rounding: no aggregated $ value sits in the (0, $0.001) dust band
     for c in dollar_cols:
         for v in df[c].to_list():

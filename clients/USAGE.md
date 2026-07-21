@@ -340,6 +340,7 @@ position-**action** flow in **`$` notional** (`price × size`), computed from
   | `net_pos_change` | `increased_long + decreased_short − increased_short − decreased_long` (directional inc/dec flow; excludes opens/closes/flips) |
   | `net_flip` | `flip_sl − flip_ls` (net flips into long) |
   | `net_flow` | full directional net: `(open/inc long + close/dec short + flip S→L) − (open/inc short + close/dec long + flip L→S)` |
+  | `abs_flow` | gross flow: the sum of **all ten** action columns (every change's `$` notional, direction-agnostic). `abs_flow ≥ |net_flow|` |
 
 > **Dust rounding:** aggregated `$` metrics (the `positions` aggregates and
 > `realized_performance` metrics) are snapped to `0` when `|value| < $0.001`, so a
@@ -834,6 +835,9 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **1.1.0** — `positions().aggregate_change()` gains an **`abs_flow`** column: the
+  gross flow, i.e. the sum of all ten action columns (every change's `$` notional,
+  direction-agnostic; `abs_flow ≥ |net_flow|`). Additive — no other change.
 - **1.0.0** — First stable release; the public API is now considered stable.
   Consolidates the `0.12`–`0.13` line: the `hyperliquid.positions()` endpoint
   (below), the IDE/jedi fluent-builder fix, and `$`-metric dust rounding. No API

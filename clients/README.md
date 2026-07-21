@@ -50,6 +50,9 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**1.1.0 — `abs_flow` on the change-aggregate.** `positions().aggregate_change()`
+adds `abs_flow`: the gross flow (sum of all ten action columns, direction-agnostic).
+
 **1.0.0 — First stable release.** The public API is now considered stable.
 Consolidates the `0.12`–`0.13` line: the `hyperliquid.positions()` endpoint,
 IDE/jedi fluent-builder resolution, and `$`-metric dust rounding.
@@ -59,7 +62,8 @@ multiple). Default mode downsamples the position snapshots to the window; the
 snapshot **`.aggregate()`** returns the per-`(token, window)` open-position book
 (side / net_size / counts / sizes / avg_entry, optional `pos_recency_hrs=`
 staleness filter); **`.aggregate_change()`** returns the fills-based action-flow
-frame (opened/increased/decreased/closed long/short, flips, net_pos_change/flip/flow).
+frame (opened/increased/decreased/closed long/short, flips,
+net_pos_change/flip/flow, abs_flow).
 `0.13.2` snaps aggregated `$` metrics under `$0.001` to `0`.
 
 **0.11.2 — IDE/jedi fluent-builder fix.** The chained query builders resolve to

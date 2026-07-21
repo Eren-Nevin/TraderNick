@@ -1164,7 +1164,9 @@ def hl_positions_change_aggregate(since: str, until: str, window: str, *,
                        (directional inc/dec flow; excludes opens/closes/flips),
       net_flip       = flip_sl − flip_ls (net flips into long),
       net_flow       = full directional net: (open/inc long + close/dec short + flip S→L)
-                       − (open/inc short + close/dec long + flip L→S).
+                       − (open/inc short + close/dec long + flip L→S),
+      abs_flow       = gross flow: the sum of ALL ten action columns (every change's
+                       $ notional, direction-agnostic). abs_flow ≥ |net_flow|.
 
     `window` required (15m multiple). `wallets`/`wallet_groups` are OPTIONAL —
     with only `tokens` it aggregates over ALL wallets for those tokens."""
@@ -1186,7 +1188,10 @@ def hl_positions_change_aggregate(since: str, until: str, window: str, *,
             (increased_long + decreased_short - increased_short - decreased_long) AS net_pos_change,
             (flip_sl - flip_ls) AS net_flip,
             (opened_long + increased_long + closed_short + decreased_short + flip_sl
-             - opened_short - increased_short - closed_long - decreased_long - flip_ls) AS net_flow
+             - opened_short - increased_short - closed_long - decreased_long - flip_ls) AS net_flow,
+            (opened_long + opened_short + increased_long + decreased_long
+             + increased_short + decreased_short + closed_long + closed_short
+             + flip_ls + flip_sl) AS abs_flow
         FROM (
             SELECT
                 toDateTime64(w, 6, 'UTC') AS time, token,
