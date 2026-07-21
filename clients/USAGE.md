@@ -341,6 +341,8 @@ position-**action** flow in **`$` notional** (`price × size`), computed from
   | `net_flip` | `flip_sl − flip_ls` (net flips into long) |
   | `net_flow` | full directional net: `(open/inc long + close/dec short + flip S→L) − (open/inc short + close/dec long + flip L→S)` |
   | `abs_flow` | gross flow: the sum of **all ten** action columns (every change's `$` notional, direction-agnostic). `abs_flow ≥ |net_flow|` |
+  | `buy_size` / `sell_size` | `$` notional of long-oriented (buy) vs short-oriented (sell) fills. `buy_size` = open/inc long + close/dec short + flip S→L; `sell_size` = the 5 sell types. `buy_size + sell_size = abs_flow`, `buy_size − sell_size = net_flow` |
+  | `buy_taker_size` / `sell_taker_size` | same as `buy_size`/`sell_size` but only `crossed=1` (taker / market-order) fills |
 
 > **Dust rounding:** aggregated `$` metrics (the `positions` aggregates and
 > `realized_performance` metrics) are snapped to `0` when `|value| < $0.001`, so a

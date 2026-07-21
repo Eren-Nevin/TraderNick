@@ -306,10 +306,12 @@ class _HLPositionsQuery(_HLPerfQuery):
         ``opened_short``/``increased_long``/``decreased_long``/``increased_short``/
         ``decreased_short``/``closed_long``/``closed_short``/``flip_ls``/``flip_sl``
         + ``net_pos_change`` (inc_long+dec_short−inc_short−dec_long), ``net_flip``
-        (flip_sl−flip_ls), ``net_flow`` (full directional net), and ``abs_flow`` (gross
-        flow — the sum of all ten action columns). Time is the window start.
-        ``.wallets()`` / ``.wallet_groups()`` optional (only ``.tokens()`` → ALL wallets
-        for the selected token(s))."""
+        (flip_sl−flip_ls), ``net_flow`` (full directional net), ``abs_flow`` (gross
+        flow — the sum of all ten action columns), and the fill-side ``$`` sizes:
+        ``buy_size`` / ``sell_size`` (long- vs short-oriented fills) and
+        ``buy_taker_size`` / ``sell_taker_size`` (same, but only crossed=taker fills).
+        Time is the window start. ``.wallets()`` / ``.wallet_groups()`` optional (only
+        ``.tokens()`` → ALL wallets for the selected token(s))."""
         self._body["aggregate_change"] = enabled
         return self
 

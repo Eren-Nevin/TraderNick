@@ -63,7 +63,8 @@ snapshot **`.aggregate()`** returns the per-`(token, window)` open-position book
 (side / net_size / counts / sizes / avg_entry, optional `pos_recency_hrs=`
 staleness filter); **`.aggregate_change()`** returns the fills-based action-flow
 frame (opened/increased/decreased/closed long/short, flips,
-net_pos_change/flip/flow, abs_flow).
+net_pos_change/flip/flow, abs_flow, and buy/sell_size +
+buy/sell_taker_size).
 `0.13.2` snaps aggregated `$` metrics under `$0.001` to `0`.
 
 **0.11.2 — IDE/jedi fluent-builder fix.** The chained query builders resolve to

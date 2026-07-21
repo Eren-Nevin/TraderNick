@@ -1146,6 +1146,11 @@ _HL_FILL_ACTION_SQL = """multiIf(
     dir = 'Short > Long', 'flip_sl',
     'other')"""
 
+# Long-oriented (buy) vs short-oriented (sell) action types — the two sides of the
+# fill flow. Every buy action is a side='B' fill, every sell action a side='A' fill.
+_HL_BUY_ACTIONS = "('open_long', 'inc_long', 'close_short', 'dec_short', 'flip_sl')"
+_HL_SELL_ACTIONS = "('open_short', 'inc_short', 'close_long', 'dec_long', 'flip_ls')"
+
 
 def hl_positions_change_aggregate(since: str, until: str, window: str, *,
                                   tokens: list[str] | None = None,
@@ -1166,7 +1171,13 @@ def hl_positions_change_aggregate(since: str, until: str, window: str, *,
       net_flow       = full directional net: (open/inc long + close/dec short + flip S→L)
                        − (open/inc short + close/dec long + flip L→S),
       abs_flow       = gross flow: the sum of ALL ten action columns (every change's
-                       $ notional, direction-agnostic). abs_flow ≥ |net_flow|.
+                       $ notional, direction-agnostic). abs_flow ≥ |net_flow|,
+      buy_size       = $ notional of long-oriented (buy) fills — open/inc long,
+                       close/dec short, flip S→L (= the 5 buy action types),
+      sell_size      = $ notional of short-oriented (sell) fills (the 5 sell types);
+                       buy_size + sell_size = abs_flow, buy_size − sell_size = net_flow,
+      buy_taker_size / sell_taker_size = buy_size / sell_size restricted to crossed=1
+                       (taker / market-order) fills.
 
     `window` required (15m multiple). `wallets`/`wallet_groups` are OPTIONAL —
     with only `tokens` it aggregates over ALL wallets for those tokens."""
@@ -1191,7 +1202,8 @@ def hl_positions_change_aggregate(since: str, until: str, window: str, *,
              - opened_short - increased_short - closed_long - decreased_long - flip_ls) AS net_flow,
             (opened_long + opened_short + increased_long + decreased_long
              + increased_short + decreased_short + closed_long + closed_short
-             + flip_ls + flip_sl) AS abs_flow
+             + flip_ls + flip_sl) AS abs_flow,
+            buy_size, sell_size, buy_taker_size, sell_taker_size
         FROM (
             SELECT
                 toDateTime64(w, 6, 'UTC') AS time, token,
@@ -1204,11 +1216,18 @@ def hl_positions_change_aggregate(since: str, until: str, window: str, *,
                 sumIf(v, ty = 'close_long')  AS closed_long,
                 sumIf(v, ty = 'close_short') AS closed_short,
                 sumIf(v, ty = 'flip_ls')     AS flip_ls,
-                sumIf(v, ty = 'flip_sl')     AS flip_sl
+                sumIf(v, ty = 'flip_sl')     AS flip_sl,
+                -- $ notional of long-oriented (buy) vs short-oriented (sell) fills;
+                -- *_taker_* restrict to crossed=1 (taker / market-order) fills.
+                sumIf(v, ty IN {_HL_BUY_ACTIONS})                  AS buy_size,
+                sumIf(v, ty IN {_HL_SELL_ACTIONS})                 AS sell_size,
+                sumIf(v, crossed = 1 AND ty IN {_HL_BUY_ACTIONS})  AS buy_taker_size,
+                sumIf(v, crossed = 1 AND ty IN {_HL_SELL_ACTIONS}) AS sell_taker_size
             FROM (
                 SELECT token,
                        toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
                        price * size AS v,
+                       crossed,
                        {_HL_FILL_ACTION_SQL} AS ty
                 FROM tradernick.hl_fills FINAL
                 WHERE {' AND '.join(where)}
