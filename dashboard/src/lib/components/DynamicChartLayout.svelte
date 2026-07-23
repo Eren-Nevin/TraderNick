@@ -893,6 +893,8 @@
         inst.gsAsOf = r.gsAsOf === 'live' ? 'live' : 'snapshot';
         const gpl = r.gsPriceLb;
         inst.gsPriceLb = gpl === '5m' || gpl === '15m' || gpl === '4h' || gpl === '1d' ? gpl : '1h';
+        const glr = r.gsLiveRefresh;
+        inst.gsLiveRefresh = glr === '15s' || glr === '1m' || glr === '2m' || glr === '5m' || glr === '15m' ? glr : 'off';
       }
       if (inst.kind === 'backtracker') {
         // Persist the Position-Changes dialog "Only <group>" filter (default ON):

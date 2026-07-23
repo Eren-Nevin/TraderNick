@@ -5672,7 +5672,8 @@
   // 'off' by default. 15s → :00/:15/:30/:45 of each minute; 1m → top of each minute;
   // 2m/5m/15m → aligned to those boundaries. Aligned to the epoch (UTC) so ticks land
   // exactly on the clock rather than drifting from an interval start.
-  let gsLiveRefresh = $state<'off' | '15s' | '1m' | '2m' | '5m' | '15m'>('off');
+  // Persisted per-widget on the instance (instance.gsLiveRefresh).
+  const gsLiveRefresh = $derived((instance.gsLiveRefresh ?? 'off') as 'off' | '15s' | '1m' | '2m' | '5m' | '15m');
   const _GS_CADENCE_SEC: Record<string, number> = { '15s': 15, '1m': 60, '2m': 120, '5m': 300, '15m': 900 };
   $effect(() => {
     if (instance.kind !== 'group_snapshot' || gsLiveRefresh === 'off') return;
@@ -9598,7 +9599,7 @@
         rosterTokens={tokens}
         onTokenClick={openGsWallets}
         liveRefresh={gsLiveRefresh}
-        onLiveRefreshChange={(v) => (gsLiveRefresh = v as typeof gsLiveRefresh)}
+        onLiveRefreshChange={(v) => (instance.gsLiveRefresh = v as typeof gsLiveRefresh)}
       />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}

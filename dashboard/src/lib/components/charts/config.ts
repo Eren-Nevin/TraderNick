@@ -1815,6 +1815,9 @@ export type ChartInstance = {
   /** group_snapshot: lookback for the per-token price-change % column (separate from
    *  staleness). In the key. */
   gsPriceLb?: '5m' | '15m' | '1h' | '4h' | '1d';
+  /** group_snapshot: live auto-refresh cadence, snapped to the wall clock.
+   *  NOT in the key (a reload trigger, like tpLive). Persists per-widget. */
+  gsLiveRefresh?: 'off' | '15s' | '1m' | '2m' | '5m' | '15m';
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
@@ -2814,6 +2817,7 @@ export function newChartInstance(
     base.gsStaleness = '7d';
     base.gsAsOf = 'snapshot';
     base.gsPriceLb = '1h';
+    base.gsLiveRefresh = 'off';
   }
   if (kind === 'ohlcv') {
     base.pin = false;
