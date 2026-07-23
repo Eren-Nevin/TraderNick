@@ -5647,6 +5647,11 @@
   let gswCtl: AbortController | null = null;
   async function openGsWallets(token: string) {
     if (!instance.gsGroupId) return;
+    // Refresh the table alongside the dialog: the endpoint always serves the LATEST
+    // snapshot bucket, so if the table was fetched seconds/minutes ago it can be on an
+    // older bucket than this per-wallet fetch → counts wouldn't match. Re-loading now
+    // means both hit the same latest bucket, so the dialog is consistent with the table.
+    load(true);
     gswToken = token; gswOpen = true; gswRows = []; gswError = null; gswLoading = true;
     if (gswCtl) gswCtl.abort();
     const ctl = new AbortController(); gswCtl = ctl;
@@ -5662,6 +5667,30 @@
       if (gswCtl === ctl) gswLoading = false;
     }
   }
+
+  // Group Snapshot: optional live auto-refresh, snapped to wall-clock boundaries.
+  // 'off' by default. 15s → :00/:15/:30/:45 of each minute; 1m → top of each minute;
+  // 2m/5m/15m → aligned to those boundaries. Aligned to the epoch (UTC) so ticks land
+  // exactly on the clock rather than drifting from an interval start.
+  let gsLiveRefresh = $state<'off' | '15s' | '1m' | '2m' | '5m' | '15m'>('off');
+  const _GS_CADENCE_SEC: Record<string, number> = { '15s': 15, '1m': 60, '2m': 120, '5m': 300, '15m': 900 };
+  $effect(() => {
+    if (instance.kind !== 'group_snapshot' || gsLiveRefresh === 'off') return;
+    const sec = _GS_CADENCE_SEC[gsLiveRefresh];
+    if (!sec) return;
+    let timer: ReturnType<typeof setTimeout>;
+    const schedule = () => {
+      const now = Date.now();
+      // Next clock boundary strictly after `now` (ms), aligned to the epoch.
+      const next = Math.ceil((now + 1) / (sec * 1000)) * (sec * 1000);
+      timer = setTimeout(() => {
+        load(true); // background refresh — keeps showing current rows until the new snapshot lands
+        schedule();
+      }, next - now);
+    };
+    schedule();
+    return () => clearTimeout(timer);
+  });
 
   // Trading Pit 'Live': re-fetch every 5 min while the toggle is on (fills land < 5 min).
   $effect(() => {
@@ -9568,6 +9597,8 @@
         hasGroup={!!instance.gsGroupId}
         rosterTokens={tokens}
         onTokenClick={openGsWallets}
+        liveRefresh={gsLiveRefresh}
+        onLiveRefreshChange={(v) => (gsLiveRefresh = v as typeof gsLiveRefresh)}
       />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}

@@ -16,7 +16,9 @@
     error = null,
     hasGroup = false,
     rosterTokens = [],
-    onTokenClick = (_t: string) => {}
+    onTokenClick = (_t: string) => {},
+    liveRefresh = 'off',
+    onLiveRefreshChange = (_v: string) => {}
   }: {
     rows?: Row[];
     loading?: boolean;
@@ -24,6 +26,9 @@
     hasGroup?: boolean;
     rosterTokens?: string[];
     onTokenClick?: (t: string) => void;
+    /** Live auto-refresh cadence: 'off' | '15s' | '1m' | '2m' | '5m' | '15m'. */
+    liveRefresh?: string;
+    onLiveRefreshChange?: (v: string) => void;
   } = $props();
 
   let sortKey = $state<string>('netsize');
@@ -99,6 +104,19 @@
 <div class="h-full flex flex-col text-xs" use:stopDragEvents>
   <div class="flex items-center gap-2 px-3 py-1.5 border-b border-zinc-800 text-zinc-400">
     <span class="text-[11px]">Group positions · latest snapshot</span>
+    <select
+      class="bg-zinc-900 border rounded px-1.5 py-0.5 text-[11px] focus:outline-none {liveRefresh === 'off' ? 'border-zinc-700 text-zinc-400' : 'border-emerald-800 text-emerald-400'}"
+      value={liveRefresh}
+      onchange={(e) => onLiveRefreshChange((e.currentTarget as HTMLSelectElement).value)}
+      title="Live auto-refresh cadence, snapped to the clock (1m = top of each minute, 15s = :00/:15/:30/:45)"
+    >
+      <option value="off">Live: off</option>
+      <option value="15s">Live: 15s</option>
+      <option value="1m">Live: 1m</option>
+      <option value="2m">Live: 2m</option>
+      <option value="5m">Live: 5m</option>
+      <option value="15m">Live: 15m</option>
+    </select>
     <select class="bg-zinc-900 border border-zinc-700 rounded px-1.5 py-0.5 text-[11px] text-zinc-200 focus:outline-none" bind:value={search} title="Filter by token">
       <option value="">All tokens</option>
       {#each tokenOpts as tok (tok)}<option value={tok}>{tok}</option>{/each}
