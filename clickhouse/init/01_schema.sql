@@ -2087,7 +2087,12 @@ CREATE TABLE IF NOT EXISTS tradernick.hl_position_history
     ingested_at      DateTime       DEFAULT now() CODEC(DoubleDelta, ZSTD(3))
 ) ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (token, time, side, wallet)
+-- `side` MUST NOT be in the sorting key: a wallet has ONE net position per token
+-- per instant, so (token, time, wallet) is the identity. With `side` in the key, a
+-- long and a short snapshot for the same (wallet, token, time) are distinct keys the
+-- RMT never dedups — when the feed revises a bucket's side, the stale wrong-side row
+-- survives (bug fixed 2026-07-23: Group Snapshot showed wallets on the wrong side).
+ORDER BY (token, time, wallet)
 TTL toDateTime(time) + INTERVAL 270 DAY;
 
 -- 15-minute rollup of hl_position_history. Source emits a 5m carry-forward
