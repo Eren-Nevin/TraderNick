@@ -90,6 +90,7 @@ _alert_buckets: dict[tuple, int] = {}
 async def eval_price_alert(rule: dict) -> list[dict]:
     p = rule.get("params") or {}
     alerts = p.get("alerts") or []
+    title = str(rule.get("title") or "Price alert").strip() or "Price alert"
     global_tokens = [str(t).strip().upper() for t in (p.get("tokens") or []) if str(t).strip()]
     now_epoch = int(datetime.now(timezone.utc).timestamp())
 
@@ -140,20 +141,38 @@ async def eval_price_alert(rule: dict) -> list[dict]:
             hits = [(token, pct) for token, pct in moves if abs(pct) >= thr]
             if not hits:
                 continue
-            # ONE aggregated message per alert (not one per token), biggest moves
-            # first. entity == alert id → a single dispatch per due check.
-            hits.sort(key=lambda x: abs(x[1]), reverse=True)
-            cap = 30
-            listed = ", ".join(f"{tok} {_fmt_pct(pct)}" for tok, pct in hits[:cap])
-            if len(hits) > cap:
-                listed += f", …+{len(hits) - cap} more"
-            head = f"⚠️ ≥{thr:g}% move in {wl} — {len(hits)} token{'s' if len(hits) != 1 else ''}"
+            # ONE aggregated message per alert (entity == alert id → a single
+            # dispatch per due check), formatted into gainers/losers sections.
             out.append({
                 "entity": a["id"],
                 "group": None,
-                "message": f"{head}\n{listed}",
+                "message": _format_price_alert(title, thr, wl, hits),
             })
     return out
+
+
+def _format_price_alert(title: str, thr: float, wl: str, hits: list[tuple[str, float]]) -> str:
+    """Readable multi-line Telegram message: a header, then Gainers / Losers
+    sections (biggest move first), capped, one token per line with an arrow."""
+    ups = sorted([h for h in hits if h[1] >= 0], key=lambda x: -x[1])
+    downs = sorted([h for h in hits if h[1] < 0], key=lambda x: x[1])
+    CAP = 24
+    lines = [f"🔔 {title}", f"≥{thr:g}% move in {wl} · {len(hits)} token{'s' if len(hits) != 1 else ''}"]
+    shown = 0
+    if ups:
+        lines += ["", f"📈 Gainers ({len(ups)})"]
+        for tok, pct in ups[:CAP - shown]:
+            lines.append(f"▲ {tok}  {_fmt_pct(pct)}")
+            shown += 1
+    if downs and shown < CAP:
+        lines += ["", f"📉 Losers ({len(downs)})"]
+        for tok, pct in downs[:CAP - shown]:
+            lines.append(f"▼ {tok}  {_fmt_pct(pct)}")
+            shown += 1
+    remaining = len(hits) - shown
+    if remaining > 0:
+        lines += ["", f"…and {remaining} more"]
+    return "\n".join(lines)
 
 
 # ── admin_job_fail ─────────────────────────────────────────────────────────
