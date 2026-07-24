@@ -16,11 +16,18 @@ against notification_state to decide what actually fires.
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
+
+import httpx
 
 from clickhouse import async_client
 
 log = logging.getLogger(__name__)
+
+# data_server (same docker network) — the monitor reuses its group_snapshot
+# endpoint for Positions Alert so the Live position logic isn't duplicated.
+_DATA_SERVER_URL = os.environ.get("DATA_SERVER_URL", "http://data_server:8000").rstrip("/")
 
 
 def _utcnow() -> datetime:
@@ -29,6 +36,20 @@ def _utcnow() -> datetime:
 
 def _fmt_pct(x: float) -> str:
     return f"{x:+.2f}%"
+
+
+def _fmt_price(p: float) -> str:
+    """Magnitude-aware price: more decimals for cheaper tokens, never scientific."""
+    a = abs(p)
+    if a >= 1000:
+        return f"${p:,.2f}"
+    if a >= 1:
+        return f"${p:,.3f}"
+    if a >= 0.01:
+        return f"${p:.4f}"
+    if a >= 0.0001:
+        return f"${p:.6f}"
+    return f"${p:.8f}"
 
 
 # ── price_change (user widgets) ────────────────────────────────────────────
@@ -142,12 +163,12 @@ async def eval_price_alert(rule: dict) -> list[dict]:
         for token, cur, past in res.result_rows:
             if not past:
                 continue
-            moves.append((token, (float(cur) / float(past) - 1.0) * 100.0))
+            moves.append((token, (float(cur) / float(past) - 1.0) * 100.0, float(cur)))
         wl = _humanize_seconds(window_s)
         for a in alist:
             thr = a["threshold"]
             limit = int(a.get("limit") or 0)  # 0 = report all
-            hits = [(token, pct) for token, pct in moves if abs(pct) >= thr]
+            hits = [(token, pct, price) for token, pct, price in moves if abs(pct) >= thr]
             if not hits:
                 continue
             # ONE aggregated message per alert (entity == alert id → a single
@@ -161,11 +182,12 @@ async def eval_price_alert(rule: dict) -> list[dict]:
 
 
 def _format_price_alert(title: str, thr: float, wl: str,
-                        hits: list[tuple[str, float]], limit: int = 0) -> str:
+                        hits: list[tuple[str, float, float]], limit: int = 0) -> str:
     """Readable multi-line Telegram message: a header, then Gainers / Losers
     sections (biggest move first), one token per line with a ▲/▼ arrow (the
-    arrow shows direction, so the % carries no sign). `limit` (0 = all) is
-    per-side — the top-N gainers AND the top-N losers."""
+    arrow shows direction, so the % carries no sign) and the current price in
+    parentheses. `limit` (0 = all) is per-side — top-N gainers AND top-N losers.
+    `hits` items are (token, pct, price)."""
     total = len(hits)
     all_ups = sorted([h for h in hits if h[1] >= 0], key=lambda x: -x[1])
     all_downs = sorted([h for h in hits if h[1] < 0], key=lambda x: x[1])
@@ -174,10 +196,122 @@ def _format_price_alert(title: str, thr: float, wl: str,
     lines = [f"🔔 {title}", f"≥{thr:g}% move in {wl} · {total} token{'s' if total != 1 else ''}"]
     if ups:
         lines += ["", f"📈 Gainers ({len(ups)})"]
-        lines += [f"▲ {tok}  {abs(pct):.2f}%" for tok, pct in ups]
+        lines += [f"▲ {tok}  {abs(pct):.2f}% ({_fmt_price(price)})" for tok, pct, price in ups]
     if downs:
         lines += ["", f"📉 Losers ({len(downs)})"]
-        lines += [f"▼ {tok}  {abs(pct):.2f}%" for tok, pct in downs]
+        lines += [f"▼ {tok}  {abs(pct):.2f}% ({_fmt_price(price)})" for tok, pct, price in downs]
+    return "\n".join(lines)
+
+
+# ── positions_alert (Group-Snapshot-based widget) ──────────────────────────
+# One rule + one topic. On its own cadence it pulls the wallet group's current
+# Live positions (reusing data_server's group_snapshot endpoint), ranks tokens
+# by the chosen criteria (Net Long count or Net Size $), and reports the top-N
+# most-long AND most-short as two sections. Stateless: it sends a fresh report
+# each cadence tick (wall-clock aligned).
+
+_pa_buckets: dict[str, int] = {}
+
+
+def _ratio(n_long: int, n_short: int) -> float:
+    """Long-concentration ratio, Laplace-smoothed to avoid div-by-zero and to
+    order sensibly (7/1 → 4 above 9/3 → 2.5, and 7/0 → 8 above 7/1)."""
+    return (n_long + 1) / (n_short + 1)
+
+
+def _fmt_money(n: float) -> str:
+    a = abs(n)
+    s = "-" if n < 0 else "+"
+    if a >= 1e9:
+        return f"{s}${a / 1e9:.2f}B"
+    if a >= 1e6:
+        return f"{s}${a / 1e6:.2f}M"
+    if a >= 1e3:
+        return f"{s}${a / 1e3:.1f}K"
+    return f"{s}${a:.0f}"
+
+
+async def eval_positions_alert(rule: dict) -> list[dict]:
+    p = rule.get("params") or {}
+    group_id = str(p.get("group_id") or "").strip()
+    if not group_id:
+        return []
+    criteria = "net_size" if str(p.get("criteria")) == "net_size" else "net_long"
+    top_n = max(int(p.get("top_n") or 5), 1)
+    staleness = str(p.get("staleness") or "1d")
+    cadence_s = max(int(rule.get("cadence_s") or 300), 60)
+    title = str(rule.get("title") or "Positions alert").strip() or "Positions alert"
+
+    # Wall-clock cadence gating (fire once per cadence bucket, in its first
+    # minute) — the same alignment Price Alert uses.
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    if now_epoch % cadence_s >= 60:
+        return []
+    bucket = now_epoch // cadence_s
+    if _pa_buckets.get(rule["rule_id"]) == bucket:
+        return []
+    _pa_buckets[rule["rule_id"]] = bucket
+
+    # Reuse the canonical Live group_snapshot aggregation (per-token n_long/
+    # n_short/long_usd/short_usd/entry). No SQL duplication.
+    url = (f"{_DATA_SERVER_URL}/hyperliquid/group_snapshot"
+           f"?group={group_id}&staleness={staleness}&as_of=live")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as client:
+            resp = await client.get(url)
+            resp.raise_for_status()
+            rows = resp.json().get("rows", []) or []
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("positions_alert fetch failed (%s): %s", url, exc)
+        return []
+
+    toks = []
+    for row in rows:
+        n_long = int(row.get("n_long") or 0)
+        n_short = int(row.get("n_short") or 0)
+        if n_long == 0 and n_short == 0:
+            continue
+        long_usd = float(row.get("long_usd") or 0)
+        short_usd = float(row.get("short_usd") or 0)
+        toks.append({
+            "token": row.get("token", "?"),
+            "n_long": n_long, "n_short": n_short,
+            "net_long": n_long - n_short,
+            "net_size": long_usd - short_usd,
+            "entry": float(row.get("entry") or 0),
+        })
+    if not toks:
+        return []
+
+    if criteria == "net_size":
+        keyfn = lambda t: (t["net_size"], _ratio(t["n_long"], t["n_short"]))
+    else:  # net_long: primary net-long count, tiebreak by long/short ratio
+        keyfn = lambda t: (t["net_long"], _ratio(t["n_long"], t["n_short"]))
+
+    top_longs = sorted(toks, key=keyfn, reverse=True)[:top_n]
+    long_set = {t["token"] for t in top_longs}
+    top_shorts = [t for t in sorted(toks, key=keyfn) if t["token"] not in long_set][:top_n]
+
+    msg = _format_positions_alert(title, criteria, top_n, top_longs, top_shorts)
+    return [{"entity": rule["rule_id"], "group": None, "message": msg}]
+
+
+def _format_positions_alert(title: str, criteria: str, top_n: int,
+                            top_longs: list[dict], top_shorts: list[dict]) -> str:
+    crit_label = "Net Size" if criteria == "net_size" else "Net Long"
+    lines = [f"🔔 {title}", f"Top {top_n} by {crit_label}"]
+
+    def line(t: dict) -> str:
+        side = "long" if t["net_size"] >= 0 else "short"
+        return (f"{t['token']}  {_fmt_money(t['net_size'])}  {side}  "
+                f"@{_fmt_price(t['entry'])}  {t['net_long']:+d} ({t['n_long']}/{t['n_short']})")
+
+    if top_longs:
+        lines += ["", "📈 Top Longs"]
+        lines += [line(t) for t in top_longs]
+    if top_shorts:
+        lines += ["", "📉 Top Shorts"]
+        lines += [line(t) for t in top_shorts]
     return "\n".join(lines)
 
 
@@ -305,6 +439,7 @@ def _provider_group_for_job(job_type: str) -> str | None:
 # kind → evaluator coroutine
 EVALUATORS = {
     "price_alert": eval_price_alert,
+    "positions_alert": eval_positions_alert,
     "price_change": eval_price_change,   # legacy single-condition; kept for compat
     "admin_job_fail": eval_admin_job_fail,
     "admin_stale_data": eval_admin_stale_data,
@@ -312,4 +447,4 @@ EVALUATORS = {
 
 # Kinds whose evaluator handles its OWN cadence/dedup and returns only what
 # should fire NOW → the engine dispatches directly, no edge/cooldown state.
-STATELESS_KINDS = {"price_alert"}
+STATELESS_KINDS = {"price_alert", "positions_alert"}

@@ -238,7 +238,7 @@
     // can read it). Explicit removal must soft-delete it — unlike a page unmount,
     // which must NOT. Fire-and-forget; the layout persists regardless.
     const gone = instances.find((i) => i.id === id);
-    if (gone?.kind === 'notification' && gone.notifRuleId) {
+    if ((gone?.kind === 'notification' || gone?.kind === 'positions_alert') && gone.notifRuleId) {
       fetch(`/api/notifications/rules/${encodeURIComponent(gone.notifRuleId)}`, {
         method: 'DELETE'
       }).catch(() => {});
@@ -923,6 +923,19 @@
                 limit: (LIMS.includes(a.limit as string) ? a.limit : 'all') as NonNullable<ChartInstanceT['notifAlerts']>[number]['limit']
               }))
           : [];
+      }
+      if (inst.kind === 'positions_alert') {
+        inst.notifRuleId = typeof r.notifRuleId === 'string' && r.notifRuleId ? r.notifRuleId : inst.id;
+        inst.notifTitle = typeof r.notifTitle === 'string' ? r.notifTitle : 'Positions alert';
+        inst.notifMuted = r.notifMuted === true;
+        inst.paGroupId = typeof r.paGroupId === 'string' ? r.paGroupId : null;
+        inst.paCriteria = r.paCriteria === 'net_size' ? 'net_size' : 'net_long';
+        const PN = ['3', '5', '10', '20'];
+        inst.paTopN = (PN.includes(r.paTopN as string) ? r.paTopN : '5') as NonNullable<ChartInstanceT['paTopN']>;
+        const PS = ['1h', '4h', '1d', '3d', '7d', '14d', '30d'];
+        inst.paStaleness = (PS.includes(r.paStaleness as string) ? r.paStaleness : '1d') as NonNullable<ChartInstanceT['paStaleness']>;
+        const PC = ['1m', '5m', '15m', '1h', '4h'];
+        inst.paCadence = (PC.includes(r.paCadence as string) ? r.paCadence : '5m') as NonNullable<ChartInstanceT['paCadence']>;
       }
       if (inst.kind === 'backtracker') {
         // Persist the Position-Changes dialog "Only <group>" filter (default ON):

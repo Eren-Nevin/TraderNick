@@ -29,7 +29,8 @@
     'smart_wallets_table', 'smart_wallets_dynamic', 'smart_wallets_cutoff', 'smart_wallets_group',
     'backtracker', 'backtracker_leaderboard', 'early_movers', 'trading_pit', 'group_snapshot',
     'lido',
-    'notification'
+    'notification',
+    'positions_alert'
   ];
 
   function defaultLayout(): ChartInstanceT[] {

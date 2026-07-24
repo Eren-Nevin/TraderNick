@@ -114,6 +114,9 @@ async def get_rules(_request):
 _WINDOW_S = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
 # The rule always runs at the base 1-min cadence; per-alert gating does the rest.
 _BASE_CADENCE_S = 60
+# Positions-alert report cadence labels → seconds, and allowed staleness values.
+_PA_CADENCE_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
+_PA_STALENESS = {"1h", "4h", "1d", "3d", "7d", "14d", "30d"}
 
 
 def _clean_alerts(raw) -> list[dict]:
@@ -138,26 +141,47 @@ def _clean_alerts(raw) -> list[dict]:
 
 @bp.put("/notifications/rules")
 async def put_rule(request):
-    """Create/replace a Price Alert widget rule + its 1:1 topic. Body:
-    {rule_id, title, alerts: [{id, threshold, window}], tokens?}. rule_id is the
+    """Create/replace a notification-widget rule + its 1:1 topic. rule_id is the
     widget instance UUID (== topic_id, so a rename keeps subscriptions intact).
-    The rule is enabled iff it has at least one valid alert."""
+    `type` selects the widget:
+      price_alert (default): {alerts: [{id, threshold, window, limit}], tokens?}
+      positions_alert:       {group_id, criteria, top_n, staleness, cadence}
+    A widget is enabled iff it's configured AND not paused."""
     b = request.json or {}
     rule_id = str(b.get("rule_id") or "").strip()
     if not rule_id:
         return response.json({"error": "rule_id required"}, status=400)
-    title = str(b.get("title") or "Price alert").strip() or "Price alert"
-    alerts = _clean_alerts(b.get("alerts"))
     paused = bool(b.get("paused"))
-    params = {"alerts": alerts, "tokens": _clean_tokens(b.get("tokens"))}
-    # Enabled iff there's ≥1 alert AND not paused. Pausing keeps the whole config
-    # (alerts + subscribers) but stops the monitor from pushing.
-    enabled = 1 if (alerts and not paused) else 0
+    wtype = str(b.get("type") or "price_alert")
+
+    if wtype == "positions_alert":
+        title = str(b.get("title") or "Positions alert").strip() or "Positions alert"
+        group_id = str(b.get("group_id") or "").strip()
+        criteria = "net_size" if b.get("criteria") == "net_size" else "net_long"
+        top_n = min(max(int(b.get("top_n") or 5), 1), 50)
+        staleness = str(b.get("staleness") or "1d")
+        if staleness not in _PA_STALENESS:
+            staleness = "1d"
+        cadence_s = _PA_CADENCE_S.get(str(b.get("cadence") or "5m"), 300)
+        params = {"group_id": group_id, "criteria": criteria, "top_n": top_n,
+                  "staleness": staleness}
+        enabled = 1 if (group_id and not paused) else 0
+        kind = "positions_alert"
+        extra = {"group_id": group_id}
+    else:
+        title = str(b.get("title") or "Price alert").strip() or "Price alert"
+        alerts = _clean_alerts(b.get("alerts"))
+        params = {"alerts": alerts, "tokens": _clean_tokens(b.get("tokens"))}
+        enabled = 1 if (alerts and not paused) else 0
+        kind = "price_alert"
+        cadence_s = _BASE_CADENCE_S
+        extra = {"alerts": len(alerts)}
+
     now = _utcnow()
     ch = await client()
     await ch.insert(
         RULES_TABLE,
-        [[rule_id, rule_id, "price_alert", "user", enabled, _BASE_CADENCE_S, 0,
+        [[rule_id, rule_id, kind, "user", enabled, cadence_s, 0,
           json.dumps(params), title, now, 0]],
         column_names=_RULE_COLS,
     )
@@ -166,8 +190,7 @@ async def put_rule(request):
         [[rule_id, "user", "widget", title, "", 1, now, 0]],
         column_names=_TOPIC_COLS,
     )
-    return response.json({"ok": True, "rule_id": rule_id, "enabled": bool(enabled),
-                          "alerts": len(alerts)})
+    return response.json({"ok": True, "rule_id": rule_id, "enabled": bool(enabled), **extra})
 
 
 @bp.delete("/notifications/rules/<rule_id>")

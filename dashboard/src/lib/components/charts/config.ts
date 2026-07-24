@@ -454,6 +454,7 @@ export type ChartKind =
   | 'trading_pit'
   | 'group_snapshot'
   | 'notification'
+  | 'positions_alert'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
@@ -598,6 +599,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   trading_pit: 'Trading Pit',
   group_snapshot: 'Group Snapshot',
   notification: 'Price Alert',
+  positions_alert: 'Positions Alert',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1363,9 +1365,16 @@ export const CHART_CATEGORIES: ChartCategory[] = [
   'Exchange', 'Flows', 'Lending', 'DeX', 'Perp', 'Staking', 'Alerts'
 ];
 
+/** Notification-widget kinds — bespoke chrome (no token/timeframe/refresh/gear;
+ *  no backend chart data). Add new notification widgets here so ChartInstance's
+ *  guards cover them automatically. */
+export function isNotifWidgetKind(kind: ChartKind): boolean {
+  return kind === 'notification' || kind === 'positions_alert';
+}
+
 export function chartKindCategory(kind: ChartKind): ChartCategory | null {
   // Alerts — user-defined notification widgets.
-  if (kind === 'notification') return 'Alerts';
+  if (isNotifWidgetKind(kind)) return 'Alerts';
   // Exchange — Binance OHLCV + derivatives. The chart's in-built exchange
   // selector lets the user flip these to Hyperliquid in place, so we list
   // them once under Exchange rather than duplicating under Perp.
@@ -1836,6 +1845,14 @@ export type ChartInstance = {
   notifTokens?: string;          // CSV; blank = all tokens
   notifMuted?: boolean;          // paused: keep config but stop pushing notifications
   notifAlerts?: { id: string; threshold: number; window: '5m' | '15m' | '30m' | '1h' | '4h' | '1d'; limit: 'all' | '5' | '10' | '20' }[];
+  // Positions Alert widget (kind 'positions_alert'). Reuses notifRuleId /
+  // notifTitle / notifMuted (shared topic identity + mute). A periodic report
+  // of a wallet group's top-N most-long / most-short tokens by a criteria.
+  paGroupId?: string | null;     // wallet group to snapshot
+  paCriteria?: 'net_long' | 'net_size';
+  paTopN?: '3' | '5' | '10' | '20';
+  paStaleness?: '1h' | '4h' | '1d' | '3d' | '7d' | '14d' | '30d';
+  paCadence?: '1m' | '5m' | '15m' | '1h' | '4h';   // report cadence
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
@@ -2849,6 +2866,16 @@ export function newChartInstance(
     base.notifTokens = '';
     base.notifMuted = false;
     base.notifAlerts = [];
+  }
+  if (kind === 'positions_alert') {
+    base.notifRuleId = base.id;
+    base.notifTitle = 'Positions alert';
+    base.notifMuted = false;
+    base.paGroupId = null;
+    base.paCriteria = 'net_long';
+    base.paTopN = '5';
+    base.paStaleness = '1d';
+    base.paCadence = '5m';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

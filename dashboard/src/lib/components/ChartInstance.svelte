@@ -11,6 +11,7 @@
   import TradingPitWalletsDialog from '$lib/components/TradingPitWalletsDialog.svelte';
   import GroupSnapshotTable from '$lib/components/GroupSnapshotTable.svelte';
   import NotificationWidget from '$lib/components/NotificationWidget.svelte';
+  import PositionsAlertWidget from '$lib/components/PositionsAlertWidget.svelte';
   import GroupSnapshotWalletsDialog from '$lib/components/GroupSnapshotWalletsDialog.svelte';
   // Trading Pit query params → URLSearchParams (shared by loadKey + fetch).
   const _TP_LB_SECS: Record<string, number> = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
@@ -164,6 +165,7 @@
     isLidoKind,
     isLeaderboardKind,
     LEADERBOARD_KIND_CONFIG,
+    isNotifWidgetKind,
     isDualViewKind,
     DUAL_VIEW_KINDS,
     SMART_WALLET_LOOKBACKS,
@@ -1290,7 +1292,7 @@
   async function load(forceFresh = false, preserveView = false) {
     // The notification widget is a pure client-side rule editor — no backend
     // data to fetch. Skip the whole load path so it never shows a spinner/error.
-    if (instance.kind === 'notification') { loading = false; return; }
+    if (isNotifWidgetKind(instance.kind)) { loading = false; return; }
     // preserveView: keep the user's current zoom/pan across this load (a refresh
     // of the same token/interval/window). We NEVER reassign localView below when
     // set — reassigning to defaultView mid-load momentarily applies it to the
@@ -5876,7 +5878,7 @@
     || instance.kind === 'backtracker_leaderboard'
     || instance.kind === 'trading_pit'
     || instance.kind === 'group_snapshot'
-    || instance.kind === 'notification'
+    || isNotifWidgetKind(instance.kind)
     // Dual-view chart mode renders a real LineChart, so the chart-only settings
     // (Point / Week lines / MA / zoom-sync) DO apply there — only the table view
     // counts as a tableview kind.
@@ -7514,9 +7516,9 @@
             <option value="token">Token</option>
           </select>
         {/if}
-      {:else if instance.kind === 'notification'}
-        <!-- Price Alert: bespoke widget — no token / timeframe / exchange
-             controls in the header. Its whole UI is the alert grid body. -->
+      {:else if isNotifWidgetKind(instance.kind)}
+        <!-- Notification widgets (Price Alert / Positions Alert): bespoke chrome
+             — no token / timeframe / exchange controls in the header. -->
       {:else}
         {#if instance.kind === 'smart_wallets_dynamic'}
           <!-- Dynamic chart: the set is re-selected per bucket over a ROLLING
@@ -7826,7 +7828,7 @@
           </select>
         {/if}
       {/if}
-      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'spot_cvd_table' && instance.kind !== 'backtracker_leaderboard' && instance.kind !== 'trading_pit' && instance.kind !== 'group_snapshot' && instance.kind !== 'notification' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
+      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'spot_cvd_table' && instance.kind !== 'backtracker_leaderboard' && instance.kind !== 'trading_pit' && instance.kind !== 'group_snapshot' && !isNotifWidgetKind(instance.kind) && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
         <select
           bind:value={instance.interval}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -7930,9 +7932,9 @@
           {/if}
         {/if}
       {/if}
-      {#if instance.kind !== 'notification'}
-        <!-- Price Alert has no data to refetch and no settings pane, so it hides
-             the refresh + gear buttons; only the remove (✕) button remains. -->
+      {#if !isNotifWidgetKind(instance.kind)}
+        <!-- Notification widgets have no data to refetch and no settings pane, so
+             they hide the refresh + gear buttons; only the remove (✕) remains. -->
         <button
           type="button"
           onclick={reload}
@@ -9029,7 +9031,7 @@
     {#if error}
       <div class="p-3 text-xs text-red-300 bg-red-950/30">{error}</div>
     {/if}
-    {#if data.length === 0 && loading && !(isSwKind(instance.kind) && instance.viewMode !== 'chart') && instance.kind !== 'notification'}
+    {#if data.length === 0 && loading && !(isSwKind(instance.kind) && instance.viewMode !== 'chart') && !isNotifWidgetKind(instance.kind)}
       <div class="p-4 text-sm text-zinc-400 flex items-center gap-2">
         <svg class="animate-spin h-4 w-4 text-zinc-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-opacity="0.25"/>
@@ -9037,7 +9039,7 @@
         </svg>
         Loading {chartKindGroup(effectiveKind) ? `${chartKindGroup(effectiveKind)} ${chartKindShortLabel(effectiveKind)}` : kindLabel}…
       </div>
-    {:else if data.length === 0 && !(isSwKind(instance.kind) && instance.viewMode !== 'chart') && instance.kind !== 'notification'}
+    {:else if data.length === 0 && !(isSwKind(instance.kind) && instance.viewMode !== 'chart') && !isNotifWidgetKind(instance.kind)}
       <!-- notification (Price Alert) never fetches data, so it must skip this
            empty-state and render its own component below. -->
       <!-- smart_wallets_table (table view) is excluded here so it ALWAYS renders
@@ -9617,6 +9619,8 @@
       />
     {:else if instance.kind === 'notification'}
       <NotificationWidget {instance} rosterTokens={tokens} />
+    {:else if instance.kind === 'positions_alert'}
+      <PositionsAlertWidget {instance} />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}
       <EarlyMoversTable
