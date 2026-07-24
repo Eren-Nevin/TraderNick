@@ -3868,10 +3868,12 @@ async def group_snapshot(request):
         #   1) the ~30-min-stale position_history baseline, and
         #   2) cumulative-fills drift (our hl_fills can miss the odd
         #      position-changing event, so summing deltas diverges from reality).
-        # position_history is kept ONLY for an approximate entry price, falling
-        # back to the fills VWAP then the mark so uPnL stays sane for fresh
-        # positions the stale snapshot doesn't have yet.
-        entry_expr = "coalesce(nullIf(ph.entry, 0), f.vwap, mk.mark)"
+        # position_history is kept ONLY for an approximate entry price: HL's own
+        # avg_entry when the (stale) snapshot has the position, else the mark
+        # (→ uPnL ≈ 0 for fresh positions the snapshot doesn't have yet). We do
+        # NOT derive entry from a fills VWAP: net signed size is ~0 for a flipper,
+        # so notional/size blows up (observed WLD entry ≈ -3.24e12).
+        entry_expr = "coalesce(nullIf(ph.entry, 0), mk.mark)"
         pos_sql = (
             "SELECT f.token AS token, f.wallet AS wallet, f.cur AS signed,"
             " abs(f.cur) * mk.mark AS sz,"
@@ -3879,8 +3881,7 @@ async def group_snapshot(request):
             " f.cur * (mk.mark - " + entry_expr + ") AS upnl"
             " FROM ("
             "   SELECT token, wallet,"
-            "     argMax(start_position + if(side='B', size, -size), time) AS cur,"
-            "     sum(if(side='B', size*price, -size*price)) / nullIf(sum(if(side='B', size, -size)), 0) AS vwap"
+            "     argMax(start_position + if(side='B', size, -size), time) AS cur"
             "   FROM tradernick.hl_fills"
             "   WHERE time > now() - INTERVAL {st:UInt32} SECOND" + tok_filter + " AND " + member +
             "   GROUP BY token, wallet"
@@ -3896,6 +3897,12 @@ async def group_snapshot(request):
             "             WHERE time > now() - INTERVAL 86400 SECOND" + tok_filter + " GROUP BY token) mk ON f.token = mk.token"
         )
     else:
+        # DEPRECATED (as_of=snapshot). Reads the last position_history bucket,
+        # which is ~30 min stale and can show WRONG sides for wallets that
+        # flipped since (that's why Live is now the default everywhere). Kept
+        # only as a fallback / for A-B debugging; drop this branch once Live is
+        # proven out in the wild. Note it still GROUP BYs `side` (latent
+        # both-sides-dupe for a mid-bucket flipper).
         pos_sql = (
             "SELECT token, wallet, signed, sz, entry, upnl FROM ("
             "   SELECT token, wallet, argMax(amount,time)*if(side='long',1,-1) AS signed,"

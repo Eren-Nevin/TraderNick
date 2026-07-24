@@ -963,7 +963,7 @@
       return `trading_pit|${_tpQs(instance).toString()}`;
     }
     if (instance.kind === 'group_snapshot') {
-      return `group_snapshot|g:${instance.gsGroupId ?? ''}|st:${instance.gsStaleness ?? '7d'}|a:${instance.gsAsOf ?? 'snapshot'}|pl:${instance.gsPriceLb ?? '1h'}`;
+      return `group_snapshot|g:${instance.gsGroupId ?? ''}|st:${instance.gsStaleness ?? '7d'}|a:${instance.gsAsOf ?? 'live'}|pl:${instance.gsPriceLb ?? '1h'}`;
     }
     if (instance.kind === 'early_movers') {
       const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 0}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}|${instance.emMinRealizedPnlK ?? 'x'}`;
@@ -1959,7 +1959,7 @@
         if (!instance.gsGroupId) {
           data = [{ gs: { rows: [] } } as unknown as AnyDatum];
         } else {
-          const res = await queuedFetch(`/api/hyperliquid/group_snapshot?group=${instance.gsGroupId}&staleness=${instance.gsStaleness ?? '7d'}&as_of=${instance.gsAsOf ?? 'snapshot'}&price_lb=${instance.gsPriceLb ?? '1h'}`, { signal });
+          const res = await queuedFetch(`/api/hyperliquid/group_snapshot?group=${instance.gsGroupId}&staleness=${instance.gsStaleness ?? '7d'}&as_of=${instance.gsAsOf ?? 'live'}&price_lb=${instance.gsPriceLb ?? '1h'}`, { signal });
           if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
           data = [{ gs: await res.json() } as unknown as AnyDatum];
         }
@@ -5660,7 +5660,7 @@
     if (gswCtl) gswCtl.abort();
     const ctl = new AbortController(); gswCtl = ctl;
     try {
-      const qs = `group=${instance.gsGroupId}&staleness=${instance.gsStaleness ?? '7d'}&as_of=${instance.gsAsOf ?? 'snapshot'}&token=${encodeURIComponent(token)}`;
+      const qs = `group=${instance.gsGroupId}&staleness=${instance.gsStaleness ?? '7d'}&as_of=${instance.gsAsOf ?? 'live'}&token=${encodeURIComponent(token)}`;
       const res = await fetch(`/api/hyperliquid/group_snapshot?${qs}`, { signal: ctl.signal });
       if (!res.ok) throw new Error(`group_snapshot ${res.status}`);
       const body = await res.json();
@@ -8067,13 +8067,13 @@
           </select>
         </label>
         <label class="flex items-center gap-1.5 text-zinc-300"
-          title="Snapshot = last published snapshot; Live = reconstructed to now from fills (fresher; entry/uPnL approximate)">
+          title="Live (default) = current positions from HL's own fill accounting (fresh ~40s, exact sides). Snapshot = last published position_history bucket (~30 min stale, can show wrong sides) — DEPRECATED, kept only as a fallback; will be removed.">
           As of
-          <select value={instance.gsAsOf ?? 'snapshot'}
+          <select value={instance.gsAsOf ?? 'live'}
             onchange={(e) => (instance.gsAsOf = e.currentTarget.value as 'snapshot' | 'live')}
             class={gsSel}>
-            <option value="snapshot">Snapshot</option>
             <option value="live">Live</option>
+            <option value="snapshot">Snapshot (deprecated)</option>
           </select>
         </label>
       {/if}
@@ -9968,7 +9968,7 @@
 <GroupSnapshotWalletsDialog
   open={gswOpen}
   token={gswToken}
-  asOf={instance.gsAsOf ?? 'snapshot'}
+  asOf={instance.gsAsOf ?? 'live'}
   groupName={walletPinsStore.groups.find((g) => g.id === instance.gsGroupId)?.name ?? ''}
   rows={gswRows as never}
   loading={gswLoading}

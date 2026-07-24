@@ -10,7 +10,7 @@
   let {
     open = false,
     token = '',
-    asOf = 'snapshot',
+    asOf = 'live',
     groupName = '',
     rows = [],
     loading = false,
@@ -53,7 +53,12 @@
     if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(1) + 'K';
     return s + '$' + a.toFixed(0);
   }
-  const fmtPrice = (n: number) => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n.toPrecision(5));
+  function fmtPrice(n: number): string {
+    if (n == null || !isFinite(n)) return '—';
+    const a = Math.abs(n);
+    const d = a >= 1000 ? 2 : a >= 1 ? 3 : a >= 0.01 ? 4 : a >= 0.0001 ? 6 : 8;
+    return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: d });
+  }
 </script>
 
 {#if open}

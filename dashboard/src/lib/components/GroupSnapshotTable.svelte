@@ -95,7 +95,15 @@
     if (a >= 1e3) return s + '$' + (a / 1e3).toFixed(1) + 'K';
     return s + '$' + a.toFixed(0);
   }
-  const fmtPrice = (n: number) => (n >= 1000 ? n.toLocaleString(undefined, { maximumFractionDigits: 2 }) : n.toPrecision(5));
+  // Magnitude-aware price: decimals scale with the token's price so each token
+  // reads naturally (BTC 2dp, mid-caps 3-4dp, sub-$0.01 up to 8dp) and never
+  // falls back to scientific notation.
+  function fmtPrice(n: number): string {
+    if (n == null || !isFinite(n)) return '—';
+    const a = Math.abs(n);
+    const d = a >= 1000 ? 2 : a >= 1 ? 3 : a >= 0.01 ? 4 : a >= 0.0001 ? 6 : 8;
+    return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: d });
+  }
   const fmtPct = (n: number | null | undefined) => (n == null ? '—' : (n > 0 ? '+' : '') + n.toFixed(2) + '%');
   const pctCls = (n: number | null | undefined) =>
     n == null ? 'text-zinc-600' : n > 0 ? 'text-emerald-400' : n < 0 ? 'text-rose-400' : 'text-zinc-500';

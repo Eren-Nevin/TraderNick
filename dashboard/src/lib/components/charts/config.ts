@@ -1813,8 +1813,11 @@ export type ChartInstance = {
   /** group_snapshot staleness: drop positions with no fill in the token within this
    *  window (1d|3d|7d|14d|30d). In the key. */
   gsStaleness?: '1h' | '4h' | '1d' | '3d' | '7d' | '14d' | '30d';
-  /** group_snapshot: 'snapshot' = last published snapshot; 'live' = reconstructed to now
-   *  from fills (fresher, entry/uPnL approximate). In the key. */
+  /** group_snapshot: 'live' (DEFAULT) = current positions from HL's own fill
+   *  accounting (fresh ~40s, exact sides; entry/uPnL approximate). 'snapshot' =
+   *  last published position_history bucket (~30 min stale, can show wrong
+   *  sides) — DEPRECATED, kept only as a fallback; drop it once Live is proven
+   *  out. In the key. */
   gsAsOf?: 'snapshot' | 'live';
   /** group_snapshot: lookback for the per-token price-change % column (separate from
    *  staleness). In the key. */
