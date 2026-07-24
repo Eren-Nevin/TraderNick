@@ -2836,7 +2836,7 @@ export function newChartInstance(
     // handler in data_server routes/hyperliquid.py.
     base.gsAsOf = 'live';
     base.gsPriceLb = '1h';
-    base.gsLiveRefresh = 'off';
+    base.gsLiveRefresh = '1m';
   }
   if (kind === 'notification') {
     // rule_id doubles as the stable topic_id — unique per widget instance so

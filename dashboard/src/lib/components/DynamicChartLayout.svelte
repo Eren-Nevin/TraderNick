@@ -903,7 +903,7 @@
         const gpl = r.gsPriceLb;
         inst.gsPriceLb = gpl === '5m' || gpl === '15m' || gpl === '4h' || gpl === '1d' ? gpl : '1h';
         const glr = r.gsLiveRefresh;
-        inst.gsLiveRefresh = glr === '15s' || glr === '1m' || glr === '2m' || glr === '5m' || glr === '15m' ? glr : 'off';
+        inst.gsLiveRefresh = glr === 'off' || glr === '15s' || glr === '2m' || glr === '5m' || glr === '15m' ? glr : '1m';
       }
       if (inst.kind === 'notification') {
         // topic_id must stay unique per instance → fall back to the instance id.
