@@ -22,6 +22,7 @@ from routes.hyperliquid import bp as hyperliquid_bp
 from routes.exchange_flow import bp as exchange_flow_bp
 from routes.book_depth import bp as book_depth_bp
 from routes.wallet_pins import bp as wallet_pins_bp, ensure_tables as ensure_wallet_pins
+from routes.notifications import bp as notifications_bp, ensure_tables as ensure_notifications
 from throttle import register_health_endpoint
 from clickhouse import client
 from wallets.cache import ensure_table as ensure_wallets_cache
@@ -55,6 +56,7 @@ app.blueprint(hyperliquid_bp)
 app.blueprint(exchange_flow_bp)
 app.blueprint(book_depth_bp)
 app.blueprint(wallet_pins_bp)
+app.blueprint(notifications_bp)
 
 
 @app.listener("before_server_start")
@@ -66,6 +68,8 @@ async def _warm_caches(_app):
     await ensure_wallets_cache(await client())
     # Create the wallet pins + groups tables if absent.
     await ensure_wallet_pins(await client())
+    # Create the notification rules + topics tables if absent.
+    await ensure_notifications(await client())
 
 
 @app.get("/health")

@@ -234,6 +234,15 @@
     placeInstance(build({ token: tk, chain: defaultChain }));
   }
   function removeChart(id: string) {
+    // A NotificationWidget owns a server-side rule + topic (so the monitor cron
+    // can read it). Explicit removal must soft-delete it — unlike a page unmount,
+    // which must NOT. Fire-and-forget; the layout persists regardless.
+    const gone = instances.find((i) => i.id === id);
+    if (gone?.kind === 'notification' && gone.notifRuleId) {
+      fetch(`/api/notifications/rules/${encodeURIComponent(gone.notifRuleId)}`, {
+        method: 'DELETE'
+      }).catch(() => {});
+    }
     instances = instances.filter((i) => i.id !== id);
   }
 
@@ -895,6 +904,21 @@
         inst.gsPriceLb = gpl === '5m' || gpl === '15m' || gpl === '4h' || gpl === '1d' ? gpl : '1h';
         const glr = r.gsLiveRefresh;
         inst.gsLiveRefresh = glr === '15s' || glr === '1m' || glr === '2m' || glr === '5m' || glr === '15m' ? glr : 'off';
+      }
+      if (inst.kind === 'notification') {
+        // topic_id must stay unique per instance → fall back to the instance id.
+        inst.notifRuleId = typeof r.notifRuleId === 'string' && r.notifRuleId ? r.notifRuleId : inst.id;
+        inst.notifType = 'price_change';
+        inst.notifEnabled = r.notifEnabled === true;
+        inst.notifTitle = typeof r.notifTitle === 'string' ? r.notifTitle : 'Price alert';
+        inst.notifThreshold = typeof r.notifThreshold === 'number' ? r.notifThreshold : 10;
+        const nw = r.notifWindow;
+        inst.notifWindow = nw === '15m' || nw === '30m' || nw === '4h' || nw === '1d' ? nw : '1h';
+        inst.notifTokens = typeof r.notifTokens === 'string' ? r.notifTokens : '';
+        const nc2 = r.notifCadence;
+        inst.notifCadence = nc2 === '1m' || nc2 === '15m' || nc2 === '1h' ? nc2 : '5m';
+        const ncd = r.notifCooldown;
+        inst.notifCooldown = ncd === '0' || ncd === '15m' || ncd === '4h' || ncd === '1d' ? ncd : '1h';
       }
       if (inst.kind === 'backtracker') {
         // Persist the Position-Changes dialog "Only <group>" filter (default ON):

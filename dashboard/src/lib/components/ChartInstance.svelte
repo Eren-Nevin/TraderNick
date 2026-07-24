@@ -10,6 +10,7 @@
   import TradingPitTable from '$lib/components/TradingPitTable.svelte';
   import TradingPitWalletsDialog from '$lib/components/TradingPitWalletsDialog.svelte';
   import GroupSnapshotTable from '$lib/components/GroupSnapshotTable.svelte';
+  import NotificationWidget from '$lib/components/NotificationWidget.svelte';
   import GroupSnapshotWalletsDialog from '$lib/components/GroupSnapshotWalletsDialog.svelte';
   // Trading Pit query params → URLSearchParams (shared by loadKey + fetch).
   const _TP_LB_SECS: Record<string, number> = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
@@ -1287,6 +1288,9 @@
   }
 
   async function load(forceFresh = false, preserveView = false) {
+    // The notification widget is a pure client-side rule editor — no backend
+    // data to fetch. Skip the whole load path so it never shows a spinner/error.
+    if (instance.kind === 'notification') { loading = false; return; }
     // preserveView: keep the user's current zoom/pan across this load (a refresh
     // of the same token/interval/window). We NEVER reassign localView below when
     // set — reassigning to defaultView mid-load momentarily applies it to the
@@ -5872,6 +5876,7 @@
     || instance.kind === 'backtracker_leaderboard'
     || instance.kind === 'trading_pit'
     || instance.kind === 'group_snapshot'
+    || instance.kind === 'notification'
     // Dual-view chart mode renders a real LineChart, so the chart-only settings
     // (Point / Week lines / MA / zoom-sync) DO apply there — only the table view
     // counts as a tableview kind.
@@ -9601,6 +9606,8 @@
         liveRefresh={gsLiveRefresh}
         onLiveRefreshChange={(v) => (instance.gsLiveRefresh = v as typeof gsLiveRefresh)}
       />
+    {:else if instance.kind === 'notification'}
+      <NotificationWidget {instance} />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}
       <EarlyMoversTable

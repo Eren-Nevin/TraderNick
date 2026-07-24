@@ -33,6 +33,106 @@ CREATE TABLE IF NOT EXISTS tradernick.ingestion_token_overrides
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (kind, token);
 
+-- ---------------------------------------------------------------------------
+-- Notification service (Phase 1: Telegram). Topic/subscription model — see
+-- services/ingestion/src/notification_config.py + services/ingestion/src/
+-- monitors/. All 6 tables are ReplacingMergeTree with a soft-delete flag;
+-- reads use FINAL + `deleted = 0`. The in-code `_ensure_table` guards create
+-- these too (init SQL only runs on a fresh CH volume).
+-- ---------------------------------------------------------------------------
+
+-- Two rows only: bot='user' and bot='admin'. `token` is the Telegram bot token
+-- (secret, masked in the admin UI). Managed at /admin/notifications.
+CREATE TABLE IF NOT EXISTS tradernick.notification_bots
+(
+    bot         String,          -- 'user' | 'admin'
+    token       String,          -- Telegram bot token (secret)
+    updated_at  DateTime64(3)  DEFAULT now64(3),
+    deleted     UInt8          DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY bot;
+
+-- Topics users subscribe to. kind='widget' rows are dynamic (one per
+-- NotificationWidget instance, topic_id = the widget instance UUID);
+-- kind='admin' rows are static (one per stream group, seeded).
+CREATE TABLE IF NOT EXISTS tradernick.notification_topics
+(
+    topic_id    String,
+    bot         String,          -- 'user' | 'admin'
+    kind        String,          -- 'widget' | 'admin'
+    title       String,          -- shown in the bot's subscribe menu
+    grp         String         DEFAULT '',  -- admin routing / display group
+    enabled     UInt8          DEFAULT 1,
+    updated_at  DateTime64(3)  DEFAULT now64(3),
+    deleted     UInt8          DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY topic_id;
+
+-- Which Telegram chat is subscribed to which topic. chat_id captured when the
+-- user interacts with the bot. subscribed=0 = unsubscribed (soft toggle).
+CREATE TABLE IF NOT EXISTS tradernick.notification_subscriptions
+(
+    bot          String,         -- 'user' | 'admin'
+    topic_id     String,
+    chat_id      String,         -- Telegram chat id (string-safe)
+    tg_username  String         DEFAULT '',
+    subscribed   UInt8          DEFAULT 1,
+    updated_at   DateTime64(3)  DEFAULT now64(3),
+    deleted      UInt8          DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (bot, topic_id, chat_id);
+
+-- Admin Telegram chats that passed the NOTIFICATIONS_ADMIN_SECRET auth gate.
+CREATE TABLE IF NOT EXISTS tradernick.notification_admin_auth
+(
+    chat_id      String,
+    authed       UInt8          DEFAULT 1,
+    updated_at   DateTime64(3)  DEFAULT now64(3),
+    deleted      UInt8          DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY chat_id;
+
+-- Notification rules — the source of truth the monitor evaluates. Widget rules
+-- (scope='user') are 1:1 with a 'widget' topic (both keyed by the widget UUID);
+-- admin rules (scope='admin', kind IN ('admin_job_fail','admin_stale_data'))
+-- route each firing to the admin topic for the affected stream's group.
+-- params is a JSON blob of rule-specific config.
+CREATE TABLE IF NOT EXISTS tradernick.notification_rules
+(
+    rule_id     String,
+    topic_id    String         DEFAULT '',
+    kind        String,          -- 'price_change' | 'admin_job_fail' | 'admin_stale_data'
+    scope       String,          -- 'user' | 'admin'
+    enabled     UInt8          DEFAULT 1,
+    cadence_s   UInt32         DEFAULT 300,
+    cooldown_s  UInt32         DEFAULT 0,
+    params      String         DEFAULT '{}',
+    title       String         DEFAULT '',
+    updated_at  DateTime64(3)  DEFAULT now64(3),
+    deleted     UInt8          DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY rule_id;
+
+-- Per-(rule, entity) trigger state powering edge + cooldown. `entity` is the
+-- independently-firing subject (a token / job_id / stream name). state=1 means
+-- the condition was true at the last evaluation.
+CREATE TABLE IF NOT EXISTS tradernick.notification_state
+(
+    rule_id       String,
+    entity        String,
+    state         UInt8          DEFAULT 0,
+    last_fired_at DateTime64(3)  DEFAULT toDateTime64(0, 3),
+    updated_at    DateTime64(3)  DEFAULT now64(3),
+    deleted       UInt8          DEFAULT 0
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (rule_id, entity);
+
 CREATE TABLE IF NOT EXISTS tradernick.binance_ohlcv_1m
 (
     token                LowCardinality(String),

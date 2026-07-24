@@ -450,6 +450,42 @@ services:
       - "10001:8000"
     restart: unless-stopped
 
+  # =============================================================
+  # Notification service — two standalone processes on the ingestion
+  # image (command overrides, like admin_server). NOT supervised streams;
+  # kept alive by compose restart. They read/write the notification_*
+  # ClickHouse tables and reach out to the Telegram API.
+  #   notifications_monitor — evaluates notification_rules on a cadence and
+  #                           fans firings out to topic subscribers.
+  #   notifications_bot     — interactive Telegram bot (subscribe/unsubscribe
+  #                           menus + admin auth gate).
+  # =============================================================
+  notifications_monitor:
+    build: ./services/ingestion
+    command: ["python", "-m", "monitors.evaluate"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+    restart: unless-stopped
+
+  notifications_bot:
+    build: ./services/ingestion
+    command: ["python", "-m", "monitors.bot"]
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    env_file: .env
+    environment:
+      CLICKHOUSE_HOST: clickhouse
+      CLICKHOUSE_USER: tradernick
+      CLICKHOUSE_DB: tradernick
+    restart: unless-stopped
+
   # Wallets parquet upload endpoint. Accepts uploaded wallets.parquet
   # via /admin/wallets/upload and refreshes the wallet_labels CH
   # dictionary in place. admin_server forwards /admin/wallets/* here.

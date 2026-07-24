@@ -453,6 +453,7 @@ export type ChartKind =
   | 'early_movers'
   | 'trading_pit'
   | 'group_snapshot'
+  | 'notification'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
@@ -596,6 +597,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   early_movers: 'Early Movers',
   trading_pit: 'Trading Pit',
   group_snapshot: 'Group Snapshot',
+  notification: 'Notification',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1355,13 +1357,15 @@ export function chartKindGroup(kind: ChartKind): string | null {
  *  Flows / Lending / DeX / Perp / Staking — instead of the protocol-family
  *  grouping the per-category pages use. Returns null for kinds we don't
  *  want to surface from the Dashboard picker. */
-export type ChartCategory = 'Exchange' | 'Flows' | 'Lending' | 'DeX' | 'Perp' | 'Staking';
+export type ChartCategory = 'Exchange' | 'Flows' | 'Lending' | 'DeX' | 'Perp' | 'Staking' | 'Alerts';
 
 export const CHART_CATEGORIES: ChartCategory[] = [
-  'Exchange', 'Flows', 'Lending', 'DeX', 'Perp', 'Staking'
+  'Exchange', 'Flows', 'Lending', 'DeX', 'Perp', 'Staking', 'Alerts'
 ];
 
 export function chartKindCategory(kind: ChartKind): ChartCategory | null {
+  // Alerts — user-defined notification widgets.
+  if (kind === 'notification') return 'Alerts';
   // Exchange — Binance OHLCV + derivatives. The chart's in-built exchange
   // selector lets the user flip these to Hyperliquid in place, so we list
   // them once under Exchange rather than duplicating under Perp.
@@ -1818,6 +1822,19 @@ export type ChartInstance = {
   /** group_snapshot: live auto-refresh cadence, snapped to the wall clock.
    *  NOT in the key (a reload trigger, like tpLive). Persists per-widget. */
   gsLiveRefresh?: 'off' | '15s' | '1m' | '2m' | '5m' | '15m';
+  // notification widget — a user-defined alert rule synced server-side to the
+  // notification service (a monitor cron evaluates it and pushes Telegram
+  // alerts to the topic's subscribers). notifRuleId doubles as the topic_id →
+  // unique per widget instance so duplicate widgets never share a topic.
+  notifRuleId?: string;
+  notifType?: 'price_change';
+  notifEnabled?: boolean;
+  notifTitle?: string;           // topic title shown in the Telegram bot menu
+  notifThreshold?: number;       // percent move that triggers (price_change)
+  notifWindow?: '15m' | '30m' | '1h' | '4h' | '1d';
+  notifTokens?: string;          // CSV; blank = all tokens
+  notifCadence?: '1m' | '5m' | '15m' | '1h';   // how often the monitor checks
+  notifCooldown?: '0' | '15m' | '1h' | '4h' | '1d';  // re-arm delay while still true
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
@@ -2818,6 +2835,19 @@ export function newChartInstance(
     base.gsAsOf = 'snapshot';
     base.gsPriceLb = '1h';
     base.gsLiveRefresh = 'off';
+  }
+  if (kind === 'notification') {
+    // rule_id doubles as the topic_id — must be unique per widget instance so
+    // duplicate NotificationWidgets never collide. Reuse the instance id.
+    base.notifRuleId = base.id;
+    base.notifType = 'price_change';
+    base.notifEnabled = false;
+    base.notifTitle = 'Price alert';
+    base.notifThreshold = 10;
+    base.notifWindow = '1h';
+    base.notifTokens = '';
+    base.notifCadence = '5m';
+    base.notifCooldown = '1h';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

@@ -80,6 +80,11 @@ for _bname, _btoks in INGEST_TOKEN_BATCHES:
 ADMIN_USER = os.environ.get("ADMIN_USER", "admin")
 ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "change_me")
 
+# Notification service: the secret a Telegram user replies with to the ADMIN
+# bot to unlock admin-alert topics (distinct from ADMIN_PASSWORD). Empty means
+# the admin bot refuses all auth attempts until it's set.
+NOTIFICATIONS_ADMIN_SECRET = os.environ.get("NOTIFICATIONS_ADMIN_SECRET", "")
+
 MAX_CONCURRENT_BACKFILLS = int(os.environ.get("MAX_CONCURRENT_BACKFILLS", "4"))
 
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))

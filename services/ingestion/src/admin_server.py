@@ -34,6 +34,7 @@ from sanic.request import Request
 
 import config
 import token_batches
+import notification_config as nc
 import provider_registry as pr
 
 log = logging.getLogger("admin_server")
@@ -209,6 +210,13 @@ async def _startup(app_, _loop):
     log.info("admin_server up. providers=%s legacy=%s",
              {k: bool(v["live"]) for k, v in PROVIDER_URLS.items()},
              LEGACY_INGESTION_URL or "<unset>")
+    # Seed the notification service's static admin topics + rules so the
+    # /admin/notifications page has something to show even before the monitor
+    # process has run. Guarded — a CH blip must not block startup.
+    try:
+        nc.seed_defaults()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("notification seed_defaults failed: %s", exc)
 
 
 @app.after_server_stop
@@ -363,6 +371,71 @@ async def delete_token_override(_request, kind: str, token: str):
     except Exception as exc:  # noqa: BLE001
         return response.json({"error": f"delete failed: {exc}"}, status=500)
     return response.json({"ok": True, **result})
+
+
+# --------------------------------------------------------------------------
+# Notification service config (bots + admin-scope rules). Served locally — no
+# provider fan-out. The user-scope widget rules are managed by data_server
+# (dashboard-facing), not here. See services/ingestion/src/notification_config.py.
+# --------------------------------------------------------------------------
+
+@app.get("/config/notification_bots")
+async def get_notification_bots(_request):
+    """Which Telegram bots (user/admin) are configured. Token is masked."""
+    return response.json({"bots": nc.list_bots_masked()})
+
+
+@app.put("/config/notification_bots")
+async def put_notification_bot(request):
+    """Set a bot token. Body: {bot: 'user'|'admin', token}. Takes effect across
+    the monitor + bot processes within the config cache TTL — no restart."""
+    body = request.json or {}
+    try:
+        result = nc.set_bot_token(body.get("bot", ""), body.get("token", ""))
+    except ValueError as exc:
+        return response.json({"error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        return response.json({"error": f"set failed: {exc}"}, status=500)
+    return response.json({"ok": True, "bot": result})
+
+
+@app.get("/config/notification_rules")
+async def get_notification_rules(_request):
+    """Admin-scope rules (the two built-in monitors) + the static admin topics
+    (read-only display)."""
+    try:
+        rules = [r for r in nc.get_rules(force=True, enabled_only=False)
+                 if r["scope"] == "admin"]
+        topics = nc.get_topics(bot="admin", enabled_only=False)
+    except Exception as exc:  # noqa: BLE001
+        return response.json({"error": f"read failed: {exc}"}, status=500)
+    return response.json({"rules": rules, "topics": topics})
+
+
+@app.put("/config/notification_rules")
+async def put_notification_rule(request):
+    """Update an admin rule's config (enabled / cadence_s / cooldown_s / params).
+    Body: {rule_id, ...}. kind + scope are preserved from the existing row."""
+    body = request.json or {}
+    rule_id = (body.get("rule_id") or "").strip()
+    existing = nc.get_rule(rule_id) if rule_id else None
+    if not existing or existing["scope"] != "admin":
+        return response.json({"error": "unknown admin rule"}, status=400)
+    try:
+        result = nc.upsert_rule(
+            rule_id,
+            kind=existing["kind"], scope="admin",
+            enabled=bool(body.get("enabled", existing["enabled"])),
+            cadence_s=int(body.get("cadence_s", existing["cadence_s"])),
+            cooldown_s=int(body.get("cooldown_s", existing["cooldown_s"])),
+            params=body.get("params", existing["params"]),
+            title=existing["title"],
+        )
+    except ValueError as exc:
+        return response.json({"error": str(exc)}, status=400)
+    except Exception as exc:  # noqa: BLE001
+        return response.json({"error": f"update failed: {exc}"}, status=500)
+    return response.json({"ok": True, "rule": result})
 
 
 @app.get("/streams")
