@@ -29,6 +29,9 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [monitors.evaluate] %(levelname)s %(message)s",
 )
+# httpx logs the full request URL at INFO — which for Telegram embeds the bot
+# token (a secret). Quiet it so tokens never land in the container logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 STREAM_NAME = "notifications.monitor"

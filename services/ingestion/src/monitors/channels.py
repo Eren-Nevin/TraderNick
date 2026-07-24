@@ -119,6 +119,13 @@ class TelegramChannel(Channel):
         await self._call("answerCallbackQuery",
                          {"callback_query_id": callback_id, "text": text})
 
+    async def set_my_commands(self, commands: list[tuple[str, str]]) -> None:
+        """Register the bot's slash-command menu (shown in Telegram's ⌘ menu).
+        `commands` is a list of (command, description)."""
+        await self._call("setMyCommands", {
+            "commands": [{"command": c, "description": d} for c, d in commands],
+        })
+
 
 # Channel registry — extend here for new delivery methods (mobile push, etc.).
 # Keyed by channel name; value is the factory (token/credential → Channel).

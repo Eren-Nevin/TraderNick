@@ -24,11 +24,15 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [monitors.bot] %(levelname)s %(message)s",
 )
+# httpx logs the full request URL at INFO — which for Telegram embeds the bot
+# token (a secret). Quiet it so tokens never land in the container logs.
+logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 
 def _build_menu(bot: str, chat_id: str) -> tuple[str, list[tuple[str, str]]]:
-    """(text, [(label, callback_data)]) for a chat's topic menu."""
+    """(text, [(label, callback_data)]) for a chat's full topic menu — every
+    topic, marked with its current subscription state."""
     topics = nc.get_topics(bot=bot, enabled_only=True)
     subscribed = nc.get_chat_subscriptions(bot, chat_id)
     if not topics:
@@ -40,7 +44,23 @@ def _build_menu(bot: str, chat_id: str) -> tuple[str, list[tuple[str, str]]]:
         buttons.append((f"{mark} {t['title']}",
                         ("unsub:" if is_sub else "sub:") + t["topic_id"]))
     header = ("Admin alert topics" if bot == "admin" else "Notification topics")
-    return (f"{header} — tap to subscribe / unsubscribe:", buttons)
+    return (f"{header} — tap to subscribe / unsubscribe:\n(use /mine to review just your subscriptions)",
+            buttons)
+
+
+def _build_my_menu(bot: str, chat_id: str) -> tuple[str, list[tuple[str, str]]]:
+    """(text, buttons) for a chat's CURRENT subscriptions only — each button
+    removes that subscription (tap to unsubscribe)."""
+    subscribed = nc.get_chat_subscriptions(bot, chat_id)
+    if not subscribed:
+        return ("You have no subscriptions yet. Use /start to browse topics.", [])
+    # Resolve titles (fall back to the id for a since-deleted topic).
+    titles = {t["topic_id"]: t["title"] for t in nc.get_topics(bot=bot, enabled_only=False)}
+    buttons = [
+        (f"✅ {titles.get(tid, tid)} — tap to remove", "mdel:" + tid)
+        for tid in sorted(subscribed, key=lambda x: titles.get(x, x).lower())
+    ]
+    return ("Your subscriptions — tap one to unsubscribe:", buttons)
 
 
 async def _send_menu(channel: TelegramChannel, bot: str, chat_id: str):
@@ -49,6 +69,21 @@ async def _send_menu(channel: TelegramChannel, bot: str, chat_id: str):
         await channel.send_menu(chat_id, text, buttons)
     else:
         await channel.send(chat_id, text)
+
+
+async def _send_my_menu(channel: TelegramChannel, bot: str, chat_id: str):
+    text, buttons = _build_my_menu(bot, chat_id)
+    if buttons:
+        await channel.send_menu(chat_id, text, buttons)
+    else:
+        await channel.send(chat_id, text)
+
+
+_MINE_CMDS = ("/mine", "/subscriptions", "/subs", "/my")
+
+
+def _is_mine_cmd(text: str) -> bool:
+    return bool(text) and text.split()[0].lower().split("@")[0] in _MINE_CMDS
 
 
 async def _handle_message(bot: str, channel: TelegramChannel, msg: dict,
@@ -78,8 +113,11 @@ async def _handle_message(bot: str, channel: TelegramChannel, msg: dict,
                 "🔒 This is the admin alerts bot. Reply with the admin secret to continue.")
             return
 
-    # Authed (or user bot): any text / /start shows the menu.
-    await _send_menu(channel, bot, chat_id)
+    # Authed (or user bot): /mine → current subscriptions; anything else → full menu.
+    if _is_mine_cmd(text):
+        await _send_my_menu(channel, bot, chat_id)
+    else:
+        await _send_menu(channel, bot, chat_id)
 
 
 async def _handle_callback(bot: str, channel: TelegramChannel, cq: dict,
@@ -99,19 +137,28 @@ async def _handle_callback(bot: str, channel: TelegramChannel, cq: dict,
         return
 
     action, topic_id = data.split(":", 1)
+    # `mdel` comes from the /mine menu → unsubscribe + refresh the my-subs view;
+    # `sub`/`unsub` come from the full /start menu → refresh the full view.
     if action == "sub":
         nc.set_subscription(bot, topic_id, chat_id, True, username)
         await channel.answer_callback(cq_id, "Subscribed ✅")
-    elif action == "unsub":
+    elif action in ("unsub", "mdel"):
         nc.set_subscription(bot, topic_id, chat_id, False, username)
         await channel.answer_callback(cq_id, "Unsubscribed")
     else:
         await channel.answer_callback(cq_id)
         return
-    # refresh the menu in place
-    text, buttons = _build_menu(bot, chat_id)
-    if msg_id and buttons:
-        await channel.edit_menu(chat_id, msg_id, text, buttons)
+    # refresh the originating menu in place
+    if action == "mdel":
+        text, buttons = _build_my_menu(bot, chat_id)
+    else:
+        text, buttons = _build_menu(bot, chat_id)
+    if msg_id:
+        if buttons:
+            await channel.edit_menu(chat_id, msg_id, text, buttons)
+        else:
+            # last subscription removed → replace the keyboard with a plain note
+            await channel.edit_menu(chat_id, msg_id, text, [])
 
 
 async def _run_bot(bot: str):
@@ -133,6 +180,13 @@ async def _run_bot(bot: str):
             channel = TelegramChannel(token)
             cur_token = token
             offset = None  # fresh bot → let Telegram replay pending once
+            try:
+                await channel.set_my_commands([
+                    ("start", "Browse & subscribe to topics"),
+                    ("mine", "View / edit your subscriptions"),
+                ])
+            except Exception:  # noqa: BLE001
+                pass
             log.info("bot %s: token configured, polling", bot)
         try:
             updates = await channel.get_updates(offset, timeout=25)
