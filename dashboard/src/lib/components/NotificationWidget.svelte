@@ -266,12 +266,12 @@
           </select>
           <select
             class="mt-0.5 rounded border border-zinc-800 bg-zinc-950 px-2 py-0.5 text-[11px] text-zinc-400 focus:border-zinc-500 focus:outline-none"
-            title="How many tokens to include in the alert message"
+            title="How many tokens to include per side (top gainers AND top losers)"
             bind:value={alert.limit}>
             <option value="all">Report all</option>
-            <option value="5">Top 5</option>
-            <option value="10">Top 10</option>
-            <option value="20">Top 20</option>
+            <option value="5">Top 5 / side</option>
+            <option value="10">Top 10 / side</option>
+            <option value="20">Top 20 / side</option>
           </select>
         </div>
       {/each}

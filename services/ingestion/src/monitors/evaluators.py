@@ -157,13 +157,13 @@ def _format_price_alert(title: str, thr: float, wl: str,
                         hits: list[tuple[str, float]], limit: int = 0) -> str:
     """Readable multi-line Telegram message: a header, then Gainers / Losers
     sections (biggest move first), one token per line with a ▲/▼ arrow (the
-    arrow shows direction, so the % carries no sign). `limit` (0 = all) keeps
-    only the top-N tokens by absolute move."""
+    arrow shows direction, so the % carries no sign). `limit` (0 = all) is
+    per-side — the top-N gainers AND the top-N losers."""
     total = len(hits)
-    ranked = sorted(hits, key=lambda x: abs(x[1]), reverse=True)
-    shown = ranked[:limit] if limit > 0 else ranked
-    ups = sorted([h for h in shown if h[1] >= 0], key=lambda x: -x[1])
-    downs = sorted([h for h in shown if h[1] < 0], key=lambda x: x[1])
+    all_ups = sorted([h for h in hits if h[1] >= 0], key=lambda x: -x[1])
+    all_downs = sorted([h for h in hits if h[1] < 0], key=lambda x: x[1])
+    ups = all_ups[:limit] if limit > 0 else all_ups
+    downs = all_downs[:limit] if limit > 0 else all_downs
     lines = [f"🔔 {title}", f"≥{thr:g}% move in {wl} · {total} token{'s' if total != 1 else ''}"]
     if ups:
         lines += ["", f"📈 Gainers ({len(ups)})"]
@@ -171,9 +171,9 @@ def _format_price_alert(title: str, thr: float, wl: str,
     if downs:
         lines += ["", f"📉 Losers ({len(downs)})"]
         lines += [f"▼ {tok}  {abs(pct):.2f}%" for tok, pct in downs]
-    remaining = total - len(shown)
+    remaining = (len(all_ups) - len(ups)) + (len(all_downs) - len(downs))
     if remaining > 0:
-        lines += ["", f"…and {remaining} more (showing top {limit})"]
+        lines += ["", f"…and {remaining} more (top {limit} per side shown)"]
     return "\n".join(lines)
 
 
