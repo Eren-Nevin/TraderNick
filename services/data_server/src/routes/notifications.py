@@ -109,9 +109,12 @@ async def get_rules(_request):
     return response.json({"rules": out})
 
 
-# Allowed notification cadences (all widgets): 1m / 5m / 15m / 1h — nothing else.
-# For Price Alert the alert's window doubles as its firing cadence.
-_WINDOW_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
+# Allowed firing cadences (all widgets): 1m / 5m / 15m / 1h — nothing else.
+_CADENCE_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
+# Price-alert price-change lookback WINDOW is independent from the firing cadence
+# above — it may be longer (e.g. a 1h cadence checking the 1d change).
+_ALERT_WINDOW_S = {"1m": 60, "5m": 300, "15m": 900, "30m": 1800,
+                   "1h": 3600, "4h": 14400, "1d": 86400}
 # The rule always runs at the base 1-min cadence; per-alert gating does the rest.
 _BASE_CADENCE_S = 60
 # Positions-alert report cadence + allowed staleness values.
@@ -124,22 +127,27 @@ _PCHG_CRITERIA = {"net_pos_change", "net_open_long", "net_flip"}
 
 
 def _clean_alerts(raw) -> list[dict]:
-    """Normalize the widget's alert list → [{id, threshold_pct, window_s, limit}].
+    """Normalize the widget's alert list →
+    [{id, threshold_pct, window_s, cadence_s, limit}].
+    window_s = price-change lookback; cadence_s = firing interval (independent);
     limit is how many tokens the message includes (0 = all)."""
     out: list[dict] = []
     for a in (raw or []):
         if not isinstance(a, dict):
             continue
         aid = str(a.get("id") or "").strip()
-        window_s = _WINDOW_S.get(str(a.get("window") or ""))
+        window_s = _ALERT_WINDOW_S.get(str(a.get("window") or ""))
+        # cadence falls back to the window for legacy alerts (window == cadence).
+        cadence_s = _CADENCE_S.get(str(a.get("cadence") or "")) or window_s
         try:
             thr = abs(float(a.get("threshold") or 0))
         except (TypeError, ValueError):
             thr = 0.0
         lim_raw = str(a.get("limit") or "all")
         limit = int(lim_raw) if lim_raw in ("5", "10", "20") else 0
-        if aid and window_s and thr > 0:
-            out.append({"id": aid, "threshold_pct": thr, "window_s": window_s, "limit": limit})
+        if aid and window_s and cadence_s and thr > 0:
+            out.append({"id": aid, "threshold_pct": thr, "window_s": window_s,
+                        "cadence_s": cadence_s, "limit": limit})
     return out
 
 
@@ -148,7 +156,7 @@ async def put_rule(request):
     """Create/replace a notification-widget rule + its 1:1 topic. rule_id is the
     widget instance UUID (== topic_id, so a rename keeps subscriptions intact).
     `type` selects the widget:
-      price_alert (default): {alerts: [{id, threshold, window, limit}], tokens?}
+      price_alert (default): {alerts: [{id, threshold, window, cadence, limit}], tokens?}
       positions_alert:       {group_id, criteria, top_n, staleness, cadence}
     A widget is enabled iff it's configured AND not paused."""
     b = request.json or {}

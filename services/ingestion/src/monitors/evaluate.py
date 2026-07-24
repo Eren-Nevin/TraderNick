@@ -94,26 +94,36 @@ async def _dispatch(bot: str, topic_id: str, text: str) -> int:
 
 # ── slot scheduling ─────────────────────────────────────────────────────────
 
+def _alert_cadences(rule: dict) -> list[int]:
+    """A price_alert's per-alert FIRING cadences (seconds). Each alert fires on
+    its own cadence and measures the move over its (separate) window; cadence_s
+    falls back to window_s for legacy alerts that predate the split."""
+    out = []
+    for a in (rule.get("params") or {}).get("alerts", []):
+        c = int(a.get("cadence_s") or a.get("window_s") or 0)
+        if c > 0:
+            out.append(c)
+    return out
+
+
 def _rule_cadence_s(rule: dict) -> int:
     """The rule's slot cadence (seconds) — used both to decide due-ness and to
     order slot execution (smaller = more time-sensitive → runs first). A
-    price_alert holds several alerts with their own windows; its cadence is the
-    smallest, so it rides in the most time-sensitive tier."""
+    price_alert holds several alerts with their own cadences; the rule's cadence
+    is the smallest, so it rides in the most time-sensitive tier."""
     if rule["kind"] == "price_alert":
-        ws = [int(a.get("window_s") or 0) for a in (rule.get("params") or {}).get("alerts", [])]
-        ws = [w for w in ws if w > 0]
-        return min(ws) if ws else 60
+        cs = _alert_cadences(rule)
+        return min(cs) if cs else 60
     return max(int(rule.get("cadence_s") or 300), 60)
 
 
 def _is_due(rule: dict, slot_epoch: int) -> bool:
     """Is this rule due at this slot? A cadence-C rule is due when the wall clock
-    aligns to C. price_alert is due whenever ANY of its alerts aligns (the
-    evaluator then fires just the aligned ones). Uses the SLOT time (not the
+    aligns to C. price_alert is due whenever ANY of its alerts' cadence aligns
+    (the evaluator then fires just the aligned ones). Uses the SLOT time (not the
     execution time) so a late-running slot still counts as its slot."""
     if rule["kind"] == "price_alert":
-        ws = {int(a.get("window_s") or 0) for a in (rule.get("params") or {}).get("alerts", [])}
-        return any(w > 0 and slot_epoch % w < 60 for w in ws)
+        return any(slot_epoch % c < 60 for c in _alert_cadences(rule))
     return slot_epoch % _rule_cadence_s(rule) < 60
 
 

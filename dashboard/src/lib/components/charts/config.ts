@@ -1840,13 +1840,15 @@ export type ChartInstance = {
   // monitor cron evaluates it and pushes Telegram alerts to the topic's
   // subscribers). notifRuleId doubles as the stable topic_id → unique per
   // widget instance, so renaming notifTitle never breaks subscriptions.
-  // notifAlerts is the list of conditions (each: % move over a timeframe); all
-  // of a widget's alerts fire into its single shared topic.
+  // notifAlerts is the list of conditions; all of a widget's alerts fire into its
+  // single shared topic. Each alert's `window` (price-change lookback) is
+  // independent from its `cadence` (firing interval) — e.g. a 1h cadence checking
+  // the 1d change. cadence is restricted to 1m/5m/15m/1h; window may be longer.
   notifRuleId?: string;
   notifTitle?: string;           // editable topic name, mirrored in the bot menu
   notifTokens?: string;          // CSV; blank = all tokens
   notifMuted?: boolean;          // paused: keep config but stop pushing notifications
-  notifAlerts?: { id: string; threshold: number; window: '1m' | '5m' | '15m' | '1h'; limit: 'all' | '5' | '10' | '20' }[];
+  notifAlerts?: { id: string; threshold: number; window: '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d'; cadence: '1m' | '5m' | '15m' | '1h'; limit: 'all' | '5' | '10' | '20' }[];
   // Positions Alert widget (kind 'positions_alert'). Reuses notifRuleId /
   // notifTitle / notifMuted (shared topic identity + mute). A periodic report
   // of a wallet group's top-N most-long / most-short tokens by a criteria.

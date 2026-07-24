@@ -14,8 +14,13 @@
 
   let { instance, rosterTokens = [] }: { instance: ChartInstance; rosterTokens?: string[] } = $props();
 
-  type Win = '1m' | '5m' | '15m' | '1h';
-  const WINDOWS: Win[] = ['1m', '5m', '15m', '1h'];
+  // Window = price-change lookback (may be long, e.g. daily). Cadence = firing
+  // interval (restricted to 1m/5m/15m/1h). They are independent: e.g. a 1h
+  // cadence checking the 1d change.
+  type Win = NonNullable<ChartInstance['notifAlerts']>[number]['window'];
+  type Cad = NonNullable<ChartInstance['notifAlerts']>[number]['cadence'];
+  const WINDOWS: Win[] = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+  const CADENCES: Cad[] = ['1m', '5m', '15m', '1h'];
 
   let userBotConfigured = $state<boolean | null>(null);
   let syncMsg = $state<string>('');
@@ -97,7 +102,7 @@
   }
   function addAlert() {
     const list = instance.notifAlerts ? [...instance.notifAlerts] : [];
-    list.push({ id: uid(), threshold: 10, window: '1h', limit: '10' });
+    list.push({ id: uid(), threshold: 10, window: '1h', cadence: '15m', limit: '10' });
     instance.notifAlerts = list;
   }
   function removeAlert(id: string) {
@@ -115,6 +120,7 @@
           id: a.id,
           threshold: Number(a.threshold) || 0,
           window: a.window,
+          cadence: a.cadence ?? a.window,
           limit: a.limit ?? 'all'
         }))
       };
@@ -245,7 +251,7 @@
   <div class="min-h-0 flex-1 overflow-y-auto {instance.notifMuted ? 'opacity-50' : ''}">
     <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));">
       {#each instance.notifAlerts ?? [] as alert (alert.id)}
-        <div class="relative flex min-h-[132px] flex-col items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900/60 p-2">
+        <div class="relative flex min-h-[176px] flex-col items-center justify-center gap-0.5 rounded-lg border border-zinc-700 bg-zinc-900/60 p-2">
           <button
             type="button"
             class="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
@@ -261,8 +267,16 @@
           <span class="text-[10px] uppercase tracking-wide text-zinc-600">move over</span>
           <select
             class="rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-xs text-zinc-100 focus:border-zinc-500 focus:outline-none"
+            title="Price-change lookback window (how far back the move is measured)"
             bind:value={alert.window}>
             {#each WINDOWS as w (w)}<option value={w}>{w}</option>{/each}
+          </select>
+          <span class="mt-0.5 text-[10px] uppercase tracking-wide text-zinc-600">check every</span>
+          <select
+            class="rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-xs text-zinc-100 focus:border-zinc-500 focus:outline-none"
+            title="Firing cadence — how often this alert is evaluated (independent of the lookback window)"
+            bind:value={alert.cadence}>
+            {#each CADENCES as c (c)}<option value={c}>{c}</option>{/each}
           </select>
           <select
             class="mt-0.5 rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-400 focus:border-zinc-500 focus:outline-none"
@@ -279,7 +293,7 @@
       <!-- Add-alert square -->
       <button
         type="button"
-        class="flex min-h-[132px] flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
+        class="flex min-h-[176px] flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
         onclick={addAlert}>
         <span class="text-2xl leading-none">＋</span>
         <span class="text-[11px]">Add alert</span>

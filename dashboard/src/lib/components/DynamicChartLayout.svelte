@@ -911,17 +911,27 @@
         inst.notifTitle = typeof r.notifTitle === 'string' ? r.notifTitle : 'Price alert';
         inst.notifTokens = typeof r.notifTokens === 'string' ? r.notifTokens : '';
         inst.notifMuted = r.notifMuted === true;
-        const WINS = ['1m', '5m', '15m', '1h'];
+        // window = price-change lookback (may be long); cadence = firing interval.
+        const WINS = ['1m', '5m', '15m', '30m', '1h', '4h', '1d'];
+        const CADS = ['1m', '5m', '15m', '1h'];
         const LIMS = ['all', '5', '10', '20'];
         inst.notifAlerts = Array.isArray(r.notifAlerts)
           ? r.notifAlerts
               .filter((a: unknown): a is Record<string, unknown> => !!a && typeof a === 'object')
-              .map((a: Record<string, unknown>) => ({
-                id: typeof a.id === 'string' && a.id ? a.id : Math.random().toString(36).slice(2),
-                threshold: typeof a.threshold === 'number' ? a.threshold : 10,
-                window: (WINS.includes(a.window as string) ? a.window : '1h') as NonNullable<ChartInstanceT['notifAlerts']>[number]['window'],
-                limit: (LIMS.includes(a.limit as string) ? a.limit : 'all') as NonNullable<ChartInstanceT['notifAlerts']>[number]['limit']
-              }))
+              .map((a: Record<string, unknown>) => {
+                const window = (WINS.includes(a.window as string) ? a.window : '1h') as NonNullable<ChartInstanceT['notifAlerts']>[number]['window'];
+                // legacy alerts (no cadence) fired on their window → default to it.
+                const cadence = (CADS.includes(a.cadence as string)
+                  ? a.cadence
+                  : CADS.includes(window) ? window : '1h') as NonNullable<ChartInstanceT['notifAlerts']>[number]['cadence'];
+                return {
+                  id: typeof a.id === 'string' && a.id ? a.id : Math.random().toString(36).slice(2),
+                  threshold: typeof a.threshold === 'number' ? a.threshold : 10,
+                  window,
+                  cadence,
+                  limit: (LIMS.includes(a.limit as string) ? a.limit : 'all') as NonNullable<ChartInstanceT['notifAlerts']>[number]['limit']
+                };
+              })
           : [];
       }
       if (inst.kind === 'positions_alert') {

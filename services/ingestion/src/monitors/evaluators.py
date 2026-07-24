@@ -114,16 +114,19 @@ async def eval_price_alert(rule: dict, slot_epoch: int = 0) -> list[dict]:
     # fires the alerts that belong to this slot.
     now_epoch = int(slot_epoch or datetime.now(timezone.utc).timestamp())
 
-    # Which alerts align to THIS slot (their window boundary is now). The monitor
-    # runs one slot per minute, so no per-bucket dedup is needed here.
+    # Which alerts fire THIS slot: an alert fires on its own CADENCE boundary and
+    # measures the price change over its (separate) WINDOW/lookback — e.g. a 1h
+    # cadence checking the 1d change. cadence_s falls back to window_s for legacy
+    # alerts that predate the split (window == cadence).
     due: list[dict] = []
     for a in alerts:
         aid = str(a.get("id") or "")
         window_s = int(a.get("window_s") or 0)
+        cadence_s = int(a.get("cadence_s") or window_s or 0)
         threshold = abs(float(a.get("threshold_pct") or 0))
-        if not aid or window_s <= 0 or threshold <= 0:
+        if not aid or window_s <= 0 or cadence_s <= 0 or threshold <= 0:
             continue
-        if now_epoch % window_s >= 60:  # not this alert's slot
+        if now_epoch % cadence_s >= 60:  # not this alert's firing slot
             continue
         due.append({"id": aid, "window_s": window_s, "threshold": threshold,
                     "limit": int(a.get("limit") or 0)})
