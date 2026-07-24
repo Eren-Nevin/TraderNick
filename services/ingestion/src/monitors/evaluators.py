@@ -107,7 +107,8 @@ async def eval_price_alert(rule: dict) -> list[dict]:
         if _alert_buckets.get(key) == bucket:
             continue  # already checked this window — no-op
         _alert_buckets[key] = bucket
-        due.append({"id": aid, "window_s": window_s, "threshold": threshold})
+        due.append({"id": aid, "window_s": window_s, "threshold": threshold,
+                    "limit": int(a.get("limit") or 0)})
     if not due:
         return []
 
@@ -138,6 +139,7 @@ async def eval_price_alert(rule: dict) -> list[dict]:
         wl = _humanize_seconds(window_s)
         for a in alist:
             thr = a["threshold"]
+            limit = int(a.get("limit") or 0)  # 0 = report all
             hits = [(token, pct) for token, pct in moves if abs(pct) >= thr]
             if not hits:
                 continue
@@ -146,32 +148,32 @@ async def eval_price_alert(rule: dict) -> list[dict]:
             out.append({
                 "entity": a["id"],
                 "group": None,
-                "message": _format_price_alert(title, thr, wl, hits),
+                "message": _format_price_alert(title, thr, wl, hits, limit),
             })
     return out
 
 
-def _format_price_alert(title: str, thr: float, wl: str, hits: list[tuple[str, float]]) -> str:
+def _format_price_alert(title: str, thr: float, wl: str,
+                        hits: list[tuple[str, float]], limit: int = 0) -> str:
     """Readable multi-line Telegram message: a header, then Gainers / Losers
-    sections (biggest move first), capped, one token per line with an arrow."""
-    ups = sorted([h for h in hits if h[1] >= 0], key=lambda x: -x[1])
-    downs = sorted([h for h in hits if h[1] < 0], key=lambda x: x[1])
-    CAP = 24
-    lines = [f"🔔 {title}", f"≥{thr:g}% move in {wl} · {len(hits)} token{'s' if len(hits) != 1 else ''}"]
-    shown = 0
+    sections (biggest move first), one token per line with a ▲/▼ arrow (the
+    arrow shows direction, so the % carries no sign). `limit` (0 = all) keeps
+    only the top-N tokens by absolute move."""
+    total = len(hits)
+    ranked = sorted(hits, key=lambda x: abs(x[1]), reverse=True)
+    shown = ranked[:limit] if limit > 0 else ranked
+    ups = sorted([h for h in shown if h[1] >= 0], key=lambda x: -x[1])
+    downs = sorted([h for h in shown if h[1] < 0], key=lambda x: x[1])
+    lines = [f"🔔 {title}", f"≥{thr:g}% move in {wl} · {total} token{'s' if total != 1 else ''}"]
     if ups:
         lines += ["", f"📈 Gainers ({len(ups)})"]
-        for tok, pct in ups[:CAP - shown]:
-            lines.append(f"▲ {tok}  {_fmt_pct(pct)}")
-            shown += 1
-    if downs and shown < CAP:
+        lines += [f"▲ {tok}  {abs(pct):.2f}%" for tok, pct in ups]
+    if downs:
         lines += ["", f"📉 Losers ({len(downs)})"]
-        for tok, pct in downs[:CAP - shown]:
-            lines.append(f"▼ {tok}  {_fmt_pct(pct)}")
-            shown += 1
-    remaining = len(hits) - shown
+        lines += [f"▼ {tok}  {abs(pct):.2f}%" for tok, pct in downs]
+    remaining = total - len(shown)
     if remaining > 0:
-        lines += ["", f"…and {remaining} more"]
+        lines += ["", f"…and {remaining} more (showing top {limit})"]
     return "\n".join(lines)
 
 

@@ -912,13 +912,15 @@
         inst.notifTokens = typeof r.notifTokens === 'string' ? r.notifTokens : '';
         inst.notifMuted = r.notifMuted === true;
         const WINS = ['5m', '15m', '30m', '1h', '4h', '1d'];
+        const LIMS = ['all', '5', '10', '20'];
         inst.notifAlerts = Array.isArray(r.notifAlerts)
           ? r.notifAlerts
               .filter((a: unknown): a is Record<string, unknown> => !!a && typeof a === 'object')
               .map((a: Record<string, unknown>) => ({
                 id: typeof a.id === 'string' && a.id ? a.id : Math.random().toString(36).slice(2),
                 threshold: typeof a.threshold === 'number' ? a.threshold : 10,
-                window: (WINS.includes(a.window as string) ? a.window : '1h') as NonNullable<ChartInstanceT['notifAlerts']>[number]['window']
+                window: (WINS.includes(a.window as string) ? a.window : '1h') as NonNullable<ChartInstanceT['notifAlerts']>[number]['window'],
+                limit: (LIMS.includes(a.limit as string) ? a.limit : 'all') as NonNullable<ChartInstanceT['notifAlerts']>[number]['limit']
               }))
           : [];
       }

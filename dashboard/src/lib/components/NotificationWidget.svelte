@@ -97,7 +97,7 @@
   }
   function addAlert() {
     const list = instance.notifAlerts ? [...instance.notifAlerts] : [];
-    list.push({ id: uid(), threshold: 10, window: '1h' });
+    list.push({ id: uid(), threshold: 10, window: '1h', limit: 'all' });
     instance.notifAlerts = list;
   }
   function removeAlert(id: string) {
@@ -114,7 +114,8 @@
         alerts: (instance.notifAlerts ?? []).map((a) => ({
           id: a.id,
           threshold: Number(a.threshold) || 0,
-          window: a.window
+          window: a.window,
+          limit: a.limit ?? 'all'
         }))
       };
       const res = await fetch('/api/notifications/rules', {
@@ -244,8 +245,7 @@
   <div class="min-h-0 flex-1 overflow-y-auto {instance.notifMuted ? 'opacity-50' : ''}">
     <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));">
       {#each instance.notifAlerts ?? [] as alert (alert.id)}
-        <div class="relative flex flex-col items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900/60 p-2"
-             style="aspect-ratio: 1 / 1;">
+        <div class="relative flex min-h-[132px] flex-col items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900/60 p-2">
           <button
             type="button"
             class="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
@@ -253,10 +253,10 @@
             onclick={() => removeAlert(alert.id)}>✕</button>
           <div class="flex items-baseline gap-0.5">
             <input
-              class="w-12 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-center text-lg font-semibold text-zinc-100 focus:border-zinc-500 focus:outline-none"
+              class="w-11 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-center text-sm font-semibold text-zinc-100 focus:border-zinc-500 focus:outline-none"
               type="number" min="0.1" step="0.1"
               bind:value={alert.threshold} />
-            <span class="text-lg font-semibold text-zinc-400">%</span>
+            <span class="text-sm font-semibold text-zinc-400">%</span>
           </div>
           <span class="text-[10px] uppercase tracking-wide text-zinc-600">move over</span>
           <select
@@ -264,14 +264,22 @@
             bind:value={alert.window}>
             {#each WINDOWS as w (w)}<option value={w}>{w}</option>{/each}
           </select>
+          <select
+            class="mt-0.5 rounded border border-zinc-800 bg-zinc-950 px-2 py-0.5 text-[11px] text-zinc-400 focus:border-zinc-500 focus:outline-none"
+            title="How many tokens to include in the alert message"
+            bind:value={alert.limit}>
+            <option value="all">Report all</option>
+            <option value="5">Top 5</option>
+            <option value="10">Top 10</option>
+            <option value="20">Top 20</option>
+          </select>
         </div>
       {/each}
 
       <!-- Add-alert square -->
       <button
         type="button"
-        class="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
-        style="aspect-ratio: 1 / 1;"
+        class="flex min-h-[132px] flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
         onclick={addAlert}>
         <span class="text-2xl leading-none">＋</span>
         <span class="text-[11px]">Add alert</span>

@@ -117,7 +117,8 @@ _BASE_CADENCE_S = 60
 
 
 def _clean_alerts(raw) -> list[dict]:
-    """Normalize the widget's alert list → [{id, threshold_pct, window_s}]."""
+    """Normalize the widget's alert list → [{id, threshold_pct, window_s, limit}].
+    limit is how many tokens the message includes (0 = all)."""
     out: list[dict] = []
     for a in (raw or []):
         if not isinstance(a, dict):
@@ -128,8 +129,10 @@ def _clean_alerts(raw) -> list[dict]:
             thr = abs(float(a.get("threshold") or 0))
         except (TypeError, ValueError):
             thr = 0.0
+        lim_raw = str(a.get("limit") or "all")
+        limit = int(lim_raw) if lim_raw in ("5", "10", "20") else 0
         if aid and window_s and thr > 0:
-            out.append({"id": aid, "threshold_pct": thr, "window_s": window_s})
+            out.append({"id": aid, "threshold_pct": thr, "window_s": window_s, "limit": limit})
     return out
 
 
