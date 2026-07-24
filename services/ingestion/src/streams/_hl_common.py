@@ -138,11 +138,20 @@ async def run(stream_name: str, event: str) -> None:
             # position_history: 45m (late-published).
             _live_lookback = (
                 45 if event == "position_history"
+                # fills: trim the re-fetch overlap to 2m (DeFiStream is only ~40s
+                # behind, and the 30-min sweep backstops any straggler) so a
+                # faster tick doesn't cost more per-request volume.
+                else 2 if event == "fills"
                 else 5 if event in _FAST_1M
                 else 15
             )
             since = floor_now - timedelta(minutes=_live_lookback)
-            until = floor_now
+            # fills: fetch right up to `now` (not the last closed minute) so the
+            # newest fill is ~DeFiStream-fresh (~40s) instead of trailing by up to
+            # a full minute. Safe off-grid (raw events, DS serves narrow windows at
+            # 200); RMT dedups the overlap. Everything else keeps the aligned
+            # just-closed slot (position_history/trade_history need the grid).
+            until = now if event == "fills" else floor_now
             n = 0
             err: str | None = None
             _live_t0 = time.monotonic()

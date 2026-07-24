@@ -54,12 +54,12 @@ _CADENCE: dict[str, tuple[int, int]] = {
     # coarser cadence (heavy per-bucket / once-daily).
     "ohlcv":            (60,    6),
     "trades":           (60,    6),
-    # fills poll every 60s on a 1-min window grid (2026-07-09) so the newest fill is
-    # ~1m old (+ DS's ~15s lag). Was a 5-min grid, which capped the newest ingested
-    # fill at the last closed 5-min boundary → fills read 1–5m stale (avg ~2–3m) even
-    # at a 60s tick. Each tick re-fetches a 5m trailing window; RMT dedups the
-    # overlap (see streams/_hl_common.py). Gap-fill chunk (sweep tier) unchanged at 6h.
-    "fills":            (60,    6),
+    # fills poll every 30s (2026-07-24, was 60s) with until=now + a 2-min trailing
+    # window (see streams/_hl_common.py) so Group Snapshot's Live mode reads to
+    # within ~40-60s of real time (DeFiStream's own ~40s floor). Each tick
+    # re-fetches the 2m window; RMT dedups the overlap. Gap-fill chunk (sweep
+    # tier) unchanged at 6h.
+    "fills":            (30,    6),
     "position_history": (900,   1),
     # trade_history moved to a DAILY tick (2026-06): DeFiStream deprecated the
     # `window` arg and now emits one absolute (cumulative-from-inception)
