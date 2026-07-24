@@ -910,6 +910,7 @@
         inst.notifRuleId = typeof r.notifRuleId === 'string' && r.notifRuleId ? r.notifRuleId : inst.id;
         inst.notifTitle = typeof r.notifTitle === 'string' ? r.notifTitle : 'Price alert';
         inst.notifTokens = typeof r.notifTokens === 'string' ? r.notifTokens : '';
+        inst.notifMuted = r.notifMuted === true;
         const WINS = ['5m', '15m', '30m', '1h', '4h', '1d'];
         inst.notifAlerts = Array.isArray(r.notifAlerts)
           ? r.notifAlerts

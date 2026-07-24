@@ -1831,6 +1831,7 @@ export type ChartInstance = {
   notifRuleId?: string;
   notifTitle?: string;           // editable topic name, mirrored in the bot menu
   notifTokens?: string;          // CSV; blank = all tokens
+  notifMuted?: boolean;          // paused: keep config but stop pushing notifications
   notifAlerts?: { id: string; threshold: number; window: '5m' | '15m' | '30m' | '1h' | '4h' | '1d' }[];
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
@@ -2839,6 +2840,7 @@ export function newChartInstance(
     base.notifRuleId = base.id;
     base.notifTitle = 'Price alert';
     base.notifTokens = '';
+    base.notifMuted = false;
     base.notifAlerts = [];
   }
   if (kind === 'ohlcv') {

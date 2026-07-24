@@ -9616,7 +9616,7 @@
         onLiveRefreshChange={(v) => (instance.gsLiveRefresh = v as typeof gsLiveRefresh)}
       />
     {:else if instance.kind === 'notification'}
-      <NotificationWidget {instance} />
+      <NotificationWidget {instance} rosterTokens={tokens} />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}
       <EarlyMoversTable

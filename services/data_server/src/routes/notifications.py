@@ -128,8 +128,11 @@ async def put_rule(request):
         return response.json({"error": "rule_id required"}, status=400)
     title = str(b.get("title") or "Price alert").strip() or "Price alert"
     alerts = _clean_alerts(b.get("alerts"))
+    paused = bool(b.get("paused"))
     params = {"alerts": alerts, "tokens": _clean_tokens(b.get("tokens"))}
-    enabled = 1 if alerts else 0
+    # Enabled iff there's ≥1 alert AND not paused. Pausing keeps the whole config
+    # (alerts + subscribers) but stops the monitor from pushing.
+    enabled = 1 if (alerts and not paused) else 0
     now = _utcnow()
     ch = await client()
     await ch.insert(
