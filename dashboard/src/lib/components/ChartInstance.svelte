@@ -9029,7 +9029,7 @@
     {#if error}
       <div class="p-3 text-xs text-red-300 bg-red-950/30">{error}</div>
     {/if}
-    {#if data.length === 0 && loading && !(isSwKind(instance.kind) && instance.viewMode !== 'chart')}
+    {#if data.length === 0 && loading && !(isSwKind(instance.kind) && instance.viewMode !== 'chart') && instance.kind !== 'notification'}
       <div class="p-4 text-sm text-zinc-400 flex items-center gap-2">
         <svg class="animate-spin h-4 w-4 text-zinc-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
           <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" stroke-opacity="0.25"/>
@@ -9037,7 +9037,9 @@
         </svg>
         Loading {chartKindGroup(effectiveKind) ? `${chartKindGroup(effectiveKind)} ${chartKindShortLabel(effectiveKind)}` : kindLabel}…
       </div>
-    {:else if data.length === 0 && !(isSwKind(instance.kind) && instance.viewMode !== 'chart')}
+    {:else if data.length === 0 && !(isSwKind(instance.kind) && instance.viewMode !== 'chart') && instance.kind !== 'notification'}
+      <!-- notification (Price Alert) never fetches data, so it must skip this
+           empty-state and render its own component below. -->
       <!-- smart_wallets_table (table view) is excluded here so it ALWAYS renders
            its own component even with no rows yet — the finder is refresh-only,
            and the user needs its metric / lookback / token / snapshot chrome to

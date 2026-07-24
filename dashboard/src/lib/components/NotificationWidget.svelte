@@ -6,6 +6,7 @@
   // server-side (debounced) so the monitor cron can evaluate it.
 
   import { onMount } from 'svelte';
+  import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import type { ChartInstance } from '$lib/components/charts/config';
 
   let { instance }: { instance: ChartInstance } = $props();
@@ -84,7 +85,7 @@
   });
 </script>
 
-<div class="flex h-full flex-col gap-2 p-3 text-sm text-zinc-200">
+<div class="flex h-full flex-col gap-2 p-3 text-sm text-zinc-200" use:stopDragEvents>
   <!-- Topic header: editable name (mirrored in the Telegram bot) -->
   <div class="flex items-center gap-2">
     <span class="text-base leading-none" title="Telegram alert topic">🔔</span>
