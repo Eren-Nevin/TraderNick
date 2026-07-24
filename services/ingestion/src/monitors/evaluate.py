@@ -158,7 +158,14 @@ async def _tick() -> tuple[int, int, str | None]:
         # sub-second scheduling jitter (which would drop it to the next minute).
         if now_mono < due - 2.0:
             continue
-        _next_fire[rule["rule_id"]] = now_mono + max(int(rule.get("cadence_s", 300) or 300), 15)
+        # Stateless kinds gate their OWN wall-clock cadence INSIDE the evaluator
+        # (fire only in the first minute of each 5m/15m/… bucket). So the
+        # scheduler must re-run them EVERY minute — otherwise the monotonic
+        # _next_fire phase (set at monitor restart) rarely lines up with the
+        # evaluator's wall-clock boundary and they never fire. Only edge/cooldown
+        # kinds honour the stored cadence_s here.
+        eff_cadence = 60 if rule["kind"] in STATELESS_KINDS else max(int(rule.get("cadence_s", 300) or 300), 15)
+        _next_fire[rule["rule_id"]] = now_mono + eff_cadence
         try:
             sent += await _evaluate_rule(rule)
             evaluated += 1
