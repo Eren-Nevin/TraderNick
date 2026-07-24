@@ -3861,18 +3861,26 @@ async def group_snapshot(request):
     if as_of == "live":
         # Side/size come from HL's OWN position accounting, not from
         # position_history: every fill carries `start_position` (the position
-        # immediately BEFORE it), so the LATEST fill's start_position + signed
-        # size is the exact position AFTER it — i.e. the current position, fresh
-        # to the fills lag (~40s). This avoids two failure modes of the old
-        # snapshot+Σfills reconstruction that broke on active flippers:
-        #   1) the ~30-min-stale position_history baseline, and
-        #   2) cumulative-fills drift (our hl_fills can miss the odd
-        #      position-changing event, so summing deltas diverges from reality).
+        # immediately BEFORE it), so the position AFTER the LATEST fill is the
+        # current position — fresh to the fills lag (~40s), with no ~30-min-stale
+        # position_history baseline and no cumulative-Σfills drift (our hl_fills
+        # can miss the odd position event, so summing deltas diverges).
+        #
+        # The catch: a market order sweeps several book levels as multiple fills
+        # at the SAME millisecond, and there's no reliable intra-ms order column
+        # (time ties; tid is NOT execution order — verified). So `argMax(pos, time)`
+        # picks an ARBITRARY fill from the final sweep → a mid-sweep position (a
+        # wallet flat since a 3-fills-in-1ms close read as still-long). Since a
+        # sweep is monotonic and single-sided, the terminal position is the
+        # extreme in the net direction: sells (net<0) → min(pos_after), buys → max.
+        # (Validated vs the chain-terminal: 99.6% on unambiguous sweeps; the rest
+        # are gappy batches no method can fully recover, where the extreme is the
+        # best estimate.)
+        #
         # position_history is kept ONLY for an approximate entry price: HL's own
         # avg_entry when the (stale) snapshot has the position, else the mark
-        # (→ uPnL ≈ 0 for fresh positions the snapshot doesn't have yet). We do
-        # NOT derive entry from a fills VWAP: net signed size is ~0 for a flipper,
-        # so notional/size blows up (observed WLD entry ≈ -3.24e12).
+        # (→ uPnL ≈ 0 for fresh positions). NOT a fills VWAP — net signed size is
+        # ~0 for a flipper, so notional/size blows up (observed WLD ≈ -3.24e12).
         entry_expr = "coalesce(nullIf(ph.entry, 0), mk.mark)"
         pos_sql = (
             "SELECT f.token AS token, f.wallet AS wallet, f.cur AS signed,"
@@ -3880,12 +3888,18 @@ async def group_snapshot(request):
             " " + entry_expr + " AS entry,"
             " f.cur * (mk.mark - " + entry_expr + ") AS upnl"
             " FROM ("
-            "   SELECT token, wallet,"
-            "     argMax(start_position + if(side='B', size, -size), time) AS cur"
-            "   FROM tradernick.hl_fills"
-            "   WHERE time > now() - INTERVAL {st:UInt32} SECOND" + tok_filter + " AND " + member +
-            "   GROUP BY token, wallet"
-            "   HAVING abs(cur) > 1e-9"
+            "   SELECT token, wallet, cur FROM ("
+            "     SELECT token, wallet, if(sum(sg) >= 0, max(pa), min(pa)) AS cur"
+            "     FROM ("
+            "       SELECT token, wallet, if(side='B', size, -size) AS sg,"
+            "         start_position + if(side='B', size, -size) AS pa,"
+            "         time = max(time) OVER (PARTITION BY token, wallet) AS is_latest"
+            "       FROM tradernick.hl_fills"
+            "       WHERE time > now() - INTERVAL {st:UInt32} SECOND" + tok_filter + " AND " + member +
+            "     )"
+            "     WHERE is_latest"
+            "     GROUP BY token, wallet"
+            "   ) WHERE abs(cur) > 1e-9"
             " ) f"
             " LEFT JOIN ("
             "   SELECT token, wallet, argMax(avg_entry, time) AS entry"
