@@ -3859,30 +3859,41 @@ async def group_snapshot(request):
         params["tok"] = token_one
 
     if as_of == "live":
+        # Side/size come from HL's OWN position accounting, not from
+        # position_history: every fill carries `start_position` (the position
+        # immediately BEFORE it), so the LATEST fill's start_position + signed
+        # size is the exact position AFTER it — i.e. the current position, fresh
+        # to the fills lag (~40s). This avoids two failure modes of the old
+        # snapshot+Σfills reconstruction that broke on active flippers:
+        #   1) the ~30-min-stale position_history baseline, and
+        #   2) cumulative-fills drift (our hl_fills can miss the odd
+        #      position-changing event, so summing deltas diverges from reality).
+        # position_history is kept ONLY for an approximate entry price, falling
+        # back to the fills VWAP then the mark so uPnL stays sane for fresh
+        # positions the stale snapshot doesn't have yet.
+        entry_expr = "coalesce(nullIf(ph.entry, 0), f.vwap, mk.mark)"
         pos_sql = (
-            "SELECT rec.token AS token, rec.wallet AS wallet, rec.cur AS signed,"
-            " abs(rec.cur) * mk.mark AS sz, rec.entry AS entry, rec.cur * (mk.mark - rec.entry) AS upnl"
+            "SELECT f.token AS token, f.wallet AS wallet, f.cur AS signed,"
+            " abs(f.cur) * mk.mark AS sz,"
+            " " + entry_expr + " AS entry,"
+            " f.cur * (mk.mark - " + entry_expr + ") AS upnl"
             " FROM ("
-            "   SELECT token, wallet, (sumIf(sig, tag='s') + sumIf(sig, tag='f')) AS cur,"
-            "     if(abs(sumIf(sig,tag='s')) > 1e-9, maxIf(ent,tag='s'),"
-            "        if(abs(sumIf(sig,tag='f')) > 1e-9, abs(sumIf(notl,tag='f')/sumIf(sig,tag='f')), 0)) AS entry"
-            "   FROM ("
-            "     SELECT token, wallet, 's' AS tag, argMax(amount,time)*if(side='long',1,-1) AS sig,"
-            "            argMax(avg_entry,time) AS ent, 0 AS notl"
-            "     FROM tradernick.hl_position_history"
-            "     WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND" + tok_filter + " AND " + member +
-            "     GROUP BY token, wallet, side"
-            "     UNION ALL"
-            "     SELECT token, wallet, 'f' AS tag, sum(if(side='B',size,-size)) AS sig, 0 AS ent,"
-            "            sum(if(side='B',size*price,-size*price)) AS notl"
-            "     FROM tradernick.hl_fills WHERE time >= {b:DateTime} AND time < now()" + tok_filter + " AND " + member +
-            "     GROUP BY token, wallet"
-            "   ) GROUP BY token, wallet"
-            "   HAVING abs(cur) > 1e-9 AND (token, wallet) IN ("
-            "     SELECT token, wallet FROM tradernick.hl_fills WHERE time > now() - INTERVAL {st:UInt32} SECOND" + tok_filter + " AND " + member + ")"
-            " ) rec"
+            "   SELECT token, wallet,"
+            "     argMax(start_position + if(side='B', size, -size), time) AS cur,"
+            "     sum(if(side='B', size*price, -size*price)) / nullIf(sum(if(side='B', size, -size)), 0) AS vwap"
+            "   FROM tradernick.hl_fills"
+            "   WHERE time > now() - INTERVAL {st:UInt32} SECOND" + tok_filter + " AND " + member +
+            "   GROUP BY token, wallet"
+            "   HAVING abs(cur) > 1e-9"
+            " ) f"
+            " LEFT JOIN ("
+            "   SELECT token, wallet, argMax(avg_entry, time) AS entry"
+            "   FROM tradernick.hl_position_history"
+            "   WHERE time >= {b:DateTime} AND time < {b:DateTime} + INTERVAL 900 SECOND" + tok_filter + " AND " + member +
+            "   GROUP BY token, wallet"
+            " ) ph ON f.token = ph.token AND f.wallet = ph.wallet"
             " INNER JOIN (SELECT token, argMax(price,time) AS mark FROM tradernick.hl_fills"
-            "             WHERE time > now() - INTERVAL 86400 SECOND" + tok_filter + " GROUP BY token) mk ON rec.token = mk.token"
+            "             WHERE time > now() - INTERVAL 86400 SECOND" + tok_filter + " GROUP BY token) mk ON f.token = mk.token"
         )
     else:
         pos_sql = (
