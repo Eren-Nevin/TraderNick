@@ -1846,7 +1846,7 @@ export type ChartInstance = {
   notifTitle?: string;           // editable topic name, mirrored in the bot menu
   notifTokens?: string;          // CSV; blank = all tokens
   notifMuted?: boolean;          // paused: keep config but stop pushing notifications
-  notifAlerts?: { id: string; threshold: number; window: '5m' | '15m' | '30m' | '1h' | '4h' | '1d'; limit: 'all' | '5' | '10' | '20' }[];
+  notifAlerts?: { id: string; threshold: number; window: '1m' | '5m' | '15m' | '1h'; limit: 'all' | '5' | '10' | '20' }[];
   // Positions Alert widget (kind 'positions_alert'). Reuses notifRuleId /
   // notifTitle / notifMuted (shared topic identity + mute). A periodic report
   // of a wallet group's top-N most-long / most-short tokens by a criteria.
@@ -1854,12 +1854,12 @@ export type ChartInstance = {
   paCriteria?: 'net_long' | 'net_size';
   paTopN?: '3' | '5' | '10' | '20';
   paStaleness?: '1h' | '4h' | '1d' | '3d' | '7d' | '14d' | '30d';
-  paCadence?: '1m' | '5m' | '15m' | '1h' | '4h';   // report cadence
+  paCadence?: '1m' | '5m' | '15m' | '1h';   // report cadence
   // Positions Change widget (kind 'positions_change'). Also reuses notifRuleId /
   // notifTitle / notifMuted. Top-N tokens by a Trading-Pit-Overview flow metric.
   pchgGroupId?: string | null;
-  pchgWindow?: '5m' | '15m' | '30m' | '1h' | '4h';       // lookback window
-  pchgCadence?: '1m' | '5m' | '15m' | '1h' | '4h';       // report cadence
+  pchgWindow?: '5m' | '15m' | '30m' | '1h' | '4h';       // lookback window (not a cadence)
+  pchgCadence?: '1m' | '5m' | '15m' | '1h';              // report cadence
   pchgCriteria?: 'net_pos_change' | 'net_open_long' | 'net_flip';
   pchgRankBy?: 'usd' | 'wallets';
   pchgTopN?: '3' | '5' | '10' | '20';

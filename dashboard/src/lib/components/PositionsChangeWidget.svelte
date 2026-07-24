@@ -14,7 +14,7 @@
   let { instance }: { instance: ChartInstance } = $props();
 
   const WINDOWS: NonNullable<ChartInstance['pchgWindow']>[] = ['5m', '15m', '30m', '1h', '4h'];
-  const CADENCE: NonNullable<ChartInstance['pchgCadence']>[] = ['1m', '5m', '15m', '1h', '4h'];
+  const CADENCE: NonNullable<ChartInstance['pchgCadence']>[] = ['1m', '5m', '15m', '1h'];
 
   let userBotConfigured = $state<boolean | null>(null);
   let syncMsg = $state<string>('');

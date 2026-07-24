@@ -14,8 +14,8 @@
 
   let { instance, rosterTokens = [] }: { instance: ChartInstance; rosterTokens?: string[] } = $props();
 
-  type Win = '5m' | '15m' | '30m' | '1h' | '4h' | '1d';
-  const WINDOWS: Win[] = ['5m', '15m', '30m', '1h', '4h', '1d'];
+  type Win = '1m' | '5m' | '15m' | '1h';
+  const WINDOWS: Win[] = ['1m', '5m', '15m', '1h'];
 
   let userBotConfigured = $state<boolean | null>(null);
   let syncMsg = $state<string>('');

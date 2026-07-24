@@ -54,7 +54,7 @@ def _fmt_price(p: float) -> str:
 
 # ── price_change (user widgets) ────────────────────────────────────────────
 
-async def eval_price_change(rule: dict) -> list[dict]:
+async def eval_price_change(rule: dict, slot_epoch: int = 0) -> list[dict]:
     """Fire tokens whose close moved ≥ threshold_pct (abs) over window_s, from
     hl_ohlcv_1m. Reuses the argMax/argMin close-ratio approach from
     data_server routes/hyperliquid.py group_snapshot."""
@@ -105,17 +105,17 @@ async def eval_price_change(rule: dict) -> list[dict]:
 # Stateless — each due check evaluates the last window and fires matching
 # tokens; the rolling non-overlapping windows naturally avoid repeat spam.
 
-_alert_buckets: dict[tuple, int] = {}
-
-
-async def eval_price_alert(rule: dict) -> list[dict]:
+async def eval_price_alert(rule: dict, slot_epoch: int = 0) -> list[dict]:
     p = rule.get("params") or {}
     alerts = p.get("alerts") or []
     title = str(rule.get("title") or "Price alert").strip() or "Price alert"
     global_tokens = [str(t).strip().upper() for t in (p.get("tokens") or []) if str(t).strip()]
-    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    # Use the SLOT's wall-clock epoch (not now()) so a late-running slot still
+    # fires the alerts that belong to this slot.
+    now_epoch = int(slot_epoch or datetime.now(timezone.utc).timestamp())
 
-    # Which alerts are DUE this tick (their wall-clock window bucket rolled over).
+    # Which alerts align to THIS slot (their window boundary is now). The monitor
+    # runs one slot per minute, so no per-bucket dedup is needed here.
     due: list[dict] = []
     for a in alerts:
         aid = str(a.get("id") or "")
@@ -123,18 +123,8 @@ async def eval_price_alert(rule: dict) -> list[dict]:
         threshold = abs(float(a.get("threshold_pct") or 0))
         if not aid or window_s <= 0 or threshold <= 0:
             continue
-        # Only fire in the FIRST minute of each wall-clock window bucket, so
-        # alerts align to round times (5m → :00/:05/…, 1h → top of the hour)
-        # regardless of when the alert was created or the monitor last restarted.
-        # (Unix epoch is aligned to these boundaries, so epoch // window_s and
-        # epoch % window_s give clean wall-clock buckets.)
-        if now_epoch % window_s >= 60:
+        if now_epoch % window_s >= 60:  # not this alert's slot
             continue
-        bucket = now_epoch // window_s
-        key = (rule["rule_id"], aid)
-        if _alert_buckets.get(key) == bucket:
-            continue  # already fired for this bucket
-        _alert_buckets[key] = bucket
         due.append({"id": aid, "window_s": window_s, "threshold": threshold,
                     "limit": int(a.get("limit") or 0)})
     if not due:
@@ -210,9 +200,6 @@ def _format_price_alert(title: str, thr: float, wl: str,
 # most-long AND most-short as two sections. Stateless: it sends a fresh report
 # each cadence tick (wall-clock aligned).
 
-_pa_buckets: dict[str, int] = {}
-
-
 def _ratio(n_long: int, n_short: int) -> float:
     """Long-concentration ratio, Laplace-smoothed to avoid div-by-zero and to
     order sensibly (7/1 → 4 above 9/3 → 2.5, and 7/0 → 8 above 7/1)."""
@@ -231,7 +218,10 @@ def _fmt_money(n: float) -> str:
     return f"{s}${a:.0f}"
 
 
-async def eval_positions_alert(rule: dict) -> list[dict]:
+async def eval_positions_alert(rule: dict, slot_epoch: int = 0) -> list[dict]:
+    # The monitor's slot scheduler decides WHEN this runs (at the report cadence);
+    # this just builds the current report. `slot_epoch` is accepted for a uniform
+    # evaluator signature but unused (the data is "as of now").
     p = rule.get("params") or {}
     group_id = str(p.get("group_id") or "").strip()
     if not group_id:
@@ -239,18 +229,7 @@ async def eval_positions_alert(rule: dict) -> list[dict]:
     criteria = "net_size" if str(p.get("criteria")) == "net_size" else "net_long"
     top_n = max(int(p.get("top_n") or 5), 1)
     staleness = str(p.get("staleness") or "1d")
-    cadence_s = max(int(rule.get("cadence_s") or 300), 60)
     title = str(rule.get("title") or "Positions alert").strip() or "Positions alert"
-
-    # Wall-clock cadence gating (fire once per cadence bucket, in its first
-    # minute) — the same alignment Price Alert uses.
-    now_epoch = int(datetime.now(timezone.utc).timestamp())
-    if now_epoch % cadence_s >= 60:
-        return []
-    bucket = now_epoch // cadence_s
-    if _pa_buckets.get(rule["rule_id"]) == bucket:
-        return []
-    _pa_buckets[rule["rule_id"]] = bucket
 
     # Reuse the canonical Live group_snapshot aggregation (per-token n_long/
     # n_short/long_usd/short_usd/entry). No SQL duplication.
@@ -323,7 +302,6 @@ def _format_positions_alert(title: str, criteria: str, top_n: int,
 # positive AND most negative as two sections. Each token line shows all three
 # metrics as "$value (walletΔ)". Stateless, wall-clock-cadence-gated.
 
-_pc_buckets: dict[str, int] = {}
 _PC_METRICS = {
     "net_pos_change": "Net Pos Change",
     "net_open_long": "Net Open Long",
@@ -331,7 +309,9 @@ _PC_METRICS = {
 }
 
 
-async def eval_positions_change(rule: dict) -> list[dict]:
+async def eval_positions_change(rule: dict, slot_epoch: int = 0) -> list[dict]:
+    # The monitor's slot scheduler decides WHEN this runs (at the report cadence);
+    # this just builds the current report over the lookback window.
     p = rule.get("params") or {}
     group_id = str(p.get("group_id") or "").strip()
     if not group_id:
@@ -342,16 +322,7 @@ async def eval_positions_change(rule: dict) -> list[dict]:
     rank_by = "wallets" if str(p.get("rank_by")) == "wallets" else "usd"
     top_n = max(int(p.get("top_n") or 5), 1)
     window = str(p.get("window") or "15m")
-    cadence_s = max(int(rule.get("cadence_s") or 300), 60)
     title = str(rule.get("title") or "Positions change").strip() or "Positions change"
-
-    now_epoch = int(datetime.now(timezone.utc).timestamp())
-    if now_epoch % cadence_s >= 60:
-        return []
-    bucket = now_epoch // cadence_s
-    if _pc_buckets.get(rule["rule_id"]) == bucket:
-        return []
-    _pc_buckets[rule["rule_id"]] = bucket
 
     url = f"{_DATA_SERVER_URL}/hyperliquid/positions_change?group={group_id}&lookback={window}"
     try:
@@ -399,7 +370,7 @@ def _format_positions_change(title: str, criteria: str, rank_by: str, window: st
 
 # ── admin_job_fail ─────────────────────────────────────────────────────────
 
-async def eval_admin_job_fail(rule: dict) -> list[dict]:
+async def eval_admin_job_fail(rule: dict, slot_epoch: int = 0) -> list[dict]:
     """Fire ingestion_jobs that have status='failed'. Scoped to failures within
     a recent lookback so the first run doesn't replay ancient history; each
     job_id then fires exactly once (it never flips back to non-failed)."""
@@ -431,7 +402,7 @@ async def eval_admin_job_fail(rule: dict) -> list[dict]:
 
 # ── admin_stale_data ───────────────────────────────────────────────────────
 
-async def eval_admin_stale_data(rule: dict) -> list[dict]:
+async def eval_admin_stale_data(rule: dict, slot_epoch: int = 0) -> list[dict]:
     """Fire enabled streams whose last successful tick is older than
     cadence_s + grace_s. Auto-covers every stream in the registry."""
     p = rule.get("params") or {}

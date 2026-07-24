@@ -109,17 +109,17 @@ async def get_rules(_request):
     return response.json({"rules": out})
 
 
-# Price-alert timeframe labels → seconds. The alert's window doubles as its
-# check cadence in the monitor (a 1h alert is evaluated once/hour).
-_WINDOW_S = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
+# Allowed notification cadences (all widgets): 1m / 5m / 15m / 1h — nothing else.
+# For Price Alert the alert's window doubles as its firing cadence.
+_WINDOW_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 # The rule always runs at the base 1-min cadence; per-alert gating does the rest.
 _BASE_CADENCE_S = 60
-# Positions-alert report cadence labels → seconds, and allowed staleness values.
-_PA_CADENCE_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
+# Positions-alert report cadence + allowed staleness values.
+_PA_CADENCE_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 _PA_STALENESS = {"1h", "4h", "1d", "3d", "7d", "14d", "30d"}
-# Positions-change lookback windows + report cadence + criteria.
+# Positions-change lookback windows (NOT a cadence) + report cadence + criteria.
 _PCHG_WINDOWS = {"5m", "15m", "30m", "1h", "4h"}
-_PCHG_CADENCE_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
+_PCHG_CADENCE_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 _PCHG_CRITERIA = {"net_pos_change", "net_open_long", "net_flip"}
 
 

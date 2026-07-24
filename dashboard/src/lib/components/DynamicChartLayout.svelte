@@ -911,7 +911,7 @@
         inst.notifTitle = typeof r.notifTitle === 'string' ? r.notifTitle : 'Price alert';
         inst.notifTokens = typeof r.notifTokens === 'string' ? r.notifTokens : '';
         inst.notifMuted = r.notifMuted === true;
-        const WINS = ['5m', '15m', '30m', '1h', '4h', '1d'];
+        const WINS = ['1m', '5m', '15m', '1h'];
         const LIMS = ['all', '5', '10', '20'];
         inst.notifAlerts = Array.isArray(r.notifAlerts)
           ? r.notifAlerts
@@ -934,7 +934,7 @@
         inst.paTopN = (PN.includes(r.paTopN as string) ? r.paTopN : '5') as NonNullable<ChartInstanceT['paTopN']>;
         const PS = ['1h', '4h', '1d', '3d', '7d', '14d', '30d'];
         inst.paStaleness = (PS.includes(r.paStaleness as string) ? r.paStaleness : '1d') as NonNullable<ChartInstanceT['paStaleness']>;
-        const PC = ['1m', '5m', '15m', '1h', '4h'];
+        const PC = ['1m', '5m', '15m', '1h'];
         inst.paCadence = (PC.includes(r.paCadence as string) ? r.paCadence : '5m') as NonNullable<ChartInstanceT['paCadence']>;
       }
       if (inst.kind === 'positions_change') {
@@ -944,7 +944,7 @@
         inst.pchgGroupId = typeof r.pchgGroupId === 'string' ? r.pchgGroupId : null;
         const PW = ['5m', '15m', '30m', '1h', '4h'];
         inst.pchgWindow = (PW.includes(r.pchgWindow as string) ? r.pchgWindow : '15m') as NonNullable<ChartInstanceT['pchgWindow']>;
-        const PCC = ['1m', '5m', '15m', '1h', '4h'];
+        const PCC = ['1m', '5m', '15m', '1h'];
         inst.pchgCadence = (PCC.includes(r.pchgCadence as string) ? r.pchgCadence : '15m') as NonNullable<ChartInstanceT['pchgCadence']>;
         const CR = ['net_pos_change', 'net_open_long', 'net_flip'];
         inst.pchgCriteria = (CR.includes(r.pchgCriteria as string) ? r.pchgCriteria : 'net_pos_change') as NonNullable<ChartInstanceT['pchgCriteria']>;

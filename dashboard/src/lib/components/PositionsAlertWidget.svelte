@@ -13,7 +13,7 @@
   let { instance }: { instance: ChartInstance } = $props();
 
   const STALE: NonNullable<ChartInstance['paStaleness']>[] = ['1h', '4h', '1d', '3d', '7d', '14d', '30d'];
-  const CADENCE: NonNullable<ChartInstance['paCadence']>[] = ['1m', '5m', '15m', '1h', '4h'];
+  const CADENCE: NonNullable<ChartInstance['paCadence']>[] = ['1m', '5m', '15m', '1h'];
 
   let userBotConfigured = $state<boolean | null>(null);
   let syncMsg = $state<string>('');

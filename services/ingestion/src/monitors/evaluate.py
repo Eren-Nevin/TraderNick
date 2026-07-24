@@ -1,17 +1,22 @@
 """Monitor process: `python -m monitors.evaluate`.
 
-A single long-running asyncio process (its own docker-compose service). Every
-BASE_TICK it re-reads notification_rules (hot-reloaded via the config store's
-TTL cache) and evaluates each enabled rule whose per-rule cadence has elapsed.
-Each evaluator returns the subjects currently satisfying its condition; the
-edge+cooldown engine diffs those against notification_state and dispatches only
-genuine transitions (0→1), staying silent until an entity resets (1→0), with an
-optional per-rule cooldown re-arm. Each firing fans out to the subscribers of
-its topic via the bot's channel.
+A single long-running asyncio process (its own docker-compose service). It runs
+on a **slot model**: it wakes at the start of every wall-clock minute (a "slot")
+and runs every rule that is due for that slot — a rule with cadence C fires at
+the slots where the wall clock aligns to C (1m every slot; 5m at :00/:05/…; 15m
+at :00/:15/:30/:45; 1h at :00; …). The slot only sets the START time; a slot's
+work runs as its own task, so:
 
-Not a supervised stream — a plain process kept alive by compose
-`restart: unless-stopped`. Heartbeats are written to ingestion_event_status so
-the admin overview still shows it.
+  • a slow slot never delays the next one (consecutive slots overlap),
+  • each rule's execution is capped at 5 min (memory/hang guard),
+  • within a slot, lower-cadence (more time-sensitive) rules run first,
+  • best-effort only — no catch-up/retry. If a rule fails or times out we drop
+    the notification and (once per failure streak) send a short error notice to
+    its topic so the owner can fix it fast.
+
+Stateless kinds (price/positions alerts) dispatch their evaluator output
+directly. Edge kinds (admin monitors) run the notification_state edge+cooldown
+engine. Heartbeats go to ingestion_event_status so the admin overview shows it.
 """
 from __future__ import annotations
 
@@ -35,11 +40,13 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 STREAM_NAME = "notifications.monitor"
+_RULE_MAX_S = 300  # hard cap for one rule's execution (5 min)
 
-# per-rule next-fire wall-clock (monotonic seconds); rules not present fire now.
-_next_fire: dict[str, float] = {}
 # bot → (token, TelegramChannel) so we rebuild only when the admin rotates a token
 _channels: dict[str, tuple[str, TelegramChannel]] = {}
+# rule_id → is-currently-erroring, so an error notice is sent ONCE per failure
+# streak (not every slot) — in-memory, best-effort, reset on recovery/restart.
+_rule_errored: dict[str, bool] = {}
 
 
 def _utcnow() -> datetime:
@@ -85,15 +92,41 @@ async def _dispatch(bot: str, topic_id: str, text: str) -> int:
     return sent
 
 
-async def _evaluate_rule(rule: dict) -> int:
-    """Evaluate one rule, apply edge+cooldown, dispatch. Returns messages sent."""
+# ── slot scheduling ─────────────────────────────────────────────────────────
+
+def _rule_cadence_s(rule: dict) -> int:
+    """The rule's slot cadence (seconds) — used both to decide due-ness and to
+    order slot execution (smaller = more time-sensitive → runs first). A
+    price_alert holds several alerts with their own windows; its cadence is the
+    smallest, so it rides in the most time-sensitive tier."""
+    if rule["kind"] == "price_alert":
+        ws = [int(a.get("window_s") or 0) for a in (rule.get("params") or {}).get("alerts", [])]
+        ws = [w for w in ws if w > 0]
+        return min(ws) if ws else 60
+    return max(int(rule.get("cadence_s") or 300), 60)
+
+
+def _is_due(rule: dict, slot_epoch: int) -> bool:
+    """Is this rule due at this slot? A cadence-C rule is due when the wall clock
+    aligns to C. price_alert is due whenever ANY of its alerts aligns (the
+    evaluator then fires just the aligned ones). Uses the SLOT time (not the
+    execution time) so a late-running slot still counts as its slot."""
+    if rule["kind"] == "price_alert":
+        ws = {int(a.get("window_s") or 0) for a in (rule.get("params") or {}).get("alerts", [])}
+        return any(w > 0 and slot_epoch % w < 60 for w in ws)
+    return slot_epoch % _rule_cadence_s(rule) < 60
+
+
+# ── evaluate + dispatch one rule ────────────────────────────────────────────
+
+async def _evaluate_and_dispatch(rule: dict, slot_epoch: int) -> int:
+    """Run a rule's evaluator (given the slot's wall-clock epoch) and dispatch.
+    Stateless kinds fan out directly; edge kinds run the edge+cooldown engine."""
     evaluator = EVALUATORS.get(rule["kind"])
     if evaluator is None:
         return 0
-    firing = await evaluator(rule)  # [{entity, message, group}]
+    firing = await evaluator(rule, slot_epoch)  # [{entity, message, group}]
 
-    # Stateless kinds (price_alert): the evaluator already gated cadence + dedup
-    # and returns only what should fire now → dispatch directly, no state.
     if rule["kind"] in STATELESS_KINDS:
         bot = "admin" if rule["scope"] == "admin" else "user"
         sent = 0
@@ -103,25 +136,23 @@ async def _evaluate_rule(rule: dict) -> int:
                 sent += await _dispatch(bot, topic_id, item["message"])
         return sent
 
+    # ── edge + cooldown (admin monitors) ──
     firing_by_entity = {it["entity"]: it for it in firing}
-
-    prior = nc.get_states(rule["rule_id"])  # {entity: {state, last_fired_at}}
+    prior = nc.get_states(rule["rule_id"])
     bot = "admin" if rule["scope"] == "admin" else "user"
     cooldown_s = int(rule.get("cooldown_s", 0) or 0)
     now = _utcnow()
     sent_total = 0
-
-    # entities currently true → decide fire vs hold
     for entity, item in firing_by_entity.items():
         pstate = prior.get(entity)
         was_true = bool(pstate and pstate["state"])
         should_fire = False
         if not was_true:
-            should_fire = True  # 0→1 edge
+            should_fire = True
         elif cooldown_s > 0:
             last = pstate.get("last_fired_at")
             if isinstance(last, datetime) and (now - last.replace(tzinfo=None)).total_seconds() >= cooldown_s:
-                should_fire = True  # re-arm after cooldown, still true
+                should_fire = True
         if should_fire:
             topic_id = _topic_for(rule, item)
             if topic_id:
@@ -129,74 +160,94 @@ async def _evaluate_rule(rule: dict) -> int:
             nc.set_state(rule["rule_id"], entity, True, now)
         elif was_true and pstate.get("last_fired_at") is None:
             nc.set_state(rule["rule_id"], entity, True, now)
-
-    # entities that were true but no longer firing → reset (1→0)
     for entity, pstate in prior.items():
         if pstate["state"] and entity not in firing_by_entity:
             last = pstate.get("last_fired_at") or now
             nc.set_state(rule["rule_id"], entity,
                          False, last.replace(tzinfo=None) if isinstance(last, datetime) else now)
-
     return sent_total
 
 
-async def _tick() -> tuple[int, int, str | None]:
-    """Evaluate all due rules. Returns (rules_evaluated, messages_sent, error)."""
-    now_mono = time.monotonic()
+async def _dispatch_error(rule: dict, exc: BaseException) -> None:
+    """Best-effort error notice to a user rule's topic (once per failure streak)
+    so the owner can fix it fast. Admin rules have no single widget topic → skip."""
+    if rule.get("scope") == "admin":
+        return
+    topic_id = rule.get("topic_id") or rule.get("rule_id")
+    if not topic_id:
+        return
+    title = rule.get("title") or "Alert"
+    reason = "timed out (>5 min)" if isinstance(exc, (asyncio.TimeoutError, TimeoutError)) \
+        else f"error: {type(exc).__name__}"
     try:
-        rules = nc.get_rules()  # enabled, cached
-    except Exception as exc:  # noqa: BLE001
-        return 0, 0, f"rules read: {exc}"
-    evaluated = 0
+        await _dispatch("user", topic_id, f"⚠️ {title}\nThis alert failed to run ({reason}) — skipped this cycle.")
+    except Exception:  # noqa: BLE001
+        pass
+
+
+async def _run_rule(rule: dict, slot_epoch: int) -> int:
+    """Run one rule with a hard 5-min cap. On failure: drop the notification
+    (no retry/catch-up) and, once per failure streak, send an error notice."""
+    rid = rule.get("rule_id", "?")
+    try:
+        sent = await asyncio.wait_for(_evaluate_and_dispatch(rule, slot_epoch), timeout=_RULE_MAX_S)
+        _rule_errored[rid] = False
+        return sent
+    except Exception as exc:  # noqa: BLE001  (incl. asyncio.TimeoutError)
+        log.warning("rule %s (%s) failed: %s", rid, rule.get("kind"), exc)
+        if not _rule_errored.get(rid):
+            _rule_errored[rid] = True
+            await _dispatch_error(rule, exc)
+        return 0
+
+
+async def _slot(slot_epoch: int, rules: list[dict]) -> None:
+    """Execute all rules due at this slot, tier by tier in ascending cadence
+    (lower cadence = more time-sensitive → dispatched first), concurrently
+    within a tier. Runs as its own task so consecutive slots can overlap."""
+    due = [r for r in rules if _is_due(r, slot_epoch)]
+    if not due:
+        return
+    tiers: dict[int, list[dict]] = {}
+    for r in due:
+        tiers.setdefault(_rule_cadence_s(r), []).append(r)
     sent = 0
-    err: str | None = None
-    live_ids = set()
-    for rule in rules:
-        live_ids.add(rule["rule_id"])
-        due = _next_fire.get(rule["rule_id"], 0.0)
-        # 2s tolerance so a rule due right at a minute boundary isn't skipped by
-        # sub-second scheduling jitter (which would drop it to the next minute).
-        if now_mono < due - 2.0:
-            continue
-        # Stateless kinds gate their OWN wall-clock cadence INSIDE the evaluator
-        # (fire only in the first minute of each 5m/15m/… bucket). So the
-        # scheduler must re-run them EVERY minute — otherwise the monotonic
-        # _next_fire phase (set at monitor restart) rarely lines up with the
-        # evaluator's wall-clock boundary and they never fire. Only edge/cooldown
-        # kinds honour the stored cadence_s here.
-        eff_cadence = 60 if rule["kind"] in STATELESS_KINDS else max(int(rule.get("cadence_s", 300) or 300), 15)
-        _next_fire[rule["rule_id"]] = now_mono + eff_cadence
-        try:
-            sent += await _evaluate_rule(rule)
-            evaluated += 1
-        except Exception as exc:  # noqa: BLE001
-            err = f"{rule['rule_id']}: {exc}"
-            log.exception("rule %s evaluation failed", rule["rule_id"])
-    # forget schedule entries for rules that disappeared (disabled/deleted)
-    for rid in list(_next_fire):
-        if rid not in live_ids:
-            _next_fire.pop(rid, None)
-    return evaluated, sent, err
+    for cad in sorted(tiers):
+        results = await asyncio.gather(
+            *[_run_rule(r, slot_epoch) for r in tiers[cad]], return_exceptions=True)
+        sent += sum(x for x in results if isinstance(x, int))
+    try:
+        await ch_status.write_tick(STREAM_NAME, sent)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def main():
-    log.info("monitors.evaluate up (minute-aligned)")
+    log.info("monitors.evaluate up (slot model)")
     try:
         nc.seed_defaults()
     except Exception as exc:  # noqa: BLE001
-        log.warning("seed_defaults failed (will retry via ticks): %s", exc)
+        log.warning("seed_defaults failed (will retry via slots): %s", exc)
     await ch_status.bootstrap_counter(STREAM_NAME)
+    inflight: set[asyncio.Task] = set()
     while True:
-        # Align every evaluation to the start of a wall-clock minute. Combined
-        # with the evaluator's boundary-minute gate, window-aligned alerts fire
-        # on their round times (5m → :00/:05/…, 1h → top of hour) no matter when
-        # the process started or last restarted.
+        # Wake at the start of each wall-clock minute — the slot boundary.
         await asyncio.sleep(60.0 - (time.time() % 60.0))
-        t0 = time.monotonic()
-        evaluated, sent, err = await _tick()
+        slot_epoch = int(time.time())
         try:
-            await ch_status.write_tick(
-                STREAM_NAME, sent, error=err, duration_s=time.monotonic() - t0)
+            rules = nc.get_rules()  # enabled, cached
+        except Exception as exc:  # noqa: BLE001
+            log.warning("rules read failed: %s", exc)
+            rules = []
+        # Launch the slot as its own task so a long slot doesn't delay the next
+        # (slots may overlap); each rule inside is independently capped at 5 min.
+        task = asyncio.create_task(_slot(slot_epoch, rules))
+        inflight.add(task)
+        task.add_done_callback(inflight.discard)
+        # A lightweight liveness heartbeat every minute (the slot task writes the
+        # real sent-count when it finishes).
+        try:
+            await ch_status.write_tick(STREAM_NAME, 0, duration_s=0.0)
         except Exception:  # noqa: BLE001
             pass
 
