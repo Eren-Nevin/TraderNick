@@ -97,7 +97,7 @@
   }
   function addAlert() {
     const list = instance.notifAlerts ? [...instance.notifAlerts] : [];
-    list.push({ id: uid(), threshold: 10, window: '1h', limit: 'all' });
+    list.push({ id: uid(), threshold: 10, window: '1h', limit: '10' });
     instance.notifAlerts = list;
   }
   function removeAlert(id: string) {
@@ -260,18 +260,18 @@
           </div>
           <span class="text-[10px] uppercase tracking-wide text-zinc-600">move over</span>
           <select
-            class="rounded border border-zinc-700 bg-zinc-950 px-2 py-0.5 text-sm text-zinc-100 focus:border-zinc-500 focus:outline-none"
+            class="rounded border border-zinc-700 bg-zinc-950 px-1.5 py-0.5 text-xs text-zinc-100 focus:border-zinc-500 focus:outline-none"
             bind:value={alert.window}>
             {#each WINDOWS as w (w)}<option value={w}>{w}</option>{/each}
           </select>
           <select
-            class="mt-0.5 rounded border border-zinc-800 bg-zinc-950 px-2 py-0.5 text-[11px] text-zinc-400 focus:border-zinc-500 focus:outline-none"
+            class="mt-0.5 rounded border border-zinc-800 bg-zinc-950 px-1.5 py-0.5 text-[11px] text-zinc-400 focus:border-zinc-500 focus:outline-none"
             title="How many tokens to include per side (top gainers AND top losers)"
             bind:value={alert.limit}>
             <option value="all">Report all</option>
-            <option value="5">Top 5 / side</option>
-            <option value="10">Top 10 / side</option>
-            <option value="20">Top 20 / side</option>
+            <option value="5">Top 5</option>
+            <option value="10">Top 10</option>
+            <option value="20">Top 20</option>
           </select>
         </div>
       {/each}
