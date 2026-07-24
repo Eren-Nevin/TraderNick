@@ -2830,7 +2830,11 @@ export function newChartInstance(
   if (kind === 'group_snapshot') {
     base.gsGroupId = null;
     base.gsStaleness = '7d';
-    base.gsAsOf = 'snapshot';
+    // 'live' by default: the stored position_history feed lags ~30 min, so
+    // Snapshot mode shows stale sides for wallets that recently flipped. Live
+    // reconstructs from fresh fills (accurate to ~5 min). See the group_snapshot
+    // handler in data_server routes/hyperliquid.py.
+    base.gsAsOf = 'live';
     base.gsPriceLb = '1h';
     base.gsLiveRefresh = 'off';
   }

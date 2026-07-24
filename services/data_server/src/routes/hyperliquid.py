@@ -3833,7 +3833,7 @@ async def group_snapshot(request):
         return response.json({"error": "missing group"}, status=400)
     stale = request.args.get("staleness", "7d")
     st_sec = _GS_STALE.get(stale, _GS_STALE["7d"])
-    as_of = request.args.get("as_of", "snapshot")
+    as_of = request.args.get("as_of", "live")
     token_one = (request.args.get("token") or "").strip().upper() or None
     ch = await client()
     try:
