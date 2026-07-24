@@ -22,6 +22,36 @@
   let syncTimer: ReturnType<typeof setTimeout> | undefined;
   let lastSynced = '';
 
+  // Last-fired status (from CH, independent of subscribers), polled.
+  let lastFiredAt = $state<number | null>(null);
+  let lastMessage = $state<string>('');
+  let lastSentCount = $state(0);
+  let statusTimer: ReturnType<typeof setInterval> | undefined;
+
+  function relTime(ms: number): string {
+    const s = Math.max(0, Math.round((Date.now() - ms) / 1000));
+    if (s < 60) return `${s}s ago`;
+    if (s < 3600) return `${Math.floor(s / 60)}m ago`;
+    if (s < 86400) return `${Math.floor(s / 3600)}h ago`;
+    return `${Math.floor(s / 86400)}d ago`;
+  }
+
+  async function fetchStatus() {
+    try {
+      const res = await fetch('/api/notifications/rules');
+      if (!res.ok) return;
+      const rid = instance.notifRuleId ?? instance.id;
+      const rule = ((await res.json()).rules ?? []).find((r: { rule_id: string }) => r.rule_id === rid);
+      if (rule) {
+        lastFiredAt = typeof rule.last_fired_at === 'number' ? rule.last_fired_at : null;
+        lastMessage = rule.last_message ?? '';
+        lastSentCount = rule.last_sent_count ?? 0;
+      }
+    } catch {
+      /* ignore */
+    }
+  }
+
   // ── token picker (collapsible multiselect) ──────────────────────────────
   let tokenPickerOpen = $state(false);
   let tokenSearch = $state('');
@@ -117,13 +147,18 @@
     syncTimer = setTimeout(sync, 600);
   });
 
-  onMount(async () => {
-    try {
-      const res = await fetch('/api/notifications/bots');
-      if (res.ok) userBotConfigured = (await res.json()).user_bot_configured === true;
-    } catch {
-      userBotConfigured = null;
-    }
+  onMount(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/notifications/bots');
+        if (res.ok) userBotConfigured = (await res.json()).user_bot_configured === true;
+      } catch {
+        userBotConfigured = null;
+      }
+    })();
+    fetchStatus();
+    statusTimer = setInterval(fetchStatus, 30000);
+    return () => clearInterval(statusTimer);
   });
 </script>
 
@@ -244,15 +279,17 @@
     </div>
   </div>
 
-  <!-- Footer: sync status + subscribe hint -->
+  <!-- Footer: last-triggered / subscribe hint + sync status -->
   <div class="flex items-center justify-between gap-2 border-t border-zinc-800 pt-1.5 text-[11px]">
-    <span class="text-zinc-500">
-      {#if instance.notifMuted}
+    <span class="min-w-0 flex-1 truncate text-zinc-500">
+      {#if lastFiredAt}
+        <span title={lastMessage}>Last triggered <span class="text-zinc-300">{relTime(lastFiredAt)}</span>{lastSentCount ? ` · ${lastSentCount} sent` : ''}</span>
+      {:else if instance.notifMuted}
         <span class="text-amber-500">Muted</span> — not pushing notifications.
       {:else if userBotConfigured === false}
         ⚠️ User bot not set up (admin → Notifications)
       {:else}
-        Subscribe to “{(instance.notifTitle ?? 'Price alert').trim() || 'Price alert'}” in the Telegram bot.
+        Not triggered yet · subscribe in the Telegram bot.
       {/if}
     </span>
     <span class="shrink-0 text-zinc-500">{syncMsg}</span>

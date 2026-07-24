@@ -133,6 +133,19 @@ CREATE TABLE IF NOT EXISTS tradernick.notification_state
 ENGINE = ReplacingMergeTree(updated_at)
 ORDER BY (rule_id, entity);
 
+-- Last time each topic actually fired (dispatched), regardless of subscribers,
+-- so a widget can show "last triggered" on its own. RMT(fired_at) keeps only
+-- the most recent row per topic.
+CREATE TABLE IF NOT EXISTS tradernick.notification_last_fired
+(
+    topic_id    String,
+    message     String,
+    sent_count  UInt32         DEFAULT 0,
+    fired_at    DateTime64(3)  DEFAULT now64(3)
+)
+ENGINE = ReplacingMergeTree(fired_at)
+ORDER BY topic_id;
+
 CREATE TABLE IF NOT EXISTS tradernick.binance_ohlcv_1m
 (
     token                LowCardinality(String),

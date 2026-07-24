@@ -137,14 +137,22 @@ async def eval_price_alert(rule: dict) -> list[dict]:
         wl = _humanize_seconds(window_s)
         for a in alist:
             thr = a["threshold"]
-            for token, pct in moves:
-                if abs(pct) >= thr:
-                    d = "up" if pct >= 0 else "down"
-                    out.append({
-                        "entity": f"{a['id']}:{token}",
-                        "group": None,
-                        "message": f"⚠️ {token} {d} {_fmt_pct(pct)} in {wl} (alert ≥{thr:g}% / {wl})",
-                    })
+            hits = [(token, pct) for token, pct in moves if abs(pct) >= thr]
+            if not hits:
+                continue
+            # ONE aggregated message per alert (not one per token), biggest moves
+            # first. entity == alert id → a single dispatch per due check.
+            hits.sort(key=lambda x: abs(x[1]), reverse=True)
+            cap = 30
+            listed = ", ".join(f"{tok} {_fmt_pct(pct)}" for tok, pct in hits[:cap])
+            if len(hits) > cap:
+                listed += f", …+{len(hits) - cap} more"
+            head = f"⚠️ ≥{thr:g}% move in {wl} — {len(hits)} token{'s' if len(hits) != 1 else ''}"
+            out.append({
+                "entity": a["id"],
+                "group": None,
+                "message": f"{head}\n{listed}",
+            })
     return out
 
 

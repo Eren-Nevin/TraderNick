@@ -41,6 +41,7 @@ SUBS_TABLE = "tradernick.notification_subscriptions"
 AUTH_TABLE = "tradernick.notification_admin_auth"
 RULES_TABLE = "tradernick.notification_rules"
 STATE_TABLE = "tradernick.notification_state"
+LAST_FIRED_TABLE = "tradernick.notification_last_fired"
 
 _CACHE_TTL_S = 15.0
 
@@ -101,6 +102,13 @@ _DDL = [
         last_fired_at DateTime64(3) DEFAULT toDateTime64(0, 3),
         updated_at DateTime64(3) DEFAULT now64(3), deleted UInt8 DEFAULT 0
     ) ENGINE = ReplacingMergeTree(updated_at) ORDER BY (rule_id, entity)""",
+    # Last time each topic actually fired (dispatched), regardless of whether
+    # anyone was subscribed — so a widget can show "last triggered" on its own.
+    # RMT(fired_at) keeps only the most recent row per topic.
+    f"""CREATE TABLE IF NOT EXISTS {LAST_FIRED_TABLE} (
+        topic_id String, message String, sent_count UInt32 DEFAULT 0,
+        fired_at DateTime64(3) DEFAULT now64(3)
+    ) ENGINE = ReplacingMergeTree(fired_at) ORDER BY topic_id""",
 ]
 
 # Static admin rules seeded (disabled) so they appear ready to configure in the
@@ -488,3 +496,26 @@ def set_state(rule_id: str, entity: str, state: bool, last_fired_at: datetime) -
               [[rule_id, entity, int(bool(state)), last_fired_at, _now(), 0]],
               column_names=["rule_id", "entity", "state", "last_fired_at",
                             "updated_at", "deleted"])
+
+
+# ── last-fired (per topic) ─────────────────────────────────────────────────
+
+def record_fired(topic_id: str, message: str, sent_count: int = 0) -> None:
+    """Record that `topic_id` just fired. Logged regardless of subscriber count,
+    so a widget/admin can see the last trigger time even with no subscribers.
+    RMT(fired_at) keeps only the newest row per topic."""
+    ch = _client()
+    _ensure_all(ch)
+    ch.insert(LAST_FIRED_TABLE,
+              [[topic_id, (message or "")[:2000], int(sent_count), _now()]],
+              column_names=["topic_id", "message", "sent_count", "fired_at"])
+
+
+def get_last_fired() -> dict[str, dict]:
+    """{topic_id: {message, sent_count, fired_at}} — latest fire per topic."""
+    ch = _client()
+    _ensure_all(ch)
+    rows = ch.query(
+        f"SELECT topic_id, message, sent_count, fired_at FROM {LAST_FIRED_TABLE} FINAL"
+    ).result_rows
+    return {r[0]: {"message": r[1], "sent_count": int(r[2]), "fired_at": r[3]} for r in rows}

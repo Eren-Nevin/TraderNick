@@ -69,16 +69,20 @@ def _topic_for(rule: dict, item: dict) -> str | None:
 
 
 async def _dispatch(bot: str, topic_id: str, text: str) -> int:
-    """Send `text` to every current subscriber of the topic. Returns count sent."""
+    """Send `text` to every current subscriber of the topic, and record the
+    fire (last-triggered time + message) regardless of subscriber count."""
     channel = _channel_for(bot)
-    if channel is None:
-        log.warning("no %s bot token configured; cannot dispatch", bot)
-        return 0
-    subs = nc.get_subscribers(bot, topic_id)
     sent = 0
-    for s in subs:
-        if await channel.send(s["chat_id"], text):
-            sent += 1
+    if channel is None:
+        log.warning("no %s bot token configured; recording fire without send", bot)
+    else:
+        for s in nc.get_subscribers(bot, topic_id):
+            if await channel.send(s["chat_id"], text):
+                sent += 1
+    try:
+        nc.record_fired(topic_id, text, sent)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("record_fired(%s) failed: %s", topic_id, exc)
     return sent
 
 

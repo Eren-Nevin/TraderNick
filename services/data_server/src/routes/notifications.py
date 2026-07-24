@@ -28,6 +28,7 @@ bp = Blueprint("notifications")
 RULES_TABLE = "tradernick.notification_rules"
 TOPICS_TABLE = "tradernick.notification_topics"
 BOTS_TABLE = "tradernick.notification_bots"
+LAST_FIRED_TABLE = "tradernick.notification_last_fired"
 
 _RULE_COLS = ["rule_id", "topic_id", "kind", "scope", "enabled", "cadence_s",
               "cooldown_s", "params", "title", "updated_at", "deleted"]
@@ -53,6 +54,12 @@ async def ensure_tables(ch) -> None:
         "  updated_at DateTime64(3) DEFAULT now64(3), deleted UInt8 DEFAULT 0\n"
         ") ENGINE = ReplacingMergeTree(updated_at) ORDER BY topic_id"
     )
+    await ch.command(
+        f"CREATE TABLE IF NOT EXISTS {LAST_FIRED_TABLE} (\n"
+        "  topic_id String, message String, sent_count UInt32 DEFAULT 0,\n"
+        "  fired_at DateTime64(3) DEFAULT now64(3)\n"
+        ") ENGINE = ReplacingMergeTree(fired_at) ORDER BY topic_id"
+    )
 
 
 def _utcnow():
@@ -72,10 +79,12 @@ async def get_rules(_request):
     ch = await client()
     rows = await ch.query(
         "SELECT r.rule_id, r.topic_id, r.kind, r.enabled, r.cadence_s, r.cooldown_s,"
-        " r.params, r.title, t.title"
-        f" FROM {RULES_TABLE} FINAL AS r"
+        " r.params, r.title, t.title, lf.fired_at, lf.message, lf.sent_count"
+        f" FROM {RULES_TABLE} AS r FINAL"
         f" LEFT JOIN (SELECT topic_id, title FROM {TOPICS_TABLE} FINAL WHERE deleted = 0) AS t"
         " ON r.topic_id = t.topic_id"
+        f" LEFT JOIN (SELECT topic_id, fired_at, message, sent_count FROM {LAST_FIRED_TABLE} FINAL) AS lf"
+        " ON r.topic_id = lf.topic_id"
         " WHERE r.scope = 'user' AND r.deleted = 0"
     )
     out = []
@@ -84,10 +93,18 @@ async def get_rules(_request):
             params = json.loads(r[6]) if r[6] else {}
         except (ValueError, TypeError):
             params = {}
+        # fired_at is DateTime64 (or the 1970 epoch zero when never fired).
+        fired = r[9]
+        fired_ms = None
+        if fired is not None:
+            ts = int(fired.replace(tzinfo=timezone.utc).timestamp() * 1000)
+            fired_ms = ts if ts > 0 else None
         out.append({
             "rule_id": r[0], "topic_id": r[1], "kind": r[2],
             "enabled": bool(r[3]), "cadence_s": int(r[4]), "cooldown_s": int(r[5]),
             "params": params, "title": r[7], "topic_title": r[8] or r[7],
+            "last_fired_at": fired_ms, "last_message": (r[10] or None) if fired_ms else None,
+            "last_sent_count": int(r[11]) if fired_ms else 0,
         })
     return response.json({"rules": out})
 
