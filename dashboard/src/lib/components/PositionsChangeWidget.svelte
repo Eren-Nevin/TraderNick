@@ -1,9 +1,10 @@
 <script lang="ts">
-  // Positions Alert widget — a periodic Telegram report of a wallet group's
-  // current Live positions: the top-N most-long and most-short tokens by a
-  // criteria (Net Long count or Net Size $). Reuses the notification topic /
-  // mute / sync / last-fired plumbing (shared notif* fields). The monitor pulls
-  // the group_snapshot (Live) on the chosen cadence and formats the message.
+  // Positions Change widget — a periodic Telegram report of a wallet group's
+  // position-change flow (Trading-Pit-Overview data) over a lookback window:
+  // the top-N most-positive and most-negative tokens by a criteria (Net Pos
+  // Change / Net Open Long / Net Flip), ranked in $ or wallet-count terms. Each
+  // token line shows all three metrics as "$value (walletΔ)". Reuses the shared
+  // notification topic / mute / sync / last-fired plumbing (notif* fields).
 
   import { onMount } from 'svelte';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
@@ -12,8 +13,8 @@
 
   let { instance }: { instance: ChartInstance } = $props();
 
-  const STALE: NonNullable<ChartInstance['paStaleness']>[] = ['1h', '4h', '1d', '3d', '7d', '14d', '30d'];
-  const CADENCE: NonNullable<ChartInstance['paCadence']>[] = ['1m', '5m', '15m', '1h', '4h'];
+  const WINDOWS: NonNullable<ChartInstance['pchgWindow']>[] = ['5m', '15m', '30m', '1h', '4h'];
+  const CADENCE: NonNullable<ChartInstance['pchgCadence']>[] = ['1m', '5m', '15m', '1h', '4h'];
 
   let userBotConfigured = $state<boolean | null>(null);
   let syncMsg = $state<string>('');
@@ -36,14 +37,15 @@
     try {
       const body = {
         rule_id: instance.notifRuleId ?? instance.id,
-        title: (instance.notifTitle ?? 'Positions alert').trim() || 'Positions alert',
-        type: 'positions_alert',
+        title: (instance.notifTitle ?? 'Positions change').trim() || 'Positions change',
+        type: 'positions_change',
         paused: instance.notifMuted === true,
-        group_id: instance.paGroupId ?? '',
-        criteria: instance.paCriteria ?? 'net_long',
-        top_n: Number(instance.paTopN ?? '5'),
-        staleness: instance.paStaleness ?? '1d',
-        cadence: instance.paCadence ?? '5m'
+        group_id: instance.pchgGroupId ?? '',
+        criteria: instance.pchgCriteria ?? 'net_pos_change',
+        rank_by: instance.pchgRankBy ?? 'usd',
+        top_n: Number(instance.pchgTopN ?? '5'),
+        window: instance.pchgWindow ?? '15m',
+        cadence: instance.pchgCadence ?? '15m'
       };
       const res = await fetch('/api/notifications/rules', {
         method: 'PUT',
@@ -53,7 +55,7 @@
       if (!res.ok) throw new Error(`${res.status}`);
       syncMsg = instance.notifMuted
         ? 'Muted · paused'
-        : instance.paGroupId ? 'Saved · active' : 'Saved · pick a group';
+        : instance.pchgGroupId ? 'Saved · active' : 'Saved · pick a group';
     } catch (e) {
       syncMsg = `Save failed (${e})`;
     }
@@ -63,11 +65,12 @@
     const snap = JSON.stringify({
       t: instance.notifTitle ?? '',
       m: instance.notifMuted === true,
-      g: instance.paGroupId ?? '',
-      c: instance.paCriteria ?? 'net_long',
-      n: instance.paTopN ?? '5',
-      s: instance.paStaleness ?? '1d',
-      cad: instance.paCadence ?? '5m'
+      g: instance.pchgGroupId ?? '',
+      c: instance.pchgCriteria ?? 'net_pos_change',
+      r: instance.pchgRankBy ?? 'usd',
+      n: instance.pchgTopN ?? '5',
+      w: instance.pchgWindow ?? '15m',
+      cad: instance.pchgCadence ?? '15m'
     });
     if (snap === lastSynced) return;
     lastSynced = snap;
@@ -139,8 +142,8 @@
       <label class="col-span-2 text-[10px] text-zinc-400">
         Wallet group
         <select class="{selCls} mt-0.5 block w-full"
-          value={instance.paGroupId ?? ''}
-          onchange={(e) => (instance.paGroupId = e.currentTarget.value || null)}>
+          value={instance.pchgGroupId ?? ''}
+          onchange={(e) => (instance.pchgGroupId = e.currentTarget.value || null)}>
           <option value="">— select a group —</option>
           {#each walletPinsStore.groups as g (g.id)}<option value={g.id}>{g.name}</option>{/each}
         </select>
@@ -148,31 +151,39 @@
 
       <label class="text-[10px] text-zinc-400">
         Rank by
-        <select class="{selCls} mt-0.5 block w-full"
-          bind:value={instance.paCriteria}>
-          <option value="net_long">Net Long</option>
-          <option value="net_size">Net Size</option>
+        <select class="{selCls} mt-0.5 block w-full" bind:value={instance.pchgCriteria}>
+          <option value="net_pos_change">Net Pos Change</option>
+          <option value="net_open_long">Net Open Long</option>
+          <option value="net_flip">Net Flip</option>
+        </select>
+      </label>
+
+      <label class="text-[10px] text-zinc-400">
+        In terms of
+        <select class="{selCls} mt-0.5 block w-full" bind:value={instance.pchgRankBy}>
+          <option value="usd">$ amount</option>
+          <option value="wallets">Wallets</option>
         </select>
       </label>
 
       <label class="text-[10px] text-zinc-400">
         Top N / side
-        <select class="{selCls} mt-0.5 block w-full" bind:value={instance.paTopN}>
+        <select class="{selCls} mt-0.5 block w-full" bind:value={instance.pchgTopN}>
           <option value="3">3</option><option value="5">5</option>
           <option value="10">10</option><option value="20">20</option>
         </select>
       </label>
 
       <label class="text-[10px] text-zinc-400">
-        Staleness
-        <select class="{selCls} mt-0.5 block w-full" bind:value={instance.paStaleness}>
-          {#each STALE as s (s)}<option value={s}>{s}</option>{/each}
+        Window
+        <select class="{selCls} mt-0.5 block w-full" bind:value={instance.pchgWindow}>
+          {#each WINDOWS as w (w)}<option value={w}>{w}</option>{/each}
         </select>
       </label>
 
       <label class="text-[10px] text-zinc-400">
         Report every
-        <select class="{selCls} mt-0.5 block w-full" bind:value={instance.paCadence}>
+        <select class="{selCls} mt-0.5 block w-full" bind:value={instance.pchgCadence}>
           {#each CADENCE as c (c)}<option value={c}>{c}</option>{/each}
         </select>
       </label>

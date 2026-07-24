@@ -3565,6 +3565,60 @@ _TP_TYPE_CATEGORIES = {
 }
 
 
+_PC_LB = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400}
+
+
+@bp.get("/hyperliquid/positions_change")
+@throttled("heavy")
+async def positions_change(request):
+    """Per-token position-change flow for a wallet group over a lookback window
+    (Trading-Pit-Overview data), with BOTH a $ value and a distinct-WALLET-count
+    for each metric. Powers the Positions Change notification widget. Metrics:
+      net_pos_change = inc_long + dec_short − inc_short − dec_long
+      net_open_long  = open_long − open_short
+      net_flip       = flip_sl − flip_ls
+    Each computed in $ (Σ size*price) and in signed distinct-wallet counts
+    (uniqExact(wallet) per action, netted). Params: group, lookback (5m..4h)."""
+    lb = request.args.get("lookback", "15m")
+    if lb not in _PC_LB:
+        return response.json({"error": f"lookback must be one of {list(_PC_LB)}"}, status=400)
+    ch = await client()
+    member = None
+    if request.args.get("group"):
+        try:
+            member = _cutoff_membership_sql(await _resolve_group_passing(ch, request), col="wallet")
+        except ValueError:
+            member = None
+    where = ["time >= now() - INTERVAL {lb:UInt32} SECOND", "time < now()"]
+    params = {"lb": _PC_LB[lb]}
+    if member:
+        where.append(member)
+    classified = (
+        "SELECT wallet, token, size*price AS value, " + _TP_TYPE_SQL + " AS type "
+        "FROM tradernick.hl_fills FINAL WHERE " + " AND ".join(where)
+    )
+    # toInt64 the wallet counts BEFORE subtracting — uniqExactIf is UInt64 and a
+    # naive subtraction underflows to a huge positive on net-negative tokens.
+    r = await ch.query(
+        "SELECT token,"
+        " sumIf(value,type='inc_long')+sumIf(value,type='dec_short')-sumIf(value,type='inc_short')-sumIf(value,type='dec_long') AS npc_u,"
+        " toInt64(uniqExactIf(wallet,type='inc_long'))+toInt64(uniqExactIf(wallet,type='dec_short'))-toInt64(uniqExactIf(wallet,type='inc_short'))-toInt64(uniqExactIf(wallet,type='dec_long')) AS npc_w,"
+        " sumIf(value,type='open_long')-sumIf(value,type='open_short') AS nol_u,"
+        " toInt64(uniqExactIf(wallet,type='open_long'))-toInt64(uniqExactIf(wallet,type='open_short')) AS nol_w,"
+        " sumIf(value,type='flip_sl')-sumIf(value,type='flip_ls') AS nf_u,"
+        " toInt64(uniqExactIf(wallet,type='flip_sl'))-toInt64(uniqExactIf(wallet,type='flip_ls')) AS nf_w"
+        " FROM (" + classified + ") WHERE type != 'other' GROUP BY token",
+        parameters=params,
+    )
+    rows = [{
+        "token": tok,
+        "net_pos_change": {"usd": float(a), "wallets": int(b)},
+        "net_open_long": {"usd": float(c), "wallets": int(d)},
+        "net_flip": {"usd": float(e), "wallets": int(f)},
+    } for (tok, a, b, c, d, e, f) in r.result_rows]
+    return response.json({"lookback": lb, "rows": rows})
+
+
 @bp.get("/hyperliquid/trading_pit")
 @throttled("heavy")
 async def trading_pit(request):

@@ -304,7 +304,7 @@ def _format_positions_alert(title: str, criteria: str, top_n: int,
     def line(t: dict) -> str:
         side = "long" if t["net_size"] >= 0 else "short"
         return (f"{t['token']}  {_fmt_money(t['net_size'])}  {side}  "
-                f"@{_fmt_price(t['entry'])}  {t['net_long']:+d} ({t['n_long']}/{t['n_short']})")
+                f"{t['net_long']:+d} ({t['n_long']}/{t['n_short']})")
 
     if top_longs:
         lines += ["", "📈 Top Longs"]
@@ -312,6 +312,88 @@ def _format_positions_alert(title: str, criteria: str, top_n: int,
     if top_shorts:
         lines += ["", "📉 Top Shorts"]
         lines += [line(t) for t in top_shorts]
+    return "\n".join(lines)
+
+
+# ── positions_change (Trading-Pit-Overview-based widget) ────────────────────
+# One rule + one topic. On its own cadence it pulls the wallet group's
+# position-change flow over a lookback window (reusing data_server's
+# positions_change endpoint), ranks tokens by a criteria (Net Pos Change / Net
+# Open Long / Net Flip) in $ or wallet-count terms, and reports the top-N most
+# positive AND most negative as two sections. Each token line shows all three
+# metrics as "$value (walletΔ)". Stateless, wall-clock-cadence-gated.
+
+_pc_buckets: dict[str, int] = {}
+_PC_METRICS = {
+    "net_pos_change": "Net Pos Change",
+    "net_open_long": "Net Open Long",
+    "net_flip": "Net Flip",
+}
+
+
+async def eval_positions_change(rule: dict) -> list[dict]:
+    p = rule.get("params") or {}
+    group_id = str(p.get("group_id") or "").strip()
+    if not group_id:
+        return []
+    criteria = str(p.get("criteria") or "net_pos_change")
+    if criteria not in _PC_METRICS:
+        criteria = "net_pos_change"
+    rank_by = "wallets" if str(p.get("rank_by")) == "wallets" else "usd"
+    top_n = max(int(p.get("top_n") or 5), 1)
+    window = str(p.get("window") or "15m")
+    cadence_s = max(int(rule.get("cadence_s") or 300), 60)
+    title = str(rule.get("title") or "Positions change").strip() or "Positions change"
+
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+    if now_epoch % cadence_s >= 60:
+        return []
+    bucket = now_epoch // cadence_s
+    if _pc_buckets.get(rule["rule_id"]) == bucket:
+        return []
+    _pc_buckets[rule["rule_id"]] = bucket
+
+    url = f"{_DATA_SERVER_URL}/hyperliquid/positions_change?group={group_id}&lookback={window}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as hc:
+            resp = await hc.get(url)
+            resp.raise_for_status()
+            rows = resp.json().get("rows", []) or []
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("positions_change fetch failed (%s): %s", url, exc)
+        return []
+
+    def val(row: dict) -> float:
+        return row.get(criteria, {}).get(rank_by, 0) or 0
+
+    toks = [r for r in rows if val(r) != 0]
+    if not toks:
+        return []
+    top_pos = [t for t in sorted(toks, key=val, reverse=True)[:top_n] if val(t) > 0]
+    pos_set = {t["token"] for t in top_pos}
+    top_neg = [t for t in sorted(toks, key=val) if t["token"] not in pos_set and val(t) < 0][:top_n]
+
+    msg = _format_positions_change(title, criteria, rank_by, window, top_pos, top_neg)
+    return [{"entity": rule["rule_id"], "group": None, "message": msg}]
+
+
+def _format_positions_change(title: str, criteria: str, rank_by: str, window: str,
+                             top_pos: list[dict], top_neg: list[dict]) -> str:
+    basis = "$" if rank_by == "usd" else "wallets"
+    lines = [f"🔔 {title}", f"Top by {_PC_METRICS[criteria]} ({basis}) · {window}"]
+
+    def line(t: dict) -> str:
+        a = t["net_pos_change"]; b = t["net_open_long"]; c = t["net_flip"]
+        return (f"{t['token']}  Pos {_fmt_money(a['usd'])} ({a['wallets']:+d})  "
+                f"Open {_fmt_money(b['usd'])} ({b['wallets']:+d})  "
+                f"Flip {_fmt_money(c['usd'])} ({c['wallets']:+d})")
+
+    if top_pos:
+        lines += ["", "📈 Top Positive"]
+        lines += [line(t) for t in top_pos]
+    if top_neg:
+        lines += ["", "📉 Top Negative"]
+        lines += [line(t) for t in top_neg]
     return "\n".join(lines)
 
 
@@ -440,6 +522,7 @@ def _provider_group_for_job(job_type: str) -> str | None:
 EVALUATORS = {
     "price_alert": eval_price_alert,
     "positions_alert": eval_positions_alert,
+    "positions_change": eval_positions_change,
     "price_change": eval_price_change,   # legacy single-condition; kept for compat
     "admin_job_fail": eval_admin_job_fail,
     "admin_stale_data": eval_admin_stale_data,
@@ -447,4 +530,4 @@ EVALUATORS = {
 
 # Kinds whose evaluator handles its OWN cadence/dedup and returns only what
 # should fire NOW → the engine dispatches directly, no edge/cooldown state.
-STATELESS_KINDS = {"price_alert", "positions_alert"}
+STATELESS_KINDS = {"price_alert", "positions_alert", "positions_change"}

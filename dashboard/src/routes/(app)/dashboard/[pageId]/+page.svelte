@@ -30,7 +30,8 @@
     'backtracker', 'backtracker_leaderboard', 'early_movers', 'trading_pit', 'group_snapshot',
     'lido',
     'notification',
-    'positions_alert'
+    'positions_alert',
+    'positions_change'
   ];
 
   function defaultLayout(): ChartInstanceT[] {

@@ -12,6 +12,7 @@
   import GroupSnapshotTable from '$lib/components/GroupSnapshotTable.svelte';
   import NotificationWidget from '$lib/components/NotificationWidget.svelte';
   import PositionsAlertWidget from '$lib/components/PositionsAlertWidget.svelte';
+  import PositionsChangeWidget from '$lib/components/PositionsChangeWidget.svelte';
   import GroupSnapshotWalletsDialog from '$lib/components/GroupSnapshotWalletsDialog.svelte';
   // Trading Pit query params → URLSearchParams (shared by loadKey + fetch).
   const _TP_LB_SECS: Record<string, number> = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
@@ -6452,9 +6453,14 @@
       class="cursor-grab active:cursor-grabbing flex items-center gap-2 min-w-0 text-left"
     >
       <span class="text-zinc-500 text-base leading-none select-none">⠿</span>
-      <span class="text-zinc-100 text-sm font-semibold tracking-tight truncate">
-        {displayTitle}
-      </span>
+      {#if !isNotifWidgetKind(instance.kind)}
+        <!-- Notification widgets carry their own editable topic name in the body,
+             so the card title is redundant — hiding it lets the drag grip + ✕
+             fit on one line in a 1x1 widget (otherwise the ✕ wraps). -->
+        <span class="text-zinc-100 text-sm font-semibold tracking-tight truncate">
+          {displayTitle}
+        </span>
+      {/if}
       {#if isTemplate}
         <span
           class="inline-flex items-center px-1.5 py-0.5 rounded bg-amber-900/40 border border-amber-700/40 text-[9px] uppercase tracking-widest text-amber-300"
@@ -9622,6 +9628,8 @@
       <NotificationWidget {instance} rosterTokens={tokens} />
     {:else if instance.kind === 'positions_alert'}
       <PositionsAlertWidget {instance} />
+    {:else if instance.kind === 'positions_change'}
+      <PositionsChangeWidget {instance} />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}
       <EarlyMoversTable

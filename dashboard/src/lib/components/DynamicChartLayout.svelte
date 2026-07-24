@@ -937,6 +937,21 @@
         const PC = ['1m', '5m', '15m', '1h', '4h'];
         inst.paCadence = (PC.includes(r.paCadence as string) ? r.paCadence : '5m') as NonNullable<ChartInstanceT['paCadence']>;
       }
+      if (inst.kind === 'positions_change') {
+        inst.notifRuleId = typeof r.notifRuleId === 'string' && r.notifRuleId ? r.notifRuleId : inst.id;
+        inst.notifTitle = typeof r.notifTitle === 'string' ? r.notifTitle : 'Positions change';
+        inst.notifMuted = r.notifMuted === true;
+        inst.pchgGroupId = typeof r.pchgGroupId === 'string' ? r.pchgGroupId : null;
+        const PW = ['5m', '15m', '30m', '1h', '4h'];
+        inst.pchgWindow = (PW.includes(r.pchgWindow as string) ? r.pchgWindow : '15m') as NonNullable<ChartInstanceT['pchgWindow']>;
+        const PCC = ['1m', '5m', '15m', '1h', '4h'];
+        inst.pchgCadence = (PCC.includes(r.pchgCadence as string) ? r.pchgCadence : '15m') as NonNullable<ChartInstanceT['pchgCadence']>;
+        const CR = ['net_pos_change', 'net_open_long', 'net_flip'];
+        inst.pchgCriteria = (CR.includes(r.pchgCriteria as string) ? r.pchgCriteria : 'net_pos_change') as NonNullable<ChartInstanceT['pchgCriteria']>;
+        inst.pchgRankBy = r.pchgRankBy === 'wallets' ? 'wallets' : 'usd';
+        const PN = ['3', '5', '10', '20'];
+        inst.pchgTopN = (PN.includes(r.pchgTopN as string) ? r.pchgTopN : '5') as NonNullable<ChartInstanceT['pchgTopN']>;
+      }
       if (inst.kind === 'backtracker') {
         // Persist the Position-Changes dialog "Only <group>" filter (default ON):
         // an explicit untoggle is saved as false and restored here so it sticks

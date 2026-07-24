@@ -455,6 +455,7 @@ export type ChartKind =
   | 'group_snapshot'
   | 'notification'
   | 'positions_alert'
+  | 'positions_change'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
@@ -600,6 +601,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   group_snapshot: 'Group Snapshot',
   notification: 'Price Alert',
   positions_alert: 'Positions Alert',
+  positions_change: 'Positions Change',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1369,7 +1371,7 @@ export const CHART_CATEGORIES: ChartCategory[] = [
  *  no backend chart data). Add new notification widgets here so ChartInstance's
  *  guards cover them automatically. */
 export function isNotifWidgetKind(kind: ChartKind): boolean {
-  return kind === 'notification' || kind === 'positions_alert';
+  return kind === 'notification' || kind === 'positions_alert' || kind === 'positions_change';
 }
 
 export function chartKindCategory(kind: ChartKind): ChartCategory | null {
@@ -1853,6 +1855,14 @@ export type ChartInstance = {
   paTopN?: '3' | '5' | '10' | '20';
   paStaleness?: '1h' | '4h' | '1d' | '3d' | '7d' | '14d' | '30d';
   paCadence?: '1m' | '5m' | '15m' | '1h' | '4h';   // report cadence
+  // Positions Change widget (kind 'positions_change'). Also reuses notifRuleId /
+  // notifTitle / notifMuted. Top-N tokens by a Trading-Pit-Overview flow metric.
+  pchgGroupId?: string | null;
+  pchgWindow?: '5m' | '15m' | '30m' | '1h' | '4h';       // lookback window
+  pchgCadence?: '1m' | '5m' | '15m' | '1h' | '4h';       // report cadence
+  pchgCriteria?: 'net_pos_change' | 'net_open_long' | 'net_flip';
+  pchgRankBy?: 'usd' | 'wallets';
+  pchgTopN?: '3' | '5' | '10' | '20';
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
@@ -2876,6 +2886,17 @@ export function newChartInstance(
     base.paTopN = '5';
     base.paStaleness = '1d';
     base.paCadence = '5m';
+  }
+  if (kind === 'positions_change') {
+    base.notifRuleId = base.id;
+    base.notifTitle = 'Positions change';
+    base.notifMuted = false;
+    base.pchgGroupId = null;
+    base.pchgWindow = '15m';
+    base.pchgCadence = '15m';
+    base.pchgCriteria = 'net_pos_change';
+    base.pchgRankBy = 'usd';
+    base.pchgTopN = '5';
   }
   if (kind === 'ohlcv') {
     base.pin = false;

@@ -117,6 +117,10 @@ _BASE_CADENCE_S = 60
 # Positions-alert report cadence labels → seconds, and allowed staleness values.
 _PA_CADENCE_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
 _PA_STALENESS = {"1h", "4h", "1d", "3d", "7d", "14d", "30d"}
+# Positions-change lookback windows + report cadence + criteria.
+_PCHG_WINDOWS = {"5m", "15m", "30m", "1h", "4h"}
+_PCHG_CADENCE_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600, "4h": 14400}
+_PCHG_CRITERIA = {"net_pos_change", "net_open_long", "net_flip"}
 
 
 def _clean_alerts(raw) -> list[dict]:
@@ -167,6 +171,23 @@ async def put_rule(request):
                   "staleness": staleness}
         enabled = 1 if (group_id and not paused) else 0
         kind = "positions_alert"
+        extra = {"group_id": group_id}
+    elif wtype == "positions_change":
+        title = str(b.get("title") or "Positions change").strip() or "Positions change"
+        group_id = str(b.get("group_id") or "").strip()
+        criteria = str(b.get("criteria") or "net_pos_change")
+        if criteria not in _PCHG_CRITERIA:
+            criteria = "net_pos_change"
+        rank_by = "wallets" if b.get("rank_by") == "wallets" else "usd"
+        top_n = min(max(int(b.get("top_n") or 5), 1), 50)
+        window = str(b.get("window") or "15m")
+        if window not in _PCHG_WINDOWS:
+            window = "15m"
+        cadence_s = _PCHG_CADENCE_S.get(str(b.get("cadence") or "15m"), 900)
+        params = {"group_id": group_id, "criteria": criteria, "rank_by": rank_by,
+                  "top_n": top_n, "window": window}
+        enabled = 1 if (group_id and not paused) else 0
+        kind = "positions_change"
         extra = {"group_id": group_id}
     else:
         title = str(b.get("title") or "Price alert").strip() or "Price alert"
