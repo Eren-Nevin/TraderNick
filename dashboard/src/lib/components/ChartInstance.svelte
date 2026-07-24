@@ -5867,6 +5867,7 @@
     && instance.kind !== 'backtracker_leaderboard'
     && instance.kind !== 'smart_wallets_table'
     && !isLeaderboardKind(instance.kind)
+    && !isNotifWidgetKind(instance.kind)
   );
 
   // TableView kinds render a bespoke table instead of a LineChart, so the
