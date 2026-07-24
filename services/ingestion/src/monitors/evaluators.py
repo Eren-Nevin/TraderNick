@@ -102,10 +102,17 @@ async def eval_price_alert(rule: dict) -> list[dict]:
         threshold = abs(float(a.get("threshold_pct") or 0))
         if not aid or window_s <= 0 or threshold <= 0:
             continue
+        # Only fire in the FIRST minute of each wall-clock window bucket, so
+        # alerts align to round times (5m → :00/:05/…, 1h → top of the hour)
+        # regardless of when the alert was created or the monitor last restarted.
+        # (Unix epoch is aligned to these boundaries, so epoch // window_s and
+        # epoch % window_s give clean wall-clock buckets.)
+        if now_epoch % window_s >= 60:
+            continue
         bucket = now_epoch // window_s
         key = (rule["rule_id"], aid)
         if _alert_buckets.get(key) == bucket:
-            continue  # already checked this window — no-op
+            continue  # already fired for this bucket
         _alert_buckets[key] = bucket
         due.append({"id": aid, "window_s": window_s, "threshold": threshold,
                     "limit": int(a.get("limit") or 0)})
@@ -171,9 +178,6 @@ def _format_price_alert(title: str, thr: float, wl: str,
     if downs:
         lines += ["", f"📉 Losers ({len(downs)})"]
         lines += [f"▼ {tok}  {abs(pct):.2f}%" for tok, pct in downs]
-    remaining = (len(all_ups) - len(ups)) + (len(all_downs) - len(downs))
-    if remaining > 0:
-        lines += ["", f"…and {remaining} more (top {limit} per side shown)"]
     return "\n".join(lines)
 
 

@@ -35,7 +35,6 @@ logging.getLogger("httpx").setLevel(logging.WARNING)
 log = logging.getLogger(__name__)
 
 STREAM_NAME = "notifications.monitor"
-BASE_TICK_S = 10.0
 
 # per-rule next-fire wall-clock (monotonic seconds); rules not present fire now.
 _next_fire: dict[str, float] = {}
@@ -155,7 +154,9 @@ async def _tick() -> tuple[int, int, str | None]:
     for rule in rules:
         live_ids.add(rule["rule_id"])
         due = _next_fire.get(rule["rule_id"], 0.0)
-        if now_mono < due:
+        # 2s tolerance so a rule due right at a minute boundary isn't skipped by
+        # sub-second scheduling jitter (which would drop it to the next minute).
+        if now_mono < due - 2.0:
             continue
         _next_fire[rule["rule_id"]] = now_mono + max(int(rule.get("cadence_s", 300) or 300), 15)
         try:
@@ -172,14 +173,18 @@ async def _tick() -> tuple[int, int, str | None]:
 
 
 async def main():
-    log.info("monitors.evaluate up (base tick %.0fs)", BASE_TICK_S)
+    log.info("monitors.evaluate up (minute-aligned)")
     try:
         nc.seed_defaults()
     except Exception as exc:  # noqa: BLE001
         log.warning("seed_defaults failed (will retry via ticks): %s", exc)
     await ch_status.bootstrap_counter(STREAM_NAME)
     while True:
-        next_fire = time.monotonic() + BASE_TICK_S
+        # Align every evaluation to the start of a wall-clock minute. Combined
+        # with the evaluator's boundary-minute gate, window-aligned alerts fire
+        # on their round times (5m → :00/:05/…, 1h → top of hour) no matter when
+        # the process started or last restarted.
+        await asyncio.sleep(60.0 - (time.time() % 60.0))
         t0 = time.monotonic()
         evaluated, sent, err = await _tick()
         try:
@@ -187,7 +192,6 @@ async def main():
                 STREAM_NAME, sent, error=err, duration_s=time.monotonic() - t0)
         except Exception:  # noqa: BLE001
             pass
-        await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
 
 
 if __name__ == "__main__":
