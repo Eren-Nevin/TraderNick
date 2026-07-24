@@ -1,23 +1,78 @@
 <script lang="ts">
-  // NotificationWidget — a user-defined alert. Phase 1: "Price Change" (any of
-  // the watched tokens moving ≥ threshold% over a window). The rule is synced
-  // server-side (to notification_rules + a 1:1 topic keyed by this widget's
-  // instance id) so the monitor cron can evaluate it and push Telegram alerts
-  // to the topic's subscribers. The instance.notif* fields also persist in the
-  // page's localStorage layout for UI state.
+  // Price Alert widget — a single Telegram alert TOPIC (editable name, stable
+  // UUID) holding a grid of alert conditions. Each square is one condition
+  // (% move over a timeframe); all of them fire into this widget's one topic.
+  // State lives on the instance (persisted in the page layout) and is synced
+  // server-side (debounced) so the monitor cron can evaluate it.
 
   import { onMount } from 'svelte';
   import type { ChartInstance } from '$lib/components/charts/config';
 
   let { instance }: { instance: ChartInstance } = $props();
 
-  let saving = $state(false);
-  let saveMsg = $state<string | null>(null);
-  let userBotConfigured = $state<boolean | null>(null);
+  type Win = '5m' | '15m' | '30m' | '1h' | '4h' | '1d';
+  const WINDOWS: Win[] = ['5m', '15m', '30m', '1h', '4h', '1d'];
 
-  const WINDOW_S: Record<string, number> = { '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400, '1d': 86400 };
-  const CADENCE_S: Record<string, number> = { '1m': 60, '5m': 300, '15m': 900, '1h': 3600 };
-  const COOLDOWN_S: Record<string, number> = { '0': 0, '15m': 900, '1h': 3600, '4h': 14400, '1d': 86400 };
+  let userBotConfigured = $state<boolean | null>(null);
+  let syncMsg = $state<string>('');
+  let syncTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastSynced = '';
+
+  function uid() {
+    try {
+      return crypto.randomUUID();
+    } catch {
+      return Math.random().toString(36).slice(2) + Date.now().toString(36);
+    }
+  }
+
+  function addAlert() {
+    const list = instance.notifAlerts ? [...instance.notifAlerts] : [];
+    list.push({ id: uid(), threshold: 10, window: '1h' });
+    instance.notifAlerts = list;
+  }
+  function removeAlert(id: string) {
+    instance.notifAlerts = (instance.notifAlerts ?? []).filter((a) => a.id !== id);
+  }
+
+  async function sync() {
+    try {
+      const body = {
+        rule_id: instance.notifRuleId ?? instance.id,
+        title: (instance.notifTitle ?? 'Price alert').trim() || 'Price alert',
+        tokens: instance.notifTokens ?? '',
+        alerts: (instance.notifAlerts ?? []).map((a) => ({
+          id: a.id,
+          threshold: Number(a.threshold) || 0,
+          window: a.window
+        }))
+      };
+      const res = await fetch('/api/notifications/rules', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify(body)
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      const n = (instance.notifAlerts ?? []).length;
+      syncMsg = n ? `Saved · ${n} alert${n === 1 ? '' : 's'} active` : 'Saved · no alerts (inactive)';
+    } catch (e) {
+      syncMsg = `Save failed (${e})`;
+    }
+  }
+
+  // Debounced auto-sync whenever the topic name / tokens / alerts change.
+  $effect(() => {
+    const snap = JSON.stringify({
+      t: instance.notifTitle ?? '',
+      k: instance.notifTokens ?? '',
+      a: instance.notifAlerts ?? []
+    });
+    if (snap === lastSynced) return;
+    lastSynced = snap;
+    clearTimeout(syncTimer);
+    syncMsg = 'Saving…';
+    syncTimer = setTimeout(sync, 600);
+  });
 
   onMount(async () => {
     try {
@@ -27,112 +82,73 @@
       userBotConfigured = null;
     }
   });
-
-  async function save() {
-    saving = true;
-    saveMsg = null;
-    try {
-      const body = {
-        rule_id: instance.notifRuleId ?? instance.id,
-        title: (instance.notifTitle ?? 'Price alert').trim() || 'Price alert',
-        type: 'price_change',
-        enabled: instance.notifEnabled === true,
-        threshold_pct: Number(instance.notifThreshold ?? 10),
-        window_s: WINDOW_S[instance.notifWindow ?? '1h'] ?? 3600,
-        tokens: instance.notifTokens ?? '',
-        cadence_s: CADENCE_S[instance.notifCadence ?? '5m'] ?? 300,
-        cooldown_s: COOLDOWN_S[instance.notifCooldown ?? '1h'] ?? 3600
-      };
-      const res = await fetch('/api/notifications/rules', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(body)
-      });
-      if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
-      saveMsg = instance.notifEnabled ? 'Saved & active.' : 'Saved (disabled).';
-    } catch (e) {
-      saveMsg = `Save failed: ${e}`;
-    } finally {
-      saving = false;
-    }
-  }
 </script>
 
-<div class="flex h-full flex-col gap-3 p-3 text-sm text-zinc-200">
-  <div class="flex items-center justify-between">
-    <span class="rounded bg-zinc-800 px-2 py-0.5 text-[11px] uppercase tracking-wide text-zinc-400">Price change alert</span>
-    <label class="flex items-center gap-1.5 text-xs">
-      <input type="checkbox" bind:checked={instance.notifEnabled} />
-      <span class={instance.notifEnabled ? 'text-emerald-400' : 'text-zinc-500'}>
-        {instance.notifEnabled ? 'active' : 'off'}
-      </span>
-    </label>
+<div class="flex h-full flex-col gap-2 p-3 text-sm text-zinc-200">
+  <!-- Topic header: editable name (mirrored in the Telegram bot) -->
+  <div class="flex items-center gap-2">
+    <span class="text-base leading-none" title="Telegram alert topic">🔔</span>
+    <input
+      class="min-w-0 flex-1 rounded border border-transparent bg-transparent px-1 py-0.5 text-base font-semibold text-zinc-100
+             hover:border-zinc-700 focus:border-zinc-600 focus:bg-zinc-950 focus:outline-none"
+      bind:value={instance.notifTitle}
+      placeholder="Alert topic name"
+      title="Topic name shown in the Telegram bot. Renaming keeps existing subscribers." />
+    <input
+      class="w-28 shrink-0 rounded border border-zinc-800 bg-zinc-950 px-2 py-1 text-[11px] text-zinc-300 placeholder-zinc-600"
+      bind:value={instance.notifTokens}
+      placeholder="all tokens"
+      title="Comma-separated token filter for this topic. Blank = every token." />
   </div>
 
-  <label class="text-xs text-zinc-400">
-    Alert name (topic)
-    <input
-      class="mt-1 block w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100"
-      bind:value={instance.notifTitle} placeholder="e.g. Majors 10% move" />
-  </label>
+  <!-- Alerts grid -->
+  <div class="min-h-0 flex-1 overflow-y-auto">
+    <div class="grid gap-2" style="grid-template-columns: repeat(auto-fill, minmax(112px, 1fr));">
+      {#each instance.notifAlerts ?? [] as alert (alert.id)}
+        <div class="relative flex flex-col items-center justify-center gap-1 rounded-lg border border-zinc-700 bg-zinc-900/60 p-2"
+             style="aspect-ratio: 1 / 1;">
+          <button
+            type="button"
+            class="absolute right-1 top-1 flex h-5 w-5 items-center justify-center rounded text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
+            title="Remove alert"
+            onclick={() => removeAlert(alert.id)}>✕</button>
+          <div class="flex items-baseline gap-0.5">
+            <input
+              class="w-12 rounded border border-zinc-700 bg-zinc-950 px-1 py-0.5 text-center text-lg font-semibold text-zinc-100 focus:border-zinc-500 focus:outline-none"
+              type="number" min="0.1" step="0.1"
+              bind:value={alert.threshold} />
+            <span class="text-lg font-semibold text-zinc-400">%</span>
+          </div>
+          <span class="text-[10px] uppercase tracking-wide text-zinc-600">move over</span>
+          <select
+            class="rounded border border-zinc-700 bg-zinc-950 px-2 py-0.5 text-sm text-zinc-100 focus:border-zinc-500 focus:outline-none"
+            bind:value={alert.window}>
+            {#each WINDOWS as w (w)}<option value={w}>{w}</option>{/each}
+          </select>
+        </div>
+      {/each}
 
-  <div class="flex flex-wrap gap-3">
-    <label class="text-xs text-zinc-400">
-      Move ≥ (%)
-      <input
-        class="mt-1 block w-20 rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100"
-        type="number" min="0.1" step="0.1" bind:value={instance.notifThreshold} />
-    </label>
-    <label class="text-xs text-zinc-400">
-      Over
-      <select
-        class="mt-1 block rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100"
-        bind:value={instance.notifWindow}>
-        <option value="15m">15m</option><option value="30m">30m</option>
-        <option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
-      </select>
-    </label>
-    <label class="text-xs text-zinc-400">
-      Check every
-      <select
-        class="mt-1 block rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100"
-        bind:value={instance.notifCadence}>
-        <option value="1m">1m</option><option value="5m">5m</option>
-        <option value="15m">15m</option><option value="1h">1h</option>
-      </select>
-    </label>
-    <label class="text-xs text-zinc-400">
-      Re-alert after
-      <select
-        class="mt-1 block rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100"
-        bind:value={instance.notifCooldown}>
-        <option value="0">once</option><option value="15m">15m</option>
-        <option value="1h">1h</option><option value="4h">4h</option><option value="1d">1d</option>
-      </select>
-    </label>
+      <!-- Add-alert square -->
+      <button
+        type="button"
+        class="flex flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-zinc-700 text-zinc-500 hover:border-zinc-500 hover:text-zinc-300"
+        style="aspect-ratio: 1 / 1;"
+        onclick={addAlert}>
+        <span class="text-2xl leading-none">＋</span>
+        <span class="text-[11px]">Add alert</span>
+      </button>
+    </div>
   </div>
 
-  <label class="text-xs text-zinc-400">
-    Tokens (comma-separated; blank = all)
-    <input
-      class="mt-1 block w-full rounded border border-zinc-700 bg-zinc-950 px-2 py-1 text-sm text-zinc-100"
-      bind:value={instance.notifTokens} placeholder="BTC, ETH, SOL" />
-  </label>
-
-  <div class="mt-auto flex items-center justify-between gap-2">
-    <span class="text-[11px] text-zinc-500">
+  <!-- Footer: sync status + subscribe hint -->
+  <div class="flex items-center justify-between gap-2 border-t border-zinc-800 pt-1.5 text-[11px]">
+    <span class="text-zinc-500">
       {#if userBotConfigured === false}
         ⚠️ User bot not set up (admin → Notifications)
       {:else}
-        Subscribe to this alert inside the Telegram user bot.
+        Subscribe to “{(instance.notifTitle ?? 'Price alert').trim() || 'Price alert'}” in the Telegram bot.
       {/if}
     </span>
-    <div class="flex items-center gap-2">
-      {#if saveMsg}<span class="text-[11px] text-zinc-400">{saveMsg}</span>{/if}
-      <button
-        class="rounded bg-emerald-700 px-3 py-1 text-sm text-white hover:bg-emerald-600 disabled:opacity-50"
-        disabled={saving}
-        onclick={save}>Save</button>
-    </div>
+    <span class="shrink-0 text-zinc-500">{syncMsg}</span>
   </div>
 </div>

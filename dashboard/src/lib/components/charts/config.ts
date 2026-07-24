@@ -597,7 +597,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   early_movers: 'Early Movers',
   trading_pit: 'Trading Pit',
   group_snapshot: 'Group Snapshot',
-  notification: 'Notification',
+  notification: 'Price Alert',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1822,19 +1822,16 @@ export type ChartInstance = {
   /** group_snapshot: live auto-refresh cadence, snapped to the wall clock.
    *  NOT in the key (a reload trigger, like tpLive). Persists per-widget. */
   gsLiveRefresh?: 'off' | '15s' | '1m' | '2m' | '5m' | '15m';
-  // notification widget — a user-defined alert rule synced server-side to the
-  // notification service (a monitor cron evaluates it and pushes Telegram
-  // alerts to the topic's subscribers). notifRuleId doubles as the topic_id →
-  // unique per widget instance so duplicate widgets never share a topic.
+  // Price Alert widget — a user-defined alert TOPIC synced server-side (a
+  // monitor cron evaluates it and pushes Telegram alerts to the topic's
+  // subscribers). notifRuleId doubles as the stable topic_id → unique per
+  // widget instance, so renaming notifTitle never breaks subscriptions.
+  // notifAlerts is the list of conditions (each: % move over a timeframe); all
+  // of a widget's alerts fire into its single shared topic.
   notifRuleId?: string;
-  notifType?: 'price_change';
-  notifEnabled?: boolean;
-  notifTitle?: string;           // topic title shown in the Telegram bot menu
-  notifThreshold?: number;       // percent move that triggers (price_change)
-  notifWindow?: '15m' | '30m' | '1h' | '4h' | '1d';
+  notifTitle?: string;           // editable topic name, mirrored in the bot menu
   notifTokens?: string;          // CSV; blank = all tokens
-  notifCadence?: '1m' | '5m' | '15m' | '1h';   // how often the monitor checks
-  notifCooldown?: '0' | '15m' | '1h' | '4h' | '1d';  // re-arm delay while still true
+  notifAlerts?: { id: string; threshold: number; window: '5m' | '15m' | '30m' | '1h' | '4h' | '1d' }[];
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
@@ -2837,17 +2834,12 @@ export function newChartInstance(
     base.gsLiveRefresh = 'off';
   }
   if (kind === 'notification') {
-    // rule_id doubles as the topic_id — must be unique per widget instance so
-    // duplicate NotificationWidgets never collide. Reuse the instance id.
+    // rule_id doubles as the stable topic_id — unique per widget instance so
+    // duplicate widgets never collide and renames don't break subscriptions.
     base.notifRuleId = base.id;
-    base.notifType = 'price_change';
-    base.notifEnabled = false;
     base.notifTitle = 'Price alert';
-    base.notifThreshold = 10;
-    base.notifWindow = '1h';
     base.notifTokens = '';
-    base.notifCadence = '5m';
-    base.notifCooldown = '1h';
+    base.notifAlerts = [];
   }
   if (kind === 'ohlcv') {
     base.pin = false;

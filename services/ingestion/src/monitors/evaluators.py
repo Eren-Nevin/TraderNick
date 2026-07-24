@@ -75,6 +75,79 @@ async def eval_price_change(rule: dict) -> list[dict]:
     return out
 
 
+# ── price_alert (multi-condition widget) ───────────────────────────────────
+# A Price Alert widget = one rule + one topic, holding a LIST of alert
+# conditions (each: threshold_pct + window_s). All conditions fire into the
+# widget's single topic. The rule itself runs at the base 1-min cadence, but
+# each alert only does real work once per its own window (wall-clock bucket):
+# a 1h alert checks once/hour, the other 59 minute-ticks are a dict lookup.
+# Stateless — each due check evaluates the last window and fires matching
+# tokens; the rolling non-overlapping windows naturally avoid repeat spam.
+
+_alert_buckets: dict[tuple, int] = {}
+
+
+async def eval_price_alert(rule: dict) -> list[dict]:
+    p = rule.get("params") or {}
+    alerts = p.get("alerts") or []
+    global_tokens = [str(t).strip().upper() for t in (p.get("tokens") or []) if str(t).strip()]
+    now_epoch = int(datetime.now(timezone.utc).timestamp())
+
+    # Which alerts are DUE this tick (their wall-clock window bucket rolled over).
+    due: list[dict] = []
+    for a in alerts:
+        aid = str(a.get("id") or "")
+        window_s = int(a.get("window_s") or 0)
+        threshold = abs(float(a.get("threshold_pct") or 0))
+        if not aid or window_s <= 0 or threshold <= 0:
+            continue
+        bucket = now_epoch // window_s
+        key = (rule["rule_id"], aid)
+        if _alert_buckets.get(key) == bucket:
+            continue  # already checked this window — no-op
+        _alert_buckets[key] = bucket
+        due.append({"id": aid, "window_s": window_s, "threshold": threshold})
+    if not due:
+        return []
+
+    # One CH query per DISTINCT due window (multiple alerts may share a window).
+    by_window: dict[int, list[dict]] = {}
+    for a in due:
+        by_window.setdefault(a["window_s"], []).append(a)
+
+    ch = await async_client()
+    out: list[dict] = []
+    for window_s, alist in by_window.items():
+        where = ["time >= now() - INTERVAL {w:UInt32} SECOND", "time <= now()"]
+        params: dict = {"w": window_s}
+        if global_tokens:
+            where.append("token IN {toks:Array(String)}")
+            params["toks"] = global_tokens
+        res = await ch.query(
+            "SELECT token, argMax(close, time) AS cur, argMin(close, time) AS past "
+            "FROM tradernick.hl_ohlcv_1m "
+            f"WHERE {' AND '.join(where)} GROUP BY token",
+            parameters=params,
+        )
+        moves = []
+        for token, cur, past in res.result_rows:
+            if not past:
+                continue
+            moves.append((token, (float(cur) / float(past) - 1.0) * 100.0))
+        wl = _humanize_seconds(window_s)
+        for a in alist:
+            thr = a["threshold"]
+            for token, pct in moves:
+                if abs(pct) >= thr:
+                    d = "up" if pct >= 0 else "down"
+                    out.append({
+                        "entity": f"{a['id']}:{token}",
+                        "group": None,
+                        "message": f"⚠️ {token} {d} {_fmt_pct(pct)} in {wl} (alert ≥{thr:g}% / {wl})",
+                    })
+    return out
+
+
 # ── admin_job_fail ─────────────────────────────────────────────────────────
 
 async def eval_admin_job_fail(rule: dict) -> list[dict]:
@@ -198,7 +271,12 @@ def _provider_group_for_job(job_type: str) -> str | None:
 
 # kind → evaluator coroutine
 EVALUATORS = {
-    "price_change": eval_price_change,
+    "price_alert": eval_price_alert,
+    "price_change": eval_price_change,   # legacy single-condition; kept for compat
     "admin_job_fail": eval_admin_job_fail,
     "admin_stale_data": eval_admin_stale_data,
 }
+
+# Kinds whose evaluator handles its OWN cadence/dedup and returns only what
+# should fire NOW → the engine dispatches directly, no edge/cooldown state.
+STATELESS_KINDS = {"price_alert"}

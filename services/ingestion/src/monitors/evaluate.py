@@ -23,7 +23,7 @@ from datetime import datetime, timezone
 import ch_status
 import notification_config as nc
 from .channels import TelegramChannel
-from .evaluators import EVALUATORS
+from .evaluators import EVALUATORS, STATELESS_KINDS
 
 logging.basicConfig(
     level=logging.INFO,
@@ -88,6 +88,18 @@ async def _evaluate_rule(rule: dict) -> int:
     if evaluator is None:
         return 0
     firing = await evaluator(rule)  # [{entity, message, group}]
+
+    # Stateless kinds (price_alert): the evaluator already gated cadence + dedup
+    # and returns only what should fire now → dispatch directly, no state.
+    if rule["kind"] in STATELESS_KINDS:
+        bot = "admin" if rule["scope"] == "admin" else "user"
+        sent = 0
+        for item in firing:
+            topic_id = _topic_for(rule, item)
+            if topic_id:
+                sent += await _dispatch(bot, topic_id, item["message"])
+        return sent
+
     firing_by_entity = {it["entity"]: it for it in firing}
 
     prior = nc.get_states(rule["rule_id"])  # {entity: {state, last_fired_at}}

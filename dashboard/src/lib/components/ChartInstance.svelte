@@ -7514,6 +7514,9 @@
             <option value="token">Token</option>
           </select>
         {/if}
+      {:else if instance.kind === 'notification'}
+        <!-- Price Alert: bespoke widget — no token / timeframe / exchange
+             controls in the header. Its whole UI is the alert grid body. -->
       {:else}
         {#if instance.kind === 'smart_wallets_dynamic'}
           <!-- Dynamic chart: the set is re-selected per bucket over a ROLLING
@@ -7823,7 +7826,7 @@
           </select>
         {/if}
       {/if}
-      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'spot_cvd_table' && instance.kind !== 'backtracker_leaderboard' && instance.kind !== 'trading_pit' && instance.kind !== 'group_snapshot' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
+      {#if !isLeaderboardKind(instance.kind) && instance.kind !== 'token_leaderboard' && instance.kind !== 'spot_cvd_table' && instance.kind !== 'backtracker_leaderboard' && instance.kind !== 'trading_pit' && instance.kind !== 'group_snapshot' && instance.kind !== 'notification' && (instance.kind !== 'smart_wallets_table' || instance.viewMode === 'chart')}
         <select
           bind:value={instance.interval}
           class="bg-zinc-900 border border-zinc-700 rounded-md px-2 py-1 text-xs font-medium text-zinc-100 hover:border-zinc-600 focus:outline-none focus:border-zinc-500"
@@ -7927,23 +7930,27 @@
           {/if}
         {/if}
       {/if}
-      <button
-        type="button"
-        onclick={reload}
-        title={swNeedsRefresh ? (swArmed ? 'Inputs changed — click to run the finder' : 'Click to run the finder') : (loading ? 'Loading — click to cancel and retry' : 'Refresh')}
-        class={'w-7 h-7 rounded-md text-sm leading-none flex items-center justify-center ' + (loading ? 'animate-spin ' : '') + (swNeedsRefresh
-          ? 'text-amber-300 border border-amber-500 bg-amber-600/20 hover:bg-amber-600/40'
-          : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent')}
-        aria-label="Refresh chart"
-      >↻</button>
-      <button
-        type="button"
-        onclick={() => (settingsOpen = !settingsOpen)}
-        title="Chart settings"
-        aria-pressed={settingsOpen}
-        class="w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center
-               {settingsOpen ? 'bg-zinc-800 text-zinc-100 border-zinc-700' : ''}"
-      >⚙</button>
+      {#if instance.kind !== 'notification'}
+        <!-- Price Alert has no data to refetch and no settings pane, so it hides
+             the refresh + gear buttons; only the remove (✕) button remains. -->
+        <button
+          type="button"
+          onclick={reload}
+          title={swNeedsRefresh ? (swArmed ? 'Inputs changed — click to run the finder' : 'Click to run the finder') : (loading ? 'Loading — click to cancel and retry' : 'Refresh')}
+          class={'w-7 h-7 rounded-md text-sm leading-none flex items-center justify-center ' + (loading ? 'animate-spin ' : '') + (swNeedsRefresh
+            ? 'text-amber-300 border border-amber-500 bg-amber-600/20 hover:bg-amber-600/40'
+            : 'text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent')}
+          aria-label="Refresh chart"
+        >↻</button>
+        <button
+          type="button"
+          onclick={() => (settingsOpen = !settingsOpen)}
+          title="Chart settings"
+          aria-pressed={settingsOpen}
+          class="w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 border border-transparent text-sm leading-none flex items-center justify-center
+                 {settingsOpen ? 'bg-zinc-800 text-zinc-100 border-zinc-700' : ''}"
+        >⚙</button>
+      {/if}
       <button
         type="button"
         onclick={() => onRemove(instance.id)}

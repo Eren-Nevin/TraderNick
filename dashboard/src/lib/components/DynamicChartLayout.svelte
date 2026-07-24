@@ -908,17 +908,18 @@
       if (inst.kind === 'notification') {
         // topic_id must stay unique per instance → fall back to the instance id.
         inst.notifRuleId = typeof r.notifRuleId === 'string' && r.notifRuleId ? r.notifRuleId : inst.id;
-        inst.notifType = 'price_change';
-        inst.notifEnabled = r.notifEnabled === true;
         inst.notifTitle = typeof r.notifTitle === 'string' ? r.notifTitle : 'Price alert';
-        inst.notifThreshold = typeof r.notifThreshold === 'number' ? r.notifThreshold : 10;
-        const nw = r.notifWindow;
-        inst.notifWindow = nw === '15m' || nw === '30m' || nw === '4h' || nw === '1d' ? nw : '1h';
         inst.notifTokens = typeof r.notifTokens === 'string' ? r.notifTokens : '';
-        const nc2 = r.notifCadence;
-        inst.notifCadence = nc2 === '1m' || nc2 === '15m' || nc2 === '1h' ? nc2 : '5m';
-        const ncd = r.notifCooldown;
-        inst.notifCooldown = ncd === '0' || ncd === '15m' || ncd === '4h' || ncd === '1d' ? ncd : '1h';
+        const WINS = ['5m', '15m', '30m', '1h', '4h', '1d'];
+        inst.notifAlerts = Array.isArray(r.notifAlerts)
+          ? r.notifAlerts
+              .filter((a: unknown): a is Record<string, unknown> => !!a && typeof a === 'object')
+              .map((a: Record<string, unknown>) => ({
+                id: typeof a.id === 'string' && a.id ? a.id : Math.random().toString(36).slice(2),
+                threshold: typeof a.threshold === 'number' ? a.threshold : 10,
+                window: (WINS.includes(a.window as string) ? a.window : '1h') as NonNullable<ChartInstanceT['notifAlerts']>[number]['window']
+              }))
+          : [];
       }
       if (inst.kind === 'backtracker') {
         // Persist the Position-Changes dialog "Only <group>" filter (default ON):

@@ -92,30 +92,49 @@ async def get_rules(_request):
     return response.json({"rules": out})
 
 
+# Price-alert timeframe labels → seconds. The alert's window doubles as its
+# check cadence in the monitor (a 1h alert is evaluated once/hour).
+_WINDOW_S = {"5m": 300, "15m": 900, "30m": 1800, "1h": 3600, "4h": 14400, "1d": 86400}
+# The rule always runs at the base 1-min cadence; per-alert gating does the rest.
+_BASE_CADENCE_S = 60
+
+
+def _clean_alerts(raw) -> list[dict]:
+    """Normalize the widget's alert list → [{id, threshold_pct, window_s}]."""
+    out: list[dict] = []
+    for a in (raw or []):
+        if not isinstance(a, dict):
+            continue
+        aid = str(a.get("id") or "").strip()
+        window_s = _WINDOW_S.get(str(a.get("window") or ""))
+        try:
+            thr = abs(float(a.get("threshold") or 0))
+        except (TypeError, ValueError):
+            thr = 0.0
+        if aid and window_s and thr > 0:
+            out.append({"id": aid, "threshold_pct": thr, "window_s": window_s})
+    return out
+
+
 @bp.put("/notifications/rules")
 async def put_rule(request):
-    """Create/replace a user widget rule + its 1:1 topic. Body:
-    {rule_id, title, type?, enabled, threshold_pct, window_s, tokens,
-     cadence_s, cooldown_s}. rule_id is the widget instance UUID."""
+    """Create/replace a Price Alert widget rule + its 1:1 topic. Body:
+    {rule_id, title, alerts: [{id, threshold, window}], tokens?}. rule_id is the
+    widget instance UUID (== topic_id, so a rename keeps subscriptions intact).
+    The rule is enabled iff it has at least one valid alert."""
     b = request.json or {}
     rule_id = str(b.get("rule_id") or "").strip()
     if not rule_id:
         return response.json({"error": "rule_id required"}, status=400)
-    title = str(b.get("title") or "Price alert").strip()
-    kind = str(b.get("type") or "price_change").strip()
-    enabled = 1 if b.get("enabled", True) else 0
-    cadence_s = max(int(b.get("cadence_s", 300) or 300), 60)
-    cooldown_s = max(int(b.get("cooldown_s", 0) or 0), 0)
-    params = {
-        "threshold_pct": abs(float(b.get("threshold_pct", 10) or 10)),
-        "window_s": max(int(b.get("window_s", 3600) or 3600), 60),
-        "tokens": _clean_tokens(b.get("tokens")),
-    }
+    title = str(b.get("title") or "Price alert").strip() or "Price alert"
+    alerts = _clean_alerts(b.get("alerts"))
+    params = {"alerts": alerts, "tokens": _clean_tokens(b.get("tokens"))}
+    enabled = 1 if alerts else 0
     now = _utcnow()
     ch = await client()
     await ch.insert(
         RULES_TABLE,
-        [[rule_id, rule_id, kind, "user", enabled, cadence_s, cooldown_s,
+        [[rule_id, rule_id, "price_alert", "user", enabled, _BASE_CADENCE_S, 0,
           json.dumps(params), title, now, 0]],
         column_names=_RULE_COLS,
     )
@@ -124,7 +143,8 @@ async def put_rule(request):
         [[rule_id, "user", "widget", title, "", 1, now, 0]],
         column_names=_TOPIC_COLS,
     )
-    return response.json({"ok": True, "rule_id": rule_id})
+    return response.json({"ok": True, "rule_id": rule_id, "enabled": bool(enabled),
+                          "alerts": len(alerts)})
 
 
 @bp.delete("/notifications/rules/<rule_id>")
