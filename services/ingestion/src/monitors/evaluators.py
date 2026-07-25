@@ -316,9 +316,9 @@ async def eval_positions_change(rule: dict, slot_epoch: int = 0) -> list[dict]:
     # The monitor's slot scheduler decides WHEN this runs (at the report cadence);
     # this just builds the current report over the lookback window.
     p = rule.get("params") or {}
+    # group_id is OPTIONAL — empty = market-wide (all wallets), like the Trading
+    # Pit widget's "All wallets". The endpoint omits the membership filter then.
     group_id = str(p.get("group_id") or "").strip()
-    if not group_id:
-        return []
     criteria = str(p.get("criteria") or "net_pos_change")
     if criteria not in _PC_METRICS:
         criteria = "net_pos_change"
@@ -327,7 +327,9 @@ async def eval_positions_change(rule: dict, slot_epoch: int = 0) -> list[dict]:
     window = str(p.get("window") or "15m")
     title = str(rule.get("title") or "Positions change").strip() or "Positions change"
 
-    url = f"{_DATA_SERVER_URL}/hyperliquid/positions_change?group={group_id}&lookback={window}"
+    url = f"{_DATA_SERVER_URL}/hyperliquid/positions_change?lookback={window}"
+    if group_id:
+        url += f"&group={group_id}"
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as hc:
             resp = await hc.get(url)

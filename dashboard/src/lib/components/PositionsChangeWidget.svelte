@@ -53,9 +53,7 @@
         body: JSON.stringify(body)
       });
       if (!res.ok) throw new Error(`${res.status}`);
-      syncMsg = instance.notifMuted
-        ? 'Muted · paused'
-        : instance.pchgGroupId ? 'Saved · active' : 'Saved · pick a group';
+      syncMsg = instance.notifMuted ? 'Muted · paused' : 'Saved · active';
     } catch (e) {
       syncMsg = `Save failed (${e})`;
     }
@@ -144,7 +142,7 @@
         <select class="{selCls} mt-0.5 block w-full"
           value={instance.pchgGroupId ?? ''}
           onchange={(e) => (instance.pchgGroupId = e.currentTarget.value || null)}>
-          <option value="">— select a group —</option>
+          <option value="">None — all wallets (market-wide)</option>
           {#each walletPinsStore.groups as g (g.id)}<option value={g.id}>{g.name}</option>{/each}
         </select>
       </label>

@@ -199,7 +199,8 @@ async def put_rule(request):
         cadence_s = _PCHG_CADENCE_S.get(str(b.get("cadence") or "15m"), 900)
         params = {"group_id": group_id, "criteria": criteria, "rank_by": rank_by,
                   "top_n": top_n, "window": window}
-        enabled = 1 if (group_id and not paused) else 0
+        # group is OPTIONAL for positions_change — empty = market-wide (all wallets).
+        enabled = 0 if paused else 1
         kind = "positions_change"
         extra = {"group_id": group_id}
     elif wtype == "backtracker_alert":
