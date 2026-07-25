@@ -371,6 +371,79 @@ def _format_positions_change(title: str, criteria: str, rank_by: str, window: st
     return "\n".join(lines)
 
 
+# ── backtracker_alert (Backtracker-Leaderboard-based widget) ────────────────
+# One rule + one topic. On its own cadence it pulls the MARKET-WIDE (no wallet
+# group) per-token flow over a lookback window (reusing data_server's
+# backtracker_leaderboard endpoint), ranks tokens by Spot VD % or Vol Δ%, and
+# reports the top-N most-positive AND most-negative as two sections. Each token
+# line shows BOTH metrics regardless of the ranking criteria. Stateless,
+# wall-clock-cadence-gated.
+
+_BLA_METRICS = {"spot_vd_pct": "Spot VD %", "vol_pct": "Vol Δ%"}
+
+
+async def eval_backtracker_alert(rule: dict, slot_epoch: int = 0) -> list[dict]:
+    # The monitor's slot scheduler decides WHEN this runs (at the report cadence);
+    # this just builds the current report over the lookback window.
+    p = rule.get("params") or {}
+    criteria = str(p.get("criteria") or "spot_vd_pct")
+    if criteria not in _BLA_METRICS:
+        criteria = "spot_vd_pct"
+    top_n = max(int(p.get("top_n") or 5), 1)
+    lookback = str(p.get("lookback") or "1h")
+    title = str(rule.get("title") or "Backtracker alert").strip() or "Backtracker alert"
+
+    # No group → market-wide leaderboard. as_of=now for the freshest flow.
+    url = (f"{_DATA_SERVER_URL}/hyperliquid/backtracker_leaderboard"
+           f"?lookback={lookback}&as_of=now")
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as hc:
+            resp = await hc.get(url)
+            resp.raise_for_status()
+            rows = resp.json().get("rows", []) or []
+    except (httpx.HTTPError, ValueError) as exc:
+        log.warning("backtracker_alert fetch failed (%s): %s", url, exc)
+        return []
+
+    def val(row: dict):
+        # rank by the chosen criteria; skip tokens where it's null (e.g. no
+        # Binance spot pair → spot_vd_pct is None).
+        v = row.get(criteria)
+        return None if v is None else float(v)
+
+    toks = [r for r in rows if val(r) is not None]
+    if not toks:
+        return []
+    top_pos = [t for t in sorted(toks, key=val, reverse=True)[:top_n] if val(t) > 0]
+    pos_set = {t["token"] for t in top_pos}
+    top_neg = [t for t in sorted(toks, key=val) if t["token"] not in pos_set and val(t) < 0][:top_n]
+
+    msg = _format_backtracker_alert(title, criteria, lookback, top_pos, top_neg)
+    return [{"entity": rule["rule_id"], "group": None, "message": msg}]
+
+
+def _bla_pct(v) -> str:
+    """A percent field that may be null (missing Binance spot pair / zero denom)."""
+    return "—" if v is None else f"{float(v):+.2f}%"
+
+
+def _format_backtracker_alert(title: str, criteria: str, lookback: str,
+                              top_pos: list[dict], top_neg: list[dict]) -> str:
+    lines = [f"🔔 {title}", f"Top by {_BLA_METRICS[criteria]} · {lookback}"]
+
+    def line(t: dict) -> str:
+        return (f"{t['token']}  Spot VD {_bla_pct(t.get('spot_vd_pct'))}  "
+                f"Vol Δ {_bla_pct(t.get('vol_pct'))}")
+
+    if top_pos:
+        lines += ["", "📈 Top Positive"]
+        lines += [line(t) for t in top_pos]
+    if top_neg:
+        lines += ["", "📉 Top Negative"]
+        lines += [line(t) for t in top_neg]
+    return "\n".join(lines)
+
+
 # ── admin_job_fail ─────────────────────────────────────────────────────────
 
 async def eval_admin_job_fail(rule: dict, slot_epoch: int = 0) -> list[dict]:
@@ -497,6 +570,7 @@ EVALUATORS = {
     "price_alert": eval_price_alert,
     "positions_alert": eval_positions_alert,
     "positions_change": eval_positions_change,
+    "backtracker_alert": eval_backtracker_alert,
     "price_change": eval_price_change,   # legacy single-condition; kept for compat
     "admin_job_fail": eval_admin_job_fail,
     "admin_stale_data": eval_admin_stale_data,
@@ -504,4 +578,4 @@ EVALUATORS = {
 
 # Kinds whose evaluator handles its OWN cadence/dedup and returns only what
 # should fire NOW → the engine dispatches directly, no edge/cooldown state.
-STATELESS_KINDS = {"price_alert", "positions_alert", "positions_change"}
+STATELESS_KINDS = {"price_alert", "positions_alert", "positions_change", "backtracker_alert"}

@@ -16,6 +16,7 @@
     chartKindProvider,
     chartKindShortLabel,
     defaultMAs,
+    isNotifWidgetKind,
     newChartInstance,
     sanitizeOverlay,
     type ChartCategory,
@@ -238,7 +239,7 @@
     // can read it). Explicit removal must soft-delete it — unlike a page unmount,
     // which must NOT. Fire-and-forget; the layout persists regardless.
     const gone = instances.find((i) => i.id === id);
-    if ((gone?.kind === 'notification' || gone?.kind === 'positions_alert') && gone.notifRuleId) {
+    if (gone && isNotifWidgetKind(gone.kind) && gone.notifRuleId) {
       fetch(`/api/notifications/rules/${encodeURIComponent(gone.notifRuleId)}`, {
         method: 'DELETE'
       }).catch(() => {});
@@ -961,6 +962,18 @@
         inst.pchgRankBy = r.pchgRankBy === 'wallets' ? 'wallets' : 'usd';
         const PN = ['3', '5', '10', '20'];
         inst.pchgTopN = (PN.includes(r.pchgTopN as string) ? r.pchgTopN : '5') as NonNullable<ChartInstanceT['pchgTopN']>;
+      }
+      if (inst.kind === 'backtracker_alert') {
+        inst.notifRuleId = typeof r.notifRuleId === 'string' && r.notifRuleId ? r.notifRuleId : inst.id;
+        inst.notifTitle = typeof r.notifTitle === 'string' ? r.notifTitle : 'Backtracker alert';
+        inst.notifMuted = r.notifMuted === true;
+        const BLW = ['15m', '30m', '1h', '4h', '12h', '1d', '7d'];
+        inst.blaLookback = (BLW.includes(r.blaLookback as string) ? r.blaLookback : '1h') as NonNullable<ChartInstanceT['blaLookback']>;
+        const BLC = ['1m', '5m', '15m', '1h'];
+        inst.blaCadence = (BLC.includes(r.blaCadence as string) ? r.blaCadence : '15m') as NonNullable<ChartInstanceT['blaCadence']>;
+        inst.blaCriteria = r.blaCriteria === 'vol_pct' ? 'vol_pct' : 'spot_vd_pct';
+        const BLN = ['3', '5', '10', '20'];
+        inst.blaTopN = (BLN.includes(r.blaTopN as string) ? r.blaTopN : '5') as NonNullable<ChartInstanceT['blaTopN']>;
       }
       if (inst.kind === 'backtracker') {
         // Persist the Position-Changes dialog "Only <group>" filter (default ON):

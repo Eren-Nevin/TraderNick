@@ -124,6 +124,10 @@ _PA_STALENESS = {"1h", "4h", "1d", "3d", "7d", "14d", "30d"}
 _PCHG_WINDOWS = {"5m", "15m", "30m", "1h", "4h"}
 _PCHG_CADENCE_S = {"1m": 60, "5m": 300, "15m": 900, "1h": 3600}
 _PCHG_CRITERIA = {"net_pos_change", "net_open_long", "net_flip"}
+# Backtracker-alert lookback (Backtracker-Leaderboard windows) + criteria. Report
+# cadence reuses _CADENCE_S. No wallet group.
+_BLA_LOOKBACKS = {"15m", "30m", "1h", "4h", "12h", "1d", "7d"}
+_BLA_CRITERIA = {"spot_vd_pct", "vol_pct"}
 
 
 def _clean_alerts(raw) -> list[dict]:
@@ -158,6 +162,7 @@ async def put_rule(request):
     `type` selects the widget:
       price_alert (default): {alerts: [{id, threshold, window, cadence, limit}], tokens?}
       positions_alert:       {group_id, criteria, top_n, staleness, cadence}
+      backtracker_alert:     {criteria, top_n, lookback, cadence}  (no group)
     A widget is enabled iff it's configured AND not paused."""
     b = request.json or {}
     rule_id = str(b.get("rule_id") or "").strip()
@@ -197,6 +202,20 @@ async def put_rule(request):
         enabled = 1 if (group_id and not paused) else 0
         kind = "positions_change"
         extra = {"group_id": group_id}
+    elif wtype == "backtracker_alert":
+        title = str(b.get("title") or "Backtracker alert").strip() or "Backtracker alert"
+        criteria = str(b.get("criteria") or "spot_vd_pct")
+        if criteria not in _BLA_CRITERIA:
+            criteria = "spot_vd_pct"
+        top_n = min(max(int(b.get("top_n") or 5), 1), 50)
+        lookback = str(b.get("lookback") or "1h")
+        if lookback not in _BLA_LOOKBACKS:
+            lookback = "1h"
+        cadence_s = _CADENCE_S.get(str(b.get("cadence") or "15m"), 900)
+        params = {"criteria": criteria, "top_n": top_n, "lookback": lookback}
+        enabled = 0 if paused else 1
+        kind = "backtracker_alert"
+        extra = {}
     else:
         title = str(b.get("title") or "Price alert").strip() or "Price alert"
         alerts = _clean_alerts(b.get("alerts"))

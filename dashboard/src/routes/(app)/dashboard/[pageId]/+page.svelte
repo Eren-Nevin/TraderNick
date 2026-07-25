@@ -31,7 +31,8 @@
     'lido',
     'notification',
     'positions_alert',
-    'positions_change'
+    'positions_change',
+    'backtracker_alert'
   ];
 
   function defaultLayout(): ChartInstanceT[] {

@@ -456,6 +456,7 @@ export type ChartKind =
   | 'notification'
   | 'positions_alert'
   | 'positions_change'
+  | 'backtracker_alert'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
@@ -602,6 +603,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   notification: 'Price Alert',
   positions_alert: 'Positions Alert',
   positions_change: 'Positions Change',
+  backtracker_alert: 'Backtracker Alert',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1371,7 +1373,8 @@ export const CHART_CATEGORIES: ChartCategory[] = [
  *  no backend chart data). Add new notification widgets here so ChartInstance's
  *  guards cover them automatically. */
 export function isNotifWidgetKind(kind: ChartKind): boolean {
-  return kind === 'notification' || kind === 'positions_alert' || kind === 'positions_change';
+  return kind === 'notification' || kind === 'positions_alert' || kind === 'positions_change'
+    || kind === 'backtracker_alert';
 }
 
 export function chartKindCategory(kind: ChartKind): ChartCategory | null {
@@ -1865,6 +1868,13 @@ export type ChartInstance = {
   pchgCriteria?: 'net_pos_change' | 'net_open_long' | 'net_flip';
   pchgRankBy?: 'usd' | 'wallets';
   pchgTopN?: '3' | '5' | '10' | '20';
+  // Backtracker Alert widget (kind 'backtracker_alert'). Reuses notifRuleId /
+  // notifTitle / notifMuted. Market-wide (no group): top-N tokens by Spot VD %
+  // or Vol Δ% over a lookback; each line shows both metrics. Two-way top-N.
+  blaLookback?: '15m' | '30m' | '1h' | '4h' | '12h' | '1d' | '7d';  // lookback window
+  blaCadence?: '1m' | '5m' | '15m' | '1h';                          // report cadence
+  blaCriteria?: 'spot_vd_pct' | 'vol_pct';                          // rank by
+  blaTopN?: '3' | '5' | '10' | '20';
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
@@ -2899,6 +2909,15 @@ export function newChartInstance(
     base.pchgCriteria = 'net_pos_change';
     base.pchgRankBy = 'usd';
     base.pchgTopN = '5';
+  }
+  if (kind === 'backtracker_alert') {
+    base.notifRuleId = base.id;
+    base.notifTitle = 'Backtracker alert';
+    base.notifMuted = false;
+    base.blaLookback = '1h';
+    base.blaCadence = '15m';
+    base.blaCriteria = 'spot_vd_pct';
+    base.blaTopN = '5';
   }
   if (kind === 'ohlcv') {
     base.pin = false;
