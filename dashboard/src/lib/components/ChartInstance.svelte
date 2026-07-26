@@ -967,7 +967,7 @@
       return `trading_pit|${_tpQs(instance).toString()}`;
     }
     if (instance.kind === 'group_snapshot') {
-      return `group_snapshot|g:${instance.gsGroupId ?? ''}|st:${instance.gsStaleness ?? '7d'}|a:${instance.gsAsOf ?? 'live'}|pl:${instance.gsPriceLb ?? '1h'}`;
+      return `group_snapshot|g:${instance.gsGroupId ?? ''}|st:${instance.gsStaleness ?? '7d'}|a:${instance.gsAsOf ?? 'live'}|pl:${instance.gsPriceLb ?? '1h'}|mp:${instance.gsMinPos ?? 0}`;
     }
     if (instance.kind === 'early_movers') {
       const crit = `${instance.emLookback ?? '3d'}|${instance.emLongThr ?? 5}|${instance.emShortThr ?? 5}|${instance.emMaxLen ?? 3}|${instance.emLead ?? 1}|${instance.emMode ?? 'flow'}|${instance.emMinSize ?? 0}|${instance.emSkipIntra ? 1 : 0}|${instance.emMinAvgSizeK ?? 0}|${instance.emMinCorrectLong ?? 0}|${instance.emMinCorrectShort ?? 0}|${instance.emMinCorrectLongPct ?? 0}|${instance.emMinCorrectShortPct ?? 0}|${instance.emMinRealizedPnlK ?? 'x'}`;
@@ -1963,7 +1963,7 @@
         if (!instance.gsGroupId) {
           data = [{ gs: { rows: [] } } as unknown as AnyDatum];
         } else {
-          const res = await queuedFetch(`/api/hyperliquid/group_snapshot?group=${instance.gsGroupId}&staleness=${instance.gsStaleness ?? '7d'}&as_of=${instance.gsAsOf ?? 'live'}&price_lb=${instance.gsPriceLb ?? '1h'}`, { signal });
+          const res = await queuedFetch(`/api/hyperliquid/group_snapshot?group=${instance.gsGroupId}&staleness=${instance.gsStaleness ?? '7d'}&as_of=${instance.gsAsOf ?? 'live'}&price_lb=${instance.gsPriceLb ?? '1h'}&min_pos=${instance.gsMinPos ?? 0}`, { signal });
           if (!res.ok) throw new Error(`${instance.kind} ${res.status}`);
           data = [{ gs: await res.json() } as unknown as AnyDatum];
         }
@@ -5664,7 +5664,7 @@
     if (gswCtl) gswCtl.abort();
     const ctl = new AbortController(); gswCtl = ctl;
     try {
-      const qs = `group=${instance.gsGroupId}&staleness=${instance.gsStaleness ?? '7d'}&as_of=${instance.gsAsOf ?? 'live'}&token=${encodeURIComponent(token)}`;
+      const qs = `group=${instance.gsGroupId}&staleness=${instance.gsStaleness ?? '7d'}&as_of=${instance.gsAsOf ?? 'live'}&min_pos=${instance.gsMinPos ?? 0}&token=${encodeURIComponent(token)}`;
       const res = await fetch(`/api/hyperliquid/group_snapshot?${qs}`, { signal: ctl.signal });
       if (!res.ok) throw new Error(`group_snapshot ${res.status}`);
       const body = await res.json();
@@ -8085,6 +8085,14 @@
             <option value="live">Live</option>
             <option value="snapshot">Snapshot (deprecated)</option>
           </select>
+        </label>
+        <label class="flex items-center gap-1.5 text-zinc-300"
+          title="Ignore any individual wallet position smaller than this ($ notional) BEFORE aggregating — so a tiny position never counts toward a token's Longs/Shorts, Net Long or Net Size. 0 = no filter.">
+          Min position $
+          <input type="number" min="0" step="100" placeholder="0"
+            value={instance.gsMinPos ?? 0}
+            onchange={(e) => (instance.gsMinPos = Math.max(0, parseFloat(e.currentTarget.value) || 0))}
+            class="{gsSel} w-24" />
         </label>
       {/if}
       {#if isSwKind(instance.kind) && !isGroup && (instance.kind === 'smart_wallets_dynamic' || isCutoff || instance.viewMode !== 'chart')}

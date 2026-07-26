@@ -1836,6 +1836,10 @@ export type ChartInstance = {
   /** group_snapshot: lookback for the per-token price-change % column (separate from
    *  staleness). In the key. */
   gsPriceLb?: '5m' | '15m' | '1h' | '4h' | '1d';
+  /** group_snapshot: min per-wallet position notional ($) — drop each position below
+   *  this BEFORE aggregation, so tiny positions don't count toward Longs / Net Long /
+   *  Net Size. 0 = no filter. In the key (server-side). */
+  gsMinPos?: number;
   /** group_snapshot: live auto-refresh cadence, snapped to the wall clock.
    *  NOT in the key (a reload trigger, like tpLive). Persists per-widget. */
   gsLiveRefresh?: 'off' | '15s' | '1m' | '2m' | '5m' | '15m';
@@ -2878,6 +2882,7 @@ export function newChartInstance(
     // handler in data_server routes/hyperliquid.py.
     base.gsAsOf = 'live';
     base.gsPriceLb = '1h';
+    base.gsMinPos = 0;
     base.gsLiveRefresh = '1m';
   }
   if (kind === 'notification') {

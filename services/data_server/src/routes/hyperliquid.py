@@ -3882,12 +3882,19 @@ async def group_snapshot(request):
     reconstructs each wallet's position to NOW (snapshot + net fills since the bucket);
     entry/uPnL are then approximate (snapshot entry carried for pre-existing positions,
     fills-VWAP for ones opened since; uPnL marked to the last fill price).
-    Params: group, staleness, as_of."""
+    Params: group, staleness, as_of, min_pos ($ per-position floor, pre-aggregation)."""
     if not request.args.get("group"):
         return response.json({"error": "missing group"}, status=400)
     stale = request.args.get("staleness", "7d")
     st_sec = _GS_STALE.get(stale, _GS_STALE["7d"])
     as_of = request.args.get("as_of", "live")
+    # Min-position filter ($): drop each individual wallet position whose notional
+    # is below this BEFORE aggregation, so a tiny $300 long never counts toward a
+    # token's Longs / Net Long / Net Size. 0 = no filter.
+    try:
+        min_pos = max(float(request.args.get("min_pos", 0) or 0), 0.0)
+    except (TypeError, ValueError):
+        min_pos = 0.0
     token_one = (request.args.get("token") or "").strip().upper() or None
     ch = await client()
     try:
@@ -3911,6 +3918,11 @@ async def group_snapshot(request):
     params = {"b": bucket, "st": st_sec}
     if token_one:
         params["tok"] = token_one
+    # Applied to the aggregation's input rows (sz = per-position notional $).
+    min_clause = ""
+    if min_pos > 0:
+        min_clause = " WHERE sz >= {mp:Float64}"
+        params["mp"] = min_pos
 
     if as_of == "live":
         # Side/size come from HL's OWN position accounting, not from
@@ -3988,7 +4000,7 @@ async def group_snapshot(request):
         r = await ch.query(
             "SELECT wallet, signed, sz, entry, upnl,"
             " dictGet('tradernick.wallet_labels','categories',lower(wallet)) AS cats"
-            " FROM (" + pos_sql + ") ORDER BY sz DESC LIMIT 500",
+            " FROM (" + pos_sql + ")" + min_clause + " ORDER BY sz DESC LIMIT 500",
             parameters=params,
         )
         wrows = [{
@@ -4002,7 +4014,7 @@ async def group_snapshot(request):
         "SELECT token, sum(sz) AS size_usd, sum(sz*entry)/nullIf(sum(sz),0) AS entry, sum(upnl) AS upnl,"
         " uniqExact(wallet) AS wallets, countIf(signed>0) AS n_long, countIf(signed<0) AS n_short,"
         " sumIf(sz, signed>0) AS long_usd, sumIf(sz, signed<0) AS short_usd"
-        " FROM (" + pos_sql + ") GROUP BY token ORDER BY size_usd DESC",
+        " FROM (" + pos_sql + ")" + min_clause + " GROUP BY token ORDER BY size_usd DESC",
         parameters=params,
     )
     rows = [{

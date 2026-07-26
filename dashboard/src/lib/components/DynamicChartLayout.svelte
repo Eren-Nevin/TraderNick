@@ -903,6 +903,7 @@
         inst.gsAsOf = r.gsAsOf === 'snapshot' ? 'snapshot' : 'live';
         const gpl = r.gsPriceLb;
         inst.gsPriceLb = gpl === '5m' || gpl === '15m' || gpl === '4h' || gpl === '1d' ? gpl : '1h';
+        inst.gsMinPos = typeof r.gsMinPos === 'number' && r.gsMinPos > 0 ? r.gsMinPos : 0;
         const glr = r.gsLiveRefresh;
         inst.gsLiveRefresh = glr === 'off' || glr === '15s' || glr === '2m' || glr === '5m' || glr === '15m' ? glr : '1m';
       }
