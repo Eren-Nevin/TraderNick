@@ -10,6 +10,7 @@
 
   import { onMount } from 'svelte';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
+  import NotifTriggerButton from '$lib/components/NotifTriggerButton.svelte';
   import type { ChartInstance } from '$lib/components/charts/config';
 
   let { instance, rosterTokens = [] }: { instance: ChartInstance; rosterTokens?: string[] } = $props();
@@ -314,6 +315,7 @@
         Not triggered yet · subscribe in the Telegram bot.
       {/if}
     </span>
+    <NotifTriggerButton ruleId={instance.notifRuleId ?? instance.id} beforeTrigger={sync} />
     <span class="shrink-0 text-zinc-500">{syncMsg}</span>
   </div>
 </div>

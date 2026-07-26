@@ -29,6 +29,7 @@ RULES_TABLE = "tradernick.notification_rules"
 TOPICS_TABLE = "tradernick.notification_topics"
 BOTS_TABLE = "tradernick.notification_bots"
 LAST_FIRED_TABLE = "tradernick.notification_last_fired"
+TRIGGERS_TABLE = "tradernick.notification_triggers"
 
 _RULE_COLS = ["rule_id", "topic_id", "kind", "scope", "enabled", "cadence_s",
               "cooldown_s", "params", "title", "updated_at", "deleted"]
@@ -59,6 +60,12 @@ async def ensure_tables(ch) -> None:
         "  topic_id String, message String, sent_count UInt32 DEFAULT 0,\n"
         "  fired_at DateTime64(3) DEFAULT now64(3)\n"
         ") ENGINE = ReplacingMergeTree(fired_at) ORDER BY topic_id"
+    )
+    await ch.command(
+        f"CREATE TABLE IF NOT EXISTS {TRIGGERS_TABLE} (\n"
+        "  rule_id String, requested_at DateTime64(3) DEFAULT now64(3)\n"
+        ") ENGINE = MergeTree ORDER BY requested_at\n"
+        "  TTL toDateTime(requested_at) + INTERVAL 1 DAY"
     )
 
 
@@ -369,6 +376,25 @@ async def delete_rule(_request, rule_id: str):
             column_names=_TOPIC_COLS,
         )
     return response.json({"ok": True, "deleted": bool(r.result_rows)})
+
+
+@bp.post("/notifications/rules/<rule_id>/trigger")
+async def trigger_rule(_request, rule_id: str):
+    """Debug 'trigger now': queue an immediate fire of this rule, bypassing the
+    cadence. Inserts a row the monitor's trigger-poller picks up within seconds
+    (it re-reads the rule from CH, so the latest saved config is used). No-op if
+    the monitor is down; returns whether the rule currently exists + is enabled."""
+    from urllib.parse import unquote
+    rule_id = unquote(rule_id)
+    ch = await client()
+    r = await ch.query(
+        f"SELECT enabled FROM {RULES_TABLE} FINAL"
+        " WHERE rule_id = {r:String} AND deleted = 0", parameters={"r": rule_id})
+    exists = bool(r.result_rows)
+    enabled = bool(r.result_rows and r.result_rows[0][0])
+    await ch.insert(TRIGGERS_TABLE, [[rule_id, _utcnow()]],
+                    column_names=["rule_id", "requested_at"])
+    return response.json({"ok": True, "rule_id": rule_id, "exists": exists, "enabled": enabled})
 
 
 @bp.get("/notifications/bots")

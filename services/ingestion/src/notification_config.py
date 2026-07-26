@@ -42,6 +42,9 @@ AUTH_TABLE = "tradernick.notification_admin_auth"
 RULES_TABLE = "tradernick.notification_rules"
 STATE_TABLE = "tradernick.notification_state"
 LAST_FIRED_TABLE = "tradernick.notification_last_fired"
+# Manual "trigger now" requests (debug): the dashboard inserts a row; the monitor
+# polls and fires that rule immediately, bypassing the cadence. Append-only, 1d TTL.
+TRIGGERS_TABLE = "tradernick.notification_triggers"
 
 _CACHE_TTL_S = 15.0
 
@@ -109,6 +112,10 @@ _DDL = [
         topic_id String, message String, sent_count UInt32 DEFAULT 0,
         fired_at DateTime64(3) DEFAULT now64(3)
     ) ENGINE = ReplacingMergeTree(fired_at) ORDER BY topic_id""",
+    f"""CREATE TABLE IF NOT EXISTS {TRIGGERS_TABLE} (
+        rule_id String, requested_at DateTime64(3) DEFAULT now64(3)
+    ) ENGINE = MergeTree ORDER BY requested_at
+      TTL toDateTime(requested_at) + INTERVAL 1 DAY""",
 ]
 
 # Static admin rules seeded (disabled) so they appear ready to configure in the
@@ -431,6 +438,38 @@ def get_rule(rule_id: str) -> dict | None:
         parameters={"r": rule_id},
     ).result_rows
     return _row_to_rule(rows[0]) if rows else None
+
+
+# ── manual triggers (debug "trigger now") ──────────────────────────────────
+
+def trigger_watermark() -> datetime:
+    """Newest existing trigger time — the poller starts here so pre-startup rows
+    (and anything left within the 1d TTL across a restart) are ignored."""
+    ch = _client()
+    _ensure_all(ch)
+    rows = ch.query(f"SELECT max(requested_at) FROM {TRIGGERS_TABLE}").result_rows
+    ts = rows[0][0] if rows else None
+    # empty table → CH returns the 1970 epoch sentinel; treat as "now".
+    if isinstance(ts, datetime) and ts.year >= 2000:
+        return ts.replace(tzinfo=None)
+    return _now()
+
+
+def read_pending_triggers(since: datetime) -> list[tuple[str, datetime]]:
+    """(rule_id, newest requested_at) for triggers requested AFTER `since`,
+    deduped per rule (a double-click fires once)."""
+    ch = _client()
+    _ensure_all(ch)
+    rows = ch.query(
+        f"SELECT rule_id, max(requested_at) FROM {TRIGGERS_TABLE} "
+        f"WHERE requested_at > {{s:DateTime64(3)}} GROUP BY rule_id",
+        parameters={"s": since},
+    ).result_rows
+    out = []
+    for r in rows:
+        t = r[1]
+        out.append((r[0], t.replace(tzinfo=None) if isinstance(t, datetime) else _now()))
+    return out
 
 
 def upsert_rule(rule_id: str, *, kind: str, scope: str, enabled: bool = True,

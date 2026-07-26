@@ -106,7 +106,7 @@ async def eval_price_change(rule: dict, slot_epoch: int = 0) -> list[dict]:
 # Stateless — each due check evaluates the last window and fires matching
 # tokens; the rolling non-overlapping windows naturally avoid repeat spam.
 
-async def eval_price_alert(rule: dict, slot_epoch: int = 0) -> list[dict]:
+async def eval_price_alert(rule: dict, slot_epoch: int = 0, force: bool = False) -> list[dict]:
     p = rule.get("params") or {}
     alerts = p.get("alerts") or []
     title = str(rule.get("title") or "Price alert").strip() or "Price alert"
@@ -127,7 +127,7 @@ async def eval_price_alert(rule: dict, slot_epoch: int = 0) -> list[dict]:
         threshold = abs(float(a.get("threshold_pct") or 0))
         if not aid or window_s <= 0 or cadence_s <= 0 or threshold <= 0:
             continue
-        if now_epoch % cadence_s >= 60:  # not this alert's firing slot
+        if not force and now_epoch % cadence_s >= 60:  # not this alert's firing slot
             continue
         due.append({"id": aid, "window_s": window_s, "threshold": threshold,
                     "limit": int(a.get("limit") or 0)})

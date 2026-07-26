@@ -10,6 +10,7 @@
   import { onMount } from 'svelte';
   import { stopDragEvents } from '$lib/actions/stopDragEvents';
   import { walletPinsStore } from '$lib/stores/walletPins.svelte';
+  import NotifTriggerButton from '$lib/components/NotifTriggerButton.svelte';
   import type { ChartInstance, ModularModule } from '$lib/components/charts/config';
 
   let { instance }: { instance: ChartInstance } = $props();
@@ -393,6 +394,7 @@
         Not sent yet · subscribe in the Telegram bot.
       {/if}
     </span>
+    <NotifTriggerButton ruleId={instance.notifRuleId ?? instance.id} beforeTrigger={sync} />
     <span class="shrink-0 text-zinc-500">{syncMsg}</span>
   </div>
 </div>

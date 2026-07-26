@@ -129,13 +129,18 @@ def _is_due(rule: dict, slot_epoch: int) -> bool:
 
 # ── evaluate + dispatch one rule ────────────────────────────────────────────
 
-async def _evaluate_and_dispatch(rule: dict, slot_epoch: int) -> int:
+async def _evaluate_and_dispatch(rule: dict, slot_epoch: int, force: bool = False) -> int:
     """Run a rule's evaluator (given the slot's wall-clock epoch) and dispatch.
-    Stateless kinds fan out directly; edge kinds run the edge+cooldown engine."""
+    Stateless kinds fan out directly; edge kinds run the edge+cooldown engine.
+    `force` (manual trigger) makes price_alert ignore its per-alert cadence gate
+    so a debug fire produces a report regardless of the wall clock."""
     evaluator = EVALUATORS.get(rule["kind"])
     if evaluator is None:
         return 0
-    firing = await evaluator(rule, slot_epoch)  # [{entity, message, group}]
+    if force and rule["kind"] == "price_alert":
+        firing = await evaluator(rule, slot_epoch, force=True)
+    else:
+        firing = await evaluator(rule, slot_epoch)  # [{entity, message, group}]
 
     if rule["kind"] in STATELESS_KINDS:
         bot = "admin" if rule["scope"] == "admin" else "user"
@@ -195,12 +200,13 @@ async def _dispatch_error(rule: dict, exc: BaseException) -> None:
         pass
 
 
-async def _run_rule(rule: dict, slot_epoch: int) -> int:
+async def _run_rule(rule: dict, slot_epoch: int, force: bool = False) -> int:
     """Run one rule with a hard 5-min cap. On failure: drop the notification
     (no retry/catch-up) and, once per failure streak, send an error notice."""
     rid = rule.get("rule_id", "?")
     try:
-        sent = await asyncio.wait_for(_evaluate_and_dispatch(rule, slot_epoch), timeout=_RULE_MAX_S)
+        sent = await asyncio.wait_for(
+            _evaluate_and_dispatch(rule, slot_epoch, force=force), timeout=_RULE_MAX_S)
         _rule_errored[rid] = False
         return sent
     except Exception as exc:  # noqa: BLE001  (incl. asyncio.TimeoutError)
@@ -232,6 +238,38 @@ async def _slot(slot_epoch: int, rules: list[dict]) -> None:
         pass
 
 
+# ── manual triggers (debug "trigger now") ──────────────────────────────────
+
+_TRIGGER_POLL_S = 3.0  # how often to check for manual triggers
+
+
+async def _trigger_poller() -> None:
+    """Poll the triggers table and fire any requested rule IMMEDIATELY (force=True,
+    bypassing the cadence). Independent of the slot loop → ~seconds of latency,
+    for debugging. Starts at the current watermark so old rows aren't replayed."""
+    try:
+        since = nc.trigger_watermark()
+    except Exception as exc:  # noqa: BLE001
+        log.warning("trigger watermark failed: %s", exc)
+        since = _utcnow()
+    while True:
+        await asyncio.sleep(_TRIGGER_POLL_S)
+        try:
+            pending = nc.read_pending_triggers(since)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("trigger poll failed: %s", exc)
+            continue
+        if not pending:
+            continue
+        since = max(t for _, t in pending)
+        for rule_id, _ in pending:
+            rule = nc.get_rule(rule_id)
+            if not rule:
+                continue
+            log.info("manual trigger: rule %s (%s)", rule_id, rule.get("kind"))
+            asyncio.create_task(_run_rule(rule, int(time.time()), force=True))
+
+
 async def main():
     log.info("monitors.evaluate up (slot model)")
     try:
@@ -239,6 +277,7 @@ async def main():
     except Exception as exc:  # noqa: BLE001
         log.warning("seed_defaults failed (will retry via slots): %s", exc)
     await ch_status.bootstrap_counter(STREAM_NAME)
+    asyncio.create_task(_trigger_poller())  # debug "trigger now" path
     inflight: set[asyncio.Task] = set()
     while True:
         # Wake at the start of each wall-clock minute — the slot boundary.
