@@ -57,7 +57,7 @@
     k === 'token' ? r.token
       : k === 'net' || k === 'side' ? netUsd(r)
       : k === 'netsize' ? netSize(r)
-      : k === 'netlong' ? (lsFrac(r) ?? -1) // sort by the long-share %
+      : k === 'netlong' ? netLong(r) // primary net; ratio tie-break handled in sort()
       : ((r[k as keyof Row] as number) ?? 0);
   // Distinct tokens in the group (plus the current pick, so it survives a reload where
   // that token drops out), sorted for the selector.
@@ -81,6 +81,14 @@
     );
     const k = sortKey, dir = sortDir;
     arr.sort((a, b) => {
+      // Net Long: primary = actual net (# long − # short); tie-break = the
+      // long/short ratio (long-share %), so 6/3 (+3, ratio 2) ranks above
+      // 9/6 (+3, ratio 1.5). Both levels follow the sort direction.
+      if (k === 'netlong') {
+        const dn = netLong(a) - netLong(b);
+        if (dn !== 0) return dn * dir;
+        return ((lsFrac(a) ?? -1) - (lsFrac(b) ?? -1)) * dir;
+      }
       const av = sv(a, k), bv = sv(b, k);
       if (typeof av === 'string' || typeof bv === 'string') return String(av).localeCompare(String(bv)) * dir;
       return (av - bv) * dir;
@@ -162,7 +170,7 @@
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('unrealized_pnl')} title="Σ unrealized PnL">uPnL{arrow('unrealized_pnl')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('long_usd')} title="Σ long positions ($); count in ()">Longs{arrow('long_usd')}</th>
             <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('short_usd')} title="Σ short positions ($); count in ()">Shorts{arrow('short_usd')}</th>
-            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('netlong')} title="# long − # short wallets; () = longs/shorts wallet counts. Sorts by the long share.">Net Long{arrow('netlong')}</th>
+            <th class="text-right px-3 py-1.5 font-normal cursor-pointer hover:text-zinc-200 select-none" onclick={() => onSort('netlong')} title="# long − # short wallets; () = longs/shorts wallet counts. Sorts by net, then the long/short ratio.">Net Long{arrow('netlong')}</th>
           </tr>
         </thead>
         <tbody>
