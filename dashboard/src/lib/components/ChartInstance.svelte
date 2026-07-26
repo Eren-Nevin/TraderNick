@@ -14,6 +14,7 @@
   import PositionsAlertWidget from '$lib/components/PositionsAlertWidget.svelte';
   import PositionsChangeWidget from '$lib/components/PositionsChangeWidget.svelte';
   import BacktrackerAlertWidget from '$lib/components/BacktrackerAlertWidget.svelte';
+  import ModularAlertWidget from '$lib/components/ModularAlertWidget.svelte';
   import GroupSnapshotWalletsDialog from '$lib/components/GroupSnapshotWalletsDialog.svelte';
   // Trading Pit query params → URLSearchParams (shared by loadKey + fetch).
   const _TP_LB_SECS: Record<string, number> = { '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '4h': 14400 };
@@ -9641,6 +9642,8 @@
       <PositionsChangeWidget {instance} />
     {:else if instance.kind === 'backtracker_alert'}
       <BacktrackerAlertWidget {instance} />
+    {:else if instance.kind === 'modular_alert'}
+      <ModularAlertWidget {instance} />
     {:else if instance.kind === 'early_movers' && instance.viewMode !== 'chart'}
       {@const emBody = (data.length > 0 ? (data[0] as unknown as { em?: Record<string, unknown> }).em : undefined) ?? {}}
       <EarlyMoversTable

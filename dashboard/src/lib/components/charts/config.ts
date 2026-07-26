@@ -457,6 +457,7 @@ export type ChartKind =
   | 'positions_alert'
   | 'positions_change'
   | 'backtracker_alert'
+  | 'modular_alert'
   | 'smart_wallets_table'
   | 'smart_wallets_dynamic'
   | 'smart_wallets_cutoff'
@@ -604,6 +605,7 @@ export const CHART_KIND_LABELS: Record<ChartKind, string> = {
   positions_alert: 'Positions Alert',
   positions_change: 'Positions Change',
   backtracker_alert: 'Backtracker Alert',
+  modular_alert: 'Modular Token Leaderboard',
   token_leaderboard: 'Token Leaderboard',
   smart_wallets_table: 'Smart Wallets (Fixed)',
   smart_wallets_dynamic: 'Smart Wallets (Dynamic)',
@@ -1374,7 +1376,7 @@ export const CHART_CATEGORIES: ChartCategory[] = [
  *  guards cover them automatically. */
 export function isNotifWidgetKind(kind: ChartKind): boolean {
   return kind === 'notification' || kind === 'positions_alert' || kind === 'positions_change'
-    || kind === 'backtracker_alert';
+    || kind === 'backtracker_alert' || kind === 'modular_alert';
 }
 
 export function chartKindCategory(kind: ChartKind): ChartCategory | null {
@@ -1671,6 +1673,27 @@ export function smartWalletMetricDef(key: SmartWalletMetric | undefined): SmartW
 export type ChartWidth = 1 | 2 | 3 | 4;
 export type ChartHeight = 1 | 2 | 3 | 4;
 
+// One module inside a Modular Token Leaderboard (kind 'modular_alert'). Only the
+// fields for the module's `type` are meaningful; the rest are undefined. Each
+// module maps to one of the standalone notif kinds' data path.
+export type ModularModule = {
+  id: string;
+  type: 'price_move' | 'positions' | 'positions_change' | 'spot_vd';
+  // price_move (like one Price Alert condition)
+  threshold?: number;
+  window?: '1m' | '5m' | '15m' | '30m' | '1h' | '4h' | '1d';
+  // positions (like Positions Alert) + positions_change (like Positions Change)
+  groupId?: string | null;
+  posCriteria?: 'net_long' | 'net_size';
+  staleness?: '1h' | '4h' | '1d' | '3d' | '7d' | '14d' | '30d';
+  pcCriteria?: 'net_pos_change' | 'net_open_long' | 'net_flip';
+  pcWindow?: '5m' | '15m' | '30m' | '1h' | '4h';
+  pcRankBy?: 'usd' | 'wallets';
+  // spot_vd (like Backtracker Alert)
+  svCriteria?: 'spot_vd_pct' | 'vol_pct';
+  svLookback?: '15m' | '30m' | '1h' | '4h' | '12h' | '1d' | '7d';
+};
+
 export type ChartInstance = {
   id: string;
   kind: ChartKind;
@@ -1879,6 +1902,17 @@ export type ChartInstance = {
   blaCadence?: '1m' | '5m' | '15m' | '1h';                          // report cadence
   blaCriteria?: 'spot_vd_pct' | 'vol_pct';                          // rank by
   blaTopN?: '3' | '5' | '10' | '20';
+  // Modular Token Leaderboard widget (kind 'modular_alert'). Reuses notifRuleId /
+  // notifTitle / notifMuted. A list of modules (each = one of the other notif
+  // kinds); the result is the INTERSECTION of every module's long set and of
+  // every module's short set. Shared top-N + cadence. Columns (≤4) are picked
+  // from the modules' outputs (keyed 'moduleId:colKey'); default none = tokens
+  // only. mlPrimary = the module id whose metric sorts the final list ('' = first).
+  mlTopN?: '3' | '5' | '10' | '20';
+  mlCadence?: '1m' | '5m' | '15m' | '1h';
+  mlPrimary?: string;
+  mlColumns?: string[];
+  mlModules?: ModularModule[];
   /** Time column format: relative ('3m ago') or standard clock. Display-only. */
   tpTimeFormat?: 'relative' | 'standard';
   // ohlcv only
@@ -2923,6 +2957,18 @@ export function newChartInstance(
     base.blaCadence = '15m';
     base.blaCriteria = 'spot_vd_pct';
     base.blaTopN = '5';
+  }
+  if (kind === 'modular_alert') {
+    base.notifRuleId = base.id;
+    base.notifTitle = 'Modular leaderboard';
+    base.notifMuted = false;
+    base.mlTopN = '10';
+    base.mlCadence = '5m';
+    base.mlPrimary = '';
+    base.mlColumns = [];
+    base.mlModules = [];
+    base.width = 2;   // this widget needs room — default to a 2×2 tile
+    base.height = 2;
   }
   if (kind === 'ohlcv') {
     base.pin = false;

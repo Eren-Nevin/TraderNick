@@ -15,6 +15,7 @@ against notification_state to decide what actually fires.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timezone
@@ -446,6 +447,214 @@ def _format_backtracker_alert(title: str, criteria: str, lookback: str,
     return "\n".join(lines)
 
 
+# ── modular_alert (Modular Token Leaderboard) ───────────────────────────────
+# One rule + one topic holding a LIST of modules, each = one of the standalone
+# notif kinds' data path. Every module yields a (longs, shorts) token set; the
+# result is the INTERSECTION of all modules' longs and of all modules' shorts
+# (cap-then-intersect: rank modules pre-cap each side at the shared top-N,
+# price_move modules are pure threshold filters). The final lists are ordered by
+# the PRIMARY module's signed metric (longs desc, shorts most-negative first) and
+# truncated to top-N. Columns (≤4) are selected per module. Because it's an AND,
+# longs/shorts counts are naturally asymmetric. Stateless, cadence-gated.
+#
+# Each module helper returns (longs:set, shorts:set, colvals:dict, rank:dict):
+#   colvals[token] = {colKey: rendered_string}; rank[token] = signed float metric.
+
+async def _mod_price_move(ch, m: dict, top_n: int):
+    window_s = int(m.get("window_s") or 0)
+    thr = abs(float(m.get("threshold_pct") or 0))
+    res = await ch.query(
+        "SELECT token, argMax(close, time) AS cur, argMin(close, time) AS past "
+        "FROM tradernick.hl_ohlcv_1m "
+        "WHERE time >= now() - INTERVAL {w:UInt32} SECOND AND time <= now() GROUP BY token",
+        parameters={"w": window_s},
+    )
+    longs, shorts, colvals, rank = set(), set(), {}, {}
+    for token, cur, past in res.result_rows:
+        if not past:
+            continue
+        pct = (float(cur) / float(past) - 1.0) * 100.0
+        rank[token] = pct
+        colvals[token] = {"dpct": _fmt_pct(pct)}
+        if pct >= thr:
+            longs.add(token)
+        elif pct <= -thr:
+            shorts.add(token)
+    return longs, shorts, colvals, rank
+
+
+async def _mod_positions(hc, m: dict, top_n: int):
+    url = (f"{_DATA_SERVER_URL}/hyperliquid/group_snapshot"
+           f"?group={m.get('group_id')}&staleness={m.get('staleness')}&as_of=live")
+    resp = await hc.get(url)
+    resp.raise_for_status()
+    rows = resp.json().get("rows", []) or []
+    crit = m.get("criteria")
+    toks = []
+    for row in rows:
+        n_long = int(row.get("n_long") or 0)
+        n_short = int(row.get("n_short") or 0)
+        if n_long == 0 and n_short == 0:
+            continue
+        long_usd = float(row.get("long_usd") or 0)
+        short_usd = float(row.get("short_usd") or 0)
+        toks.append({"token": row.get("token", "?"), "n_long": n_long, "n_short": n_short,
+                     "net_long": n_long - n_short, "net_size": long_usd - short_usd})
+    metric = (lambda t: t["net_size"]) if crit == "net_size" else (lambda t: t["net_long"])
+    keyfn = lambda t: (metric(t), _ratio(t["n_long"], t["n_short"]))
+    longs = {t["token"] for t in [x for x in sorted(toks, key=keyfn, reverse=True) if metric(x) > 0][:top_n]}
+    shorts = {t["token"] for t in [x for x in sorted(toks, key=keyfn) if metric(x) < 0][:top_n]}
+    colvals, rank = {}, {}
+    for t in toks:
+        rank[t["token"]] = float(metric(t))
+        colvals[t["token"]] = {
+            "net_long": f"{t['net_long']:+d}",
+            "net_size": _fmt_money(t["net_size"]),
+            "ls": f"{t['n_long']}/{t['n_short']}",
+        }
+    return longs, shorts, colvals, rank
+
+
+def _mod_pc_cell(a: dict) -> str:
+    return f"{_fmt_money(a.get('usd') or 0)} ({int(a.get('wallets') or 0):+d})"
+
+
+async def _mod_positions_change(hc, m: dict, top_n: int):
+    url = (f"{_DATA_SERVER_URL}/hyperliquid/positions_change"
+           f"?lookback={m.get('window')}&group={m.get('group_id')}")
+    resp = await hc.get(url)
+    resp.raise_for_status()
+    rows = resp.json().get("rows", []) or []
+    crit, rank_by = m.get("criteria"), m.get("rank_by")
+    val = lambda r: (r.get(crit, {}) or {}).get(rank_by, 0) or 0
+    toks = [r for r in rows if val(r) != 0]
+    longs = {r["token"] for r in [x for x in sorted(toks, key=val, reverse=True) if val(x) > 0][:top_n]}
+    shorts = {r["token"] for r in [x for x in sorted(toks, key=val) if val(x) < 0][:top_n]}
+    colvals, rank = {}, {}
+    for r in toks:
+        rank[r["token"]] = float(val(r))
+        colvals[r["token"]] = {
+            "net_pos_change": _mod_pc_cell(r.get("net_pos_change") or {}),
+            "net_open_long": _mod_pc_cell(r.get("net_open_long") or {}),
+            "net_flip": _mod_pc_cell(r.get("net_flip") or {}),
+        }
+    return longs, shorts, colvals, rank
+
+
+async def _mod_spot_vd(hc, m: dict, top_n: int):
+    url = (f"{_DATA_SERVER_URL}/hyperliquid/backtracker_leaderboard"
+           f"?lookback={m.get('lookback')}&as_of=now")
+    resp = await hc.get(url)
+    resp.raise_for_status()
+    rows = resp.json().get("rows", []) or []
+    crit = m.get("criteria")
+    val = lambda r: (None if r.get(crit) is None else float(r.get(crit)))
+    toks = [r for r in rows if val(r) is not None]
+    longs = {r["token"] for r in [x for x in sorted(toks, key=val, reverse=True) if val(x) > 0][:top_n]}
+    shorts = {r["token"] for r in [x for x in sorted(toks, key=val) if val(x) < 0][:top_n]}
+    colvals, rank = {}, {}
+    for r in toks:
+        rank[r["token"]] = float(val(r))
+        colvals[r["token"]] = {
+            "spot_vd_pct": _bla_pct(r.get("spot_vd_pct")),
+            "vol_pct": _bla_pct(r.get("vol_pct")),
+        }
+    return longs, shorts, colvals, rank
+
+
+_MOD_RUNNERS = {
+    "positions": _mod_positions,
+    "positions_change": _mod_positions_change,
+    "spot_vd": _mod_spot_vd,
+}
+
+
+def _mod_col_label(m: dict, ck: str) -> str:
+    t = m.get("type")
+    if t == "price_move":
+        return "Δ" + _humanize_seconds(int(m.get("window_s") or 0))
+    return {
+        "net_long": "NetL", "net_size": "NetSz", "ls": "L/S",
+        "net_pos_change": "Pos", "net_open_long": "Open", "net_flip": "Flip",
+        "spot_vd_pct": "SpotVD", "vol_pct": "VolΔ",
+    }.get(ck, ck)
+
+
+async def eval_modular_alert(rule: dict, slot_epoch: int = 0) -> list[dict]:
+    p = rule.get("params") or {}
+    modules = p.get("modules") or []
+    if not modules:
+        return []
+    top_n = max(int(p.get("top_n") or 10), 1)
+    columns = p.get("columns") or []
+    primary = str(p.get("primary") or "")
+    title = str(rule.get("title") or "Modular leaderboard").strip() or "Modular leaderboard"
+
+    ch = await async_client()
+
+    async def run(m: dict):
+        t = m.get("type")
+        if t == "price_move":
+            return await _mod_price_move(ch, m, top_n)
+        runner = _MOD_RUNNERS.get(t)
+        if runner is None:
+            return set(), set(), {}, {}
+        return await runner(hc, m, top_n)
+
+    async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as hc:
+        results = await asyncio.gather(*[run(m) for m in modules], return_exceptions=True)
+
+    # Any module that errored → abort the whole run. A missing module would
+    # silently loosen the AND, so we'd rather send nothing this tick.
+    mods: list[tuple[dict, tuple]] = []
+    for m, r in zip(modules, results):
+        if isinstance(r, Exception):
+            log.warning("modular_alert module %s failed: %s", m.get("type"), r)
+            return []
+        mods.append((m, r))
+
+    inter_long = set.intersection(*[r[0] for _, r in mods])
+    inter_short = set.intersection(*[r[1] for _, r in mods])
+    if not inter_long and not inter_short:
+        return []
+
+    # Primary module orders the final lists (longs desc, shorts most-negative first).
+    prim = next((r for (m, r) in mods if m["id"] == primary), None) or mods[0][1]
+    prank = prim[3]
+    longs = sorted(inter_long, key=lambda t: prank.get(t, 0.0), reverse=True)[:top_n]
+    shorts = sorted(inter_short, key=lambda t: prank.get(t, 0.0))[:top_n]
+
+    msg = _format_modular(title, top_n, mods, columns, longs, shorts)
+    return [{"entity": rule["rule_id"], "group": None, "message": msg}]
+
+
+def _format_modular(title: str, top_n: int, mods: list[tuple[dict, tuple]],
+                    columns: list, longs: list[str], shorts: list[str]) -> str:
+    mby = {m["id"]: (m, r) for (m, r) in mods}
+    cols = []  # (mid, ck, label)
+    for c in columns:
+        mid, _, ck = str(c).partition(":")
+        if mid in mby:
+            cols.append((mid, ck, _mod_col_label(mby[mid][0], ck)))
+    n = len(mods)
+    lines = [f"🔔 {title}", f"Top {top_n} · {n} module{'s' if n != 1 else ''} · ∩ (AND)"]
+
+    def line(token: str) -> str:
+        parts = [token]
+        for mid, ck, label in cols:
+            v = mby[mid][1][2].get(token, {}).get(ck, "—")
+            parts.append(f"{label} {v}")
+        return "  ".join(parts)
+
+    if longs:
+        lines += ["", f"📈 Longs ({len(longs)})"]
+        lines += [line(t) for t in longs]
+    if shorts:
+        lines += ["", f"📉 Shorts ({len(shorts)})"]
+        lines += [line(t) for t in shorts]
+    return "\n".join(lines)
+
+
 # ── admin_job_fail ─────────────────────────────────────────────────────────
 
 async def eval_admin_job_fail(rule: dict, slot_epoch: int = 0) -> list[dict]:
@@ -573,6 +782,7 @@ EVALUATORS = {
     "positions_alert": eval_positions_alert,
     "positions_change": eval_positions_change,
     "backtracker_alert": eval_backtracker_alert,
+    "modular_alert": eval_modular_alert,
     "price_change": eval_price_change,   # legacy single-condition; kept for compat
     "admin_job_fail": eval_admin_job_fail,
     "admin_stale_data": eval_admin_stale_data,
@@ -580,4 +790,5 @@ EVALUATORS = {
 
 # Kinds whose evaluator handles its OWN cadence/dedup and returns only what
 # should fire NOW → the engine dispatches directly, no edge/cooldown state.
-STATELESS_KINDS = {"price_alert", "positions_alert", "positions_change", "backtracker_alert"}
+STATELESS_KINDS = {"price_alert", "positions_alert", "positions_change",
+                   "backtracker_alert", "modular_alert"}

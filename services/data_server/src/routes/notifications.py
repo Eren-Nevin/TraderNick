@@ -128,6 +128,91 @@ _PCHG_CRITERIA = {"net_pos_change", "net_open_long", "net_flip"}
 # cadence reuses _CADENCE_S. No wallet group.
 _BLA_LOOKBACKS = {"15m", "30m", "1h", "4h", "12h", "1d", "7d"}
 _BLA_CRITERIA = {"spot_vd_pct", "vol_pct"}
+# Modular Token Leaderboard: the selectable columns per module type (keys the
+# evaluator knows how to render). Column ids are 'moduleId:colKey'.
+_MOD_COLS = {
+    "price_move": {"dpct"},
+    "positions": {"net_long", "net_size", "ls"},
+    "positions_change": {"net_pos_change", "net_open_long", "net_flip"},
+    "spot_vd": {"spot_vd_pct", "vol_pct"},
+}
+_MOD_MAX_COLS = 4
+
+
+def _clean_modules(raw) -> tuple[list[dict], bool]:
+    """Normalize the modular widget's module list → compact param dicts (one per
+    module, only the fields for its type). Returns (modules, has_incomplete);
+    an incomplete module (e.g. a positions module with no group) pauses the whole
+    widget. Unknown-type / id-less modules are dropped."""
+    out: list[dict] = []
+    incomplete = False
+    for m in (raw or []):
+        if not isinstance(m, dict):
+            continue
+        mid = str(m.get("id") or "").strip()
+        mtype = str(m.get("type") or "")
+        if not mid or mtype not in _MOD_COLS:
+            continue
+        if mtype == "price_move":
+            try:
+                thr = abs(float(m.get("threshold") or 0))
+            except (TypeError, ValueError):
+                thr = 0.0
+            window_s = _ALERT_WINDOW_S.get(str(m.get("window") or ""))
+            if thr <= 0 or not window_s:
+                incomplete = True
+                continue
+            out.append({"id": mid, "type": mtype, "threshold_pct": thr, "window_s": window_s})
+        elif mtype == "positions":
+            gid = str(m.get("groupId") or "").strip()
+            crit = "net_size" if m.get("posCriteria") == "net_size" else "net_long"
+            stale = str(m.get("staleness") or "1d")
+            if stale not in _PA_STALENESS:
+                stale = "1d"
+            if not gid:
+                incomplete = True
+                continue
+            out.append({"id": mid, "type": mtype, "group_id": gid,
+                        "criteria": crit, "staleness": stale})
+        elif mtype == "positions_change":
+            gid = str(m.get("groupId") or "").strip()
+            crit = str(m.get("pcCriteria") or "net_pos_change")
+            if crit not in _PCHG_CRITERIA:
+                crit = "net_pos_change"
+            window = str(m.get("pcWindow") or "15m")
+            if window not in _PCHG_WINDOWS:
+                window = "15m"
+            rank_by = "wallets" if m.get("pcRankBy") == "wallets" else "usd"
+            if not gid:
+                incomplete = True
+                continue
+            out.append({"id": mid, "type": mtype, "group_id": gid, "criteria": crit,
+                        "window": window, "rank_by": rank_by})
+        elif mtype == "spot_vd":
+            crit = str(m.get("svCriteria") or "spot_vd_pct")
+            if crit not in _BLA_CRITERIA:
+                crit = "spot_vd_pct"
+            lookback = str(m.get("svLookback") or "1h")
+            if lookback not in _BLA_LOOKBACKS:
+                lookback = "1h"
+            out.append({"id": mid, "type": mtype, "criteria": crit, "lookback": lookback})
+    return out, incomplete
+
+
+def _clean_mod_columns(raw, modules: list[dict]) -> list[str]:
+    """Keep only 'moduleId:colKey' entries that reference a present module + a
+    valid column for its type; cap at _MOD_MAX_COLS, preserving order."""
+    by_id = {m["id"]: m["type"] for m in modules}
+    out: list[str] = []
+    for c in (raw or []):
+        cid = str(c)
+        mid, _, ck = cid.partition(":")
+        mtype = by_id.get(mid)
+        if mtype and ck in _MOD_COLS.get(mtype, set()) and cid not in out:
+            out.append(cid)
+        if len(out) >= _MOD_MAX_COLS:
+            break
+    return out
 
 
 def _clean_alerts(raw) -> list[dict]:
@@ -163,6 +248,7 @@ async def put_rule(request):
       price_alert (default): {alerts: [{id, threshold, window, cadence, limit}], tokens?}
       positions_alert:       {group_id, criteria, top_n, staleness, cadence}
       backtracker_alert:     {criteria, top_n, lookback, cadence}  (no group)
+      modular_alert:         {top_n, cadence, primary, columns[], modules[]}  (AND of modules)
     A widget is enabled iff it's configured AND not paused."""
     b = request.json or {}
     rule_id = str(b.get("rule_id") or "").strip()
@@ -217,6 +303,22 @@ async def put_rule(request):
         enabled = 0 if paused else 1
         kind = "backtracker_alert"
         extra = {}
+    elif wtype == "modular_alert":
+        title = str(b.get("title") or "Modular leaderboard").strip() or "Modular leaderboard"
+        top_n = min(max(int(b.get("top_n") or 10), 1), 50)
+        cadence_s = _CADENCE_S.get(str(b.get("cadence") or "5m"), 300)
+        modules, incomplete = _clean_modules(b.get("modules"))
+        columns = _clean_mod_columns(b.get("columns"), modules)
+        primary = str(b.get("primary") or "").strip()
+        if primary and primary not in {m["id"] for m in modules}:
+            primary = ""
+        params = {"top_n": top_n, "primary": primary, "columns": columns,
+                  "modules": modules}
+        # AND semantics: an incomplete module would silently loosen the intersection,
+        # so any incomplete module (or none at all) pauses the whole widget.
+        enabled = 1 if (modules and not incomplete and not paused) else 0
+        kind = "modular_alert"
+        extra = {"modules": len(modules), "incomplete": incomplete}
     else:
         title = str(b.get("title") or "Price alert").strip() or "Price alert"
         alerts = _clean_alerts(b.get("alerts"))

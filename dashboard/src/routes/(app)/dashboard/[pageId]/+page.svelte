@@ -32,7 +32,8 @@
     'notification',
     'positions_alert',
     'positions_change',
-    'backtracker_alert'
+    'backtracker_alert',
+    'modular_alert'
   ];
 
   function defaultLayout(): ChartInstanceT[] {

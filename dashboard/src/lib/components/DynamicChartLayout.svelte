@@ -22,6 +22,7 @@
     type ChartCategory,
     type ChartInstance as ChartInstanceT,
     type ChartKind,
+    type ModularModule as ModularModuleT,
     type ChartTemplate,
     type MAConfig
   } from '$lib/components/charts/config';
@@ -975,6 +976,45 @@
         inst.blaCriteria = r.blaCriteria === 'vol_pct' ? 'vol_pct' : 'spot_vd_pct';
         const BLN = ['3', '5', '10', '20'];
         inst.blaTopN = (BLN.includes(r.blaTopN as string) ? r.blaTopN : '5') as NonNullable<ChartInstanceT['blaTopN']>;
+      }
+      if (inst.kind === 'modular_alert') {
+        inst.notifRuleId = typeof r.notifRuleId === 'string' && r.notifRuleId ? r.notifRuleId : inst.id;
+        inst.notifTitle = typeof r.notifTitle === 'string' ? r.notifTitle : 'Modular leaderboard';
+        inst.notifMuted = r.notifMuted === true;
+        const MN = ['3', '5', '10', '20'];
+        inst.mlTopN = (MN.includes(r.mlTopN as string) ? r.mlTopN : '10') as NonNullable<ChartInstanceT['mlTopN']>;
+        const MCAD = ['1m', '5m', '15m', '1h'];
+        inst.mlCadence = (MCAD.includes(r.mlCadence as string) ? r.mlCadence : '5m') as NonNullable<ChartInstanceT['mlCadence']>;
+        const inSet = <T,>(v: unknown, arr: readonly T[], d: T): T => (arr.includes(v as T) ? (v as T) : d);
+        const mods = (Array.isArray(r.mlModules) ? r.mlModules : [])
+          .filter((m: unknown): m is Record<string, unknown> => !!m && typeof m === 'object')
+          .map((m: Record<string, unknown>) => {
+            const id = typeof m.id === 'string' && m.id ? m.id : Math.random().toString(36).slice(2);
+            const type = m.type;
+            if (type === 'price_move')
+              return { id, type, threshold: typeof m.threshold === 'number' ? m.threshold : 1,
+                window: inSet(m.window, ['1m', '5m', '15m', '30m', '1h', '4h', '1d'] as const, '1h') };
+            if (type === 'positions')
+              return { id, type, groupId: typeof m.groupId === 'string' ? m.groupId : null,
+                posCriteria: m.posCriteria === 'net_size' ? 'net_size' : 'net_long',
+                staleness: inSet(m.staleness, ['1h', '4h', '1d', '3d', '7d', '14d', '30d'] as const, '1d') };
+            if (type === 'positions_change')
+              return { id, type, groupId: typeof m.groupId === 'string' ? m.groupId : null,
+                pcCriteria: inSet(m.pcCriteria, ['net_pos_change', 'net_open_long', 'net_flip'] as const, 'net_pos_change'),
+                pcWindow: inSet(m.pcWindow, ['5m', '15m', '30m', '1h', '4h'] as const, '15m'),
+                pcRankBy: m.pcRankBy === 'wallets' ? 'wallets' : 'usd' };
+            if (type === 'spot_vd')
+              return { id, type, svCriteria: m.svCriteria === 'vol_pct' ? 'vol_pct' : 'spot_vd_pct',
+                svLookback: inSet(m.svLookback, ['15m', '30m', '1h', '4h', '12h', '1d', '7d'] as const, '1h') };
+            return null;
+          })
+          .filter(Boolean) as ModularModuleT[];
+        inst.mlModules = mods;
+        const ids = new Set(mods.map((m) => m.id));
+        inst.mlColumns = (Array.isArray(r.mlColumns) ? r.mlColumns : [])
+          .filter((c: unknown) => typeof c === 'string' && ids.has((c as string).split(':')[0]))
+          .slice(0, 4) as string[];
+        inst.mlPrimary = typeof r.mlPrimary === 'string' && ids.has(r.mlPrimary) ? r.mlPrimary : '';
       }
       if (inst.kind === 'backtracker') {
         // Persist the Position-Changes dialog "Only <group>" filter (default ON):
