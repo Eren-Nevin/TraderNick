@@ -15,6 +15,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 
@@ -3867,6 +3868,11 @@ async def trading_pit(request):
 
 _GS_STALE = {"1h": 3600, "4h": 14400, "1d": 86400, "3d": 259200, "7d": 604800, "14d": 1209600, "30d": 2592000}
 _GS_PRICE_LB = {"5m": 300, "15m": 900, "1h": 3600, "4h": 14400, "1d": 86400}
+# Live-position source for group_snapshot: 'rollup' (default) reads the fills-derived
+# hl_positions_now current-position rollup (fast, sweep-accurate); 'fills' is the
+# previous on-the-fly fills-window reconstruction. Per-request override ?pos_src=,
+# or flip globally via the GROUP_SNAPSHOT_POS_SRC env (restart data_server).
+_GS_POS_SRC = os.environ.get("GROUP_SNAPSHOT_POS_SRC", "rollup")
 
 
 @bp.get("/hyperliquid/group_snapshot")
@@ -3882,7 +3888,9 @@ async def group_snapshot(request):
     reconstructs each wallet's position to NOW (snapshot + net fills since the bucket);
     entry/uPnL are then approximate (snapshot entry carried for pre-existing positions,
     fills-VWAP for ones opened since; uPnL marked to the last fill price).
-    Params: group, staleness, as_of, min_pos ($ per-position floor, pre-aggregation)."""
+    Params: group, staleness, as_of, min_pos ($ per-position floor, pre-aggregation),
+    pos_src (live position source: 'rollup' default = hl_positions_now; 'fills' =
+    previous on-the-fly reconstruction, for fast switch-back)."""
     if not request.args.get("group"):
         return response.json({"error": "missing group"}, status=400)
     stale = request.args.get("staleness", "7d")
@@ -3923,6 +3931,10 @@ async def group_snapshot(request):
     if min_pos > 0:
         min_clause = " WHERE sz >= {mp:Float64}"
         params["mp"] = min_pos
+    # Live position source: 'rollup' (default) vs 'fills' (previous behavior).
+    pos_src = request.args.get("pos_src", _GS_POS_SRC)
+    if pos_src not in ("rollup", "fills"):
+        pos_src = "rollup"
 
     if as_of == "live":
         # Side/size come from HL's OWN position accounting, not from
@@ -3947,26 +3959,48 @@ async def group_snapshot(request):
         # avg_entry when the (stale) snapshot has the position, else the mark
         # (→ uPnL ≈ 0 for fresh positions). NOT a fills VWAP — net signed size is
         # ~0 for a flipper, so notional/size blows up (observed WLD ≈ -3.24e12).
+        #
+        # The position subquery `f` (token, wallet, cur = signed position) comes
+        # from ONE of two sources; both are sweep-accurate and feed the SAME entry
+        # (ph) + mark (mk) joins, so their output is identical bar the ~0.01%
+        # unresolvable mixed-side same-ms batches:
+        #   pos_src='rollup' (default) — the fills-derived hl_positions_now rollup,
+        #     resolving the sweep terminal inline from its argMax/max states. Fast,
+        #     complete, no on-the-fly window scan. Staleness via last_time.
+        #   pos_src='fills'  — the previous on-the-fly reconstruction (kept for a
+        #     fast switch-back via ?pos_src=fills or the GROUP_SNAPSHOT_POS_SRC env).
         entry_expr = "coalesce(nullIf(ph.entry, 0), mk.mark)"
+        if pos_src == "rollup":
+            f_sub = (
+                "SELECT token, wallet,"
+                " if(argMaxMerge(dir_state) >= 0, argMaxMerge(term_hi), argMaxMerge(term_lo)) AS cur,"
+                " maxMerge(last_time) AS lt"
+                " FROM tradernick.hl_positions_now"
+                " WHERE " + member + tok_filter +
+                " GROUP BY token, wallet"
+                " HAVING abs(cur) > 1e-9 AND lt > now() - INTERVAL {st:UInt32} SECOND"
+            )
+        else:
+            f_sub = (
+                "SELECT token, wallet, cur FROM ("
+                "  SELECT token, wallet, if(sum(sg) >= 0, max(pa), min(pa)) AS cur"
+                "  FROM ("
+                "    SELECT token, wallet, if(side='B', size, -size) AS sg,"
+                "      start_position + if(side='B', size, -size) AS pa,"
+                "      time = max(time) OVER (PARTITION BY token, wallet) AS is_latest"
+                "    FROM tradernick.hl_fills"
+                "    WHERE time > now() - INTERVAL {st:UInt32} SECOND" + tok_filter + " AND " + member +
+                "  )"
+                "  WHERE is_latest"
+                "  GROUP BY token, wallet"
+                ") WHERE abs(cur) > 1e-9"
+            )
         pos_sql = (
             "SELECT f.token AS token, f.wallet AS wallet, f.cur AS signed,"
             " abs(f.cur) * mk.mark AS sz,"
             " " + entry_expr + " AS entry,"
             " f.cur * (mk.mark - " + entry_expr + ") AS upnl"
-            " FROM ("
-            "   SELECT token, wallet, cur FROM ("
-            "     SELECT token, wallet, if(sum(sg) >= 0, max(pa), min(pa)) AS cur"
-            "     FROM ("
-            "       SELECT token, wallet, if(side='B', size, -size) AS sg,"
-            "         start_position + if(side='B', size, -size) AS pa,"
-            "         time = max(time) OVER (PARTITION BY token, wallet) AS is_latest"
-            "       FROM tradernick.hl_fills"
-            "       WHERE time > now() - INTERVAL {st:UInt32} SECOND" + tok_filter + " AND " + member +
-            "     )"
-            "     WHERE is_latest"
-            "     GROUP BY token, wallet"
-            "   ) WHERE abs(cur) > 1e-9"
-            " ) f"
+            " FROM (" + f_sub + ") f"
             " LEFT JOIN ("
             "   SELECT token, wallet, argMax(avg_entry, time) AS entry"
             "   FROM tradernick.hl_position_history"
@@ -4008,7 +4042,7 @@ async def group_snapshot(request):
             "entry": float(en or 0), "unrealized_pnl": float(up),
             "categories": list(cats) if cats else [],
         } for (w, sg, sz, en, up, cats) in r.result_rows]
-        return response.json({"token": token_one, "as_of": as_of, "wallets": wrows})
+        return response.json({"token": token_one, "as_of": as_of, "pos_src": pos_src, "wallets": wrows})
 
     r = await ch.query(
         "SELECT token, sum(sz) AS size_usd, sum(sz*entry)/nullIf(sum(sz),0) AS entry, sum(upnl) AS upnl,"
@@ -4044,6 +4078,7 @@ async def group_snapshot(request):
 
     return response.json({
         "bucket": int(bucket.replace(tzinfo=timezone.utc).timestamp()),
+        "pos_src": pos_src,
         "rows": rows,
     })
 
