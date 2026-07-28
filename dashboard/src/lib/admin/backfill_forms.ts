@@ -363,7 +363,19 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
     description: 'Rebuild selected derived-table partitions from the source ' +
       'FINAL via REPLACE PARTITION. Idempotent — partitions outside the ' +
       'window are untouched. Window narrows to the partitions overlapping ' +
-      'since/until. (REPLACE PARTITION is always a full rebuild.)',
+      'since/until. (REPLACE PARTITION is always a full rebuild.) ' +
+      '⚑ After a hl_fills backfill: rebuild the FILLS-sourced dailies here for ' +
+      'the window — hl_fills_pnl_daily, hl_fills_vol_daily (the hl_position_history_* ' +
+      'rollups are position-history-sourced and unaffected by a fills backfill). ' +
+      'The hl_positions_now current-position rollup is NOT in this list: it is ' +
+      'auto-maintained by a live materialized view, so a fills backfill flows into ' +
+      'it idempotently (argMax) with no action needed. Only run its manual full ' +
+      'rebuild to recover from MV downtime: ' +
+      'INSERT INTO tradernick.hl_positions_now SELECT token, wallet, ' +
+      "argMaxState(start_position+if(side='B',size,-size),(time,(start_position+if(side='B',size,-size)))), " +
+      "argMaxState(start_position+if(side='B',size,-size),(time,-(start_position+if(side='B',size,-size)))), " +
+      "argMaxState(toInt8(if(side='B',1,-1)),(time,tid)), argMaxState(price,(time,tid)), maxState(time) " +
+      'FROM tradernick.hl_fills GROUP BY token, wallet;',
     hideForce: true,
     fields: [
       { name: 'materializers', label: 'Materializers', kind: 'multiselect',
