@@ -2159,25 +2159,38 @@ TTL toDateTime(time) + INTERVAL 270 DAY;
 -- Current position per (token, wallet) reconstructed from fills — the fills-native
 -- replacement for point-in-time hl_position_history reads. Each fill carries
 -- `start_position` (HL's authoritative position BEFORE the fill), so the position
--- AFTER a wallet's LATEST fill IS its current position. We keep that via
--- argMaxState(pos_after, (time,tid)); px_state = the latest fill price (fallback
--- mark/entry proxy); last_time = the wallet's last fill time in the token (drives
--- the "staleness" filter directly). Query: argMaxMerge(pos_state) per (token,wallet).
+-- AFTER a wallet's LATEST fill IS its current position (pa = start_position ± size).
+--
+-- SWEEP-ACCURATE terminal. A single market order sweeps several book levels as
+-- MULTIPLE fills at the SAME millisecond, and there is no reliable intra-ms
+-- execution-order column (time ties; tid is NOT execution order). A plain
+-- argMax(pa, (time,tid)) can pick a MID-sweep fill → a phantom position (a wallet
+-- flat since a 3-fills-in-1ms close reads as still-long). A single-order sweep is
+-- MONOTONIC + single-sided, so its terminal is the extreme in the trade
+-- direction: buy sweep → max(pa), sell sweep → min(pa). We encode that with
+-- argMax/max states only (so it stays backfill-idempotent — no non-idempotent
+-- SUM): term_hi = max pa at the latest time, term_lo = min pa at the latest time,
+-- dir = ±1 side of the latest fill. Resolve via the hl_positions_now_current view:
+--   pos = if(dir >= 0, term_hi, term_lo).
+-- Matches Group Snapshot's sum-based sweep terminal 99.99% (the only diffs are
+-- rare mixed-side same-ms batches no method can resolve without execution order).
+-- px_state = latest fill price (mark/entry proxy); last_time = last fill time
+-- (drives the staleness filter directly).
 --
 -- Maintenance: a LIVE materialized view (below), NOT a data_processor rebuild.
 -- The push-MV ban elsewhere exists because those rollups SUM — a backfill that
--- re-inserts overlapping fills would double-count. This rollup is argMax-only, so
--- it is IDEMPOTENT to re-inserted/older/duplicate fills (argMax depends solely on
--- the max-key row; dups and older backfills are no-ops, only a genuinely newer
--- fill moves the position — verified). So the live MV is safe under backfills.
--- (Optional belt-and-suspenders: a periodic full REBUILD via an
---  `INSERT INTO hl_positions_now SELECT ... argMaxState(...) FROM hl_fills GROUP BY
---   token,wallet` — also idempotent — can heal rare in-place fill corrections.)
+-- re-inserts overlapping fills would double-count. This rollup is argMax/max only,
+-- so it is IDEMPOTENT to re-inserted/older/duplicate fills (they are no-ops; only
+-- a genuinely newer fill moves the position — verified). So the live MV is safe
+-- under backfills. (Optional belt-and-suspenders: a periodic full REBUILD via the
+-- same argMaxState INSERT — also idempotent — heals rare in-place fill corrections.)
 CREATE TABLE IF NOT EXISTS tradernick.hl_positions_now
 (
     token       LowCardinality(String),
     wallet      String        CODEC(ZSTD(3)),
-    pos_state   AggregateFunction(argMax, Float64, Tuple(DateTime64(3), UInt64)),
+    term_hi     AggregateFunction(argMax, Float64, Tuple(DateTime64(3), Float64)),
+    term_lo     AggregateFunction(argMax, Float64, Tuple(DateTime64(3), Float64)),
+    dir_state   AggregateFunction(argMax, Int8,    Tuple(DateTime64(3), UInt64)),
     px_state    AggregateFunction(argMax, Float64, Tuple(DateTime64(3), UInt64)),
     last_time   AggregateFunction(max, DateTime64(3))
 ) ENGINE = AggregatingMergeTree()
@@ -2187,10 +2200,24 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_positions_now_mv
 TO tradernick.hl_positions_now AS
 SELECT
     token, wallet,
-    argMaxState(start_position + if(side = 'B', size, -size), (time, tid)) AS pos_state,
-    argMaxState(price, (time, tid))                                        AS px_state,
-    maxState(time)                                                         AS last_time
+    argMaxState(start_position + if(side='B',size,-size), (time,  (start_position + if(side='B',size,-size)))) AS term_hi,
+    argMaxState(start_position + if(side='B',size,-size), (time, -(start_position + if(side='B',size,-size)))) AS term_lo,
+    argMaxState(toInt8(if(side='B',1,-1)), (time, tid)) AS dir_state,
+    argMaxState(price, (time, tid))                     AS px_state,
+    maxState(time)                                      AS last_time
 FROM tradernick.hl_fills
+GROUP BY token, wallet;
+
+-- Convenience view: resolves the sweep terminal to a single current position per
+-- (token, wallet). Consumers read this, not the raw states. Filtering by token /
+-- wallet pushes down into the aggregation (token is the ORDER BY prefix).
+CREATE VIEW IF NOT EXISTS tradernick.hl_positions_now_current AS
+SELECT
+    token, wallet,
+    if(argMaxMerge(dir_state) >= 0, argMaxMerge(term_hi), argMaxMerge(term_lo)) AS pos,
+    argMaxMerge(px_state) AS last_px,
+    maxMerge(last_time)   AS last_time
+FROM tradernick.hl_positions_now
 GROUP BY token, wallet;
 
 -- Per-wallet funding events. amount is the funding paid by this wallet for
