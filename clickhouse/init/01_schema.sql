@@ -2220,6 +2220,44 @@ SELECT
 FROM tradernick.hl_positions_now
 GROUP BY token, wallet;
 
+-- HISTORICAL sibling of hl_positions_now: the sweep-resolved position per
+-- (token, wallet, 5m-bucket) — the fills-native source for point-in-time / OI
+-- time-series reads (oi_split, smart_oi, long_short_ratios, Backtracker dialogs,
+-- data_provider positions). 5m matches hl_position_history's native snapshot tick.
+-- Same argMax/max sweep-terminal states as hl_positions_now (term_hi/term_lo/dir),
+-- but keyed by bucket. SPARSE: a row exists only for buckets where the wallet
+-- traded — so a HISTORICAL query CARRY-FORWARDS at read time (per wallet: leadInFrame
+-- → next-trade bucket, then expand each held segment onto the grid with
+-- arrayJoin(range(max(b,since), min(nextb,until), step)), filtering pos!=0). Benchmarked
+-- equal to the dense hl_position_history_15m path while reading ~4× fewer rows.
+-- USD value needs a per-bucket mark join from hl_ohlcv_1m; coarser intervals downsample
+-- from the 5m events. Live-MV maintained + backfill-idempotent (argMax/max), like
+-- hl_positions_now. NOTE: hl_position_history is KEPT as the backup/authority until
+-- this is validated in the wild — nothing here replaces it yet.
+CREATE TABLE IF NOT EXISTS tradernick.hl_positions_bucketed
+(
+    token      LowCardinality(String),
+    wallet     String        CODEC(ZSTD(3)),
+    bucket     DateTime      CODEC(DoubleDelta, ZSTD(3)),
+    term_hi    AggregateFunction(argMax, Float64, Tuple(DateTime64(3), Float64)),
+    term_lo    AggregateFunction(argMax, Float64, Tuple(DateTime64(3), Float64)),
+    dir_state  AggregateFunction(argMax, Int8,    Tuple(DateTime64(3), UInt64))
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(bucket)
+ORDER BY (token, wallet, bucket)
+TTL bucket + INTERVAL 270 DAY;
+
+CREATE MATERIALIZED VIEW IF NOT EXISTS tradernick.hl_positions_bucketed_mv
+TO tradernick.hl_positions_bucketed AS
+SELECT
+    token, wallet,
+    toStartOfInterval(time, INTERVAL 300 SECOND) AS bucket,
+    argMaxState(start_position + if(side='B',size,-size), (time,  (start_position + if(side='B',size,-size)))) AS term_hi,
+    argMaxState(start_position + if(side='B',size,-size), (time, -(start_position + if(side='B',size,-size)))) AS term_lo,
+    argMaxState(toInt8(if(side='B',1,-1)), (time, tid)) AS dir_state
+FROM tradernick.hl_fills
+GROUP BY token, wallet, bucket;
+
 -- Per-wallet funding events. amount is the funding paid by this wallet for
 -- its position_amount in this token at this rate. Sign convention: positive
 -- amount = wallet PAID funding (long pays in normal contango), negative =
