@@ -367,10 +367,14 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
       '⚑ After a hl_fills backfill: rebuild the FILLS-sourced dailies here for ' +
       'the window — hl_fills_pnl_daily, hl_fills_vol_daily (the hl_position_history_* ' +
       'rollups are position-history-sourced and unaffected by a fills backfill). ' +
-      'The hl_positions_now current-position rollup is NOT in this list: it is ' +
-      'auto-maintained by a live materialized view, so a fills backfill flows into ' +
-      'it idempotently (argMax) with no action needed. Only run its manual full ' +
-      'rebuild to recover from MV downtime: ' +
+      'The fills-derived position rollups (hl_positions_now = current, ' +
+      'hl_positions_bucketed = historical 5m) are NOT in this list: both are ' +
+      'auto-maintained by live materialized views on hl_fills, so a fills backfill ' +
+      '(and live fills) flow into them idempotently (argMax/max) with NO action ' +
+      'needed. Manual full rebuild is recovery-only (MV downtime); the same ' +
+      'argMaxState INSERT re-seeds them (hl_positions_bucketed adds ' +
+      'toStartOfInterval(time,INTERVAL 300 SECOND) AS bucket and GROUP BY token, ' +
+      'wallet, bucket). E.g. hl_positions_now: ' +
       'INSERT INTO tradernick.hl_positions_now SELECT token, wallet, ' +
       "argMaxState(start_position+if(side='B',size,-size),(time,(start_position+if(side='B',size,-size)))), " +
       "argMaxState(start_position+if(side='B',size,-size),(time,-(start_position+if(side='B',size,-size)))), " +
