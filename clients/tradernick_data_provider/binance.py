@@ -198,7 +198,9 @@ class _HLWindowMixin:
 
     def window(self: _T, size: str) -> _T:
         """Bucket/snapshot size, e.g. ``'5m'`` / ``'1h'`` (ohlcv candles;
-        positions window, 15m multiple; realized_performance windows, min 15m)."""
+        positions window — 5m multiple for the fills paths (``aggregate()`` default
+        source and ``aggregate_change()``), else 15m multiple;
+        realized_performance windows, min 15m)."""
         self._body["window"] = size
         return self
 
@@ -272,7 +274,9 @@ class _HLRealizedPerfQuery(_HLPerfQuery):
 class _HLPositionsQuery(_HLPerfQuery):
     """``positions`` — token + wallet + REQUIRED window; three modes.
 
-    ``.window(...)`` is required (a 15m multiple, e.g. ``'15m'`` / ``'1h'`` / ``'4h'``).
+    ``.window(...)`` is required — a **5m** multiple for the fills paths
+    (``.aggregate()`` default source and ``.aggregate_change()``), else a 15m
+    multiple (``.aggregate(source="position_history")`` and the default snapshot mode).
 
     - default (no aggregate): the position-state snapshots downsampled to the
       window (last snapshot per window, start-aligned).
@@ -370,8 +374,9 @@ class HyperliquidNamespace:
         return _HLRealizedPerfQuery(self._session, self._base_url, "/hyperliquid/realized_performance/read")
 
     def positions(self) -> _HLPositionsQuery:
-        """Hyperliquid positions, per REQUIRED ``.window(...)`` (a 15m multiple).
-        Requires ``tokens``, ``wallets``, or ``wallet_groups``.
+        """Hyperliquid positions, per REQUIRED ``.window(...)`` (a **5m** multiple on
+        the fills paths — ``.aggregate()`` default and ``.aggregate_change()`` — else
+        a 15m multiple). Requires ``tokens``, ``wallets``, or ``wallet_groups``.
 
         - **Snapshot mode** (no ``.aggregate()``): position-state snapshots
           DOWNSAMPLED to the window — the last snapshot in each window, stamped at
@@ -379,8 +384,8 @@ class HyperliquidNamespace:
           side, amount, avg_entry, opened_at, mark_price, size, unrealized_pnl,
           funding, fee, exact_avg_price.
         - **Snapshot aggregate** (``.aggregate()``): per-(token, window) OPEN-position
-          book from snapshots — side/net_size/counts/sizes/avg_entry (see
-          :meth:`_HLPositionsQuery.aggregate`; optional ``pos_recency_hrs=`` arg).
+          book — side/net_size/counts/sizes (see :meth:`_HLPositionsQuery.aggregate`;
+          ``source="fills"`` default, ``pos_recency_hrs=`` optional).
         - **Change aggregate** (``.aggregate_change()``): per-(token, window)
           position-action ``$`` flow from fills (see
           :meth:`_HLPositionsQuery.aggregate_change`).

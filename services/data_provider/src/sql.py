@@ -1062,13 +1062,16 @@ def hl_realized_performance_windowed(since: str, until: str, window: str, *,
     return sql, params
 
 
-def _positions_window_secs(window: str) -> int:
-    """positions windows must be a whole multiple of 15m (>= 15m). The 15m floor
-    matches the position-snapshot cadence (so downsample buckets line up with the
-    snapshots), and aggregate mode uses the same contract for symmetry."""
+def _positions_window_secs(window: str, min_secs: int = 900) -> int:
+    """positions windows must be a whole multiple of `min_secs`. Default floor is
+    15m (matches the DeFiStream position-snapshot cadence, so downsample buckets
+    line up with the snapshots). The FILLS-native paths — .aggregate(source='fills')
+    and .aggregate_change() — pass a 5m floor: the fills rollup is 5m-bucketed and
+    change-aggregate reads raw fills, so neither needs the 15m contract."""
     secs = window_seconds(window)
-    if secs < 900 or secs % 900 != 0:
-        raise ValueError("positions window must be a multiple of 15m (e.g. '15m', '1h', '4h')")
+    if secs < min_secs or secs % min_secs != 0:
+        m = min_secs // 60
+        raise ValueError(f"positions window must be a multiple of {m}m (e.g. '{m}m', '1h', '4h')")
     return secs
 
 
@@ -1181,7 +1184,7 @@ def hl_positions_change_aggregate(since: str, until: str, window: str, *,
 
     `window` required (15m multiple). `wallets`/`wallet_groups` are OPTIONAL —
     with only `tokens` it aggregates over ALL wallets for those tokens."""
-    secs = _positions_window_secs(window)
+    secs = _positions_window_secs(window, 300)  # fills-native → 5m floor
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
         'time >= toDateTime64({since:String}, 3)',
@@ -1269,7 +1272,8 @@ def hl_positions_snapshot_aggregate(since: str, until: str, window: str, *,
 
     `window` required (15m multiple). `wallets`/`wallet_groups` optional (only
     `tokens` → all wallets holding those tokens)."""
-    secs = _positions_window_secs(window)
+    # fills (5m rollup) → 5m floor; position_history (15m snapshot cadence) → 15m.
+    secs = _positions_window_secs(window, 300 if source == 'fills' else 900)
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     tw: list[str] = []
     _hl_token_wallet_filters(params, tw, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)

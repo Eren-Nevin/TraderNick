@@ -50,6 +50,11 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**1.5.0 — 5m windows on the fills paths.** `positions().window()` now accepts a
+**5m** multiple (down from 15m) for the fills-native paths — `.aggregate()` (default
+`source="fills"`) and `.aggregate_change()`. The `position_history` backup and the
+default snapshot mode still require a 15m multiple.
+
 **1.4.0 — `aggregate()` defaults to `source="fills"`.** The snapshot aggregate now
 uses the sweep-accurate, complete fills rollup by DEFAULT (was `position_history`).
 Pass `source="position_history"` for the old DeFiStream-snapshot behavior (the
