@@ -921,9 +921,10 @@ async def hyperliquid_positions(request: Request):
             )
         elif aggregate:
             # Snapshot-based per-(token, window) open-position book. `source` selects
-            # the position source: 'position_history' (default backup) or 'fills'
-            # (the sweep-accurate hl_positions_bucketed rollup; fixes the imbalance).
-            source = body.get('source') or 'position_history'
+            # the position source: 'fills' (DEFAULT — the sweep-accurate
+            # hl_positions_bucketed rollup; fixes the imbalance) or 'position_history'
+            # (the DeFiStream-snapshot backup).
+            source = body.get('source') or 'fills'
             if source not in ('position_history', 'fills'):
                 return response.json(
                     {'error': "`source` must be 'position_history' or 'fills'"}, status=400,

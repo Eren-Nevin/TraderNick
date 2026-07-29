@@ -292,10 +292,10 @@ class _HLPositionsQuery(_HLPerfQuery):
         optional (only ``.tokens()`` → all wallets holding them).
 
         ``source`` (optional): the POSITION source.
-          - ``"position_history"`` (default): DeFiStream snapshots — the historical
-            backup; sparse/recency-biased, can show imbalanced long/short.
-          - ``"fills"``: the sweep-accurate, complete fills rollup — fixes the
-            long/short imbalance (complete wallet set, no phantom sweeps).
+          - ``"fills"`` (default): the sweep-accurate, complete fills rollup —
+            complete wallet set, no phantom sweeps → fixes the long/short imbalance.
+          - ``"position_history"``: DeFiStream snapshots — the historical backup;
+            sparse/recency-biased, can show imbalanced long/short.
 
         ``pos_recency_hrs`` (optional int): drop STALE positions — keep a position
         only if the wallet traded that token within this many hours. Omit → every

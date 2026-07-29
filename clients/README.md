@@ -50,6 +50,11 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**1.4.0 — `aggregate()` defaults to `source="fills"`.** The snapshot aggregate now
+uses the sweep-accurate, complete fills rollup by DEFAULT (was `position_history`).
+Pass `source="position_history"` for the old DeFiStream-snapshot behavior (the
+backup). Fixes the long/short imbalance out of the box.
+
 **1.3.0 — `positions().aggregate()`: `source=` + dropped `avg_entry`.** New
 `source=` arg on the snapshot aggregate: `"position_history"` (default — DeFiStream
 snapshots, the historical backup) or `"fills"` (a sweep-accurate, complete

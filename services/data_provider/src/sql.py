@@ -1244,7 +1244,7 @@ def hl_positions_snapshot_aggregate(since: str, until: str, window: str, *,
                                     wallets: list[str] | None = None,
                                     wallet_groups: list[str] | None = None,
                                     pos_recency_hrs: int | None = None,
-                                    source: str = 'position_history') -> tuple[str, dict[str, Any]]:
+                                    source: str = 'fills') -> tuple[str, dict[str, Any]]:
     """Snapshot-aggregate mode: per-(token, window) book of the OPEN positions,
     downsampled to the window then aggregated across wallets. `size` is $ notional.
     Columns (one row per token+window; time = window start):
@@ -1256,13 +1256,12 @@ def hl_positions_snapshot_aggregate(since: str, until: str, window: str, *,
       longs_count / shorts_count — # positions on each side.
 
     `source` selects the POSITION source:
-      'position_history' (default) — DeFiStream snapshots (hl_position_history);
-        the historical backup. Sparse/recency-biased (see the hl_positions
-        migration notes) — can show imbalanced long/short.
-      'fills' — the sweep-accurate, complete fills rollup hl_positions_bucketed,
-        carried forward onto the window grid; $ via hl_ohlcv_1m mark. Fixes the
-        long/short imbalance (complete wallet set, no phantom sweeps). No
-        position_history dependency.
+      'fills' (default) — the sweep-accurate, complete fills rollup
+        hl_positions_bucketed, carried forward onto the window grid; $ via
+        hl_ohlcv_1m mark. Complete wallet set, no phantom sweeps → fixes the
+        long/short imbalance. No position_history dependency.
+      'position_history' — DeFiStream snapshots (hl_position_history); the
+        historical backup. Sparse/recency-biased — can show imbalanced long/short.
 
     `pos_recency_hrs` (optional int): drop STALE positions — keep a position only
     if the wallet traded that token within this many hours of the window. (fills:
