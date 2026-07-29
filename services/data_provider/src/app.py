@@ -920,13 +920,21 @@ async def hyperliquid_positions(request: Request):
                 wallet_groups=body.get('wallet_groups') or None,
             )
         elif aggregate:
-            # Snapshot-based per-(token, window) open-position book.
+            # Snapshot-based per-(token, window) open-position book. `source` selects
+            # the position source: 'position_history' (default backup) or 'fills'
+            # (the sweep-accurate hl_positions_bucketed rollup; fixes the imbalance).
+            source = body.get('source') or 'position_history'
+            if source not in ('position_history', 'fills'):
+                return response.json(
+                    {'error': "`source` must be 'position_history' or 'fills'"}, status=400,
+                )
             sql, params = sql_b.hl_positions_snapshot_aggregate(
                 body['since'], body['until'], window,
                 tokens=body.get('tokens') or None,
                 wallets=body.get('wallets') or None,
                 wallet_groups=body.get('wallet_groups') or None,
                 pos_recency_hrs=recency,
+                source=source,
             )
         else:
             # Position snapshots downsampled to `window` (last-in-window, start-aligned).

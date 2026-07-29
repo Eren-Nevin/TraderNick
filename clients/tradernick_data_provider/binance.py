@@ -283,21 +283,28 @@ class _HLPositionsQuery(_HLPerfQuery):
     are set, ``aggregate_change`` wins (server-side)."""
 
     def aggregate(self: _T, enabled: bool = True, *,
-                  pos_recency_hrs: int | None = None) -> _T:
-        """**Snapshot** aggregate: per-(token, window) OPEN-position book from
-        position snapshots. Returns: ``side`` (from sign of ``net_size``),
-        ``net_size`` (longs_size − shorts_size, ``$``), ``total_count``,
-        ``longs_size``/``longs_count``, ``shorts_size``/``shorts_count``, and
-        ``avg_entry`` (``$``-size-weighted). ``$`` = notional. ``.wallets()`` /
-        ``.wallet_groups()`` optional (only ``.tokens()`` → all wallets holding
-        them).
+                  pos_recency_hrs: int | None = None,
+                  source: str | None = None) -> _T:
+        """**Snapshot** aggregate: per-(token, window) OPEN-position book. Returns:
+        ``side`` (from sign of ``net_size``), ``net_size`` (longs_size − shorts_size,
+        ``$``), ``total_count``, ``longs_size``/``longs_count``, ``shorts_size``/
+        ``shorts_count``. ``$`` = notional. ``.wallets()`` / ``.wallet_groups()``
+        optional (only ``.tokens()`` → all wallets holding them).
+
+        ``source`` (optional): the POSITION source.
+          - ``"position_history"`` (default): DeFiStream snapshots — the historical
+            backup; sparse/recency-biased, can show imbalanced long/short.
+          - ``"fills"``: the sweep-accurate, complete fills rollup — fixes the
+            long/short imbalance (complete wallet set, no phantom sweeps).
 
         ``pos_recency_hrs`` (optional int): drop STALE positions — keep a position
-        only if the wallet had a fill in that token within this many hours of the
-        snapshot. Omit → every open position regardless of age."""
+        only if the wallet traded that token within this many hours. Omit → every
+        open position regardless of age."""
         self._body["aggregate"] = enabled
         if pos_recency_hrs is not None:
             self._body["pos_recency_hrs"] = pos_recency_hrs
+        if source is not None:
+            self._body["source"] = source
         return self
 
     def aggregate_change(self: _T, enabled: bool = True) -> _T:
