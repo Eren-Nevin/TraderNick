@@ -99,7 +99,12 @@ def binance_ohlcv(token: str, window: str, since: str, until: str,
 
     `table` selects the source: the default perp `binance_ohlcv_1m`, or the
     spot `binance_spot_ohlcv_1m` (identical schema) via `binance_spot_ohlcv`.
+
+    Accepts a CCXT-style pair symbol ('LINK/USDT:USDT', 'LINK/USDT') as well as
+    the bare token ('LINK') — the tables key on the bare base token, so we strip
+    the '/QUOTE[:SETTLE]' suffix.
     """
+    token = token.split('/', 1)[0].split(':', 1)[0]
     secs = window_seconds(window)
     params: dict[str, Any] = {
         'token': token,
@@ -125,25 +130,30 @@ def binance_ohlcv(token: str, window: str, since: str, until: str,
         # duplicate 1m row doesn't double-count into the bucket — without
         # this, sum(volume) for the bucket can drift by ~2× until the
         # background ReplacingMT merge runs.
+        # Source columns are qualified `s.*`: the SELECT aliases `token`/`time`/
+        # `open`/… would otherwise SHADOW the table columns — notably
+        # `WHERE token = {token}` would bind to the `{token:String} AS token`
+        # constant alias (always true) and drop the token filter, returning
+        # market-wide aggregates identical across every token (bug fixed here).
         sql = f"""
             SELECT
                 toDateTime64(
-                    toStartOfInterval(time, toIntervalSecond({{secs:UInt32}})),
+                    toStartOfInterval(s.time, toIntervalSecond({{secs:UInt32}})),
                     3, 'UTC'
                 ) AS time,
-                {{token:String}}            AS token,
-                argMin(open,  time)         AS open,
-                argMax(close, time)         AS close,
-                max(high)                   AS high,
-                min(low)                    AS low,
-                sum(volume)                 AS volume,
-                sum(buyer_taker_volume)     AS buyer_taker_volume,
-                sum(seller_taker_volume)    AS seller_taker_volume,
-                toInt64(sum(trade_count))   AS trade_count
-            FROM tradernick.{table} FINAL
-            WHERE token = {{token:String}}
-              AND time >= toDateTime({{since:String}})
-              AND time <  toDateTime({{until:String}})
+                {{token:String}}             AS token,
+                argMin(s.open,  s.time)      AS open,
+                argMax(s.close, s.time)      AS close,
+                max(s.high)                  AS high,
+                min(s.low)                   AS low,
+                sum(s.volume)                AS volume,
+                sum(s.buyer_taker_volume)    AS buyer_taker_volume,
+                sum(s.seller_taker_volume)   AS seller_taker_volume,
+                toInt64(sum(s.trade_count))  AS trade_count
+            FROM tradernick.{table} AS s FINAL
+            WHERE s.token = {{token:String}}
+              AND s.time >= toDateTime({{since:String}})
+              AND s.time <  toDateTime({{until:String}})
             GROUP BY time
             ORDER BY time
         """
