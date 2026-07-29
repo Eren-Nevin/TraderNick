@@ -50,6 +50,14 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**1.3.0 — `positions().aggregate()`: `source=` + dropped `avg_entry`.** New
+`source=` arg on the snapshot aggregate: `"position_history"` (default — DeFiStream
+snapshots, the historical backup) or `"fills"` (a sweep-accurate, complete
+fills-derived rollup that fixes the long/short imbalance — complete wallet set, no
+phantom same-ms sweeps). **Breaking:** the `avg_entry` column is removed from
+`aggregate()` output (a $-size-weighted avg entry across all wallets/sides was
+meaningless). `pos_recency_hrs=` works with both sources.
+
 **1.1.0 — `abs_flow` on the change-aggregate.** `positions().aggregate_change()`
 adds `abs_flow`: the gross flow (sum of all ten action columns, direction-agnostic).
 
