@@ -645,6 +645,17 @@ with live query frames.
 ```python
 keys = await client.list_snapshots()          # -> ["btc_spot_july", ...]
 await client.delete_snapshot("btc_spot_july")
+
+# With sizes (human-readable) + a roster-wide total:
+info = await client.list_snapshots_detailed()
+# {
+#   "snapshots": [{"key": "btc_spot_july", "bytes": 27648,
+#                  "size": "27.0 KB", "modified": "2026-08-03T07:15:40Z"}, ...],
+#   "count": 131, "total_bytes": 46826578719, "total_size": "43.6 GB",
+# }
+for s in info["snapshots"]:
+    print(f'{s["size"]:>10}  {s["key"]}')
+print("total:", info["total_size"])
 ```
 
 ### 12.4 Scan — filter a saved snapshot — `client.scan_parquet(key, ...)`
@@ -787,7 +798,7 @@ Everything else in this guide returns real data against a populated server.
 | `tron.trc20.transfers([...])` | `POST /tron/trc20_transfers/read` (`/read/min`) |
 | `tron.native_transfers()` | `POST /tron/native_transfers/read` (`/read/min`) |
 | `btc.native_transfers()` | `POST /btc/native_transfers/read` (`/read/min`) |
-| `load_parquet / list_snapshots / delete_snapshot / scan_parquet` | `POST /snapshots/*`, `GET /snapshots/list` |
+| `load_parquet / list_snapshots / list_snapshots_detailed / delete_snapshot / scan_parquet` | `POST /snapshots/*`, `GET /snapshots/list`, `GET /snapshots/list_detailed` |
 | `wallets.*` | `GET/POST/DELETE /wallets` |
 | `jobs.*` | `GET/POST /jobs/...` |
 | `health()` | `GET /health` |

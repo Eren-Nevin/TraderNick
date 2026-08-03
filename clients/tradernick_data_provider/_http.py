@@ -53,3 +53,16 @@ async def list_snapshots(session: httpx.AsyncClient, base_url: str) -> list[str]
     resp = await session.get(f"{base_url}/snapshots/list")
     resp.raise_for_status()
     return resp.json()["keys"]
+
+
+async def list_snapshots_detailed(session: httpx.AsyncClient, base_url: str) -> dict:
+    """List saved snapshots with per-file sizes and a roster-wide total.
+
+    Returns the server payload verbatim::
+
+        {"snapshots": [{"key", "bytes", "size", "modified"}, ...],
+         "count": int, "total_bytes": int, "total_size": str}
+    """
+    resp = await session.get(f"{base_url}/snapshots/list_detailed")
+    resp.raise_for_status()
+    return resp.json()

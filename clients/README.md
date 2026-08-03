@@ -50,6 +50,12 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**1.6.0 — `list_snapshots_detailed()`.** New `client.list_snapshots_detailed()`
+returns saved snapshots **with their sizes**: a `snapshots` list (sorted by key)
+of `{key, bytes, size (human-readable), modified (ISO-8601 UTC)}`, plus `count`,
+`total_bytes` and a human-readable `total_size`. `list_snapshots()` (keys only) is
+unchanged. Backed by the new `GET /snapshots/list_detailed` route.
+
 **1.5.0 — 5m windows on the fills paths.** `positions().window()` now accepts a
 **5m** multiple (down from 15m) for the fills-native paths — `.aggregate()` (default
 `source="fills"`) and `.aggregate_change()`. The `position_history` backup and the

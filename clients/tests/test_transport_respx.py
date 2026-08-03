@@ -145,6 +145,20 @@ async def test_list_snapshots(client, respx_mock):
     assert await client.list_snapshots() == ["a", "b"]
 
 
+async def test_list_snapshots_detailed(client, respx_mock):
+    payload = {
+        "snapshots": [
+            {"key": "a", "bytes": 1024, "size": "1.0 KB", "modified": "2026-08-03T07:15:40Z"},
+        ],
+        "count": 1, "total_bytes": 1024, "total_size": "1.0 KB",
+    }
+    respx_mock.get(BASE_URL + "/snapshots/list_detailed").mock(
+        return_value=httpx.Response(200, json=payload, headers=JSON_HEADERS))
+    got = await client.list_snapshots_detailed()
+    assert got == payload
+    assert got["snapshots"][0]["size"] == "1.0 KB"
+
+
 async def test_load_parquet_casts_time(client, respx_mock):
     respx_mock.post(BASE_URL + "/snapshots/load").mock(
         return_value=_parquet_response(ohlcv_table(2)))

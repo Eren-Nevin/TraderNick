@@ -29,6 +29,7 @@ import io
 import logging
 import os
 import re
+from datetime import datetime, timezone
 
 import polars as pl
 import pyarrow.parquet as pq
@@ -54,6 +55,15 @@ def _snap_path(app_: Sanic, key: str) -> str:
     return os.path.join(app_.ctx.snapshots_dir, f'{_safe_key(key)}.parquet')
 
 
+def _human_size(n: int) -> str:
+    """Bytes → human-readable string (1024-based, e.g. '328.4 MB')."""
+    size = float(n)
+    for unit in ('B', 'KB', 'MB', 'GB', 'TB', 'PB'):
+        if size < 1024.0 or unit == 'PB':
+            return f'{int(size)} {unit}' if unit == 'B' else f'{size:.1f} {unit}'
+        size /= 1024.0
+
+
 def register(app: Sanic) -> None:
     """Attach all `/snapshots/*` routes to the Sanic app."""
 
@@ -68,6 +78,42 @@ def register(app: Sanic) -> None:
             if n.endswith('.parquet')
         )
         return response.json({'keys': keys})
+
+    @app.get('/snapshots/list_detailed')
+    async def snapshots_list_detailed(request: Request):
+        """Like /snapshots/list, but each entry carries its on-disk size
+        (bytes + human-readable) and mtime, plus a roster-wide total. Sorted
+        by key to match /snapshots/list."""
+        d = app.ctx.snapshots_dir
+        if not os.path.isdir(d):
+            return response.json({
+                'snapshots': [], 'count': 0,
+                'total_bytes': 0, 'total_size': _human_size(0),
+            })
+        entries = []
+        total = 0
+        for n in os.listdir(d):
+            if not n.endswith('.parquet'):
+                continue
+            try:
+                st = os.stat(os.path.join(d, n))
+            except OSError:
+                continue  # raced deletion — skip
+            total += st.st_size
+            entries.append({
+                'key': os.path.splitext(n)[0],
+                'bytes': st.st_size,
+                'size': _human_size(st.st_size),
+                'modified': datetime.fromtimestamp(
+                    st.st_mtime, tz=timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ'),
+            })
+        entries.sort(key=lambda e: e['key'])
+        return response.json({
+            'snapshots': entries,
+            'count': len(entries),
+            'total_bytes': total,
+            'total_size': _human_size(total),
+        })
 
     @app.post('/snapshots/load')
     async def snapshots_load(request: Request):

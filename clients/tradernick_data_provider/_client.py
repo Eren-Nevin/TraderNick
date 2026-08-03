@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Literal, Optional, Union
 import httpx
 import polars as pl
 
-from ._http import load_parquet_bytes, list_snapshots, delete_snapshot
+from ._http import load_parquet_bytes, list_snapshots, list_snapshots_detailed, delete_snapshot
 from ._query import _to_timestamp
 
 if TYPE_CHECKING:
@@ -135,6 +135,17 @@ class DataProviderClient:
     async def list_snapshots(self) -> list[str]:
         """List all saved snapshot keys."""
         return await list_snapshots(self._session, self._url)
+
+    async def list_snapshots_detailed(self) -> dict:
+        """List saved snapshots with their sizes.
+
+        Returns a dict with a ``snapshots`` list (sorted by key), each entry
+        ``{"key", "bytes", "size" (human-readable, e.g. '328.4 MB'),
+        "modified" (ISO-8601 UTC)}``, plus ``count``, ``total_bytes`` and a
+        human-readable ``total_size``. For keys only, use
+        :meth:`list_snapshots`.
+        """
+        return await list_snapshots_detailed(self._session, self._url)
 
     async def delete_snapshot(self, key: str) -> None:
         """Delete a saved snapshot."""
