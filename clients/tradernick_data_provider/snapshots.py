@@ -16,7 +16,6 @@ from typing import TYPE_CHECKING, Optional, TypeVar, Union
 
 import httpx
 import pandas as pd
-import pyarrow as pa
 import pyarrow.parquet as pq
 import polars as pl
 
@@ -158,59 +157,18 @@ class ScanParquetQuery(_WalletFilters):
             raise DataProviderHTTPError(resp.status_code, err)
 
 
-class LoadSnapshotQuery:
-    """Load a whole saved snapshot (no server-side filter — for that use
-    ``client.snapshot.scan``). Optional client-side ``[since, until)`` slice on
-    the ``time``/``timestamp`` column.
-
-    Terminal calls:
-        ``as_polars()``  → ``pl.DataFrame`` (``time`` cast to ms+UTC)
-        ``as_pandas()``  → ``pd.DataFrame``
-        ``as_arrow()``   → ``pa.Table``
-        ``bytes()``      → raw stored parquet bytes (unfiltered)
-    """
-
-    def __init__(self, session: httpx.AsyncClient, base_url: str, key: str,
-                 *, since=None, until=None):
-        self._session = session
-        self._base_url = base_url
-        self._key = key
-        self._since = _to_datetime(since) if since is not None else None
-        self._until = _to_datetime(until) if until is not None else None
-
-    def time_range(self: _T, since, until) -> _T:
-        """Set a client-side ``[since, until)`` slice, applied after load."""
-        self._since = _to_datetime(since)
-        self._until = _to_datetime(until)
-        return self
-
-    def _apply_time_filter(self, df: pl.DataFrame) -> pl.DataFrame:
-        if self._since is None and self._until is None:
-            return df
-        col = 'timestamp' if 'timestamp' in df.columns else 'time'
-        if col not in df.columns:
-            return df
-        if self._since is not None:
-            df = df.filter(pl.col(col) >= self._since)
-        if self._until is not None:
-            df = df.filter(pl.col(col) <= self._until)
+def _apply_time_filter(df: pl.DataFrame, since, until) -> pl.DataFrame:
+    """Client-side ``[since, until]`` slice on the ``time``/``timestamp`` col."""
+    if since is None and until is None:
         return df
-
-    async def bytes(self) -> bytes:
-        """Raw stored parquet bytes (the whole file; ``since``/``until`` and the
-        ms+UTC time cast are NOT applied here)."""
-        return await load_parquet_bytes(self._session, self._base_url, self._key)
-
-    async def as_polars(self) -> pl.DataFrame:
-        raw = await load_parquet_bytes(self._session, self._base_url, self._key)
-        df = _cast_time_ms_utc(pl.read_parquet(io.BytesIO(raw)))
-        return self._apply_time_filter(df)
-
-    async def as_pandas(self) -> pd.DataFrame:
-        return (await self.as_polars()).to_pandas()
-
-    async def as_arrow(self) -> pa.Table:
-        return (await self.as_polars()).to_arrow()
+    col = 'timestamp' if 'timestamp' in df.columns else 'time'
+    if col not in df.columns:
+        return df
+    if since is not None:
+        df = df.filter(pl.col(col) >= _to_datetime(since))
+    if until is not None:
+        df = df.filter(pl.col(col) <= _to_datetime(until))
+    return df
 
 
 class SnapshotNamespace:
@@ -218,8 +176,8 @@ class SnapshotNamespace:
 
     - ``list()`` → keys; ``list(detailed=True)`` / ``list_detailed()`` → keys
       with sizes + a roster-wide total.
-    - ``load(key)`` → :class:`LoadSnapshotQuery` (``as_polars`` / ``as_pandas`` /
-      ``as_arrow`` / ``bytes``).
+    - ``load(key)`` → the whole snapshot as a ``pl.DataFrame`` (convert yourself,
+      e.g. ``.to_pandas()`` / ``.to_arrow()``).
     - ``scan(key)`` → :class:`ScanParquetQuery` (server-side wallet-filtered read).
     - ``delete(key)`` → hard-remove (no undo).
 
@@ -248,12 +206,16 @@ class SnapshotNamespace:
         """Delete a saved snapshot (hard ``os.remove`` server-side — no undo)."""
         await delete_snapshot(self._session, self._base_url, key)
 
-    def load(self, key: str, *,
-             since: Optional[Union[datetime, str, int]] = None,
-             until: Optional[Union[datetime, str, int]] = None) -> LoadSnapshotQuery:
-        """Load a whole snapshot. Returns a builder — call ``.as_polars()``,
-        ``.as_pandas()``, ``.as_arrow()`` or ``.bytes()``."""
-        return LoadSnapshotQuery(self._session, self._base_url, key, since=since, until=until)
+    async def load(self, key: str, *,
+                   since: Optional[Union[datetime, str, int]] = None,
+                   until: Optional[Union[datetime, str, int]] = None) -> pl.DataFrame:
+        """Load a whole snapshot as a polars ``DataFrame`` (``time`` normalized to
+        ms+UTC). Convert as you like — ``(await ...).to_pandas()`` /
+        ``.to_arrow()``. Optional client-side ``[since, until]`` slice; for a
+        server-side wallet filter use :meth:`scan` instead."""
+        raw = await load_parquet_bytes(self._session, self._base_url, key)
+        df = _cast_time_ms_utc(pl.read_parquet(io.BytesIO(raw)))
+        return _apply_time_filter(df, since, until)
 
     def scan(self, key: str, *,
              since: Optional[Union[datetime, str, int]] = None,

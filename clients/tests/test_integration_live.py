@@ -226,7 +226,7 @@ async def test_scan_parquet_filters_a_snapshot(live_client):
     await (live_client.evm.erc20.transfers(["USDC"]).network("ethereum")
            .time_range(SINCE, UNTIL).as_parquet(key))
     try:
-        full = await live_client.snapshot.load(key).as_polars()
+        full = await live_client.snapshot.load(key)
         # category filter now applies on a scan (was a no-op pre-0.7.0)
         cat = await live_client.snapshot.scan(key).sender_category("CEX").as_polars()
         assert cat.height <= full.height

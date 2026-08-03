@@ -639,22 +639,19 @@ The snapshot **read/manage** surface lives under **`client.snapshot.*`**:
 
 ### 12.2 Load — `client.snapshot.load(key, since=None, until=None)`
 
-Returns a builder; pick the output type with a terminal:
+Returns a polars `DataFrame` directly — convert yourself if you want pandas/arrow:
 
 ```python
-df    = await client.snapshot.load("btc_spot_july").as_polars()   # polars
-df_pd = await client.snapshot.load("btc_spot_july").as_pandas()   # pandas
-tbl   = await client.snapshot.load("btc_spot_july").as_arrow()    # pyarrow.Table
-raw   = await client.snapshot.load("btc_spot_july").bytes()       # raw parquet bytes
+df    = await client.snapshot.load("btc_spot_july")               # polars
+df_pd = (await client.snapshot.load("btc_spot_july")).to_pandas() # pandas
+tbl   = (await client.snapshot.load("btc_spot_july")).to_arrow()  # pyarrow.Table
 
-# client-side [since, until) slice (ctor kwarg or .time_range()):
-df = await client.snapshot.load("btc_spot_july",
-                                since="2026-07-03", until="2026-07-05").as_polars()
+# optional client-side [since, until] slice:
+df = await client.snapshot.load("btc_spot_july", since="2026-07-03", until="2026-07-05")
 ```
 
-`time` is normalized to `Datetime('ms', UTC)` (on `as_polars`/`as_pandas`/`as_arrow`;
-`bytes()` returns the raw stored file) so a loaded snapshot joins cleanly with live
-query frames.
+`time` is normalized to `Datetime('ms', UTC)` so a loaded snapshot joins cleanly
+with live query frames.
 
 ### 12.3 List / delete
 

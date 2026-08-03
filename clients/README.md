@@ -53,12 +53,17 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**2.1.0 — `snapshot.load()` returns polars directly.** `await client.snapshot.load(k)`
+now returns a `pl.DataFrame` (no `.as_polars()` terminal — convert yourself via
+`.to_pandas()` / `.to_arrow()`), mirroring how the read builders resolve. Replaces
+the 2.0.0 load builder (`.as_polars()` / `.as_pandas()` / `.as_arrow()` / `.bytes()`).
+`scan()` is unchanged (still a filter builder with terminals).
+
 **2.0.0 — `client.snapshot.*` namespace (BREAKING).** The snapshot read/manage
 surface is a namespace: **`client.snapshot.{list, load, scan, delete}`**.
 `list(detailed=True)` (or `list_detailed()`) returns keys **with sizes** + a
-roster-wide total; `load(key)` returns a builder with `.as_polars()` /
-`.as_pandas()` / `.as_arrow()` / `.bytes()` terminals; `scan(key)` is the
-server-side wallet-filtered read; `delete(key)` removes. There is no
+roster-wide total; `load(key)` returns the whole snapshot (see 2.1.0); `scan(key)`
+is the server-side wallet-filtered read; `delete(key)` removes. There is no
 `snapshot.save` — snapshots are written by any read query's `.as_parquet(key)`
 terminal. **Removed** (no longer aliased): the old top-level `load_parquet` /
 `list_snapshots` / `list_snapshots_detailed` / `scan_parquet` / `delete_snapshot`.
@@ -66,8 +71,8 @@ Migration:
 
 | Old (removed)                     | New                                        |
 |-----------------------------------|--------------------------------------------|
-| `client.load_parquet(k)`          | `client.snapshot.load(k).as_polars()`      |
-| `(await load_parquet(k)).to_pandas()` | `client.snapshot.load(k).as_pandas()`  |
+| `client.load_parquet(k)`          | `await client.snapshot.load(k)`            |
+| `(await load_parquet(k)).to_pandas()` | `(await client.snapshot.load(k)).to_pandas()` |
 | `client.list_snapshots()`         | `client.snapshot.list()`                   |
 | `client.list_snapshots_detailed()`| `client.snapshot.list(detailed=True)`      |
 | `client.scan_parquet(k)`          | `client.snapshot.scan(k)`                  |

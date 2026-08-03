@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 
 import httpx
+import polars as pl
 import pytest
 
 from tradernick_data_provider.exceptions import DataProviderHTTPError
@@ -167,14 +168,15 @@ async def test_snapshot_delete(client, respx_mock):
     assert route.called
 
 
-async def test_snapshot_load_polars_and_pandas(client, respx_mock):
+async def test_snapshot_load_returns_polars(client, respx_mock):
     respx_mock.post(BASE_URL + "/snapshots/load").mock(
         return_value=_parquet_response(ohlcv_table(2)))
-    df = await client.snapshot.load("snap1").as_polars()
+    df = await client.snapshot.load("snap1")  # returns polars directly
+    assert isinstance(df, pl.DataFrame)
     assert df.height == 2
     assert str(df.schema["time"]) == "Datetime(time_unit='ms', time_zone='UTC')"
-    pdf = await client.snapshot.load("snap1").as_pandas()
-    assert len(pdf) == 2
+    # user converts themselves
+    assert len(df.to_pandas()) == 2
 
 
 async def test_health(client, respx_mock):
