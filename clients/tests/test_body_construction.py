@@ -377,8 +377,6 @@ def test_scan_uses_same_filter_surface(client):
     assert q._body["exclude_involving_groups"] == ["CEX"]
     assert q._body["min_amount"] == 1000
     assert "local_filters" not in q._body
-    # deprecated alias builds the identical body
-    assert client.scan_parquet("snap").receiver_groups(["Whales"])._body["receiver_groups"] == ["Whales"]
 
 
 def test_scan_filter_accepts_str_or_list(client):

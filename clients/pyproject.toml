@@ -1,7 +1,7 @@
 [project]
 name = "tradernick-data-provider"
-version = "1.7.0"
-description = "Python client for the TraderNick data_provider service. Drop-in compatible with horatio-data-provider (same DataProviderClient API; only the import path changes)."
+version = "2.0.0"
+description = "Python client for the TraderNick data_provider service. Async fluent-builder API over ClickHouse-backed on-chain + exchange data."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }

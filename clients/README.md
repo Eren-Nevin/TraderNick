@@ -1,11 +1,11 @@
 # tradernick-data-provider
 
-Python client for the TraderNick `data_provider` service. Drop-in
-compatible with [`horatio-data-provider`](https://pypi.org/project/horatio-data-provider/):
-same `DataProviderClient` class, same namespaces (`evm`, `tron`, `btc`,
-`binance`, `hyperliquid`, `wallets`, `jobs`), same chainable
-builder methods, same `as_pandas()` / `as_polars()` / `as_parquet()`
-terminators. The only visible difference is the import path.
+Python client for the TraderNick `data_provider` service. Closely modeled on
+[`horatio-data-provider`](https://pypi.org/project/horatio-data-provider/):
+same `DataProviderClient` class, same read namespaces (`evm`, `tron`, `btc`,
+`binance`, `hyperliquid`, `wallets`, `jobs`), same chainable builder methods,
+same `as_pandas()` / `as_polars()` / `as_parquet()` terminators — so read/query
+code ports by changing only the import path:
 
 ```python
 # Before
@@ -15,8 +15,11 @@ from horatio_data_provider import DataProviderClient
 from tradernick_data_provider import DataProviderClient
 ```
 
-The server URL passed to the constructor is the only thing you need to
-change at the call site.
+**Not a pure drop-in as of 2.0.0:** the snapshot surface is a namespace
+(`client.snapshot.{list, load, scan, delete}`) — Horatio's top-level
+`load_parquet` / `list_snapshots` / `scan_parquet` / `delete_snapshot` are gone.
+See the migration table under **2.0.0** below. The server URL passed to the
+constructor is the only other call-site change.
 
 > **📖 Full usage guide:** see [`USAGE.md`](USAGE.md) — an exhaustive reference
 > covering every namespace, query builder, filter, snapshot operation, and the
@@ -50,15 +53,25 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
-**1.7.0 — `client.snapshot.*` namespace.** The snapshot read/manage surface is now
-a namespace: **`client.snapshot.{list, load, scan, delete}`**. `list(detailed=True)`
-(or `list_detailed()`) returns keys **with sizes** + a roster-wide total; `load(key)`
-returns a builder with `.as_polars()` / `.as_pandas()` / `.as_arrow()` / `.bytes()`
-terminals; `scan(key)` is the server-side wallet-filtered read; `delete(key)` removes.
-The old top-level methods (`load_parquet` / `list_snapshots` / `list_snapshots_detailed`
-/ `scan_parquet` / `delete_snapshot`) still work as **deprecated** aliases (Horatio
-drop-in parity). There is no `snapshot.save` — snapshots are written by any read
-query's `.as_parquet(key)` terminal.
+**2.0.0 — `client.snapshot.*` namespace (BREAKING).** The snapshot read/manage
+surface is a namespace: **`client.snapshot.{list, load, scan, delete}`**.
+`list(detailed=True)` (or `list_detailed()`) returns keys **with sizes** + a
+roster-wide total; `load(key)` returns a builder with `.as_polars()` /
+`.as_pandas()` / `.as_arrow()` / `.bytes()` terminals; `scan(key)` is the
+server-side wallet-filtered read; `delete(key)` removes. There is no
+`snapshot.save` — snapshots are written by any read query's `.as_parquet(key)`
+terminal. **Removed** (no longer aliased): the old top-level `load_parquet` /
+`list_snapshots` / `list_snapshots_detailed` / `scan_parquet` / `delete_snapshot`.
+Migration:
+
+| Old (removed)                     | New                                        |
+|-----------------------------------|--------------------------------------------|
+| `client.load_parquet(k)`          | `client.snapshot.load(k).as_polars()`      |
+| `(await load_parquet(k)).to_pandas()` | `client.snapshot.load(k).as_pandas()`  |
+| `client.list_snapshots()`         | `client.snapshot.list()`                   |
+| `client.list_snapshots_detailed()`| `client.snapshot.list(detailed=True)`      |
+| `client.scan_parquet(k)`          | `client.snapshot.scan(k)`                  |
+| `client.delete_snapshot(k)`       | `client.snapshot.delete(k)`                |
 
 **1.6.0 — `list_snapshots_detailed()`.** New `client.list_snapshots_detailed()`
 returns saved snapshots **with their sizes**: a `snapshots` list (sorted by key)
@@ -210,9 +223,7 @@ What works:
   resolves a group/category/entity selection to its addresses
 - `client.snapshot.{list, load, scan, delete}` — snapshots (write via any read
   query's `.as_parquet(key)`); `scan` filters with the SAME wallet-filter surface
-  (resolved to addresses + DuckDB, so category/entity work on snapshots). Old
-  top-level `load_parquet` / `scan_parquet` / `list_snapshots` / `delete_snapshot`
-  remain as deprecated aliases
+  (resolved to addresses + DuckDB, so category/entity work on snapshots)
 - `client.jobs.{list, get, cancel}` — proxies to the ingestion job queue
 
 TN-exclusive (since 0.3.0):

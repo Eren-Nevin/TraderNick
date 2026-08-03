@@ -630,10 +630,12 @@ await (client.evm.erc20.transfers(["USDC"])
 
 The snapshot **read/manage** surface lives under **`client.snapshot.*`**:
 `list` / `load` / `scan` / `delete`. (There is no `snapshot.save` — snapshots are
-*written* by any read query's `.as_parquet(key)` terminal, §12.1.) The old
-top-level methods — `client.load_parquet` / `list_snapshots` /
-`list_snapshots_detailed` / `scan_parquet` / `delete_snapshot` — still work as
-**deprecated** aliases for horatio-data-provider parity.
+*written* by any read query's `.as_parquet(key)` terminal, §12.1.)
+
+> **2.0.0 breaking change:** the old top-level `client.load_parquet` /
+> `list_snapshots` / `list_snapshots_detailed` / `scan_parquet` /
+> `delete_snapshot` were **removed**. Use the `client.snapshot.*` equivalents
+> below.
 
 ### 12.2 Load — `client.snapshot.load(key, since=None, until=None)`
 
@@ -812,7 +814,7 @@ Everything else in this guide returns real data against a populated server.
 | `tron.trc20.transfers([...])` | `POST /tron/trc20_transfers/read` (`/read/min`) |
 | `tron.native_transfers()` | `POST /tron/native_transfers/read` (`/read/min`) |
 | `btc.native_transfers()` | `POST /btc/native_transfers/read` (`/read/min`) |
-| `snapshot.{load, list, list_detailed, scan, delete}` (aliases: `load_parquet / list_snapshots / list_snapshots_detailed / scan_parquet / delete_snapshot`) | `POST /snapshots/{load,delete,scan}`, `GET /snapshots/list`, `GET /snapshots/list_detailed` |
+| `snapshot.{load, list, list_detailed, scan, delete}` | `POST /snapshots/{load,delete,scan}`, `GET /snapshots/list`, `GET /snapshots/list_detailed` |
 | `wallets.*` | `GET/POST/DELETE /wallets` |
 | `jobs.*` | `GET/POST /jobs/...` |
 | `health()` | `GET /health` |

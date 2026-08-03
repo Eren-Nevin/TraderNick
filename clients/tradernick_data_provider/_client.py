@@ -1,11 +1,9 @@
-from datetime import datetime
-from typing import TYPE_CHECKING, Literal, Optional, Union
+from typing import TYPE_CHECKING
 
 import httpx
-import polars as pl
 
 if TYPE_CHECKING:
-    from .snapshots import ScanParquetQuery, SnapshotNamespace
+    from .snapshots import SnapshotNamespace
 
 from .binance import BinanceNamespace, HyperliquidNamespace
 from .btc import BtcNamespace
@@ -43,52 +41,8 @@ class DataProviderClient:
         response.raise_for_status()
         return True
 
-    # --- Snapshots ---------------------------------------------------------
-    # The snapshot surface lives under ``client.snapshot.*`` (list / load /
-    # scan / delete). The methods below are thin **deprecated** delegates kept
-    # for horatio-data-provider drop-in parity — prefer the namespace.
-
-    async def load_parquet(
-        self,
-        key: str,
-        since: Optional[Union[datetime, str, int]] = None,
-        until: Optional[Union[datetime, str, int]] = None,
-    ) -> pl.DataFrame:
-        """DEPRECATED — use ``client.snapshot.load(key).as_polars()``.
-
-        Load a saved snapshot as a polars DataFrame (``time`` normalized to
-        ms+UTC). For pandas, ``client.snapshot.load(key).as_pandas()``.
-        """
-        return await self.snapshot.load(key, since=since, until=until).as_polars()
-
-    def scan_parquet(self, key: str, *,
-                     since: Optional[Union[datetime, str, int]] = None,
-                     until: Optional[Union[datetime, str, int]] = None,
-                     engine: Literal['polars', 'duckdb'] = 'duckdb',
-                     normalize_addresses: Optional[bool] = None) -> "ScanParquetQuery":
-        """DEPRECATED — use ``client.snapshot.scan(key)``.
-
-        Lazy, server-side wallet-filtered read of a snapshot. Returns a
-        ``ScanParquetQuery``; chain the wallet-selection filters then call a
-        terminal ``as_polars()`` / ``as_pandas()`` / ``as_parquet(new_key)``.
-        """
-        return self.snapshot.scan(
-            key, since=since, until=until,
-            engine=engine, normalize_addresses=normalize_addresses,
-        )
-
-    async def list_snapshots(self) -> list[str]:
-        """DEPRECATED — use ``client.snapshot.list()``. Saved snapshot keys."""
-        return await self.snapshot.list()
-
-    async def list_snapshots_detailed(self) -> dict:
-        """DEPRECATED — use ``client.snapshot.list(detailed=True)``. Saved
-        snapshots with sizes + a roster-wide total."""
-        return await self.snapshot.list_detailed()
-
-    async def delete_snapshot(self, key: str) -> None:
-        """DEPRECATED — use ``client.snapshot.delete(key)``."""
-        await self.snapshot.delete(key)
+    # Snapshots live under ``client.snapshot.*`` (list / load / scan / delete);
+    # snapshots are *written* by any read query's ``.as_parquet(key)`` terminal.
 
     async def close(self) -> None:
         await self._session.aclose()

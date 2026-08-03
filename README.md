@@ -171,7 +171,7 @@ flow = await (c.evm.erc20.transfers(["USDC", "USDT"]).network("ethereum")
               .time_range("2026-07-10", "2026-07-11").as_polars())
 
 # same filters, applied to a saved snapshot
-sub = await c.scan_parquet("usdc_flows").sender_groups(["Whales"]).as_polars()
+sub = await c.snapshot.scan("usdc_flows").sender_groups(["Whales"]).as_polars()
 
 # resolve a selection to its addresses
 addrs = await c.wallets.addresses(groups=["Whales"], categories="CEX")
