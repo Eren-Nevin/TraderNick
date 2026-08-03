@@ -1,36 +1,11 @@
-import io
 from datetime import datetime
 from typing import TYPE_CHECKING, Literal, Optional, Union
 
 import httpx
 import polars as pl
 
-from ._http import load_parquet_bytes, list_snapshots, list_snapshots_detailed, delete_snapshot
-from ._query import _to_timestamp
-
 if TYPE_CHECKING:
-    from .snapshots import ScanParquetQuery
-
-
-def _to_datetime(date: datetime | str | int) -> datetime:
-    """Convert any date input to a timezone-aware datetime."""
-    ts = _to_timestamp(date)  # returns 'YYYY-MM-DDTHH:MM:SSZ'
-    return datetime.fromisoformat(ts.replace("Z", "+00:00"))
-
-
-def _cast_time_ms_utc(df: pl.DataFrame) -> pl.DataFrame:
-    """Normalize the ``time`` column to ``Datetime('ms', 'UTC')``.
-
-    DuckDB-written snapshots come back as μs+UTC; cache reads come back
-    as ms+UTC. The cast keeps everything joinable on the polars side.
-    """
-    if 'time' in df.columns:
-        dt = df.schema['time']
-        if isinstance(dt, pl.Datetime) and (
-            dt.time_unit != 'ms' or dt.time_zone != 'UTC'
-        ):
-            df = df.with_columns(pl.col('time').cast(pl.Datetime('ms', 'UTC')))
-    return df
+    from .snapshots import ScanParquetQuery, SnapshotNamespace
 
 from .binance import BinanceNamespace, HyperliquidNamespace
 from .btc import BtcNamespace
@@ -48,6 +23,7 @@ class DataProviderClient:
     hyperliquid: HyperliquidNamespace
     wallets: WalletsNamespace
     jobs: JobsNamespace
+    snapshot: "SnapshotNamespace"
 
     def __init__(self, url: str):
         self._url = url.rstrip("/")
@@ -59,11 +35,18 @@ class DataProviderClient:
         self.hyperliquid = HyperliquidNamespace(self._session, self._url)
         self.wallets = WalletsNamespace(self._session, self._url)
         self.jobs = JobsNamespace(self._session, self._url)
+        from .snapshots import SnapshotNamespace
+        self.snapshot = SnapshotNamespace(self._session, self._url)
 
     async def health(self) -> bool:
         response = await self._session.get(self._url + "/health")
         response.raise_for_status()
         return True
+
+    # --- Snapshots ---------------------------------------------------------
+    # The snapshot surface lives under ``client.snapshot.*`` (list / load /
+    # scan / delete). The methods below are thin **deprecated** delegates kept
+    # for horatio-data-provider drop-in parity — prefer the namespace.
 
     async def load_parquet(
         self,
@@ -71,85 +54,41 @@ class DataProviderClient:
         since: Optional[Union[datetime, str, int]] = None,
         until: Optional[Union[datetime, str, int]] = None,
     ) -> pl.DataFrame:
-        """Load a saved snapshot as a polars DataFrame.
+        """DEPRECATED — use ``client.snapshot.load(key).as_polars()``.
 
-        ``time`` is normalized to ``Datetime('ms', UTC)`` so joins with
-        transfer-read DataFrames (which the cache layer also returns at
-        ms+UTC) don't trip the polars 'datatypes of join keys don't
-        match' check. Snapshots saved via DuckDB COPY are stored at
-        μs+UTC internally; we cast on read.
-
-        For pandas, call ``(await client.load_parquet(key)).to_pandas()``.
+        Load a saved snapshot as a polars DataFrame (``time`` normalized to
+        ms+UTC). For pandas, ``client.snapshot.load(key).as_pandas()``.
         """
-        raw = await load_parquet_bytes(self._session, self._url, key)
-        df = pl.read_parquet(io.BytesIO(raw))
-        df = _cast_time_ms_utc(df)
-        if since is not None or until is not None:
-            time_col = "timestamp" if "timestamp" in df.columns else "time"
-            if time_col in df.columns:
-                if since is not None:
-                    df = df.filter(pl.col(time_col) >= _to_datetime(since))
-                if until is not None:
-                    df = df.filter(pl.col(time_col) <= _to_datetime(until))
-        return df
+        return await self.snapshot.load(key, since=since, until=until).as_polars()
 
     def scan_parquet(self, key: str, *,
                      since: Optional[Union[datetime, str, int]] = None,
                      until: Optional[Union[datetime, str, int]] = None,
                      engine: Literal['polars', 'duckdb'] = 'duckdb',
                      normalize_addresses: Optional[bool] = None) -> "ScanParquetQuery":
-        """Lazy-scan a saved snapshot with wallet filters applied
-        server-side. Returns a ``ScanParquetQuery`` builder. Chain the same
-        filter methods as the read queries (``involving`` / ``sender`` /
-        ``receiver`` + ``_label`` / ``_entity`` / ``_category`` / ``_groups``
-        + ``exclude_*``, all ``str | list[str]``) then call a terminal
-        ``as_polars()`` / ``as_pandas()`` / ``as_parquet(new_key)``.
+        """DEPRECATED — use ``client.snapshot.scan(key)``.
 
-        ``engine``:
-          - ``'duckdb'`` (default): server mounts the snapshot + wallets
-            parquets as DuckDB views and runs the filter as SQL.
-            Streams via ``COPY ... TO PARQUET``. Best optimizer for
-            large ``IN`` filters; ~3-50× faster than polars on big
-            wallet-set queries.
-          - ``'polars'``: server uses ``pl.scan_parquet`` and a polars
-            lazy filter pipeline. Streams via ``sink_parquet``.
-
-        ``normalize_addresses``: default ``None`` (auto). Set to ``False``
-        only when you know the snapshot is canonical and the file lacks
-        the metadata flag — auto-detect already handles canonical files.
-
-        Example::
-
-            df = await client.scan_parquet('huge_snapshot') \\
-                .exclude_sender_category(['Hot-Wallet', 'Cold-Wallet']) \\
-                .involving_entity('Binance') \\
-                .as_polars()
+        Lazy, server-side wallet-filtered read of a snapshot. Returns a
+        ``ScanParquetQuery``; chain the wallet-selection filters then call a
+        terminal ``as_polars()`` / ``as_pandas()`` / ``as_parquet(new_key)``.
         """
-        from .snapshots import ScanParquetQuery
-        return ScanParquetQuery(
-            self._session, self._url, key,
-            since=since, until=until,
+        return self.snapshot.scan(
+            key, since=since, until=until,
             engine=engine, normalize_addresses=normalize_addresses,
         )
 
     async def list_snapshots(self) -> list[str]:
-        """List all saved snapshot keys."""
-        return await list_snapshots(self._session, self._url)
+        """DEPRECATED — use ``client.snapshot.list()``. Saved snapshot keys."""
+        return await self.snapshot.list()
 
     async def list_snapshots_detailed(self) -> dict:
-        """List saved snapshots with their sizes.
-
-        Returns a dict with a ``snapshots`` list (sorted by key), each entry
-        ``{"key", "bytes", "size" (human-readable, e.g. '328.4 MB'),
-        "modified" (ISO-8601 UTC)}``, plus ``count``, ``total_bytes`` and a
-        human-readable ``total_size``. For keys only, use
-        :meth:`list_snapshots`.
-        """
-        return await list_snapshots_detailed(self._session, self._url)
+        """DEPRECATED — use ``client.snapshot.list(detailed=True)``. Saved
+        snapshots with sizes + a roster-wide total."""
+        return await self.snapshot.list_detailed()
 
     async def delete_snapshot(self, key: str) -> None:
-        """Delete a saved snapshot."""
-        await delete_snapshot(self._session, self._url, key)
+        """DEPRECATED — use ``client.snapshot.delete(key)``."""
+        await self.snapshot.delete(key)
 
     async def close(self) -> None:
         await self._session.aclose()

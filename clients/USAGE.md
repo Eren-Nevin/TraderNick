@@ -628,26 +628,40 @@ await (client.evm.erc20.transfers(["USDC"])
        .as_parquet("usdc_flows_july"))
 ```
 
-### 12.2 Load — `client.load_parquet(key, since=None, until=None)`
+The snapshot **read/manage** surface lives under **`client.snapshot.*`**:
+`list` / `load` / `scan` / `delete`. (There is no `snapshot.save` — snapshots are
+*written* by any read query's `.as_parquet(key)` terminal, §12.1.) The old
+top-level methods — `client.load_parquet` / `list_snapshots` /
+`list_snapshots_detailed` / `scan_parquet` / `delete_snapshot` — still work as
+**deprecated** aliases for horatio-data-provider parity.
+
+### 12.2 Load — `client.snapshot.load(key, since=None, until=None)`
+
+Returns a builder; pick the output type with a terminal:
 
 ```python
-df = await client.load_parquet("btc_spot_july")                       # polars
-df = await client.load_parquet("btc_spot_july",
-                               since="2026-07-03", until="2026-07-05") # sliced on load
-df_pd = (await client.load_parquet("btc_spot_july")).to_pandas()
+df    = await client.snapshot.load("btc_spot_july").as_polars()   # polars
+df_pd = await client.snapshot.load("btc_spot_july").as_pandas()   # pandas
+tbl   = await client.snapshot.load("btc_spot_july").as_arrow()    # pyarrow.Table
+raw   = await client.snapshot.load("btc_spot_july").bytes()       # raw parquet bytes
+
+# client-side [since, until) slice (ctor kwarg or .time_range()):
+df = await client.snapshot.load("btc_spot_july",
+                                since="2026-07-03", until="2026-07-05").as_polars()
 ```
 
-`time` is normalized to `Datetime('ms', UTC)` so a loaded snapshot joins cleanly
-with live query frames.
+`time` is normalized to `Datetime('ms', UTC)` (on `as_polars`/`as_pandas`/`as_arrow`;
+`bytes()` returns the raw stored file) so a loaded snapshot joins cleanly with live
+query frames.
 
 ### 12.3 List / delete
 
 ```python
-keys = await client.list_snapshots()          # -> ["btc_spot_july", ...]
-await client.delete_snapshot("btc_spot_july")
+keys = await client.snapshot.list()            # -> ["btc_spot_july", ...]
+await client.snapshot.delete("btc_spot_july")   # hard remove, no undo
 
 # With sizes (human-readable) + a roster-wide total:
-info = await client.list_snapshots_detailed()
+info = await client.snapshot.list(detailed=True)   # or client.snapshot.list_detailed()
 # {
 #   "snapshots": [{"key": "btc_spot_july", "bytes": 27648,
 #                  "size": "27.0 KB", "modified": "2026-08-03T07:15:40Z"}, ...],
@@ -658,7 +672,7 @@ for s in info["snapshots"]:
 print("total:", info["total_size"])
 ```
 
-### 12.4 Scan — filter a saved snapshot — `client.scan_parquet(key, ...)`
+### 12.4 Scan — filter a saved snapshot — `client.snapshot.scan(key, ...)`
 
 Uses the **same wallet-filter surface** as the reads (§9.2) — `involving` /
 `sender` / `receiver` + `_label`/`_entity`/`_category`/`_groups` + `exclude_*`,
@@ -666,14 +680,14 @@ each `str | list`, plus `.min_amount()` / `.max_amount()` and `.time_range()`.
 Chain filters, then a terminator (`as_polars` / `as_pandas` / `as_parquet`):
 
 ```python
-df = await (client.scan_parquet("usdc_flows_july")
+df = await (client.snapshot.scan("usdc_flows_july")
             .involving_label("Binance")
             .exclude_sender_category("Hot-Wallet")
             .sender_groups(["Whales"])
             .as_polars())
 
 # re-save the filtered subset as a new snapshot (bytes never leave the server)
-await (client.scan_parquet("usdc_flows_july")
+await (client.snapshot.scan("usdc_flows_july")
        .involving_groups(["Whales"])
        .as_parquet("usdc_whales_only"))
 ```
@@ -685,7 +699,7 @@ versions, **category / entity filters now apply on a scan** — they reduce to a
 address set. Only the matching subset is returned; the snapshot never leaves the
 server.
 
-`scan_parquet` options: `since`, `until`, `engine`, `normalize_addresses`.
+`snapshot.scan` options: `since`, `until`, `engine`, `normalize_addresses`.
 
 > A filter that references a column the snapshot doesn't have (e.g.
 > `sender_category` on a binance-ohlcv snapshot) is a harmless no-op.
@@ -798,7 +812,7 @@ Everything else in this guide returns real data against a populated server.
 | `tron.trc20.transfers([...])` | `POST /tron/trc20_transfers/read` (`/read/min`) |
 | `tron.native_transfers()` | `POST /tron/native_transfers/read` (`/read/min`) |
 | `btc.native_transfers()` | `POST /btc/native_transfers/read` (`/read/min`) |
-| `load_parquet / list_snapshots / list_snapshots_detailed / delete_snapshot / scan_parquet` | `POST /snapshots/*`, `GET /snapshots/list`, `GET /snapshots/list_detailed` |
+| `snapshot.{load, list, list_detailed, scan, delete}` (aliases: `load_parquet / list_snapshots / list_snapshots_detailed / scan_parquet / delete_snapshot`) | `POST /snapshots/{load,delete,scan}`, `GET /snapshots/list`, `GET /snapshots/list_detailed` |
 | `wallets.*` | `GET/POST/DELETE /wallets` |
 | `jobs.*` | `GET/POST /jobs/...` |
 | `health()` | `GET /health` |
@@ -838,7 +852,7 @@ async def main():
         await (client.binance.spot.ohlcv("BTC", "1m")
                .time_range("2026-06-01", "2026-07-01")
                .as_parquet("btc_spot_june"))
-        june = await client.load_parquet("btc_spot_june")
+        june = await client.snapshot.load("btc_spot_june").as_polars()
         print("snapshot rows:", june.height)
 
 asyncio.run(main())

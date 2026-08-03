@@ -367,7 +367,7 @@ def test_group_filters_on_every_transfer_type(client):
 def test_scan_uses_same_filter_surface(client):
     # The scan builder has the SAME wallet-filter methods as a read builder,
     # setting the same body keys (server resolves + filters the snapshot).
-    q = (client.scan_parquet("snap")
+    q = (client.snapshot.scan("snap")
          .receiver_groups(["Whales"])
          .sender_category("CEX")
          .exclude_involving_groups(["CEX"])
@@ -377,9 +377,11 @@ def test_scan_uses_same_filter_surface(client):
     assert q._body["exclude_involving_groups"] == ["CEX"]
     assert q._body["min_amount"] == 1000
     assert "local_filters" not in q._body
+    # deprecated alias builds the identical body
+    assert client.scan_parquet("snap").receiver_groups(["Whales"])._body["receiver_groups"] == ["Whales"]
 
 
 def test_scan_filter_accepts_str_or_list(client):
-    assert client.scan_parquet("snap").sender_groups("Whales")._body["sender_groups"] == ["Whales"]
+    assert client.snapshot.scan("snap").sender_groups("Whales")._body["sender_groups"] == ["Whales"]
     with pytest.raises(TypeError):
-        client.scan_parquet("snap").sender_groups([123])  # non-string in list
+        client.snapshot.scan("snap").sender_groups([123])  # non-string in list

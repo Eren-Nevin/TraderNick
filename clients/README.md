@@ -50,6 +50,16 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**1.7.0 — `client.snapshot.*` namespace.** The snapshot read/manage surface is now
+a namespace: **`client.snapshot.{list, load, scan, delete}`**. `list(detailed=True)`
+(or `list_detailed()`) returns keys **with sizes** + a roster-wide total; `load(key)`
+returns a builder with `.as_polars()` / `.as_pandas()` / `.as_arrow()` / `.bytes()`
+terminals; `scan(key)` is the server-side wallet-filtered read; `delete(key)` removes.
+The old top-level methods (`load_parquet` / `list_snapshots` / `list_snapshots_detailed`
+/ `scan_parquet` / `delete_snapshot`) still work as **deprecated** aliases (Horatio
+drop-in parity). There is no `snapshot.save` — snapshots are written by any read
+query's `.as_parquet(key)` terminal.
+
 **1.6.0 — `list_snapshots_detailed()`.** New `client.list_snapshots_detailed()`
 returns saved snapshots **with their sizes**: a `snapshots` list (sorted by key)
 of `{key, bytes, size (human-readable), modified (ISO-8601 UTC)}`, plus `count`,
@@ -198,9 +208,11 @@ What works:
   flips, net_pos_change/flip/flow)
 - `client.wallets.{list, get, upsert, delete, addresses}` — `addresses(...)`
   resolves a group/category/entity selection to its addresses
-- `client.{load_parquet, scan_parquet, list_snapshots, delete_snapshot,
-  as_parquet}` — snapshots; `scan_parquet` filters with the SAME wallet-filter
-  surface (resolved to addresses + DuckDB, so category/entity work on snapshots)
+- `client.snapshot.{list, load, scan, delete}` — snapshots (write via any read
+  query's `.as_parquet(key)`); `scan` filters with the SAME wallet-filter surface
+  (resolved to addresses + DuckDB, so category/entity work on snapshots). Old
+  top-level `load_parquet` / `scan_parquet` / `list_snapshots` / `delete_snapshot`
+  remain as deprecated aliases
 - `client.jobs.{list, get, cancel}` — proxies to the ingestion job queue
 
 TN-exclusive (since 0.3.0):

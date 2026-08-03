@@ -12,17 +12,39 @@ bounded by the result size rather than the full snapshot size.
 from __future__ import annotations
 
 import io
-from typing import TYPE_CHECKING, TypeVar
+from typing import TYPE_CHECKING, Optional, TypeVar, Union
 
 import httpx
 import pandas as pd
+import pyarrow as pa
 import pyarrow.parquet as pq
 import polars as pl
 
 from datetime import datetime
 
-from ._http import DataProviderHTTPError
+from ._http import (
+    DataProviderHTTPError,
+    delete_snapshot,
+    list_snapshots,
+    list_snapshots_detailed,
+    load_parquet_bytes,
+)
 from ._query import _WalletFilters, _to_timestamp
+
+
+def _cast_time_ms_utc(df: pl.DataFrame) -> pl.DataFrame:
+    """Normalize a ``time`` column to ``Datetime('ms', 'UTC')``. DuckDB-written
+    snapshots come back μs+UTC; cache reads come back ms+UTC — cast so both
+    join cleanly on the polars side."""
+    if 'time' in df.columns:
+        dt = df.schema['time']
+        if isinstance(dt, pl.Datetime) and (dt.time_unit != 'ms' or dt.time_zone != 'UTC'):
+            df = df.with_columns(pl.col('time').cast(pl.Datetime('ms', 'UTC')))
+    return df
+
+
+def _to_datetime(date) -> datetime:
+    return datetime.fromisoformat(_to_timestamp(date).replace('Z', '+00:00'))
 
 
 
@@ -134,3 +156,115 @@ class ScanParquetQuery(_WalletFilters):
             except Exception:
                 err = resp.text
             raise DataProviderHTTPError(resp.status_code, err)
+
+
+class LoadSnapshotQuery:
+    """Load a whole saved snapshot (no server-side filter — for that use
+    ``client.snapshot.scan``). Optional client-side ``[since, until)`` slice on
+    the ``time``/``timestamp`` column.
+
+    Terminal calls:
+        ``as_polars()``  → ``pl.DataFrame`` (``time`` cast to ms+UTC)
+        ``as_pandas()``  → ``pd.DataFrame``
+        ``as_arrow()``   → ``pa.Table``
+        ``bytes()``      → raw stored parquet bytes (unfiltered)
+    """
+
+    def __init__(self, session: httpx.AsyncClient, base_url: str, key: str,
+                 *, since=None, until=None):
+        self._session = session
+        self._base_url = base_url
+        self._key = key
+        self._since = _to_datetime(since) if since is not None else None
+        self._until = _to_datetime(until) if until is not None else None
+
+    def time_range(self: _T, since, until) -> _T:
+        """Set a client-side ``[since, until)`` slice, applied after load."""
+        self._since = _to_datetime(since)
+        self._until = _to_datetime(until)
+        return self
+
+    def _apply_time_filter(self, df: pl.DataFrame) -> pl.DataFrame:
+        if self._since is None and self._until is None:
+            return df
+        col = 'timestamp' if 'timestamp' in df.columns else 'time'
+        if col not in df.columns:
+            return df
+        if self._since is not None:
+            df = df.filter(pl.col(col) >= self._since)
+        if self._until is not None:
+            df = df.filter(pl.col(col) <= self._until)
+        return df
+
+    async def bytes(self) -> bytes:
+        """Raw stored parquet bytes (the whole file; ``since``/``until`` and the
+        ms+UTC time cast are NOT applied here)."""
+        return await load_parquet_bytes(self._session, self._base_url, self._key)
+
+    async def as_polars(self) -> pl.DataFrame:
+        raw = await load_parquet_bytes(self._session, self._base_url, self._key)
+        df = _cast_time_ms_utc(pl.read_parquet(io.BytesIO(raw)))
+        return self._apply_time_filter(df)
+
+    async def as_pandas(self) -> pd.DataFrame:
+        return (await self.as_polars()).to_pandas()
+
+    async def as_arrow(self) -> pa.Table:
+        return (await self.as_polars()).to_arrow()
+
+
+class SnapshotNamespace:
+    """``client.snapshot.*`` — manage saved parquet snapshots.
+
+    - ``list()`` → keys; ``list(detailed=True)`` / ``list_detailed()`` → keys
+      with sizes + a roster-wide total.
+    - ``load(key)`` → :class:`LoadSnapshotQuery` (``as_polars`` / ``as_pandas`` /
+      ``as_arrow`` / ``bytes``).
+    - ``scan(key)`` → :class:`ScanParquetQuery` (server-side wallet-filtered read).
+    - ``delete(key)`` → hard-remove (no undo).
+
+    Snapshots are *written* by any read query's ``.as_parquet(key)`` terminal
+    (available on every provider), so there is no ``save`` here.
+    """
+
+    def __init__(self, session: httpx.AsyncClient, base_url: str):
+        self._session = session
+        self._base_url = base_url
+
+    async def list(self, *, detailed: bool = False):
+        """Saved snapshot keys. With ``detailed=True``, return the size payload
+        (``{snapshots:[{key,bytes,size,modified}], count, total_bytes,
+        total_size}``) instead of a bare key list."""
+        if detailed:
+            return await list_snapshots_detailed(self._session, self._base_url)
+        return await list_snapshots(self._session, self._base_url)
+
+    async def list_detailed(self) -> dict:
+        """Saved snapshots with per-file sizes + a roster-wide total. Same as
+        ``list(detailed=True)``."""
+        return await list_snapshots_detailed(self._session, self._base_url)
+
+    async def delete(self, key: str) -> None:
+        """Delete a saved snapshot (hard ``os.remove`` server-side — no undo)."""
+        await delete_snapshot(self._session, self._base_url, key)
+
+    def load(self, key: str, *,
+             since: Optional[Union[datetime, str, int]] = None,
+             until: Optional[Union[datetime, str, int]] = None) -> LoadSnapshotQuery:
+        """Load a whole snapshot. Returns a builder — call ``.as_polars()``,
+        ``.as_pandas()``, ``.as_arrow()`` or ``.bytes()``."""
+        return LoadSnapshotQuery(self._session, self._base_url, key, since=since, until=until)
+
+    def scan(self, key: str, *,
+             since: Optional[Union[datetime, str, int]] = None,
+             until: Optional[Union[datetime, str, int]] = None,
+             engine: str = 'duckdb',
+             normalize_addresses: Optional[bool] = None) -> "ScanParquetQuery":
+        """Lazy, server-side wallet-filtered read of a snapshot. Returns a
+        :class:`ScanParquetQuery`; chain the wallet-selection filters then call
+        ``.as_polars()`` / ``.as_pandas()`` / ``.as_parquet(new_key)``."""
+        return ScanParquetQuery(
+            self._session, self._base_url, key,
+            since=since, until=until,
+            engine=engine, normalize_addresses=normalize_addresses,
+        )

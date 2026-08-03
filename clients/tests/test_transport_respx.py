@@ -139,13 +139,15 @@ async def test_json_error_raises(client, respx_mock):
 # ---------------------------------------------------------------------------
 # Snapshots + health
 # ---------------------------------------------------------------------------
-async def test_list_snapshots(client, respx_mock):
+async def test_snapshot_list(client, respx_mock):
     respx_mock.get(BASE_URL + "/snapshots/list").mock(
         return_value=httpx.Response(200, json={"keys": ["a", "b"]}, headers=JSON_HEADERS))
+    assert await client.snapshot.list() == ["a", "b"]
+    # deprecated alias still works
     assert await client.list_snapshots() == ["a", "b"]
 
 
-async def test_list_snapshots_detailed(client, respx_mock):
+async def test_snapshot_list_detailed(client, respx_mock):
     payload = {
         "snapshots": [
             {"key": "a", "bytes": 1024, "size": "1.0 KB", "modified": "2026-08-03T07:15:40Z"},
@@ -154,15 +156,35 @@ async def test_list_snapshots_detailed(client, respx_mock):
     }
     respx_mock.get(BASE_URL + "/snapshots/list_detailed").mock(
         return_value=httpx.Response(200, json=payload, headers=JSON_HEADERS))
-    got = await client.list_snapshots_detailed()
+    got = await client.snapshot.list(detailed=True)
     assert got == payload
     assert got["snapshots"][0]["size"] == "1.0 KB"
+    assert await client.snapshot.list_detailed() == payload
+    # deprecated alias still works
+    assert await client.list_snapshots_detailed() == payload
 
 
-async def test_load_parquet_casts_time(client, respx_mock):
+async def test_snapshot_delete(client, respx_mock):
+    route = respx_mock.post(BASE_URL + "/snapshots/delete").mock(
+        return_value=httpx.Response(200, json={"deleted": "snap1"}, headers=JSON_HEADERS))
+    await client.snapshot.delete("snap1")
+    assert route.called
+
+
+async def test_snapshot_load_polars_and_pandas(client, respx_mock):
     respx_mock.post(BASE_URL + "/snapshots/load").mock(
         return_value=_parquet_response(ohlcv_table(2)))
-    df = await client.load_parquet("snap1")
+    df = await client.snapshot.load("snap1").as_polars()
+    assert df.height == 2
+    assert str(df.schema["time"]) == "Datetime(time_unit='ms', time_zone='UTC')"
+    pdf = await client.snapshot.load("snap1").as_pandas()
+    assert len(pdf) == 2
+
+
+async def test_load_parquet_alias_casts_time(client, respx_mock):
+    respx_mock.post(BASE_URL + "/snapshots/load").mock(
+        return_value=_parquet_response(ohlcv_table(2)))
+    df = await client.load_parquet("snap1")  # deprecated alias
     assert df.height == 2
     assert str(df.schema["time"]) == "Datetime(time_unit='ms', time_zone='UTC')"
 
