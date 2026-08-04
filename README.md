@@ -185,8 +185,9 @@ addrs = await c.wallets.addresses(groups=["Whales"], categories="CEX")
 
 Also: `binance.{ohlcv, raw_trades, book_depth, funding_rate, ...}` +
 `binance.spot.*`, `hyperliquid.{fills, trade_history, ...}`, `evm.{aave, uniswap,
-lido, spark, morpho, aerodrome}`, snapshots (`as_parquet` / `load_parquet` /
-`scan_parquet`), and `wallets` / `jobs` / `cache`.
+lido, spark, morpho, aerodrome}`, snapshots (write via any read query's
+`.as_parquet(key)`; read/manage via `snapshot.{load, list, scan, delete}`), and
+`wallets` / `jobs` / `cache`.
 
 ## Operations
 
