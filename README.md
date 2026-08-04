@@ -85,6 +85,12 @@ cp .env.example .env
 # edit .env — fill DEFISTREAM_API_KEY, change ADMIN_PASSWORD and CLICKHOUSE_PASSWORD,
 # and toggle the per-source *_ENABLED flags for the domains you want to ingest.
 
+# data_provider stores parquet snapshots on the data disk via an ABSOLUTE
+# bind mount, so this host directory must exist before `up` (create it on
+# whatever large disk you keep — the path must match docker-compose.yml):
+sudo mkdir -p /mnt/viper/tradernick/data_provider_snapshots
+sudo chown "$(id -u):$(id -g)" /mnt/viper/tradernick/data_provider_snapshots
+
 docker compose up --build
 ```
 
