@@ -537,12 +537,14 @@ services:
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_USER: tradernick
       CLICKHOUSE_DB: tradernick
-      SNAPSHOTS_DIR: /data/snapshots
+      SNAPSHOTS_DIR: /mnt/viper/tradernick/data_provider_snapshots
       # Wallet writes + job calls forward to admin_server, which fans
       # out to the per-provider services.
       ADMIN_SERVER_URL: ${DATA_PROVIDER_ADMIN_URL:-http://admin_server:8000}
     ports:
       - "10005:8000"
     volumes:
-      - ./data/snapshots:/data/snapshots
+      # Snapshots live on the /mnt/viper data disk; host path == container path
+      # so SNAPSHOTS_DIR and the bind mount are the same.
+      - /mnt/viper/tradernick/data_provider_snapshots:/mnt/viper/tradernick/data_provider_snapshots
     restart: unless-stopped
