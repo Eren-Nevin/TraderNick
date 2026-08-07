@@ -1,6 +1,6 @@
 [project]
 name = "tradernick-data-provider"
-version = "2.1.0"
+version = "2.2.0"
 description = "Python client for the TraderNick data_provider service. Async fluent-builder API over ClickHouse-backed on-chain + exchange data."
 readme = "README.md"
 requires-python = ">=3.10"

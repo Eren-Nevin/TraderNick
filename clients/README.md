@@ -16,7 +16,7 @@ from tradernick_data_provider import DataProviderClient
 ```
 
 **Not a pure drop-in as of 2.0.0:** the snapshot surface is a namespace
-(`client.snapshot.{list, load, scan, delete}`) — Horatio's top-level
+(`client.snapshot.{list, load, scan, save, delete}`) — Horatio's top-level
 `load_parquet` / `list_snapshots` / `scan_parquet` / `delete_snapshot` are gone.
 See the migration table under **2.0.0** below. The server URL passed to the
 constructor is the only other call-site change.
@@ -52,6 +52,13 @@ ClickHouse instead of DeFiStream, so reads stay sub-second on tables
 where Horatio has to pay a fresh upstream fetch.
 
 ## Status
+
+**2.2.0 — `client.snapshot.save(df, key)`.** Persist a client-side frame as a
+snapshot — accepts a polars `DataFrame`/`LazyFrame` or a pandas `DataFrame`. A
+`time` column is normalized to `Datetime('ms', UTC)` on write (matching `load`);
+`overwrite` defaults to `False` (saving over an existing key raises
+`FileExistsError`); empty frames and keys with `/` `\` `..` are rejected. Bytes
+stream from a tempfile so peak memory stays bounded.
 
 **2.1.0 — `snapshot.load()` returns polars directly.** `await client.snapshot.load(k)`
 now returns a `pl.DataFrame` (no `.as_polars()` terminal — convert yourself via
@@ -226,9 +233,10 @@ What works:
   flips, net_pos_change/flip/flow)
 - `client.wallets.{list, get, upsert, delete, addresses}` — `addresses(...)`
   resolves a group/category/entity selection to its addresses
-- `client.snapshot.{list, load, scan, delete}` — snapshots (write via any read
-  query's `.as_parquet(key)`); `scan` filters with the SAME wallet-filter surface
-  (resolved to addresses + DuckDB, so category/entity work on snapshots)
+- `client.snapshot.{list, load, scan, save, delete}` — snapshots (write via a read
+  query's `.as_parquet(key)` or `save(df, key)` for a client-side frame); `scan`
+  filters with the SAME wallet-filter surface (resolved to addresses + DuckDB, so
+  category/entity work on snapshots)
 - `client.jobs.{list, get, cancel}` — proxies to the ingestion job queue
 
 TN-exclusive (since 0.3.0):

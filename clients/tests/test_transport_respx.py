@@ -7,6 +7,7 @@ multi-network fan-out; and (b) the client-side response transforms
 """
 from __future__ import annotations
 
+import io
 import json
 
 import httpx
@@ -177,6 +178,41 @@ async def test_snapshot_load_returns_polars(client, respx_mock):
     assert str(df.schema["time"]) == "Datetime(time_unit='ms', time_zone='UTC')"
     # user converts themselves
     assert len(df.to_pandas()) == 2
+
+
+async def test_snapshot_save_polars_and_pandas(client, respx_mock):
+    import pandas as pd
+    # overwrite path skips the existence check; assert the POST shape.
+    save = respx_mock.post(BASE_URL + "/snapshots/save").mock(
+        return_value=httpx.Response(200, json={"saved": True, "key": "feat"}, headers=JSON_HEADERS))
+    df = pl.DataFrame({"a": [1, 2, 3], "time": pl.Series(
+        [1, 2, 3], dtype=pl.Datetime("us"))})
+    await client.snapshot.save(df, "feat", overwrite=True)
+    req = save.calls.last.request
+    assert req.headers["X-Snapshot-Key"] == "feat"
+    assert req.headers["Content-Type"] == "application/octet-stream"
+    assert int(req.headers["Content-Length"]) > 0
+    # time normalized to ms+UTC on write (round-trips through the parquet body)
+    saved = pl.read_parquet(io.BytesIO(req.content))
+    assert str(saved.schema["time"]) == "Datetime(time_unit='ms', time_zone='UTC')"
+    # pandas input is accepted too
+    await client.snapshot.save(pd.DataFrame({"a": [1]}), "feat", overwrite=True)
+    assert save.call_count == 2
+
+
+async def test_snapshot_save_guards(client, respx_mock):
+    # empty frame rejected before any network call
+    with pytest.raises(ValueError):
+        await client.snapshot.save(pl.DataFrame({"a": []}), "empty")
+    # unsafe keys rejected
+    for bad in ("a/b", "..", "x/../y"):
+        with pytest.raises(ValueError):
+            await client.snapshot.save(pl.DataFrame({"a": [1]}), bad)
+    # refuse to clobber an existing key unless overwrite=True
+    respx_mock.get(BASE_URL + "/snapshots/list").mock(
+        return_value=httpx.Response(200, json={"keys": ["exists"]}, headers=JSON_HEADERS))
+    with pytest.raises(FileExistsError):
+        await client.snapshot.save(pl.DataFrame({"a": [1]}), "exists")
 
 
 async def test_health(client, respx_mock):

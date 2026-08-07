@@ -629,8 +629,9 @@ await (client.evm.erc20.transfers(["USDC"])
 ```
 
 The snapshot **read/manage** surface lives under **`client.snapshot.*`**:
-`list` / `load` / `scan` / `delete`. (There is no `snapshot.save` — snapshots are
-*written* by any read query's `.as_parquet(key)` terminal, §12.1.)
+`list` / `load` / `scan` / `save` / `delete`. Snapshots are written either by a
+read query's `.as_parquet(key)` terminal (§12.1, server-side) or by
+`client.snapshot.save(df, key)` for a frame you already hold on the client (§12.5).
 
 > **2.0.0 breaking change:** the old top-level `client.load_parquet` /
 > `list_snapshots` / `list_snapshots_detailed` / `scan_parquet` /
@@ -702,6 +703,28 @@ server.
 
 > A filter that references a column the snapshot doesn't have (e.g.
 > `sender_category` on a binance-ohlcv snapshot) is a harmless no-op.
+
+### 12.5 Save a client-side frame — `client.snapshot.save(df, key, *, overwrite=False)`
+
+Persist any DataFrame you already hold (e.g. a pandas frame from mid-pipeline)
+as a snapshot, so it round-trips through `load` / `scan`:
+
+```python
+await client.snapshot.save(df, "my_features")            # polars or pandas DF, or a LazyFrame
+back = await client.snapshot.load("my_features")         # -> polars DataFrame
+
+await client.snapshot.save(df, "my_features")            # raises FileExistsError (key exists)
+await client.snapshot.save(df, "my_features", overwrite=True)   # replaces it
+```
+
+- Accepts a polars `DataFrame` / `LazyFrame` (collected) or a pandas `DataFrame`
+  (via `pl.from_pandas`).
+- A `time` column is normalized to `Datetime('ms', UTC)` on write, matching
+  `load` — so a µs-precision frame doesn't silently fail to join after reload.
+- `overwrite` defaults to `False`: saving over an existing key raises
+  `FileExistsError` (delete is a hard `os.remove` with no undo). An empty (0-row)
+  frame and keys containing `/`, `\`, or `..` are rejected.
+- Bytes stream to the server from a tempfile, so peak memory stays bounded.
 
 ---
 

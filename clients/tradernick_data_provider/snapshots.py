@@ -12,6 +12,8 @@ bounded by the result size rather than the full snapshot size.
 from __future__ import annotations
 
 import io
+import os
+import tempfile
 from typing import TYPE_CHECKING, Optional, TypeVar, Union
 
 import httpx
@@ -29,6 +31,18 @@ from ._http import (
     load_parquet_bytes,
 )
 from ._query import _WalletFilters, _to_timestamp
+
+
+def _guard_snapshot_key(key: str) -> str:
+    """Reject keys that could escape the snapshot dir server-side (the server
+    names a file after the key). Rejects — rather than silently sanitizes — so
+    a typo like ``foo/bar`` errors instead of quietly landing somewhere else."""
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("snapshot key must be a non-empty string")
+    if key in ('.', '..') or any(bad in key for bad in ('/', '\\', '..')):
+        raise ValueError(
+            f"invalid snapshot key {key!r}: must not contain '/', '\\', or '..'")
+    return key
 
 
 def _cast_time_ms_utc(df: pl.DataFrame) -> pl.DataFrame:
@@ -179,10 +193,12 @@ class SnapshotNamespace:
     - ``load(key)`` → the whole snapshot as a ``pl.DataFrame`` (convert yourself,
       e.g. ``.to_pandas()`` / ``.to_arrow()``).
     - ``scan(key)`` → :class:`ScanParquetQuery` (server-side wallet-filtered read).
+    - ``save(df, key)`` → persist an arbitrary DataFrame as a snapshot.
     - ``delete(key)`` → hard-remove (no undo).
 
-    Snapshots are *written* by any read query's ``.as_parquet(key)`` terminal
-    (available on every provider), so there is no ``save`` here.
+    A read query's ``.as_parquet(key)`` terminal also writes a snapshot directly
+    from a server-side query; :meth:`save` is for uploading a frame you already
+    hold on the client.
     """
 
     def __init__(self, session: httpx.AsyncClient, base_url: str):
@@ -205,6 +221,80 @@ class SnapshotNamespace:
     async def delete(self, key: str) -> None:
         """Delete a saved snapshot (hard ``os.remove`` server-side — no undo)."""
         await delete_snapshot(self._session, self._base_url, key)
+
+    async def save(self, df, key: str, *, overwrite: bool = False) -> None:
+        """Save a DataFrame as a snapshot under ``key``.
+
+        Accepts a polars ``DataFrame`` / ``LazyFrame`` (a lazy frame is
+        collected) or a pandas ``DataFrame`` (converted via ``pl.from_pandas``).
+        A ``time`` column is normalized to ``Datetime('ms', 'UTC')`` so the
+        snapshot reloads with a dtype that joins cleanly (mirrors :meth:`load`).
+
+        ``overwrite`` defaults to ``False`` — saving over an existing key raises
+        ``FileExistsError`` (snapshots delete with a hard ``os.remove``, so a
+        typo would otherwise clobber one with no undo). An empty (0-row) frame is
+        rejected. Parquet bytes are streamed to the server from a tempfile, so
+        peak memory stays bounded by the frame, not doubled by the upload.
+        """
+        # Coerce any accepted input to a polars DataFrame (pandas matters — half
+        # the pipeline is pandas).
+        if isinstance(df, pl.LazyFrame):
+            df = df.collect()
+        elif isinstance(df, pd.DataFrame):
+            df = pl.from_pandas(df)
+        elif not isinstance(df, pl.DataFrame):
+            raise TypeError(
+                "save() expects a polars DataFrame/LazyFrame or a pandas "
+                f"DataFrame, got {type(df).__name__}")
+
+        if df.height == 0:
+            raise ValueError(f"refusing to save an empty (0-row) snapshot to {key!r}")
+
+        key = _guard_snapshot_key(key)
+        if not overwrite and key in await self.list():
+            raise FileExistsError(
+                f"snapshot {key!r} already exists; pass overwrite=True to replace it")
+
+        df = _cast_time_ms_utc(df)
+
+        fd, tmp_path = tempfile.mkstemp(suffix='.parquet')
+        os.close(fd)
+        try:
+            df.write_parquet(tmp_path)
+            del df
+
+            async def _stream(path, chunk=1024 * 1024):
+                # httpx AsyncClient rejects sync file handles; chunked async
+                # iteration keeps peak upload memory low.
+                with open(path, 'rb') as fh:
+                    while True:
+                        buf = fh.read(chunk)
+                        if not buf:
+                            break
+                        yield buf
+
+            size = os.path.getsize(tmp_path)
+            resp = await self._session.post(
+                f"{self._base_url}/snapshots/save",
+                content=_stream(tmp_path),
+                headers={
+                    "X-Snapshot-Key": key,
+                    "Content-Type": "application/octet-stream",
+                    "Content-Length": str(size),
+                },
+                timeout=None,
+            )
+            if not resp.is_success:
+                try:
+                    err = resp.json().get("error", resp.text)
+                except Exception:
+                    err = resp.text
+                raise DataProviderHTTPError(resp.status_code, err)
+        finally:
+            try:
+                os.unlink(tmp_path)
+            except FileNotFoundError:
+                pass
 
     async def load(self, key: str, *,
                    since: Optional[Union[datetime, str, int]] = None,
