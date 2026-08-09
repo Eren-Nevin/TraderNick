@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Iterable
 
 log = logging.getLogger("gap_fill")
@@ -57,6 +57,7 @@ async def min_watermark_per_token(
     tokens: list[str],
     time_col: str = "time",
     token_col: str = "token",
+    max_staleness_seconds: float | None = None,
 ) -> datetime | None:
     """For a per-token table, return the MIN across all per-token MAX(time)
     watermarks — the earliest catch-up boundary we need to reach if we want
@@ -66,15 +67,40 @@ async def min_watermark_per_token(
     doesn't peg us at 1970 forever; their on-server data starts before the
     earliest existing watermark anyway, so the multi-token call covers them
     too. If EVERY token is empty (truly fresh install), returns None and the
-    caller falls back to the standard fresh-lookback ceiling."""
+    caller falls back to the standard fresh-lookback ceiling.
+
+    `max_staleness_seconds` (usually the sweep's `max_window_seconds`): when
+    set, tokens whose latest row is older than `now - max_staleness_seconds`
+    are *also* excluded from the min — AS LONG AS at least one fresher token
+    remains to anchor the window. This stops a single permanently-stale token
+    (delisted / gapped upstream) from pinning the min at its watermark and
+    forcing every sweep to re-fetch the full max window (the highest-volume
+    endpoints turn that into multi-GB frames every tick). The live sweep is
+    capped at that same horizon, so those deep gaps can't be closed live
+    anyway — they need a targeted backfill. If EVERY token is that stale (a
+    total outage), we fall back to the min over all tokens so the capped sweep
+    still recovers as much as it can."""
+    parameters: dict = {"tokens": tokens}
+    if max_staleness_seconds is not None:
+        floor = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+            seconds=max_staleness_seconds)
+        parameters["floor"] = floor
+        # Prefer the min over fresh tokens; fall back to min over all only when
+        # no fresh token exists (total outage) so recovery still happens.
+        select_min = (
+            "if(countIf(mx >= {floor:DateTime}) > 0, "
+            "minIf(mx, mx >= {floor:DateTime}), min(mx))"
+        )
+    else:
+        select_min = "min(mx)"
     res = await ch.query(
-        f"SELECT min(mx) FROM ("
+        f"SELECT {select_min} FROM ("
         f"  SELECT max({time_col}) AS mx FROM {table}"
         f"  WHERE {token_col} IN {{tokens:Array(String)}}"
         f"  GROUP BY {token_col}"
         f"  HAVING max({time_col}) > toDateTime('2000-01-01 00:00:00')"
         f")",
-        parameters={"tokens": tokens},
+        parameters=parameters,
     )
     rows = res.result_rows
     if not rows or rows[0][0] in (None, "", "1970-01-01 00:00:00"):

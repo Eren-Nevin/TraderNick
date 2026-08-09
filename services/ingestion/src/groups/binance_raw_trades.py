@@ -9,7 +9,7 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from defistream import AsyncDeFiStream
 
@@ -28,19 +28,35 @@ def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+# Max sub-window per API fetch. raw_trades is the highest-volume endpoint, so
+# a large sweep window (e.g. outage recovery, or before the stale-token filter
+# kicks in) is fetched in slices and inserted incrementally rather than pulled
+# into one giant polars→pandas frame — that framed a 20h window as ~17M rows
+# and left ~20 GiB high-water-marked in swap. 2h keeps peak per fetch bounded
+# while staying well under DeFiStream's 1-day raw_trades cap.
+FETCH_CHUNK = timedelta(hours=2)
+
+
 async def fetch_and_insert(ds: AsyncDeFiStream, tokens: list[str], since: datetime, until: datetime) -> int:
-    df = await (
-        ds.exchange.binance.raw_trades()
-        .token(*tokens)
-        .time_range(_iso(since), _iso(until))
-        .as_df("polars")
-    )
-    if df.is_empty():
-        return 0
-    pd_df = raw_trades_df_for_insert(df)
-    ch = await async_client()
-    await ch.insert_df("tradernick.binance_raw_trades", pd_df)
-    return len(pd_df)
+    total = 0
+    start = since
+    while start < until:
+        end = min(start + FETCH_CHUNK, until)
+        df = await (
+            ds.exchange.binance.raw_trades()
+            .token(*tokens)
+            .time_range(_iso(start), _iso(end))
+            .as_df("polars")
+        )
+        if not df.is_empty():
+            pd_df = raw_trades_df_for_insert(df)
+            del df  # drop the polars frame before the pandas copy + insert
+            ch = await async_client()
+            await ch.insert_df("tradernick.binance_raw_trades", pd_df)
+            total += len(pd_df)
+            del pd_df
+        start = end
+    return total
 
 
 async def main(stream_name: str | None = None):
@@ -98,7 +114,7 @@ async def main(stream_name: str | None = None):
             _sweep_err: str | None = None
             _sweep_t0 = time.monotonic()
             try:
-                last_seen = await min_watermark_per_token(ch, table="tradernick.binance_raw_trades", tokens=tokens)
+                last_seen = await min_watermark_per_token(ch, table="tradernick.binance_raw_trades", tokens=tokens, max_staleness_seconds=20 * 3600)
                 since = sweep.sweep_since(
                     now=now,
                     sweep_cadence_seconds=sweep_cadence,

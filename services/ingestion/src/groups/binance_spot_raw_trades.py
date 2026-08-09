@@ -96,7 +96,7 @@ async def main(stream_name: str | None = None):
             _sweep_err: str | None = None
             _sweep_t0 = time.monotonic()
             try:
-                last_seen = await min_watermark_per_token(ch, table="tradernick.binance_raw_spot_trades", tokens=tokens)
+                last_seen = await min_watermark_per_token(ch, table="tradernick.binance_raw_spot_trades", tokens=tokens, max_staleness_seconds=20 * 3600)
                 since = sweep.sweep_since(
                     now=now,
                     sweep_cadence_seconds=sweep_cadence,
