@@ -1,21 +1,27 @@
-"""Live polling for Binance order book depth snapshots.
+"""Scheduled Binance order-book-depth ingestion.
 
-12 rows per snapshot at fixed bps levels from mid-price, one snapshot
-~every 30s per token. Same multi-token shape as binance_open_interest:
-`.token(*symbols)` returns a DataFrame containing every requested
-token, distinguished by the `token` column.
+12 rows per snapshot at fixed bps levels from mid-price (±20, ±100, ±200, ±300,
+±400, ±500), one snapshot ~every 30s per token. `percentage` is a data *column*
+(long format), so the ±20 level DeFiStream added (data from 2025-10-01 on) needs
+no schema change — it's just extra rows; pre-2026-02 rows may carry value=0 for
+±20, which is fine.
 
-DeFiStream caps book_depth at 31 days/request, same as OI/funding/LSR.
+DeFiStream serves book_depth from Binance's authoritative *next-day* dataset, so
+the current day (± a couple hours) is unsettled and often returns 0 / omits
+symbols. We therefore DON'T poll the live edge — we fetch on a fixed daily
+schedule (UTC) so every pull lands on settled data:
 
-Coverage caveat (2026-06): book_depth is served from Binance's
-authoritative next-day dataset. The current (not-yet-settled) day comes
-from a live feed that only publishes a symbol's current-day rows once
-its order book genuinely reaches ±5%. Deep-book majors (BTC, ETH, BNB,
-...) therefore appear only after the ~1-day settlement. Multi-token
-requests just omit uncovered symbols for the current day — except when
-*none* of the requested symbols have current-day coverage, in which
-case the API returns HTTP 422 with a `vision_through` date. We catch
-that, clip `until` to vision_through, and retry.
+  * 12:00 UTC — fetch the last 2 days for all live tokens (primary daily pull).
+  * 18:00 UTC — fetch the last 3 days for all live tokens (recovery: covers up
+    to 3 missed days after downtime).
+
+Overlap is harmless: the ReplacingMergeTree(ingested_at) table keeps the latest
+fetch per (token, time, percentage), so a later settled (non-zero) value
+replaces an earlier truncated 0.
+
+DeFiStream caps book_depth at 31 days/request; when *no* requested symbol has
+current-day coverage the API returns HTTP 422 with a `vision_through` date,
+which we catch, clip `until` to, and retry.
 """
 import asyncio
 import logging
@@ -29,31 +35,34 @@ from defistream.exceptions import DeFiStreamError
 import ch_status
 import config
 import token_batches
-import sweep
 from clickhouse import BOOK_DEPTH_COLUMNS, async_client, book_depth_df_to_rows
-from gap_fill import min_watermark_per_token
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [binance_book_depth] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 300
+# Fixed daily schedule (UTC). Noon = primary 2-day pull; 18:00 = 3-day recovery.
+NOON_HOUR_UTC = 12
+NOON_LOOKBACK = timedelta(days=2)
+SWEEP_HOUR_UTC = 18
+SWEEP_LOOKBACK = timedelta(days=3)
 
-# Daily settlement sweep. DeFiStream serves book_depth from Binance's
-# authoritative *next-day* dataset, so many symbols (deep-book majors like
-# BTC/ETH/BNB especially) only publish a given day's rows once that day has
-# settled, ~1 day later. The 5-min live poll and the ~50-min gap sweep both
-# ride the current edge and never look back far enough to pick those up, so
-# once a day we re-fetch a 2-day trailing window over the full token
-# universe. We don't need to enumerate which tokens are intraday-capable:
-# DeFiStream silently omits any symbol without coverage for the window
-# (live already relies on this), and the ReplacingMergeTree table dedups the
-# overlap against whatever the live/gap sweeps already inserted.
-DAILY_SWEEP_CADENCE_SECONDS = 24 * 3600
-DAILY_SWEEP_LOOKBACK = timedelta(days=2)
+# Fetch large windows in 1-day chunks: bounds peak memory (book_depth is a
+# per-30s snapshot series over ~95 tokens) and gives each day its own
+# vision_through handling, so an unsettled current day is clipped, not fatal.
+FETCH_CHUNK = timedelta(days=1)
 
 
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def _seconds_until(hour_utc: int) -> float:
+    """Seconds until the next HH:00:00 UTC."""
+    now = datetime.now(timezone.utc)
+    target = now.replace(hour=hour_utc, minute=0, second=0, microsecond=0)
+    if target <= now:
+        target += timedelta(days=1)
+    return (target - now).total_seconds()
 
 
 def _parse_vision_through(exc: DeFiStreamError) -> datetime | None:
@@ -100,6 +109,18 @@ async def fetch_and_insert(ds: AsyncDeFiStream, tokens: list[str], since: dateti
         return await _do_fetch_and_insert(ds, tokens, since, vt)
 
 
+async def fetch_window_chunked(ds: AsyncDeFiStream, tokens: list[str], since: datetime, until: datetime) -> int:
+    """Fetch [since, until) in 1-day chunks, inserting incrementally so peak
+    memory stays bounded to one day of snapshots."""
+    total = 0
+    start = since
+    while start < until:
+        end = min(start + FETCH_CHUNK, until)
+        total += await fetch_and_insert(ds, tokens, start, end)
+        start = end
+    return total
+
+
 async def main(stream_name: str | None = None):
     if not config.DEFISTREAM_API_KEY:
         log.error("DEFISTREAM_API_KEY is not set")
@@ -109,99 +130,35 @@ async def main(stream_name: str | None = None):
         sys.exit(2)
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
-    tokens = token_batches.get_live_tokens()
-    log.info("polling %d tokens every %ss + gap-fill from min-watermark — 1 multi-token call/tick",
-             len(tokens), POLL_INTERVAL_SECONDS)
+    log.info("book_depth scheduled ingestion: %02d:00 UTC (last %s) + %02d:00 UTC (last %s), tokens=%d",
+             NOON_HOUR_UTC, NOON_LOOKBACK, SWEEP_HOUR_UTC, SWEEP_LOOKBACK, len(token_batches.get_live_tokens()))
 
-    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS)
-
-    async def live_loop():
-        jitter = sweep.live_jitter_s(POLL_INTERVAL_SECONDS)
-        log.info("live_loop: waiting %.0fs before first fire", jitter)
-        await asyncio.sleep(jitter)
+    async def scheduled_loop(hour_utc: int, lookback: timedelta, label: str):
         while True:
+            wait = _seconds_until(hour_utc)
+            log.info("%s: sleeping %.0fs until next %02d:00 UTC", label, wait, hour_utc)
+            await asyncio.sleep(wait)
             tokens = token_batches.get_live_tokens()
-            tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            since = now - sweep.LIVE_OVERLAP
-            n = 0
+            since = now - lookback
+            _t0 = time.monotonic()
+            rows = 0
             err: str | None = None
-            _live_t0 = time.monotonic()
-            if stream_name:
-                await ch_status.write_tick_start(stream_name)
             try:
-                n = await fetch_and_insert(ds, tokens, since, now)
-                log.info("multi-token rows=%d (tokens=%d)", n, len(tokens))
+                rows = await fetch_window_chunked(ds, tokens, since, now)
+                log.info("book_depth %s fetch window=%s..%s rows=%d (tokens=%d)", label, since, now, rows, len(tokens))
             except Exception as exc:
                 err = f"{type(exc).__name__}: {exc}"[:1000]
-                log.exception("multi-token fetch failed: %s", exc)
+                log.exception("book_depth %s fetch failed: %s", label, exc)
             if stream_name:
-                await ch_status.write_tick(stream_name, n, error=err, duration_s=time.monotonic()-_live_t0)
-            await asyncio.sleep(max(0.0, tick_end - time.monotonic()))
+                await ch_status.write_sweep(stream_name, time.monotonic() - _t0, rows=rows, error=err)
+            # Guard against a same-second re-fire if the fetch returned instantly.
+            await asyncio.sleep(1)
 
-    async def sweep_loop(once: bool = False):
-        if not once:
-            jitter = sweep.sweep_jitter_s(sweep_cadence)
-            log.info("sweep_loop: waiting %.0fs before first fire (cadence=%ss)", jitter, sweep_cadence)
-            await asyncio.sleep(jitter)
-        ch = await async_client()
-        while True:
-            tokens = token_batches.get_live_tokens()
-            next_fire = time.monotonic() + sweep_cadence
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
-            _sweep_rows = 0
-            _sweep_err: str | None = None
-            _sweep_t0 = time.monotonic()
-            try:
-                last_seen = await min_watermark_per_token(ch, table="tradernick.binance_book_depth", tokens=tokens, max_staleness_seconds=30 * 24 * 3600)
-                since = sweep.sweep_since(
-                    now=now,
-                    sweep_cadence_seconds=sweep_cadence,
-                    last_seen=last_seen,
-                    # DeFiStream book_depth cap is 31 days; leave 1 day of slack.
-                    max_window_seconds=30 * 24 * 3600,
-                    stream_name=stream_name or "binance_book_depth",
-                )
-                if since < now:
-                    n = await fetch_and_insert(ds, tokens, since, now)
-                    log.info("binance_book_depth sweep window=%s..%s rows=%d (min_last_seen=%s, tokens=%d)",
-                             since, now, n, last_seen, len(tokens))
-            except Exception as exc:
-                log.exception("binance_book_depth sweep failed: %s", exc)
-            await ch_status.write_sweep(stream_name, time.monotonic() - _sweep_t0, rows=_sweep_rows, error=_sweep_err) if stream_name else None
-            if once:
-                return
-            await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
-
-    async def daily_sweep_loop():
-        # One worker per stream, so the jitter here is only to avoid every
-        # service hammering DeFiStream at the same boot instant — keep it
-        # small so the first daily sweep fires shortly after startup rather
-        # than up to a day later.
-        jitter = sweep.sweep_jitter_s(POLL_INTERVAL_SECONDS)
-        log.info("daily_sweep_loop: waiting %.0fs before first fire (cadence=%ss, lookback=%s)",
-                 jitter, DAILY_SWEEP_CADENCE_SECONDS, DAILY_SWEEP_LOOKBACK)
-        await asyncio.sleep(jitter)
-        while True:
-            tokens = token_batches.get_live_tokens()
-            next_fire = time.monotonic() + DAILY_SWEEP_CADENCE_SECONDS
-            now = datetime.now(timezone.utc).replace(tzinfo=None)
-            since = now - DAILY_SWEEP_LOOKBACK
-            try:
-                n = await fetch_and_insert(ds, tokens, since, now)
-                log.info("binance_book_depth daily sweep window=%s..%s rows=%d (tokens=%d)",
-                         since, now, n, len(tokens))
-            except Exception as exc:
-                log.exception("binance_book_depth daily sweep failed: %s", exc)
-            await asyncio.sleep(max(0.0, next_fire - time.monotonic()))
-
-    # Boot-sweep — run one sweep iteration to completion BEFORE the live
-    # loop starts, so a restart after a long stop recovers the full
-    # [last_seen, now] gap instead of live_loop advancing the watermark
-    # past it (mirrors streams/_hl_common.py).
-    log.info("boot-sweep: recovering pre-restart gap before live loop starts")
-    await sweep_loop(once=True)
-    await asyncio.gather(live_loop(), sweep_loop(), daily_sweep_loop())
+    await asyncio.gather(
+        scheduled_loop(NOON_HOUR_UTC, NOON_LOOKBACK, "noon"),
+        scheduled_loop(SWEEP_HOUR_UTC, SWEEP_LOOKBACK, "sweep-6pm"),
+    )
 
 
 if __name__ == "__main__":
