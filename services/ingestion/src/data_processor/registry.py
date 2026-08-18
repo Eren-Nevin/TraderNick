@@ -110,17 +110,6 @@ GROUP BY direction, exchange, chain, token, time
 # Daily partitions on the target.
 # ─────────────────────────────────────────────────────────────────────────────
 
-_HL_POSITION_HISTORY_15M_SELECT = """
-SELECT
-    toStartOfInterval(time, INTERVAL 15 MINUTE) AS bucket,
-    token, side, wallet,
-    argMaxState(amount,         time) AS amount_state,
-    argMaxState(size,           time) AS size_state,
-    argMaxState(unrealized_pnl, time) AS pnl_state
-FROM tradernick.hl_position_history FINAL
-GROUP BY bucket, token, side, wallet
-"""
-
 _HL_POSITION_HISTORY_1H_SELECT = """
 SELECT
     toStartOfInterval(time, INTERVAL 1 HOUR) AS bucket,
@@ -299,18 +288,6 @@ REGISTRY: list[MaterializerSpec] = [
         partition_grain="hour",
         recent_partitions=6,
         recent_cadence_s=5 * 60,
-        sweep_window_days=7,
-        sweep_cadence_s=6 * 60 * 60,
-    ),
-    MaterializerSpec(
-        name="hl_position_history_15m",
-        source_table="tradernick.hl_position_history",
-        target_table="tradernick.hl_position_history_15m",
-        source_time_col="time",
-        rebuild_sql=_HL_POSITION_HISTORY_15M_SELECT,
-        partition_grain="day",
-        recent_partitions=1,
-        recent_cadence_s=30 * 60,
         sweep_window_days=7,
         sweep_cadence_s=6 * 60 * 60,
     ),

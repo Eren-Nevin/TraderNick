@@ -2165,20 +2165,17 @@ async def smart_oi(request):
     seconds = INTERVAL_SECONDS[interval]
     since_dt = _parse_iso(since); until_dt = _parse_iso(until)
 
-    # Same MV cascade as /oi_split — 1h MV for hourly+, 15m MV for 15m/30m,
-    # raw table otherwise. Adds toDate(bucket) so we can join the per-day
+    # 1h MV for hourly+; 15m/30m and finer read the raw table (15m rollup dropped).
+    # (Was: 15m MV for 15m/30m.) Adds toDate(bucket) so we can join the per-day
     # `smart_wallets` array from the selector.
     if seconds >= 3600 and seconds % 3600 == 0:
         oi_source = "tradernick.hl_position_history_1h"
         oi_time_col = "bucket"
         oi_amount_expr = "argMaxMerge(amount_state)"
         oi_size_expr   = "argMaxMerge(size_state)"
-    elif seconds >= 900 and seconds % 900 == 0:
-        oi_source = "tradernick.hl_position_history_15m"
-        oi_time_col = "bucket"
-        oi_amount_expr = "argMaxMerge(amount_state)"
-        oi_size_expr   = "argMaxMerge(size_state)"
     else:
+        # 15m/30m and sub-15m both read the raw table (the hl_position_history_15m
+        # rollup was dropped — 1h rollup still serves hourly+).
         oi_source = "tradernick.hl_position_history"
         oi_time_col = "time"
         oi_amount_expr = "argMax(amount, time)"
@@ -2304,12 +2301,9 @@ async def smart_wallet_oi(request):
         oi_time_col = "bucket"
         oi_amount_expr = "argMaxMerge(amount_state)"
         oi_size_expr   = "argMaxMerge(size_state)"
-    elif seconds >= 900 and seconds % 900 == 0:
-        oi_source = "tradernick.hl_position_history_15m"
-        oi_time_col = "bucket"
-        oi_amount_expr = "argMaxMerge(amount_state)"
-        oi_size_expr   = "argMaxMerge(size_state)"
     else:
+        # 15m/30m and sub-15m both read the raw table (the hl_position_history_15m
+        # rollup was dropped — 1h rollup still serves hourly+).
         oi_source = "tradernick.hl_position_history"
         oi_time_col = "time"
         oi_amount_expr = "argMax(amount, time)"
@@ -4327,12 +4321,9 @@ async def smart_wallet_oi_rolling(request):
         oi_time_col = "bucket"
         oi_amount_expr = "argMaxMerge(amount_state)"
         oi_size_expr   = "argMaxMerge(size_state)"
-    elif seconds >= 900 and seconds % 900 == 0:
-        oi_source = "tradernick.hl_position_history_15m"
-        oi_time_col = "bucket"
-        oi_amount_expr = "argMaxMerge(amount_state)"
-        oi_size_expr   = "argMaxMerge(size_state)"
     else:
+        # 15m/30m and sub-15m both read the raw table (the hl_position_history_15m
+        # rollup was dropped — 1h rollup still serves hourly+).
         oi_source = "tradernick.hl_position_history"
         oi_time_col = "time"
         oi_amount_expr = "argMax(amount, time)"
@@ -5774,12 +5765,12 @@ async def oi_split(request):
 
     # Pick the coarsest MV whose bucket divides the query interval — the
     # smaller the source table, the cheaper the argMaxMerge. 1h MV for
-    # 1h/4h/1d, 15m MV for 15m/30m, raw for 1m/5m.
+    # 1h/4h/1d, raw for everything finer (15m rollup dropped).
     if seconds >= 3600 and seconds % 3600 == 0:
         mv_table = "tradernick.hl_position_history_1h"
-    elif seconds >= 900 and seconds % 900 == 0:
-        mv_table = "tradernick.hl_position_history_15m"
     else:
+        # 15m/30m and 1m/5m read the raw table (hl_position_history_15m dropped;
+        # 1h rollup still serves hourly+).
         mv_table = None
     if mv_table is not None:
         sql = f"""
@@ -6511,13 +6502,13 @@ async def unrealized_pnl(request):
         "seconds": seconds, "token": token,
         "since": since_dt, "until": until_dt, "limit": limit,
     }
-    # Same MV-selection logic as /oi_split: 1h MV for 1h/4h/1d, 15m MV for
-    # 15m/30m, raw for 1m/5m. MV time column is `bucket`, raw is `time`.
+    # 1h MV for 1h/4h/1d, raw for everything finer (15m rollup dropped).
+    # MV time column is `bucket`, raw is `time`. MV time column is `bucket`, raw is `time`.
     if seconds >= 3600 and seconds % 3600 == 0:
         mv_table = "tradernick.hl_position_history_1h"
-    elif seconds >= 900 and seconds % 900 == 0:
-        mv_table = "tradernick.hl_position_history_15m"
     else:
+        # 15m/30m and 1m/5m read the raw table (hl_position_history_15m dropped;
+        # 1h rollup still serves hourly+).
         mv_table = None
     time_col = "bucket" if mv_table is not None else "time"
     inner_where = [

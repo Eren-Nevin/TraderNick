@@ -385,7 +385,6 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
       { name: 'materializers', label: 'Materializers', kind: 'multiselect',
         options: [
           'exchange_flow_minute',
-          'hl_position_history_15m',
           'hl_position_history_1h',
           'hl_position_history_eod_wallet',
           'hl_fills_pnl_daily',
@@ -396,7 +395,6 @@ export const BACKFILL_FORMS: BackfillFormSpec[] = [
           'hl_position_history_oi_wallet_daily',
         ],
         defaultSelected: [
-          'hl_position_history_15m',
           'hl_position_history_1h',
           'hl_position_history_eod_wallet',
           'hl_fills_pnl_daily',

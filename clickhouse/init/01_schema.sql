@@ -2323,21 +2323,10 @@ TTL toDateTime(time) + INTERVAL 730 DAY;
 -- prefix-compatible with the source's (token, time, side, wallet), so the
 -- backfill INSERT can stream-aggregate in order (optimize_aggregation_in_order
 -- = 1) and the live MV trigger uses the same ordering.
-CREATE TABLE IF NOT EXISTS tradernick.hl_position_history_15m
-(
-    bucket          DateTime       CODEC(DoubleDelta, ZSTD(3)),
-    token           LowCardinality(String),
-    side            LowCardinality(String),
-    wallet          String         CODEC(ZSTD(3)),
-    amount_state    AggregateFunction(argMax, Float64, DateTime64(3)),
-    size_state      AggregateFunction(argMax, Float64, DateTime64(3)),
-    pnl_state       AggregateFunction(argMax, Float64, DateTime64(3))
-) ENGINE = AggregatingMergeTree()
--- Daily partitions for atomic data_processor REPLACE PARTITION. The push
--- MV `hl_position_history_15m_mv` is gone — see data_processor/registry.py.
-PARTITION BY toDate(bucket)
-ORDER BY (token, bucket, side, wallet)
-TTL bucket + INTERVAL 730 DAY;
+-- hl_position_history_15m rollup was DROPPED (2026-08-18, ~93 GiB): it only
+-- served 15m/30m-resolution OI charts (smart_oi / oi_split / smart_wallet_oi_
+-- rolling / unrealized_pnl), which now read the raw hl_position_history table
+-- for those resolutions. The 1h rollup (below) still serves hourly+.
 
 -- 1-hour rollup of hl_position_history. Same argMaxState pattern as the
 -- 15m rollup; 4× fewer rows. Routes pick the coarsest rollup whose bucket
