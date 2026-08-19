@@ -542,11 +542,18 @@ def _duckdb_scan(src, specs, since, until, min_amount, max_amount, dst, scalars=
         where = (' WHERE ' + ' AND '.join(preds)) if preds else ''
         base = f"SELECT * FROM read_parquet('{_sql_lit(src)}'){where}"
         if dst:
-            con.execute(f"COPY ({base}) TO '{_sql_lit(dst)}' (FORMAT PARQUET)", params)
+            # zstd to match the polars save paths (_maybe_save_or_return /
+            # snapshot.save), so a scan-derived snapshot isn't ~45% larger than
+            # a directly-saved one just because DuckDB's default is snappy.
+            con.execute(
+                f"COPY ({base}) TO '{_sql_lit(dst)}' "
+                f"(FORMAT PARQUET, COMPRESSION 'zstd')", params)
             return None
+        # In-memory result streamed back to the client (transient wire bytes,
+        # not a stored snapshot) — zstd too, to trim transfer size.
         tbl = con.execute(base, params).fetch_arrow_table()
         buf = io.BytesIO()
-        pq.write_table(tbl, buf)
+        pq.write_table(tbl, buf, compression='zstd')
         return buf.getvalue()
     finally:
         con.close()
