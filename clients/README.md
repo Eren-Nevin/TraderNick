@@ -53,6 +53,16 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**2.3.0 — fills-oriented `scan()` filters.** `client.snapshot.scan(key)` gains
+filters for HL fills snapshots. `involving` (+ `_entity`/`_category`/`_groups`/
+`exclude_*`) now also matches the single `wallet` column, so the full
+wallet-selection surface works on fills, not just transfers. New: `side('buy'|
+'sell')` (matches the fills B/A `side` encoding), `min_size`/`max_size` (base
+`size` column), `min_size_notional`/`max_size_notional` (`size * price`), and
+`tokens([...])` — a case-insensitive `token` filter that works on **both** fills
+and transfer snapshots. All are server-side and no-op on snapshots lacking the
+referenced column.
+
 **2.2.0 — `client.snapshot.save(df, key)`.** Persist a client-side frame as a
 snapshot — accepts a polars `DataFrame`/`LazyFrame` or a pandas `DataFrame`. A
 `time` column is normalized to `Datetime('ms', UTC)` on write (matching `load`);

@@ -383,3 +383,26 @@ def test_scan_filter_accepts_str_or_list(client):
     assert client.snapshot.scan("snap").sender_groups("Whales")._body["sender_groups"] == ["Whales"]
     with pytest.raises(TypeError):
         client.snapshot.scan("snap").sender_groups([123])  # non-string in list
+
+
+def test_scan_fills_filters(client):
+    # HL fills-oriented scan filters set their own body keys.
+    q = (client.snapshot.scan("fills")
+         .involving_entity("Wintermute")
+         .side("buy")
+         .min_size(0.5)
+         .max_size(100)
+         .min_size_notional(10_000)
+         .max_size_notional(5_000_000)
+         .tokens(["btc", "ETH"]))
+    assert q._body["involving_label"] == ["Wintermute"]  # entity → label key (server lowers)
+    assert q._body["side"] == "buy"
+    assert q._body["min_size"] == 0.5
+    assert q._body["max_size"] == 100
+    assert q._body["min_size_notional"] == 10_000
+    assert q._body["max_size_notional"] == 5_000_000
+    assert q._body["tokens"] == ["btc", "ETH"]
+
+
+def test_scan_tokens_accepts_str(client):
+    assert client.snapshot.scan("snap").tokens("BTC")._body["tokens"] == ["BTC"]

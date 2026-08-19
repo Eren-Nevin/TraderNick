@@ -339,8 +339,14 @@ def register(app: Sanic) -> None:
         and ``min_amount``/``max_amount``. Each wallet-selection filter is
         resolved to member addresses (ClickHouse) and applied against the
         snapshot in DuckDB — the snapshot parquet is one table, each resolved
-        address set another. Filters referencing columns the snapshot lacks
-        (e.g. sender/receiver on a non-transfer snapshot) are skipped.
+        address set another. On single-actor snapshots (HL fills) ``involving``
+        matches the ``wallet`` column.
+
+        Fills-oriented scalar filters: ``side`` ('buy'/'sell' → the fills B/A
+        encoding), ``min_size``/``max_size`` (base ``size`` col), ``min_size_notional``
+        /``max_size_notional`` (``size * price``), and ``tokens`` (case-insensitive
+        list on the ``token`` col — works on fills AND transfer snapshots).
+        Filters referencing columns the snapshot lacks are skipped.
         """
         body = request.json or {}
         key = body.get('key')
@@ -372,11 +378,14 @@ def register(app: Sanic) -> None:
             except ValueError as e:
                 return response.json({'error': str(e)}, status=400)
 
+        scalars = {k: body.get(k) for k in (
+            'side', 'min_size', 'max_size',
+            'min_size_notional', 'max_size_notional', 'tokens')}
         try:
             data = await asyncio.to_thread(
                 _duckdb_scan, src, specs,
                 body.get('since'), body.get('until'),
-                body.get('min_amount'), body.get('max_amount'), dst,
+                body.get('min_amount'), body.get('max_amount'), dst, scalars,
             )
         except Exception as e:  # noqa: BLE001
             log.exception('snapshots.scan duckdb failed')
@@ -444,20 +453,30 @@ def _sql_lit(s: str) -> str:
     return str(s).replace("'", "''")
 
 
-def _duckdb_scan(src, specs, since, until, min_amount, max_amount, dst):
+# side='buy'/'sell' → the set of column encodings that count as that side. The
+# HL fills `side` column stores B (buy/bid) / A (ask/sell); we also accept the
+# spelled-out forms so the filter works whatever a snapshot happens to store.
+_SIDE_VALUES = {'buy': ('b', 'buy'), 'sell': ('a', 's', 'sell')}
+
+
+def _duckdb_scan(src, specs, since, until, min_amount, max_amount, dst, scalars=None):
     """Filter a snapshot parquet in DuckDB. `specs` = list of
-    (role, exclude, addresses). Returns parquet bytes, or writes to `dst` and
+    (role, exclude, addresses); `scalars` = non-wallet filters (side / size /
+    size_notional / tokens). Returns parquet bytes, or writes to `dst` and
     returns None. Runs in a worker thread (sync DuckDB) via asyncio.to_thread."""
     import duckdb
     import pyarrow as pa
 
+    scalars = scalars or {}
     con = duckdb.connect()
     try:
         con.execute("SET TimeZone='UTC'")  # snapshot time cols are UTC
         cols = con.execute(
             "SELECT * FROM read_parquet(?) LIMIT 0", [src]
         ).fetch_arrow_table().column_names
-        has = {c: (c in cols) for c in ('sender', 'receiver', 'time', 'amount')}
+        has = {c: (c in cols) for c in
+               ('sender', 'receiver', 'wallet', 'time', 'amount',
+                'side', 'size', 'price', 'token')}
 
         preds: list[str] = []
         params: list = []
@@ -472,6 +491,10 @@ def _duckdb_scan(src, specs, since, until, min_amount, max_amount, dst):
                 parts.append(f'lower(sender) IN ({sub})')
             if role in ('receiver', 'involving') and has['receiver']:
                 parts.append(f'lower(receiver) IN ({sub})')
+            # HL fills (and any single-actor snapshot) carry one `wallet` column
+            # instead of sender/receiver — `involving` matches it there.
+            if role == 'involving' and has['wallet']:
+                parts.append(f'lower(wallet) IN ({sub})')
             if not parts:
                 continue  # snapshot lacks these columns → filter is a no-op
             if role == 'involving':
@@ -489,6 +512,32 @@ def _duckdb_scan(src, specs, since, until, min_amount, max_amount, dst):
             preds.append('amount >= ?'); params.append(float(min_amount))
         if max_amount is not None and has['amount']:
             preds.append('amount <= ?'); params.append(float(max_amount))
+
+        # side='buy'/'sell' (HL fills). No-op if the snapshot has no `side` col.
+        side = scalars.get('side')
+        if side and has['side']:
+            accepted = _SIDE_VALUES.get(str(side).strip().lower())
+            if accepted:
+                ph = ','.join('?' for _ in accepted)
+                preds.append(f'lower(side) IN ({ph})'); params.extend(accepted)
+        # size (base) bounds.
+        if scalars.get('min_size') is not None and has['size']:
+            preds.append('size >= ?'); params.append(float(scalars['min_size']))
+        if scalars.get('max_size') is not None and has['size']:
+            preds.append('size <= ?'); params.append(float(scalars['max_size']))
+        # notional = size * price bounds.
+        if scalars.get('min_size_notional') is not None and has['size'] and has['price']:
+            preds.append('(size * price) >= ?'); params.append(float(scalars['min_size_notional']))
+        if scalars.get('max_size_notional') is not None and has['size'] and has['price']:
+            preds.append('(size * price) <= ?'); params.append(float(scalars['max_size_notional']))
+        # case-insensitive token filter (fills AND transfer snapshots).
+        toks = scalars.get('tokens')
+        if toks and has['token']:
+            tl = [str(t).lower() for t in (toks if isinstance(toks, (list, tuple)) else [toks])
+                  if t is not None and str(t) != '']
+            if tl:
+                ph = ','.join('?' for _ in tl)
+                preds.append(f'lower(token) IN ({ph})'); params.extend(tl)
 
         where = (' WHERE ' + ' AND '.join(preds)) if preds else ''
         base = f"SELECT * FROM read_parquet('{_sql_lit(src)}'){where}"

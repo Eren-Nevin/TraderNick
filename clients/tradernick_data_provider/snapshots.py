@@ -75,7 +75,15 @@ class ScanParquetQuery(_WalletFilters):
     ``_category`` / ``_groups`` + ``exclude_*``, all ``str | list[str]``). On a
     scan the server resolves each selection to member addresses and filters the
     snapshot in DuckDB, so category/entity/group filters actually apply here
-    (they reduce to an address set).
+    (they reduce to an address set). On HL fills snapshots (one ``wallet``
+    column, no sender/receiver) ``involving`` matches ``wallet``.
+
+    Fills-oriented filters (no-ops on snapshots lacking the column):
+        ``side('buy'|'sell')``            — the ``side`` column (B/A encoding)
+        ``min_size`` / ``max_size``       — the base ``size`` column
+        ``min_size_notional`` / ``max_size_notional`` — ``size * price``
+        ``tokens([...])``                 — case-insensitive ``token`` filter
+                                            (fills AND transfer snapshots)
 
     Terminal calls:
         ``as_polars()`` → ``pl.DataFrame``
@@ -114,6 +122,43 @@ class ScanParquetQuery(_WalletFilters):
 
     def max_amount(self: _T, amount: float) -> _T:
         self._body["max_amount"] = amount
+        return self
+
+    # --- HL fills-oriented filters ------------------------------------------
+    # No-ops on snapshots that lack the referenced column (e.g. `side`/`size`
+    # on a transfer snapshot) — the server skips a filter whose column is
+    # absent, so these are safe to chain on any snapshot.
+
+    def side(self: _T, side: str) -> _T:
+        """Keep only ``'buy'`` or ``'sell'`` fills. Matches the ``side`` column
+        (mapped to the snapshot's B/A encoding)."""
+        self._body["side"] = side
+        return self
+
+    def min_size(self: _T, size: float) -> _T:
+        """Lower bound on the base ``size`` column."""
+        self._body["min_size"] = size
+        return self
+
+    def max_size(self: _T, size: float) -> _T:
+        """Upper bound on the base ``size`` column."""
+        self._body["max_size"] = size
+        return self
+
+    def min_size_notional(self: _T, notional: float) -> _T:
+        """Lower bound on notional (``size * price``)."""
+        self._body["min_size_notional"] = notional
+        return self
+
+    def max_size_notional(self: _T, notional: float) -> _T:
+        """Upper bound on notional (``size * price``)."""
+        self._body["max_size_notional"] = notional
+        return self
+
+    def tokens(self: _T, tokens: Union[str, list]) -> _T:
+        """Case-insensitive token filter on the ``token`` column. Works on
+        both fills and transfer snapshots."""
+        self._body["tokens"] = [tokens] if isinstance(tokens, str) else list(tokens)
         return self
 
     async def _post(self) -> bytes:
