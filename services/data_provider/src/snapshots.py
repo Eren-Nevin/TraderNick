@@ -342,11 +342,14 @@ def register(app: Sanic) -> None:
         address set another. On single-actor snapshots (HL fills) ``involving``
         matches the ``wallet`` column.
 
-        Fills-oriented scalar filters: ``side`` ('buy'/'sell' → the fills B/A
-        encoding), ``min_size``/``max_size`` (base ``size`` col), ``min_size_notional``
-        /``max_size_notional`` (``size * price``), and ``tokens`` (case-insensitive
-        list on the ``token`` col — works on fills AND transfer snapshots).
-        Filters referencing columns the snapshot lacks are skipped.
+        Trade-oriented scalar filters, column-adaptive across snapshot kinds:
+        ``side`` ('buy'/'sell' → the fills B/A ``side`` col, or the binance
+        raw_trades ``buy`` boolean); ``min_size``/``max_size`` (the ``size`` col
+        on fills, else the ``amount`` col on raw_trades/transfers);
+        ``min_size_notional``/``max_size_notional`` (that size col × ``price``);
+        and ``tokens`` (case-insensitive ``token`` filter — fills, raw_trades,
+        AND transfer snapshots). Filters referencing columns the snapshot lacks
+        are skipped.
         """
         body = request.json or {}
         key = body.get('key')
@@ -476,7 +479,7 @@ def _duckdb_scan(src, specs, since, until, min_amount, max_amount, dst, scalars=
         ).fetch_arrow_table().column_names
         has = {c: (c in cols) for c in
                ('sender', 'receiver', 'wallet', 'time', 'amount',
-                'side', 'size', 'price', 'token')}
+                'side', 'size', 'price', 'token', 'buy')}
 
         preds: list[str] = []
         params: list = []
@@ -513,23 +516,36 @@ def _duckdb_scan(src, specs, since, until, min_amount, max_amount, dst, scalars=
         if max_amount is not None and has['amount']:
             preds.append('amount <= ?'); params.append(float(max_amount))
 
-        # side='buy'/'sell' (HL fills). No-op if the snapshot has no `side` col.
+        # side='buy'/'sell'. HL fills store a `side` column (B/A); binance
+        # raw_trades store a `buy` boolean. Map onto whichever this snapshot has.
         side = scalars.get('side')
-        if side and has['side']:
-            accepted = _SIDE_VALUES.get(str(side).strip().lower())
-            if accepted:
-                ph = ','.join('?' for _ in accepted)
-                preds.append(f'lower(side) IN ({ph})'); params.extend(accepted)
-        # size (base) bounds.
-        if scalars.get('min_size') is not None and has['size']:
-            preds.append('size >= ?'); params.append(float(scalars['min_size']))
-        if scalars.get('max_size') is not None and has['size']:
-            preds.append('size <= ?'); params.append(float(scalars['max_size']))
-        # notional = size * price bounds.
-        if scalars.get('min_size_notional') is not None and has['size'] and has['price']:
-            preds.append('(size * price) >= ?'); params.append(float(scalars['min_size_notional']))
-        if scalars.get('max_size_notional') is not None and has['size'] and has['price']:
-            preds.append('(size * price) <= ?'); params.append(float(scalars['max_size_notional']))
+        if side:
+            want = str(side).strip().lower()
+            if has['side']:
+                accepted = _SIDE_VALUES.get(want)
+                if accepted:
+                    ph = ','.join('?' for _ in accepted)
+                    preds.append(f'lower(side) IN ({ph})'); params.extend(accepted)
+            elif has['buy'] and want in ('buy', 'sell'):
+                preds.append('CAST(buy AS BOOLEAN)' if want == 'buy'
+                             else 'NOT CAST(buy AS BOOLEAN)')
+        # size bounds: HL fills use `size`; binance raw_trades use `amount`.
+        # Prefer `size`, fall back to `amount` (so on a transfers/raw_trades
+        # snapshot min_size/max_size act on `amount`).
+        size_col = 'size' if has['size'] else ('amount' if has['amount'] else None)
+        if size_col:
+            if scalars.get('min_size') is not None:
+                preds.append(f'{size_col} >= ?'); params.append(float(scalars['min_size']))
+            if scalars.get('max_size') is not None:
+                preds.append(f'{size_col} <= ?'); params.append(float(scalars['max_size']))
+            # notional = size(or amount) * price
+            if has['price']:
+                if scalars.get('min_size_notional') is not None:
+                    preds.append(f'({size_col} * price) >= ?')
+                    params.append(float(scalars['min_size_notional']))
+                if scalars.get('max_size_notional') is not None:
+                    preds.append(f'({size_col} * price) <= ?')
+                    params.append(float(scalars['max_size_notional']))
         # case-insensitive token filter (fills AND transfer snapshots).
         toks = scalars.get('tokens')
         if toks and has['token']:

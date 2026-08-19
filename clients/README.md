@@ -53,6 +53,14 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**2.5.0 — `scan()` trade filters now cover binance raw_trades.** The trade
+filters added in 2.3.0 are column-adaptive: `side('buy'|'sell')` matches the
+fills `side` col (B/A) **or** the binance raw_trades `buy` boolean;
+`min_size`/`max_size` and `min_size_notional`/`max_size_notional` use `size`
+(fills) **or** `amount` (raw_trades / spot raw_trades); `tokens([...])` works on
+all of fills, raw_trades, and transfers. No client API change — the methods from
+2.3.0 now apply to raw_trades snapshots too (server-side).
+
 **2.4.0 — leaner `fills()` by default.** `fills()` now also drops `block_number`
 and `block_time` by default (on top of the extra columns dropped since 0.9.0), for
 more compact frames/parquet. Add `.with_block_data()` to prepend them back. No

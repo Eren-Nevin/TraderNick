@@ -78,12 +78,15 @@ class ScanParquetQuery(_WalletFilters):
     (they reduce to an address set). On HL fills snapshots (one ``wallet``
     column, no sender/receiver) ``involving`` matches ``wallet``.
 
-    Fills-oriented filters (no-ops on snapshots lacking the column):
-        ``side('buy'|'sell')``            — the ``side`` column (B/A encoding)
-        ``min_size`` / ``max_size``       — the base ``size`` column
-        ``min_size_notional`` / ``max_size_notional`` — ``size * price``
+    Trade-oriented filters, column-adaptive (no-ops on snapshots lacking the
+    column). They work on HL fills AND binance raw_trades / spot raw_trades:
+        ``side('buy'|'sell')``            — the fills ``side`` col (B/A), or the
+                                            raw_trades ``buy`` boolean
+        ``min_size`` / ``max_size``       — the ``size`` col (fills), else the
+                                            ``amount`` col (raw_trades/transfers)
+        ``min_size_notional`` / ``max_size_notional`` — that size col × ``price``
         ``tokens([...])``                 — case-insensitive ``token`` filter
-                                            (fills AND transfer snapshots)
+                                            (fills, raw_trades, AND transfers)
 
     Terminal calls:
         ``as_polars()`` → ``pl.DataFrame``
@@ -124,40 +127,45 @@ class ScanParquetQuery(_WalletFilters):
         self._body["max_amount"] = amount
         return self
 
-    # --- HL fills-oriented filters ------------------------------------------
-    # No-ops on snapshots that lack the referenced column (e.g. `side`/`size`
-    # on a transfer snapshot) — the server skips a filter whose column is
-    # absent, so these are safe to chain on any snapshot.
+    # --- Trade-oriented filters (HL fills + binance raw_trades) --------------
+    # Column-adaptive and no-ops on snapshots that lack the referenced column,
+    # so they're safe to chain on any snapshot. The server resolves each to the
+    # right column for the snapshot kind (fills `side`/`size` vs raw_trades
+    # `buy`/`amount`).
 
     def side(self: _T, side: str) -> _T:
-        """Keep only ``'buy'`` or ``'sell'`` fills. Matches the ``side`` column
-        (mapped to the snapshot's B/A encoding)."""
+        """Keep only ``'buy'`` or ``'sell'`` trades. Matches the fills ``side``
+        column (B/A encoding) or the binance raw_trades ``buy`` boolean."""
         self._body["side"] = side
         return self
 
     def min_size(self: _T, size: float) -> _T:
-        """Lower bound on the base ``size`` column."""
+        """Lower bound on trade size — the ``size`` column (fills) or the
+        ``amount`` column (raw_trades / transfers)."""
         self._body["min_size"] = size
         return self
 
     def max_size(self: _T, size: float) -> _T:
-        """Upper bound on the base ``size`` column."""
+        """Upper bound on trade size — the ``size`` column (fills) or the
+        ``amount`` column (raw_trades / transfers)."""
         self._body["max_size"] = size
         return self
 
     def min_size_notional(self: _T, notional: float) -> _T:
-        """Lower bound on notional (``size * price``)."""
+        """Lower bound on notional (size × ``price``, where size is ``size`` on
+        fills or ``amount`` on raw_trades)."""
         self._body["min_size_notional"] = notional
         return self
 
     def max_size_notional(self: _T, notional: float) -> _T:
-        """Upper bound on notional (``size * price``)."""
+        """Upper bound on notional (size × ``price``, where size is ``size`` on
+        fills or ``amount`` on raw_trades)."""
         self._body["max_size_notional"] = notional
         return self
 
     def tokens(self: _T, tokens: Union[str, list]) -> _T:
         """Case-insensitive token filter on the ``token`` column. Works on
-        both fills and transfer snapshots."""
+        fills, raw_trades, and transfer snapshots."""
         self._body["tokens"] = [tokens] if isinstance(tokens, str) else list(tokens)
         return self
 
