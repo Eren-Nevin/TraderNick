@@ -846,12 +846,15 @@ HL_FILLS_EXTRA_COLS = ('fee_token', 'builder_fee', 'crossed', 'tid', 'oid', 'has
 def hl_fills(since: str, until: str, *, tokens: list[str] | None = None,
              wallets: list[str] | None = None,
              wallet_groups: list[str] | None = None,
-             extra_cols: bool = False) -> tuple[str, dict[str, Any]]:
-    """Horatio shape: (block_number, block_time, time(us,UTC), wallet, token,
-    price, size, side, dir, start_position, closed_pnl, fee[, fee_token,
-    builder_fee, crossed, tid, oid, hash]). block_time also us-precision.
+             extra_cols: bool = False,
+             block_data: bool = False) -> tuple[str, dict[str, Any]]:
+    """Horatio shape: (time(us,UTC), wallet, token, price, size, side, dir,
+    start_position, closed_pnl, fee[, fee_token, builder_fee, crossed, tid,
+    oid, hash]).
 
-    The bracketed tail (``HL_FILLS_EXTRA_COLS``) is dropped unless
+    ``block_number`` and ``block_time`` (us-precision) are prepended only when
+    ``block_data=True`` — dropped by default to keep returned frames/parquet
+    compact. The bracketed tail (``HL_FILLS_EXTRA_COLS``) is dropped unless
     ``extra_cols=True``."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
@@ -859,14 +862,13 @@ def hl_fills(since: str, until: str, *, tokens: list[str] | None = None,
         'time <  toDateTime64({until:String}, 3)',
     ]
     _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
+    block = f"block_number, {_time_us('block_time')}, " if block_data else ''
     extra = (
         ', fee_token, builder_fee, toBool(crossed) AS crossed, tid, oid, hash'
         if extra_cols else ''
     )
     sql = f"""
-        SELECT block_number,
-               {_time_us('block_time')},
-               {_time_us()},
+        SELECT {block}{_time_us()},
                wallet, token, price, size,
                side, dir, start_position, closed_pnl, fee{extra}
         FROM tradernick.hl_fills FINAL

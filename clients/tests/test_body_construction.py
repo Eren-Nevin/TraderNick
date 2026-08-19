@@ -115,6 +115,14 @@ def test_hyperliquid_fills_with_extra_cols(client):
     assert client.hyperliquid.fills().with_extra_cols(False)._body["extra_cols"] is False
 
 
+def test_hyperliquid_fills_with_block_data(client):
+    # fills drops block_number/block_time by default; .with_block_data() opts
+    # back in via the block_data body flag.
+    assert "block_data" not in client.hyperliquid.fills()._body
+    assert client.hyperliquid.fills().with_block_data()._body["block_data"] is True
+    assert client.hyperliquid.fills().with_block_data(False)._body["block_data"] is False
+
+
 def test_hyperliquid_window_scoping(client):
     hl = client.hyperliquid
     for name in ("ohlcv", "positions", "realized_performance"):

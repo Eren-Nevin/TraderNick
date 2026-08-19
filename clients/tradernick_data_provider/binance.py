@@ -237,6 +237,12 @@ class _HLBaseQuery(CacheableQuery):
         self._body["extra_cols"] = enabled
         return self
 
+    def with_block_data(self: _T, enabled: bool = True) -> _T:
+        """``fills()`` only — prepend the ``block_number`` and ``block_time``
+        columns, which are dropped by default to keep frames/parquet compact."""
+        self._body["block_data"] = enabled
+        return self
+
     async def _fetch_table(self) -> pa.Table:
         return await fetch_table(self._session, self._base_url + self._hl_path, self._body)
 

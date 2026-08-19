@@ -53,6 +53,11 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**2.4.0 — leaner `fills()` by default.** `fills()` now also drops `block_number`
+and `block_time` by default (on top of the extra columns dropped since 0.9.0), for
+more compact frames/parquet. Add `.with_block_data()` to prepend them back. No
+change to the columns themselves — just the default projection.
+
 **2.3.0 — fills-oriented `scan()` filters.** `client.snapshot.scan(key)` gains
 filters for HL fills snapshots. `involving` (+ `_entity`/`_category`/`_groups`/
 `exclude_*`) now also matches the single `wallet` column, so the full

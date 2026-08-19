@@ -235,17 +235,20 @@ Chainables (in addition to `.time_range()`):
 | `.market_type(t)` | e.g. `"perp"` / `"spot"` |
 | `.limit(n)` | cap rows |
 | `.with_extra_cols()` | **`fills()` only** — include the columns it drops by default: `fee_token`, `builder_fee`, `crossed`, `tid`, `oid`, `hash` |
+| `.with_block_data()` | **`fills()` only** — prepend `block_number`, `block_time` (dropped by default for compactness) |
 
 Examples:
 
 ```python
-# fills — by default drops fee_token/builder_fee/crossed/tid/oid/hash
+# fills — by default drops block_number/block_time AND
+# fee_token/builder_fee/crossed/tid/oid/hash for compact frames/parquet
 fills = await hl.fills().tokens("BTC").time_range(
     "2026-07-10T00:00:00Z", "2026-07-10T00:01:00Z").as_polars()
 
-# ...pass .with_extra_cols() to keep them
-fills_full = await hl.fills().tokens("BTC").with_extra_cols().time_range(
-    "2026-07-10T00:00:00Z", "2026-07-10T00:01:00Z").as_polars()
+# ...add .with_block_data() and/or .with_extra_cols() to keep them
+fills_full = await (hl.fills().tokens("BTC")
+    .with_block_data().with_extra_cols().time_range(
+        "2026-07-10T00:00:00Z", "2026-07-10T00:01:00Z").as_polars())
 
 # realized_performance REQUIRES tokens or wallets. No .window() → daily
 # absolute-cumulative snapshots; .window("15m"+) → per-window realized deltas.
