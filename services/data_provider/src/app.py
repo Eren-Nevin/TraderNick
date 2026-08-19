@@ -22,7 +22,7 @@ from . import proxies as proxies_mod
 from . import snapshots as snapshots_mod
 from . import sql as sql_b
 from . import wallets as wallets_mod
-from .ch import query_polars
+from .ch import query_polars, stream_query_to_parquet
 
 load_dotenv()
 
@@ -101,13 +101,38 @@ def _safe_key(key: str) -> str:
 async def _maybe_save_or_return(df: pl.DataFrame, body: dict, filename: str):
     """If `save_key` is set, write parquet to the snapshots dir and return
     `{"saved": True, "key": ...}`. Otherwise stream parquet bytes back.
-    Matches Horatio's two-mode response."""
+    Matches Horatio's two-mode response.
+
+    NOTE: this takes an already-materialized frame, so a huge result is already
+    in RAM by the time it's called. Prefer `_save_or_return` (which streams the
+    save path) for endpoints whose result can be very large."""
     save_key = body.get('save_key')
     if save_key:
         safe = _safe_key(save_key)
         path = os.path.join(app.ctx.snapshots_dir, f'{safe}.parquet')
         df.write_parquet(path)
         return response.json({'saved': True, 'key': safe})
+    return _parquet_response(df, filename)
+
+
+async def _save_or_return(sql: str, params: dict, body: dict, filename: str,
+                          empty_df: pl.DataFrame):
+    """Memory-safe two-mode response driven by the query, not a materialized
+    frame:
+      - `save_key` set  → STREAM the result to the snapshot parquet one Arrow
+        batch at a time (peak memory ≈ one CH block, not the whole result).
+      - otherwise       → materialize + return parquet bytes (interactive path;
+        the caller wants the full frame anyway).
+    `empty_df` supplies the stable schema when the result has zero rows."""
+    save_key = body.get('save_key')
+    if save_key:
+        safe = _safe_key(save_key)
+        path = os.path.join(app.ctx.snapshots_dir, f'{safe}.parquet')
+        rows = await stream_query_to_parquet(sql, params, path, empty_df=empty_df)
+        return response.json({'saved': True, 'key': safe, 'rows': rows})
+    df = await query_polars(sql, params)
+    if df.is_empty():
+        df = empty_df
     return _parquet_response(df, filename)
 
 
@@ -777,12 +802,12 @@ async def hyperliquid_fills(request: Request):
         body['since'], body['until'],
         extra_cols=extra_cols, block_data=block_data, **_hl_kwargs(body),
     )
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        drop = ([] if block_data else ['block_number', 'block_time']) + \
-               ([] if extra_cols else list(sql_b.HL_FILLS_EXTRA_COLS))
-        df = _EMPTY_HL_FILLS.drop(drop)
-    return await _maybe_save_or_return(df, body, 'hyperliquid_fills.parquet')
+    drop = ([] if block_data else ['block_number', 'block_time']) + \
+           ([] if extra_cols else list(sql_b.HL_FILLS_EXTRA_COLS))
+    empty = _EMPTY_HL_FILLS.drop(drop)
+    # fills can be enormous (BTC+ETH over months → hundreds of millions of
+    # rows); stream the save path so it never materializes the whole result.
+    return await _save_or_return(sql, params, body, 'hyperliquid_fills.parquet', empty)
 
 
 @app.post('/hyperliquid/funding/read')
