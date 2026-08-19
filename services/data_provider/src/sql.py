@@ -180,17 +180,21 @@ def binance_funding_rate(token: str, since: str, until: str) -> tuple[str, dict[
 
 
 def binance_raw_trades(token: str, since: str, until: str,
-                       *, with_id: bool = False,
+                       *, with_id: bool = False, add_symbol: bool = False,
                        table: str = 'binance_raw_trades') -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(ms,UTC), token, amount, price, buy). When
-    `with_id=True` an `id` column is included as the last position.
+    `with_id=True` an `id` column is included; when `add_symbol=True` a trailing
+    `symbol` column (= the token) is appended — both after `buy`, id then symbol.
 
     `table` selects the source: the default perp `binance_raw_trades`, or the
     spot `binance_raw_spot_trades` (identical schema) via `binance_spot_raw_trades`.
     """
     extra = ', id' if with_id else ''
+    # symbol is pushed into SQL (not added post-query) so the streaming save
+    # path carries it too — a subquery wrapper would lose the ORDER BY.
+    sym = ', {token:String} AS symbol' if add_symbol else ''
     sql = f"""
-        SELECT {_time_ms()}, token, amount, price, buy{extra}
+        SELECT {_time_ms()}, token, amount, price, buy{extra}{sym}
         FROM tradernick.{table} FINAL
         WHERE token = {{token:String}}
           AND time >= toDateTime64({{since:String}}, 3)
@@ -208,9 +212,11 @@ def binance_spot_ohlcv(token: str, window: str, since: str, until: str) -> tuple
 
 
 def binance_spot_raw_trades(token: str, since: str, until: str,
-                            *, with_id: bool = False) -> tuple[str, dict[str, Any]]:
+                            *, with_id: bool = False,
+                            add_symbol: bool = False) -> tuple[str, dict[str, Any]]:
     return binance_raw_trades(
-        token, since, until, with_id=with_id, table='binance_raw_spot_trades',
+        token, since, until, with_id=with_id, add_symbol=add_symbol,
+        table='binance_raw_spot_trades',
     )
 
 

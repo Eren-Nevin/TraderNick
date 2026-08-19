@@ -128,11 +128,18 @@ async def _save_or_return(sql: str, params: dict, body: dict, filename: str,
     if save_key:
         safe = _safe_key(save_key)
         path = os.path.join(app.ctx.snapshots_dir, f'{safe}.parquet')
-        rows = await stream_query_to_parquet(sql, params, path, empty_df=empty_df)
+        if sql is None:  # route short-circuited to "no rows" without a query
+            empty_df.write_parquet(path, compression='zstd')
+            rows = 0
+        else:
+            rows = await stream_query_to_parquet(sql, params, path, empty_df=empty_df)
         return response.json({'saved': True, 'key': safe, 'rows': rows})
-    df = await query_polars(sql, params)
-    if df.is_empty():
+    if sql is None:
         df = empty_df
+    else:
+        df = await query_polars(sql, params)
+        if df.is_empty():
+            df = empty_df
     return _parquet_response(df, filename)
 
 
@@ -437,10 +444,8 @@ async def binance_ohlcv(request: Request):
         sql, params = sql_b.binance_ohlcv(token, window, since, until)
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_OHLCV_FULL
-    return await _maybe_save_or_return(df, body, f'binance_{token}_ohlcv_{window}.parquet')
+    return await _save_or_return(
+        sql, params, body, f'binance_{token}_ohlcv_{window}.parquet', _EMPTY_OHLCV_FULL)
 
 
 @app.post('/binance/funding_rate/read')
@@ -452,10 +457,8 @@ async def binance_funding_rate(request: Request):
         return response.json({'error': str(e)}, status=400)
     token, since, until = body['token'], body['since'], body['until']
     sql, params = sql_b.binance_funding_rate(token, since, until)
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_FUNDING_FULL
-    return await _maybe_save_or_return(df, body, f'binance_{token}_funding_rate.parquet')
+    return await _save_or_return(
+        sql, params, body, f'binance_{token}_funding_rate.parquet', _EMPTY_FUNDING_FULL)
 
 
 @app.post('/evm/aave/read')
@@ -476,15 +479,11 @@ async def evm_aave(request: Request):
         )
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
+    # sql is None → unsupported network: drop-in Horatio behavior is an empty
+    # result, no error (handled inside _save_or_return).
     empty_template = _EMPTY_AAVE_BY_EVENT.get(event, _EMPTY_AAVE_BY_EVENT['deposit'])
-    if sql is None:
-        # Unsupported network — drop-in Horatio behavior: empty result, no error.
-        df = empty_template
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = empty_template
-    return await _maybe_save_or_return(df, body, f'{network}_aave_{event}.parquet')
+    return await _save_or_return(
+        sql, params, body, f'{network}_aave_{event}.parquet', empty_template)
 
 
 # Registered (both /read and /read/min) via the alias loop below, alongside the
@@ -502,19 +501,13 @@ async def evm_erc20_transfers(request: Request):
     sql, params = sql_b.evm_erc20_transfers(
         network, tokens, since, until, **_transfer_filter_kwargs(body),
     )
-    if sql is None:
-        df = _EMPTY_TRANSFER_FULL
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = _EMPTY_TRANSFER_FULL
     # `local_filters` are Horatio's post-query polars-side filters. The
     # route accepts the field but only the snapshot-scan path applies them
     # (see snapshots.scan); on the raw-read path they're informational —
     # the body still validates so client code that includes them gets the
-    # same 200 it did against Horatio.
+    # same 200 it did against Horatio. sql is None → empty (handled in helper).
     filename = f"{network}_{'_'.join(tokens)}_transfers.parquet"
-    return await _maybe_save_or_return(df, body, filename)
+    return await _save_or_return(sql, params, body, filename, _EMPTY_TRANSFER_FULL)
 
 
 # ---------------------------------------------------------------------------
@@ -532,17 +525,15 @@ async def binance_raw_trades(request: Request):
     with_id = bool(body.get('with_id', False))
     add_symbol = bool(body.get('add_symbol', False))
     sql, params = sql_b.binance_raw_trades(
-        token, body['since'], body['until'], with_id=with_id,
+        token, body['since'], body['until'], with_id=with_id, add_symbol=add_symbol,
     )
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = (
-            _EMPTY_RAW_TRADES_FULL.with_columns(pl.lit(None).cast(pl.Int64).alias('id'))
-            if with_id else _EMPTY_RAW_TRADES_FULL
-        )
+    empty = _EMPTY_RAW_TRADES_FULL
+    if with_id:
+        empty = empty.with_columns(pl.lit(None).cast(pl.Int64).alias('id'))
     if add_symbol:
-        df = df.with_columns(pl.lit(token).alias('symbol'))
-    return await _maybe_save_or_return(df, body, f'binance_{token}_raw_trades.parquet')
+        empty = empty.with_columns(pl.lit(None).cast(pl.Utf8).alias('symbol'))
+    return await _save_or_return(
+        sql, params, body, f'binance_{token}_raw_trades.parquet', empty)
 
 
 # --- Binance SPOT reads --------------------------------------------------
@@ -561,10 +552,8 @@ async def binance_spot_ohlcv(request: Request):
         sql, params = sql_b.binance_spot_ohlcv(token, window, since, until)
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_OHLCV_FULL
-    return await _maybe_save_or_return(df, body, f'binance_spot_{token}_ohlcv_{window}.parquet')
+    return await _save_or_return(
+        sql, params, body, f'binance_spot_{token}_ohlcv_{window}.parquet', _EMPTY_OHLCV_FULL)
 
 
 @app.post('/binance/spot/raw_trades/read')
@@ -578,17 +567,15 @@ async def binance_spot_raw_trades(request: Request):
     with_id = bool(body.get('with_id', False))
     add_symbol = bool(body.get('add_symbol', False))
     sql, params = sql_b.binance_spot_raw_trades(
-        token, body['since'], body['until'], with_id=with_id,
+        token, body['since'], body['until'], with_id=with_id, add_symbol=add_symbol,
     )
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = (
-            _EMPTY_RAW_TRADES_FULL.with_columns(pl.lit(None).cast(pl.Int64).alias('id'))
-            if with_id else _EMPTY_RAW_TRADES_FULL
-        )
+    empty = _EMPTY_RAW_TRADES_FULL
+    if with_id:
+        empty = empty.with_columns(pl.lit(None).cast(pl.Int64).alias('id'))
     if add_symbol:
-        df = df.with_columns(pl.lit(token).alias('symbol'))
-    return await _maybe_save_or_return(df, body, f'binance_spot_{token}_raw_trades.parquet')
+        empty = empty.with_columns(pl.lit(None).cast(pl.Utf8).alias('symbol'))
+    return await _save_or_return(
+        sql, params, body, f'binance_spot_{token}_raw_trades.parquet', empty)
 
 
 @app.post('/binance/book_depth/read')
@@ -600,10 +587,8 @@ async def binance_book_depth(request: Request):
         return response.json({'error': str(e)}, status=400)
     token = body['token']
     sql, params = sql_b.binance_book_depth(token, body['since'], body['until'])
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_BOOK_DEPTH_FULL
-    return await _maybe_save_or_return(df, body, f'binance_{token}_book_depth.parquet')
+    return await _save_or_return(
+        sql, params, body, f'binance_{token}_book_depth.parquet', _EMPTY_BOOK_DEPTH_FULL)
 
 
 @app.post('/binance/open_interest/read')
@@ -615,10 +600,8 @@ async def binance_open_interest(request: Request):
         return response.json({'error': str(e)}, status=400)
     token = body['token']
     sql, params = sql_b.binance_open_interest(token, body['since'], body['until'])
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_OPEN_INTEREST_FULL
-    return await _maybe_save_or_return(df, body, f'binance_{token}_open_interest.parquet')
+    return await _save_or_return(
+        sql, params, body, f'binance_{token}_open_interest.parquet', _EMPTY_OPEN_INTEREST_FULL)
 
 
 @app.post('/binance/long_short_ratios/read')
@@ -630,10 +613,8 @@ async def binance_long_short_ratios(request: Request):
         return response.json({'error': str(e)}, status=400)
     token = body['token']
     sql, params = sql_b.binance_long_short_ratios(token, body['since'], body['until'])
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_LSR_FULL
-    return await _maybe_save_or_return(df, body, f'binance_{token}_long_short_ratios.parquet')
+    return await _save_or_return(
+        sql, params, body, f'binance_{token}_long_short_ratios.parquet', _EMPTY_LSR_FULL)
 
 
 # ---------------------------------------------------------------------------
@@ -671,13 +652,8 @@ async def evm_native_transfers(request: Request):
     sql, params = sql_b.evm_native_transfers(
         network, body['since'], body['until'], **_transfer_filter_kwargs(body),
     )
-    if sql is None:
-        df = _EMPTY_TRANSFER_FULL
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = _EMPTY_TRANSFER_FULL
-    return await _maybe_save_or_return(df, body, f'{network}_native_transfers.parquet')
+    return await _save_or_return(
+        sql, params, body, f'{network}_native_transfers.parquet', _EMPTY_TRANSFER_FULL)
 
 
 async def tron_native_transfers(request: Request):
@@ -690,13 +666,8 @@ async def tron_native_transfers(request: Request):
     sql, params = sql_b.tron_native_transfers(
         network, body['since'], body['until'], **_transfer_filter_kwargs(body),
     )
-    if sql is None:
-        df = _EMPTY_TRANSFER_FULL
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = _EMPTY_TRANSFER_FULL
-    return await _maybe_save_or_return(df, body, f'{network}_native_transfers.parquet')
+    return await _save_or_return(
+        sql, params, body, f'{network}_native_transfers.parquet', _EMPTY_TRANSFER_FULL)
 
 
 async def tron_trc20_transfers(request: Request):
@@ -711,14 +682,8 @@ async def tron_trc20_transfers(request: Request):
     sql, params = sql_b.tron_trc20_transfers(
         network, tokens, body['since'], body['until'], **_transfer_filter_kwargs(body),
     )
-    if sql is None:
-        df = _EMPTY_TRANSFER_FULL
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = _EMPTY_TRANSFER_FULL
     filename = f"{network}_{'_'.join(tokens)}_trc20_transfers.parquet"
-    return await _maybe_save_or_return(df, body, filename)
+    return await _save_or_return(sql, params, body, filename, _EMPTY_TRANSFER_FULL)
 
 
 async def btc_native_transfers(request: Request):
@@ -731,13 +696,8 @@ async def btc_native_transfers(request: Request):
     sql, params = sql_b.btc_native_transfers(
         network, body['since'], body['until'], **_transfer_filter_kwargs(body),
     )
-    if sql is None:
-        df = _EMPTY_TRANSFER_FULL
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = _EMPTY_TRANSFER_FULL
-    return await _maybe_save_or_return(df, body, f'{network}_native_transfers.parquet')
+    return await _save_or_return(
+        sql, params, body, f'{network}_native_transfers.parquet', _EMPTY_TRANSFER_FULL)
 
 
 # ---------------------------------------------------------------------------
@@ -767,10 +727,7 @@ async def hyperliquid_ohlcv(request: Request):
         tokens=body.get('tokens') or None,
         window=body.get('window'),
     )
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_HL_OHLCV
-    return await _maybe_save_or_return(df, body, 'hyperliquid_ohlcv.parquet')
+    return await _save_or_return(sql, params, body, 'hyperliquid_ohlcv.parquet', _EMPTY_HL_OHLCV)
 
 
 @app.post('/hyperliquid/trades/read')
@@ -783,10 +740,7 @@ async def hyperliquid_trades(request: Request):
     sql, params = sql_b.hl_trades(
         body['since'], body['until'], **_hl_kwargs(body),
     )
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_HL_TRADES
-    return await _maybe_save_or_return(df, body, 'hyperliquid_trades.parquet')
+    return await _save_or_return(sql, params, body, 'hyperliquid_trades.parquet', _EMPTY_HL_TRADES)
 
 
 @app.post('/hyperliquid/fills/read')
@@ -820,10 +774,7 @@ async def hyperliquid_funding(request: Request):
     sql, params = sql_b.hl_funding(
         body['since'], body['until'], **_hl_kwargs(body),
     )
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_HL_FUNDING
-    return await _maybe_save_or_return(df, body, 'hyperliquid_funding.parquet')
+    return await _save_or_return(sql, params, body, 'hyperliquid_funding.parquet', _EMPTY_HL_FUNDING)
 
 
 @app.post('/hyperliquid/transfers/read')
@@ -837,10 +788,7 @@ async def hyperliquid_transfers(request: Request):
         body['since'], body['until'], wallets=body.get('wallets') or None,
         wallet_groups=body.get('wallet_groups') or None,
     )
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_HL_TRANSFERS
-    return await _maybe_save_or_return(df, body, 'hyperliquid_transfers.parquet')
+    return await _save_or_return(sql, params, body, 'hyperliquid_transfers.parquet', _EMPTY_HL_TRANSFERS)
 
 
 @app.post('/hyperliquid/vaults/read')
@@ -854,10 +802,7 @@ async def hyperliquid_vaults(request: Request):
         body['since'], body['until'], wallets=body.get('wallets') or None,
         wallet_groups=body.get('wallet_groups') or None,
     )
-    df = await query_polars(sql, params)
-    if df.is_empty():
-        df = _EMPTY_HL_VAULTS
-    return await _maybe_save_or_return(df, body, 'hyperliquid_vaults.parquet')
+    return await _save_or_return(sql, params, body, 'hyperliquid_vaults.parquet', _EMPTY_HL_VAULTS)
 
 
 @app.post('/hyperliquid/realized_performance/read')
@@ -1040,15 +985,8 @@ async def evm_uniswap(request: Request):
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
     empty_template = _EMPTY_UNISWAP_BY_EVENT.get(body['event'], _EMPTY_UNISWAP_BY_EVENT['swap'])
-    if sql is None:
-        df = empty_template
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = empty_template
-    return await _maybe_save_or_return(
-        df, body, f"{body['network']}_uniswap_{body['event']}.parquet",
-    )
+    return await _save_or_return(
+        sql, params, body, f"{body['network']}_uniswap_{body['event']}.parquet", empty_template)
 
 
 @app.post('/evm/lido/read')
@@ -1067,15 +1005,8 @@ async def evm_lido(request: Request):
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
     empty_template = _EMPTY_LIDO_BY_EVENT.get(body['event'], _EMPTY_LIDO_BY_EVENT['deposit'])
-    if sql is None:
-        df = empty_template
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = empty_template
-    return await _maybe_save_or_return(
-        df, body, f"{body['network']}_lido_{body['event']}.parquet",
-    )
+    return await _save_or_return(
+        sql, params, body, f"{body['network']}_lido_{body['event']}.parquet", empty_template)
 
 
 # Register the /read and /read/min aliases — Horatio's client routes to a
@@ -1115,15 +1046,8 @@ async def evm_spark(request: Request):
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
     empty_template = _EMPTY_AAVE_BY_EVENT.get(body['event'], _EMPTY_AAVE_BY_EVENT['deposit'])
-    if sql is None:
-        df = empty_template
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = empty_template
-    return await _maybe_save_or_return(
-        df, body, f"{body['network']}_spark_{body['event']}.parquet",
-    )
+    return await _save_or_return(
+        sql, params, body, f"{body['network']}_spark_{body['event']}.parquet", empty_template)
 
 
 _EMPTY_MORPHO_BY_EVENT = {
@@ -1191,15 +1115,8 @@ async def evm_morpho(request: Request):
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
     empty_template = _EMPTY_MORPHO_BY_EVENT.get(body['event'], _EMPTY_MORPHO_BY_EVENT['supply'])
-    if sql is None:
-        df = empty_template
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = empty_template
-    return await _maybe_save_or_return(
-        df, body, f"{body['network']}_morpho_{body['event']}.parquet",
-    )
+    return await _save_or_return(
+        sql, params, body, f"{body['network']}_morpho_{body['event']}.parquet", empty_template)
 
 
 _EMPTY_AERO_CL_BY_EVENT = {
@@ -1290,15 +1207,8 @@ async def evm_aero_concentrated(request: Request):
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
     empty_template = _EMPTY_AERO_CL_BY_EVENT.get(body['event'], _EMPTY_AERO_CL_BY_EVENT['swap'])
-    if sql is None:
-        df = empty_template
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = empty_template
-    return await _maybe_save_or_return(
-        df, body, f"{body['network']}_aero_cl_{body['event']}.parquet",
-    )
+    return await _save_or_return(
+        sql, params, body, f"{body['network']}_aero_cl_{body['event']}.parquet", empty_template)
 
 
 @app.post('/evm/aerodrome/basic/read')
@@ -1320,12 +1230,5 @@ async def evm_aero_basic(request: Request):
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
     empty_template = _EMPTY_AERO_BASIC_BY_EVENT.get(body['event'], _EMPTY_AERO_BASIC_BY_EVENT['swap'])
-    if sql is None:
-        df = empty_template
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = empty_template
-    return await _maybe_save_or_return(
-        df, body, f"{body['network']}_aero_basic_{body['event']}.parquet",
-    )
+    return await _save_or_return(
+        sql, params, body, f"{body['network']}_aero_basic_{body['event']}.parquet", empty_template)
