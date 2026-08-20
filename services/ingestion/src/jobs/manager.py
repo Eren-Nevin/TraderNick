@@ -1,7 +1,10 @@
 import asyncio
 import json
 import logging
+import os
+import signal
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from typing import Optional
@@ -10,6 +13,40 @@ import config
 from clickhouse import async_client
 
 log = logging.getLogger("jobs")
+
+
+def _pid_alive(pid: int) -> bool:
+    """True if a process with `pid` currently exists (signal 0 probes it)."""
+    try:
+        os.kill(pid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True  # exists but not ours to signal — still 'alive'
+
+
+def _find_pid_by_job_id(job_id: str) -> Optional[int]:
+    """Scan /proc for a live job subprocess whose cmdline embeds `job_id`.
+    This is the source of truth for 'is this job actually running here?' —
+    it survives a lost/stale `_procs` handle (manager restart / resume), which
+    is exactly what let a cancelled job keep running and hold a concurrency
+    slot."""
+    try:
+        entries = os.listdir("/proc")
+    except FileNotFoundError:
+        return None
+    for e in entries:
+        if not e.isdigit():
+            continue
+        try:
+            with open(f"/proc/{e}/cmdline", "rb") as fh:
+                cmd = fh.read().replace(b"\x00", b" ").decode("utf-8", "ignore")
+        except OSError:
+            continue
+        if job_id in cmd and " -m jobs." in (" " + cmd):
+            return int(e)
+    return None
 
 JOB_TYPE_BACKFILL_OHLCV = "backfill_binance_ohlcv"
 JOB_TYPE_BACKFILL_RAW_TRADES = "backfill_binance_raw_trades"
@@ -296,27 +333,82 @@ class JobManager:
             parent_job_id, parent.get("job_type"), downstreams,
         )
 
-    async def cancel(self, job_id: str) -> bool:
+    def _live_pid(self, job_id: str) -> Optional[int]:
+        """The pid of this job's running subprocess, or None. Prefers the
+        tracked handle but *verifies* it's actually alive, then falls back to a
+        /proc scan — so a stale/absent `_procs` entry (manager restart, resume)
+        can never hide a live process from cancel."""
         proc = self._procs.get(job_id)
-        if proc is not None:
+        if proc is not None and proc.returncode is None and _pid_alive(proc.pid):
+            return proc.pid
+        return _find_pid_by_job_id(job_id)
+
+    async def cancel(self, job_id: str) -> bool:
+        """Cancel a backfill robustly. Resolves the *actual* live pid (not just
+        the possibly-stale `_procs` handle), SIGTERMs it, escalates to SIGKILL
+        if it won't exit within the grace window, frees the concurrency slot,
+        and writes the terminal 'cancelled' row LAST — after the process is
+        confirmed dead — so its own per-chunk 'running' status writes can't flip
+        it back (the bug that made a cancelled job look un-cancelled and keep a
+        MAX_CONCURRENT_BACKFILLS slot)."""
+        pid = self._live_pid(job_id)
+        if pid is not None:
+            await self._kill_escalating(job_id, pid)
+            await self._write_cancelled(job_id)
+            return True
+        # No live process on this container. Either a foreign-provider job or a
+        # genuine zombie row. We've positively confirmed nothing is running, so
+        # finalize immediately (the old 90s staleness guard existed only because
+        # cancel couldn't tell 'dead' from 'slow tick' — now it can).
+        return await self._finalize_zombie(job_id, stale_after_s=0.0)
+
+    async def _kill_escalating(self, job_id: str, pid: int) -> None:
+        """SIGTERM, wait up to CANCEL_GRACE_SECONDS for a clean exit, then
+        SIGKILL. Blocks until the process is actually gone, and frees the
+        concurrency slot (the `_await` reaper also pops `_procs`, harmlessly)."""
+        grace = config.CANCEL_GRACE_SECONDS
+        try:
+            os.kill(pid, signal.SIGTERM)
+            log.info("cancel %s: SIGTERM pid %s (grace %ss)", job_id, pid, grace)
+        except ProcessLookupError:
+            self._procs.pop(job_id, None)
+            return
+        deadline = time.monotonic() + grace
+        while _pid_alive(pid) and time.monotonic() < deadline:
+            await asyncio.sleep(1.0)
+        if _pid_alive(pid):
+            log.warning("cancel %s: pid %s survived SIGTERM %ss — SIGKILL", job_id, pid, grace)
             try:
-                proc.terminate()
+                os.kill(pid, signal.SIGKILL)
             except ProcessLookupError:
                 pass
-            return True
-        # No live subprocess. Either this manager doesn't own the job
-        # (foreign provider) or the row is a zombie: status still
-        # 'running'/'pending' from a subprocess that died without writing
-        # its terminal state (typically: SIGTERM during a tick + aiohttp
-        # session torn down before the cancelled write landed — see
-        # 2026-06-10 e828004f incident).
-        #
-        # Auto-finalize the zombie only when we own the job_type AND the
-        # row hasn't been updated in a while. The staleness window must
-        # be long enough that a slow tick (HTTP+insert can take 20-60s
-        # on heavy chunks) never gets misclassified as dead, but short
-        # enough that a stuck row clears in seconds from the UI's view.
-        return await self._finalize_zombie(job_id, stale_after_s=90.0)
+            while _pid_alive(pid):
+                await asyncio.sleep(0.5)
+        # Free the slot now so an immediate retry isn't blocked by the limit.
+        self._procs.pop(job_id, None)
+
+    async def _write_cancelled(self, job_id: str) -> None:
+        """Write the terminal 'cancelled' row (preserving args/progress) with a
+        fresh timestamp. Called only after the subprocess is dead, so no racing
+        per-chunk write can outlive it and revert the status to 'running'."""
+        ch = await async_client()
+        rows = await ch.query(
+            "SELECT job_type, args, progress, started_at FROM tradernick.ingestion_jobs FINAL "
+            "WHERE job_id = {job_id:String}",
+            parameters={"job_id": job_id},
+        )
+        if not rows.result_rows:
+            return
+        job_type, args_json, progress, started_at = rows.result_rows[0]
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        await ch.insert(
+            "tradernick.ingestion_jobs",
+            [[job_id, job_type, args_json, "cancelled", float(progress),
+              started_at, now, "cancelled by operator", now]],
+            column_names=["job_id", "job_type", "args", "status", "progress",
+                          "started_at", "finished_at", "error", "updated_at"],
+        )
+        log.info("cancel %s: wrote terminal 'cancelled' status", job_id)
 
     async def _finalize_zombie(self, job_id: str, *, stale_after_s: float) -> bool:
         """If `job_id` is a row this manager owns, currently in a non-terminal

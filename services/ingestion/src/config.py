@@ -85,7 +85,11 @@ ADMIN_PASSWORD = os.environ.get("ADMIN_PASSWORD", "change_me")
 # the admin bot refuses all auth attempts until it's set.
 NOTIFICATIONS_ADMIN_SECRET = os.environ.get("NOTIFICATIONS_ADMIN_SECRET", "")
 
-MAX_CONCURRENT_BACKFILLS = int(os.environ.get("MAX_CONCURRENT_BACKFILLS", "4"))
+MAX_CONCURRENT_BACKFILLS = int(os.environ.get("MAX_CONCURRENT_BACKFILLS", "8"))
+# Grace period a cancelled backfill gets to exit on SIGTERM (between chunks)
+# before the manager escalates to SIGKILL. Long enough for a heavy chunk's
+# in-flight insert to finish cleanly, short enough that cancel is prompt.
+CANCEL_GRACE_SECONDS = int(os.environ.get("CANCEL_GRACE_SECONDS", "20"))
 
 POLL_INTERVAL_SECONDS = int(os.environ.get("POLL_INTERVAL_SECONDS", "60"))
 POLL_OVERLAP_MINUTES = int(os.environ.get("POLL_OVERLAP_MINUTES", "3"))
