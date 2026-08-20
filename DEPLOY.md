@@ -29,20 +29,27 @@ TraderNick is a Docker Compose stack of ~30 containers on one host:
 
 | Service | Container port | Host binding | Internet-facing? |
 |---|---|---|---|
-| dashboard | 3000 | `127.0.0.1:10000` | **via nginx only** |
-| admin_server | 8000 | `127.0.0.1:10001` | no (internal + local ops) |
+| dashboard | 3000 | `0.0.0.0:10000` | **yes** (front with nginx/auth or firewall) |
+| admin_server | 8000 | `0.0.0.0:10001` | yes (basic-auth protected; firewall recommended) |
 | dashboard_backend | 8000 | `127.0.0.1:10002` | no |
 | clickhouse (HTTP) | 8123 | `127.0.0.1:10003` | **never** |
 | clickhouse (native) | 9000 | `127.0.0.1:10004` | **never** |
-| data_provider | 8000 | `0.0.0.0:10005` | only if you want external clients (see §8.4) |
+| data_provider | 8000 | `0.0.0.0:10005` | yes — used by external `tradernick-data-provider` clients |
 | all ingestion workers | 8000 | none | no |
 
-**Security model:** everything except `data_provider` binds to `127.0.0.1`, so
-the only way in from the internet is nginx (port 443). The SvelteKit app has **no
-built-in login**, and its `/admin` pages drive privileged actions — so nginx adds
-HTTP basic auth in front of the whole site. Never bind the dashboard to
-`0.0.0.0`; that would let visitors reach `SERVER_IP:10000` directly and bypass
-nginx auth.
+**Security model:** ClickHouse and `dashboard_backend` are bound to `127.0.0.1`
+(never internet-facing). The **dashboard** (and its same-origin `/admin` pages),
+**admin_server**, and **data_provider** are published on all interfaces so their
+existing clients (browsers, ops tooling, the `tradernick-data-provider` package)
+can reach them directly — this suits a host **without** a reverse proxy.
+
+> ⚠️ The SvelteKit app has **no built-in login**, and its `/admin` pages drive
+> privileged actions. If the dashboard port (10000) is reachable from the
+> internet, you MUST protect it — either front it with **nginx + HTTP basic auth**
+> (§9, recommended) or **firewall port 10000** (and 10001/10005) to trusted IPs.
+> If you put nginx in front, also bind these ports to `127.0.0.1` in
+> `docker-compose.yml` so visitors can't reach `SERVER_IP:10000` directly and
+> bypass the nginx auth.
 
 ### How the dashboard talks to its backends (why nginx is simple)
 
@@ -225,7 +232,15 @@ behind nginx/TLS + auth as well, or firewall it to known client IPs.
 
 ---
 
-## 9. nginx reverse proxy (public HTTPS + basic auth)
+## 9. nginx reverse proxy (public HTTPS + basic auth) — RECOMMENDED
+
+**Optional but strongly recommended for any internet-exposed host.** Skip this
+only if the host is on a trusted private network or you firewall ports 10000/
+10001/10005 to trusted IPs (§10). If you set nginx up, first **bind the dashboard
+and admin_server ports to `127.0.0.1`** in `docker-compose.yml` (change
+`"10000:3000"` → `"127.0.0.1:10000:3000"` and `"10001:8000"` →
+`"127.0.0.1:10001:8000"`) and `docker compose up -d dashboard admin_server`, so
+visitors can't reach the app directly on 10000 and bypass the nginx auth.
 
 The goal: `https://tradernick.example.com` → the dashboard (which serves the app,
 the admin pages, and all `/api/*` same-origin). nginx adds HTTP basic auth in

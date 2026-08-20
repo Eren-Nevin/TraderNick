@@ -453,11 +453,12 @@ services:
       # a 502 with the provider name instead of silently routing to a
       # dead container.
     ports:
-      # localhost-only — the admin API is basic-auth protected but should
-      # never be internet-facing. The dashboard reaches it over the docker
-      # network (admin_server:8000); this host port is for operator CLI
-      # (`curl localhost:10001/jobs/<id>`) only.
-      - "127.0.0.1:10001:8000"
+      # Published for existing admin/ops clients. The admin API is basic-auth
+      # protected (ADMIN_USER/ADMIN_PASSWORD). The dashboard reaches it over the
+      # docker network (admin_server:8000); firewall this port or bind it to
+      # 127.0.0.1 if the host is internet-exposed and you don't need remote
+      # admin-API clients.
+      - "10001:8000"
     restart: unless-stopped
 
   # =============================================================
@@ -533,11 +534,12 @@ services:
       INGESTION_ADMIN_USER: ${ADMIN_USER:-admin}
       INGESTION_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change_me}
     ports:
-      # localhost-only: the SvelteKit app has NO built-in auth, so it must
-      # sit behind the nginx reverse proxy (which adds HTTP basic auth). If
-      # this were bound to 0.0.0.0, visitors could hit the server IP:10000
-      # directly and bypass that auth. nginx reaches it at 127.0.0.1:10000.
-      - "127.0.0.1:10000:3000"
+      # Published on all interfaces so browsers/existing clients reach the
+      # dashboard (and the same-origin /admin pages) directly — this host runs
+      # without a reverse proxy. NOTE: the SvelteKit app has NO built-in auth,
+      # so if the host is internet-exposed, either front it with nginx + basic
+      # auth (see DEPLOY.md) or firewall port 10000 to trusted IPs.
+      - "10000:3000"
     restart: unless-stopped
 
   # Horatio-parity read API backed by ClickHouse. Read-only — never
