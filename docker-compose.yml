@@ -28,8 +28,11 @@ services:
       CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD}
       CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: 1
     ports:
-      - "10003:8123"
-      - "10004:9000"
+      # localhost-only — ClickHouse must never be internet-facing. App
+      # services reach it via docker DNS (clickhouse:8123); these host ports
+      # are only for operator access from the machine itself.
+      - "127.0.0.1:10003:8123"
+      - "127.0.0.1:10004:9000"
     ulimits:
       nofile:
         soft: 262144
@@ -39,7 +42,12 @@ services:
       interval: 5s
       retries: 30
 
-  data_server:
+  # The dashboard's read/analytics API (ClickHouse-backed). Formerly named
+  # data_server; renamed for clarity. Its build context is still
+  # ./services/data_server. Not internet-facing — the dashboard reaches it
+  # over the docker network (dashboard_backend:8000); the host port is
+  # localhost-only for operator/curl access.
+  dashboard_backend:
     build: ./services/data_server
     depends_on:
       clickhouse:
@@ -50,7 +58,7 @@ services:
       CLICKHOUSE_USER: tradernick
       CLICKHOUSE_DB: tradernick
     ports:
-      - "10002:8000"
+      - "127.0.0.1:10002:8000"
     restart: unless-stopped
 
   # =============================================================
@@ -445,11 +453,11 @@ services:
       # a 502 with the provider name instead of silently routing to a
       # dead container.
     ports:
-      # Same host port the monolith used to expose, so existing CLI
-      # tooling (`curl localhost:10001/jobs/<id>`) keeps working after
-      # the monolith is removed. Dashboard talks to admin_server over
-      # the docker network on 8000 directly.
-      - "10001:8000"
+      # localhost-only — the admin API is basic-auth protected but should
+      # never be internet-facing. The dashboard reaches it over the docker
+      # network (admin_server:8000); this host port is for operator CLI
+      # (`curl localhost:10001/jobs/<id>`) only.
+      - "127.0.0.1:10001:8000"
     restart: unless-stopped
 
   # =============================================================
@@ -473,6 +481,9 @@ services:
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_USER: tradernick
       CLICKHOUSE_DB: tradernick
+      # Reuses dashboard_backend's group_snapshot endpoint over the docker
+      # network (code default is the old data_server name; set it explicitly).
+      DATA_SERVER_URL: http://dashboard_backend:8000
     restart: unless-stopped
 
   notifications_bot:
@@ -510,10 +521,10 @@ services:
   dashboard:
     build: ./dashboard
     depends_on:
-      - data_server
+      - dashboard_backend
       - admin_server
     environment:
-      INTERNAL_DATA_SERVER_URL: http://data_server:8000
+      INTERNAL_DATA_SERVER_URL: http://dashboard_backend:8000
       # admin_server is the single admin entry point. It fans out and
       # routes to the per-provider services internally. Provider services
       # are still independently callable for direct ops work but the
@@ -522,7 +533,11 @@ services:
       INGESTION_ADMIN_USER: ${ADMIN_USER:-admin}
       INGESTION_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change_me}
     ports:
-      - "10000:3000"
+      # localhost-only: the SvelteKit app has NO built-in auth, so it must
+      # sit behind the nginx reverse proxy (which adds HTTP basic auth). If
+      # this were bound to 0.0.0.0, visitors could hit the server IP:10000
+      # directly and bypass that auth. nginx reaches it at 127.0.0.1:10000.
+      - "127.0.0.1:10000:3000"
     restart: unless-stopped
 
   # Horatio-parity read API backed by ClickHouse. Read-only — never
