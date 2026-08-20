@@ -43,13 +43,19 @@ TraderNick is a Docker Compose stack of ~30 containers on one host:
 existing clients (browsers, ops tooling, the `tradernick-data-provider` package)
 can reach them directly — this suits a host **without** a reverse proxy.
 
-> ⚠️ The SvelteKit app has **no built-in login**, and its `/admin` pages drive
-> privileged actions. If the dashboard port (10000) is reachable from the
-> internet, you MUST protect it — either front it with **nginx + HTTP basic auth**
-> (§9, recommended) or **firewall port 10000** (and 10001/10005) to trusted IPs.
-> If you put nginx in front, also bind these ports to `127.0.0.1` in
-> `docker-compose.yml` so visitors can't reach `SERVER_IP:10000` directly and
-> bypass the nginx auth.
+> **App-level auth:** the dashboard (and its same-origin `/admin` pages and
+> `/api/*`) is gated by **HTTP basic auth built into the app**
+> (`dashboard/src/hooks.server.ts`), using `WEB_AUTH_USER` / `WEB_AUTH_PASSWORD`
+> from `.env`. Set both (and change them from `admin`/`change_me`) — if either is
+> empty the gate is **disabled** and the app runs open. This protects the site
+> even with **no reverse proxy**, so it's safe to publish port 10000 directly.
+>
+> ⚠️ Two things it does NOT cover: (1) **admin_server on 10001** — that host port
+> is the raw admin API, protected only by `ADMIN_USER`/`ADMIN_PASSWORD` basic
+> auth, not by `WEB_AUTH_*`; firewall it or bind it to `127.0.0.1` if you don't
+> need remote admin-API clients. (2) **TLS** — the app auth is over plain HTTP
+> unless you add a TLS-terminating proxy (§9). For an internet-exposed host, put
+> nginx in front for HTTPS (the app basic-auth still applies behind it).
 
 ### How the dashboard talks to its backends (why nginx is simple)
 

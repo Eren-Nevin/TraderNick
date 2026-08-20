@@ -533,6 +533,9 @@ services:
       INTERNAL_INGESTION_URL: http://admin_server:8000
       INGESTION_ADMIN_USER: ${ADMIN_USER:-admin}
       INGESTION_ADMIN_PASSWORD: ${ADMIN_PASSWORD:-change_me}
+      # HTTP basic auth for the whole app (hooks.server.ts). Both empty = open.
+      WEB_AUTH_USER: ${WEB_AUTH_USER:-}
+      WEB_AUTH_PASSWORD: ${WEB_AUTH_PASSWORD:-}
     ports:
       # Published on all interfaces so browsers/existing clients reach the
       # dashboard (and the same-origin /admin pages) directly — this host runs
