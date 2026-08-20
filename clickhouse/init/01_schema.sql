@@ -162,8 +162,8 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_ohlcv_1m
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (token, time)
-TTL time + INTERVAL 730 DAY;
+ORDER BY (token, time);
+-- (TTL removed 2026-08-19: retained indefinitely for the historical backfill)
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_raw_trades
 (
@@ -177,8 +177,8 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_raw_trades
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (token, time, id)
-TTL toDateTime(time) + INTERVAL 730 DAY;
+ORDER BY (token, time, id);
+-- (TTL removed 2026-08-19: retained indefinitely for the historical backfill)
 
 -- Binance SPOT datasets — a fully separate dataset from perp/futures (above),
 -- fetched with the DeFiStream SDK's `.market("spot")`. Schema is identical to
@@ -199,8 +199,8 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_spot_ohlcv_1m
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (token, time)
-TTL time + INTERVAL 730 DAY;
+ORDER BY (token, time);
+-- (TTL removed 2026-08-19: retained indefinitely for the historical backfill)
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_raw_spot_trades
 (
@@ -214,8 +214,8 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_raw_spot_trades
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (token, time, id)
-TTL toDateTime(time) + INTERVAL 730 DAY;
+ORDER BY (token, time, id);
+-- (TTL removed 2026-08-19: retained indefinitely for the historical backfill)
 
 CREATE TABLE IF NOT EXISTS tradernick.transfers
 (
@@ -234,8 +234,8 @@ CREATE TABLE IF NOT EXISTS tradernick.transfers
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (chain, token, time, sender, receiver, amount, tx_id, log_index)
-TTL time + INTERVAL 730 DAY;
+ORDER BY (chain, token, time, sender, receiver, amount, tx_id, log_index);
+-- (TTL removed 2026-08-19: retained indefinitely for the historical backfill)
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_open_interest
 (
@@ -247,8 +247,8 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_open_interest
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (token, time)
-TTL time + INTERVAL 730 DAY;
+ORDER BY (token, time);
+-- (TTL removed 2026-08-19: retained indefinitely for the historical backfill)
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_long_short_ratios
 (
@@ -262,8 +262,8 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_long_short_ratios
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (token, time)
-TTL time + INTERVAL 730 DAY;
+ORDER BY (token, time);
+-- (TTL removed 2026-08-19: retained indefinitely for the historical backfill)
 
 CREATE TABLE IF NOT EXISTS tradernick.binance_funding_rate
 (
@@ -274,8 +274,8 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_funding_rate
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(time)
-ORDER BY (token, time)
-TTL time + INTERVAL 730 DAY;
+ORDER BY (token, time);
+-- (TTL removed 2026-08-19: retained indefinitely for the historical backfill)
 
 -- Book depth (BPS-level snapshots). 12 rows per snapshot at fixed
 -- percentage levels {±500, ±400, ±300, ±200, ±100, ±20} from mid-price,
@@ -293,8 +293,8 @@ CREATE TABLE IF NOT EXISTS tradernick.binance_book_depth
 )
 ENGINE = ReplacingMergeTree(ingested_at)
 PARTITION BY toYYYYMM(toDate(time))
-ORDER BY (token, time, percentage)
-TTL toDateTime(time) + INTERVAL 730 DAY;
+ORDER BY (token, time, percentage);
+-- (TTL removed 2026-08-19: retained indefinitely for the historical backfill)
 
 CREATE TABLE IF NOT EXISTS tradernick.ingestion_jobs
 (
