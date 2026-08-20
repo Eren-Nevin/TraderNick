@@ -19,7 +19,9 @@ services:
     restart: unless-stopped
     volumes:
       - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
-      - /mnt/viper/tradernick/clickhouse:/var/lib/clickhouse
+      # Host path for ClickHouse data is system-specific — set CLICKHOUSE_DATA_DIR
+      # in .env (defaults to a repo-local ./data/clickhouse for fresh setups).
+      - ${CLICKHOUSE_DATA_DIR:-./data/clickhouse}:/var/lib/clickhouse
     environment:
       CLICKHOUSE_DB: tradernick
       CLICKHOUSE_USER: tradernick
@@ -537,14 +539,17 @@ services:
       CLICKHOUSE_HOST: clickhouse
       CLICKHOUSE_USER: tradernick
       CLICKHOUSE_DB: tradernick
-      SNAPSHOTS_DIR: /mnt/viper/tradernick/data_provider_snapshots
+      # Container-internal path is fixed/portable; the host path is set via
+      # SNAPSHOTS_HOST_DIR in .env (system-specific).
+      SNAPSHOTS_DIR: /data/snapshots
       # Wallet writes + job calls forward to admin_server, which fans
       # out to the per-provider services.
       ADMIN_SERVER_URL: ${DATA_PROVIDER_ADMIN_URL:-http://admin_server:8000}
     ports:
       - "10005:8000"
     volumes:
-      # Snapshots live on the /mnt/viper data disk; host path == container path
-      # so SNAPSHOTS_DIR and the bind mount are the same.
-      - /mnt/viper/tradernick/data_provider_snapshots:/mnt/viper/tradernick/data_provider_snapshots
+      # Host snapshots dir is system-specific — set SNAPSHOTS_HOST_DIR in .env
+      # (defaults to a repo-local ./data/snapshots for fresh setups). Container
+      # side is the fixed /data/snapshots that SNAPSHOTS_DIR points at.
+      - ${SNAPSHOTS_HOST_DIR:-./data/snapshots}:/data/snapshots
     restart: unless-stopped

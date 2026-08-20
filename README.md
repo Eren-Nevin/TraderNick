@@ -83,13 +83,15 @@ Pages under `/` (SvelteKit route group `(app)`):
 ```sh
 cp .env.example .env
 # edit .env — fill DEFISTREAM_API_KEY, change ADMIN_PASSWORD and CLICKHOUSE_PASSWORD,
-# and toggle the per-source *_ENABLED flags for the domains you want to ingest.
+# toggle the per-source *_ENABLED flags for the domains you want to ingest, and
+# set CLICKHOUSE_DATA_DIR + SNAPSHOTS_HOST_DIR to the data disk you want to use
+# (they default to repo-local ./data/* so a fresh checkout runs as-is).
 
-# data_provider stores parquet snapshots on the data disk via an ABSOLUTE
-# bind mount, so this host directory must exist before `up` (create it on
-# whatever large disk you keep — the path must match docker-compose.yml):
-sudo mkdir -p /mnt/viper/tradernick/data_provider_snapshots
-sudo chown "$(id -u):$(id -g)" /mnt/viper/tradernick/data_provider_snapshots
+# The two host data dirs (ClickHouse store + data_provider snapshots) must exist
+# before `up`. With the defaults:
+mkdir -p ./data/clickhouse ./data/snapshots
+# ...or, if you point CLICKHOUSE_DATA_DIR / SNAPSHOTS_HOST_DIR at a big disk,
+# create those paths instead and chown them to your user.
 
 docker compose up --build
 ```
