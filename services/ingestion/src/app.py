@@ -387,7 +387,7 @@ async def clear_finished_jobs(request):
     return response.json({"ok": True, "deleted": n})
 
 
-_MAX_BACKFILL_DAYS = 365
+_MAX_BACKFILL_DAYS = 3 * 365 + 1  # 3 years (+1 so a leap-year span isn't rejected)
 
 
 def _parse_backfill_window(body: dict):
