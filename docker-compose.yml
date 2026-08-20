@@ -19,6 +19,9 @@ services:
     restart: unless-stopped
     volumes:
       - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
+      # Named collection for the wallet_labels dictionary source (password from
+      # CLICKHOUSE_PASSWORD via from_env) — see clickhouse/config.d.
+      - ./clickhouse/config.d:/etc/clickhouse-server/config.d:ro
       # Host path for ClickHouse data is system-specific — set CLICKHOUSE_DATA_DIR
       # in .env (defaults to a repo-local ./data/clickhouse for fresh setups).
       - ${CLICKHOUSE_DATA_DIR:-./data/clickhouse}:/var/lib/clickhouse

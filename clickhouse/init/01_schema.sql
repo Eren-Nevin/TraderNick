@@ -413,12 +413,13 @@ CREATE DICTIONARY IF NOT EXISTS tradernick.wallet_labels
     entity_lower     Nullable(String) DEFAULT NULL
 )
 PRIMARY KEY address
+-- Source credentials come from the `wallet_labels_src` named collection
+-- (clickhouse/config.d/named_collections.xml), whose password is read from the
+-- CLICKHOUSE_PASSWORD env var (from_env). This keeps the dictionary working
+-- when the deployment sets a non-default ClickHouse password — the old
+-- hardcoded PASSWORD 'tradernick' broke dictGet (AUTHENTICATION_FAILED / 516).
 SOURCE(CLICKHOUSE(
-    HOST 'localhost'
-    PORT 9000
-    USER 'tradernick'
-    PASSWORD 'tradernick'
-    DB 'tradernick'
+    NAME wallet_labels_src
     QUERY '
         SELECT
             address,

@@ -1,0 +1,21 @@
+<clickhouse>
+    <!--
+        Credentials for the `tradernick.wallet_labels` dictionary's ClickHouse
+        source (see clickhouse/init/01_schema.sql). The password is read from the
+        CLICKHOUSE_PASSWORD environment variable at server start (from_env), so
+        the dictionary authenticates correctly whatever password the deployment
+        uses — instead of a hardcoded value that broke dictGet on servers with a
+        non-default password (AUTHENTICATION_FAILED / code 516).
+
+        Mounted into /etc/clickhouse-server/config.d/ via docker-compose.yml.
+    -->
+    <named_collections>
+        <wallet_labels_src>
+            <host>localhost</host>
+            <port>9000</port>
+            <user>tradernick</user>
+            <password from_env="CLICKHOUSE_PASSWORD" />
+            <database>tradernick</database>
+        </wallet_labels_src>
+    </named_collections>
+</clickhouse>
