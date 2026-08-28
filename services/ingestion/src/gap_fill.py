@@ -81,27 +81,58 @@ async def min_watermark_per_token(
     total outage), we fall back to the min over all tokens so the capped sweep
     still recovers as much as it can."""
     parameters: dict = {"tokens": tokens}
+
+    def _inner(extra_where: str = "", *, having: bool = True) -> str:
+        sql = (f"SELECT max({time_col}) AS mx FROM {table}"
+               f" WHERE {token_col} IN {{tokens:Array(String)}}{extra_where}"
+               f" GROUP BY {token_col}")
+        if having:
+            sql += f" HAVING max({time_col}) > toDateTime('2000-01-01 00:00:00')"
+        return sql
+
     if max_staleness_seconds is not None:
         floor = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
             seconds=max_staleness_seconds)
         parameters["floor"] = floor
-        # Prefer the min over fresh tokens; fall back to min over all only when
-        # no fresh token exists (total outage) so recovery still happens.
-        select_min = (
-            "if(countIf(mx >= {floor:DateTime}) > 0, "
-            "minIf(mx, mx >= {floor:DateTime}), min(mx))"
+        # FAST PATH — push `floor` into the WHERE instead of only filtering on
+        # it in the projection. `min(mx)` over floor-filtered groups is exactly
+        # `minIf(mx, mx >= floor)` over all groups, so this is semantics-
+        # preserving whenever at least one token is fresher than the floor —
+        # i.e. the steady state, which is what runs every sweep tick.
+        #
+        # The payoff is large. On a table partitioned by time whose sort key
+        # starts (token, time, ...), the predicate prunes to the recent
+        # partition(s) and lets the primary index skip granules below the
+        # floor. Without it, `max(time) GROUP BY token` cannot know the max is
+        # the last row of each group and reads the whole table. Measured on
+        # tradernick.binance_raw_trades (50B rows, 2026-08-28):
+        #     before  50.13B rows read, ~160s
+        #     after   45.52M rows read,   0.3s
+        # The HAVING is dropped here as redundant: `floor` is always well after
+        # 2000, so any surviving group already clears it.
+        res = await ch.query(
+            "SELECT min(mx) FROM ("
+            + _inner(f" AND {time_col} >= {{floor:DateTime}}", having=False)
+            + ")",
+            parameters=parameters,
         )
-    else:
-        select_min = "min(mx)"
-    res = await ch.query(
-        f"SELECT {select_min} FROM ("
-        f"  SELECT max({time_col}) AS mx FROM {table}"
-        f"  WHERE {token_col} IN {{tokens:Array(String)}}"
-        f"  GROUP BY {token_col}"
-        f"  HAVING max({time_col}) > toDateTime('2000-01-01 00:00:00')"
-        f")",
-        parameters=parameters,
-    )
+        v = _scalar_datetime(res)
+        if v is not None:
+            return v
+        # SLOW PATH — fell through, so NO token is fresher than the floor: a
+        # total outage. Fall back to the unbounded scan (the old `min(mx)`
+        # else-branch) so recovery still anchors on the real min watermark.
+        log.info("min_watermark_per_token(%s): no token fresher than %s — "
+                 "falling back to unbounded scan", table, floor)
+
+    res = await ch.query("SELECT min(mx) FROM (" + _inner() + ")",
+                         parameters=parameters)
+    return _scalar_datetime(res)
+
+
+def _scalar_datetime(res) -> datetime | None:
+    """First cell of a one-row result as naive UTC, or None when CH returned
+    its DateTime default (1970-01-01) for an empty selection rather than NULL."""
     rows = res.result_rows
     if not rows or rows[0][0] in (None, "", "1970-01-01 00:00:00"):
         return None

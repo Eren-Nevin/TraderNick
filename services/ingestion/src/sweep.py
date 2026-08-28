@@ -77,7 +77,17 @@ def sweep_jitter_s(sweep_cadence_s: float) -> float:
     return random.uniform(0.0, min(sweep_cadence_s, FIRST_FIRE_CAP_S))
 
 
-def sweep_cadence_s(live_cadence_s: float) -> float:
+def sweep_cadence_s(live_cadence_s: float, override_s: float | None = None) -> float:
+    """Sweep cadence for a stream.
+
+    Default is `live_cadence_s * SWEEP_MULTIPLIER`, which ties the sweep to the
+    live tick rate. `override_s` pins it to an absolute value instead, for
+    streams whose sweep interval should NOT move when their live cadence is
+    retuned. Because `sweep_since()` uses the cadence as its minimum lookback,
+    pinning the cadence also pins the sweep's minimum window to the same span.
+    """
+    if override_s is not None and override_s > 0:
+        return float(override_s)
     return live_cadence_s * SWEEP_MULTIPLIER
 
 
@@ -87,6 +97,7 @@ def sweep_since(
     sweep_cadence_seconds: float,
     last_seen: datetime | None,
     max_window_seconds: float | None = None,
+    min_lookback_seconds: float | None = None,
     stream_name: str | None = None,
 ) -> datetime:
     """Pick the `since` boundary for one sweep fire.
@@ -115,7 +126,13 @@ def sweep_since(
     With cap = 7 days, last_seen = 100 days ago → since = now - 7d, and
     a WARNING is logged so the deeper gap is visible.
     """
-    minimum_since = now - timedelta(seconds=sweep_cadence_seconds)
+    # The minimum lookback normally equals the sweep cadence (each fire covers
+    # at least the interval since the last one). `min_lookback_seconds` decouples
+    # the two, so a stream can sweep every N minutes while always looking back
+    # further than N — deliberate overlap, which RMT dedupes for free.
+    lookback = (min_lookback_seconds if min_lookback_seconds and min_lookback_seconds > 0
+                else sweep_cadence_seconds)
+    minimum_since = now - timedelta(seconds=lookback)
     if last_seen is None:
         since = minimum_since
     else:
