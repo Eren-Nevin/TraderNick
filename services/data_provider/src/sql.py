@@ -117,10 +117,10 @@ def binance_ohlcv(token: str, window: str, since: str, until: str,
                 {_time_ms()}, token, open, close, high, low, volume,
                 buyer_taker_volume, seller_taker_volume,
                 toInt64(trade_count) AS trade_count
-            FROM tradernick.{table} FINAL
+            FROM tradernick.{table} AS s FINAL
             WHERE token = {{token:String}}
-              AND time >= toDateTime({{since:String}})
-              AND time <  toDateTime({{until:String}})
+              AND s.time >= toDateTime({{since:String}})
+              AND s.time <  toDateTime({{until:String}})
             ORDER BY time
         """
     else:
@@ -170,10 +170,10 @@ def binance_funding_rate(token: str, since: str, until: str) -> tuple[str, dict[
     open_interest, long_short_ratios."""
     sql = f"""
         SELECT {_time_ms()}, token, toFloat64(rate) AS rate
-        FROM tradernick.binance_funding_rate FINAL
+        FROM tradernick.binance_funding_rate AS s FINAL
         WHERE token = {{token:String}}
-          AND time >= toDateTime({{since:String}})
-          AND time <  toDateTime({{until:String}})
+          AND s.time >= toDateTime({{since:String}})
+          AND s.time <  toDateTime({{until:String}})
         ORDER BY time
     """
     return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
@@ -195,10 +195,10 @@ def binance_raw_trades(token: str, since: str, until: str,
     sym = ', {token:String} AS symbol' if add_symbol else ''
     sql = f"""
         SELECT {_time_ms()}, token, amount, price, buy{extra}{sym}
-        FROM tradernick.{table} FINAL
+        FROM tradernick.{table} AS s FINAL
         WHERE token = {{token:String}}
-          AND time >= toDateTime64({{since:String}}, 3)
-          AND time <  toDateTime64({{until:String}}, 3)
+          AND s.time >= toDateTime64({{since:String}}, 3)
+          AND s.time <  toDateTime64({{until:String}}, 3)
         ORDER BY time, id
     """
     return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
@@ -225,10 +225,10 @@ def binance_book_depth(token: str, since: str, until: str) -> tuple[str, dict[st
     Multi-row per snapshot — no aggregation. FINAL collapses re-ingests."""
     sql = f"""
         SELECT {_time_ms()}, token, percentage, depth, value
-        FROM tradernick.binance_book_depth FINAL
+        FROM tradernick.binance_book_depth AS s FINAL
         WHERE token = {{token:String}}
-          AND time >= toDateTime64({{since:String}}, 3)
-          AND time <  toDateTime64({{until:String}}, 3)
+          AND s.time >= toDateTime64({{since:String}}, 3)
+          AND s.time <  toDateTime64({{until:String}}, 3)
         ORDER BY time, percentage
     """
     return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
@@ -238,10 +238,10 @@ def binance_open_interest(token: str, since: str, until: str) -> tuple[str, dict
     """Horatio shape: (time(ms,UTC), token, open_interest, open_interest_value)."""
     sql = f"""
         SELECT {_time_ms()}, token, open_interest, open_interest_value
-        FROM tradernick.binance_open_interest FINAL
+        FROM tradernick.binance_open_interest AS s FINAL
         WHERE token = {{token:String}}
-          AND time >= toDateTime({{since:String}})
-          AND time <  toDateTime({{until:String}})
+          AND s.time >= toDateTime({{since:String}})
+          AND s.time <  toDateTime({{until:String}})
         ORDER BY time
     """
     return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
@@ -259,10 +259,10 @@ def binance_long_short_ratios(token: str, since: str, until: str) -> tuple[str, 
             toFloat64(top_trader_vol_ratio)       AS top_trader_vol_ratio,
             toFloat64(long_short_count_ratio)     AS long_short_count_ratio,
             toFloat64(taker_long_short_vol_ratio) AS taker_long_short_vol_ratio
-        FROM tradernick.binance_long_short_ratios FINAL
+        FROM tradernick.binance_long_short_ratios AS s FINAL
         WHERE token = {{token:String}}
-          AND time >= toDateTime({{since:String}})
-          AND time <  toDateTime({{until:String}})
+          AND s.time >= toDateTime({{since:String}})
+          AND s.time <  toDateTime({{until:String}})
         ORDER BY time
     """
     return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
@@ -358,8 +358,8 @@ def evm_aave(
     }
     where = [
         'chain = {chain:String}',
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     if eth_market_type:
         params['eth_market'] = eth_market_type
@@ -372,7 +372,7 @@ def evm_aave(
         where.append(f'lower({actor_col}) != {{exclude_involving:String}}')
     sql = f"""
         SELECT {_projection_clause(spec)}
-        FROM tradernick.{table} FINAL
+        FROM tradernick.{table} AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -537,10 +537,10 @@ def _transfers_filters(params: dict[str, Any], where: list[str], *,
     # involving = sender OR receiver, exclude = NOT IN.
     def _group_members(pname: str) -> str:
         return (
-            'SELECT lower(address) FROM tradernick.wallet_pins FINAL '
+            'SELECT lower(address) FROM tradernick.wallet_pins AS s FINAL '
             'WHERE user_id = {group_user_id:String} AND deleted = 0 '
             'AND group_id IN ('
-            'SELECT group_id FROM tradernick.wallet_groups FINAL '
+            'SELECT group_id FROM tradernick.wallet_groups AS s FINAL '
             'WHERE user_id = {group_user_id:String} AND deleted = 0 '
             'AND lower(name) IN {' + pname + ':Array(String)})'
         )
@@ -595,13 +595,13 @@ def evm_erc20_transfers(
         "kind = 'erc20'",
         'chain = {chain:String}',
         'token IN {tokens:Array(String)}',
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     _transfers_filters(params, where, **filters)
     sql = f"""
         SELECT {_TRANSFER_PROJECTION}
-        FROM tradernick.transfers FINAL
+        FROM tradernick.transfers AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -621,13 +621,13 @@ def evm_native_transfers(
     where = [
         "kind = 'native'",
         'chain = {chain:String}',
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     _transfers_filters(params, where, **filters)
     sql = f"""
         SELECT {_TRANSFER_PROJECTION}
-        FROM tradernick.transfers FINAL
+        FROM tradernick.transfers AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -643,13 +643,13 @@ def tron_native_transfers(
     where = [
         "kind = 'tron_native'",
         "chain = 'TRON'",
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     _transfers_filters(params, where, **filters)
     sql = f"""
         SELECT {_TRANSFER_PROJECTION}
-        FROM tradernick.transfers FINAL
+        FROM tradernick.transfers AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -669,13 +669,13 @@ def tron_trc20_transfers(
         "kind = 'trc20'",
         "chain = 'TRON'",
         'token IN {tokens:Array(String)}',
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     _transfers_filters(params, where, **filters)
     sql = f"""
         SELECT {_TRANSFER_PROJECTION}
-        FROM tradernick.transfers FINAL
+        FROM tradernick.transfers AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -691,13 +691,13 @@ def btc_native_transfers(
     where = [
         "kind = 'btc'",
         "chain = 'BTC'",
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     _transfers_filters(params, where, **filters)
     sql = f"""
         SELECT {_TRANSFER_PROJECTION}
-        FROM tradernick.transfers FINAL
+        FROM tradernick.transfers AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -715,10 +715,10 @@ def _wallet_group_members_sql(pname: str) -> str:
     Array(String) param holding the lowercased group names. Shares the resolver
     shape with the transfers group filter."""
     return (
-        'SELECT lower(address) FROM tradernick.wallet_pins FINAL '
+        'SELECT lower(address) FROM tradernick.wallet_pins AS s FINAL '
         'WHERE user_id = {group_user_id:String} AND deleted = 0 '
         'AND group_id IN ('
-        'SELECT group_id FROM tradernick.wallet_groups FINAL '
+        'SELECT group_id FROM tradernick.wallet_groups AS s FINAL '
         'WHERE user_id = {group_user_id:String} AND deleted = 0 '
         'AND lower(name) IN {' + pname + ':Array(String)})'
     )
@@ -757,8 +757,8 @@ def hl_ohlcv(since: str, until: str, *, tokens: list[str] | None = None,
         'since': _ts_to_ch(since), 'until': _ts_to_ch(until),
     }
     where = [
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     if tokens:
         params['tokens'] = list(tokens)
@@ -786,7 +786,7 @@ def hl_ohlcv(since: str, until: str, *, tokens: list[str] | None = None,
             -- below would double-count a pre-merge duplicate 1m row into the
             -- resampled bucket (drift up to ~2× until the background merge
             -- runs) — same reasoning as the binance_ohlcv_1m resample above.
-            FROM tradernick.hl_ohlcv_1m FINAL
+            FROM tradernick.hl_ohlcv_1m AS s FINAL
             WHERE {' AND '.join(where)}
             GROUP BY time, token
             ORDER BY time, token
@@ -797,7 +797,7 @@ def hl_ohlcv(since: str, until: str, *, tokens: list[str] | None = None,
                 {_time_us()}, token, open, close, high, low, volume,
                 buyer_taker_volume, seller_taker_volume,
                 toInt64(trade_count) AS trade_count
-            FROM tradernick.hl_ohlcv_1m FINAL
+            FROM tradernick.hl_ohlcv_1m AS s FINAL
             WHERE {' AND '.join(where)}
             ORDER BY time, token
         """
@@ -812,8 +812,8 @@ def hl_trades(since: str, until: str, *, tokens: list[str] | None = None,
     on EITHER side (buyer OR seller); `wallet_groups` matches group members."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
-        'time >= toDateTime64({since:String}, 3)',
-        'time <  toDateTime64({until:String}, 3)',
+        's.time >= toDateTime64({since:String}, 3)',
+        's.time <  toDateTime64({until:String}, 3)',
     ]
     if tokens:
         params['tokens'] = list(tokens)
@@ -835,7 +835,7 @@ def hl_trades(since: str, until: str, *, tokens: list[str] | None = None,
     sql = f"""
         SELECT {_time_us()}, token, price, amount, buy, id,
                buyer_wallet, seller_wallet, block_number
-        FROM tradernick.hl_trades FINAL
+        FROM tradernick.hl_trades AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, id
     """
@@ -864,8 +864,8 @@ def hl_fills(since: str, until: str, *, tokens: list[str] | None = None,
     ``extra_cols=True``."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
-        'time >= toDateTime64({since:String}, 3)',
-        'time <  toDateTime64({until:String}, 3)',
+        's.time >= toDateTime64({since:String}, 3)',
+        's.time <  toDateTime64({until:String}, 3)',
     ]
     _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
     block = f"block_number, {_time_us('block_time')}, " if block_data else ''
@@ -877,7 +877,7 @@ def hl_fills(since: str, until: str, *, tokens: list[str] | None = None,
         SELECT {block}{_time_us()},
                wallet, token, price, size,
                side, dir, start_position, closed_pnl, fee{extra}
-        FROM tradernick.hl_fills FINAL
+        FROM tradernick.hl_fills AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, tid, wallet
     """
@@ -891,14 +891,14 @@ def hl_funding(since: str, until: str, *, tokens: list[str] | None = None,
     position_amount, block_number)."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
-        'time >= toDateTime64({since:String}, 3)',
-        'time <  toDateTime64({until:String}, 3)',
+        's.time >= toDateTime64({since:String}, 3)',
+        's.time <  toDateTime64({until:String}, 3)',
     ]
     _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
     sql = f"""
         SELECT {_time_us()}, token, wallet, rate, amount,
                position_amount, block_number
-        FROM tradernick.hl_funding FINAL
+        FROM tradernick.hl_funding AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, wallet
     """
@@ -912,14 +912,14 @@ def hl_transfers(since: str, until: str, *,
     block_number)."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
-        'time >= toDateTime64({since:String}, 3)',
-        'time <  toDateTime64({until:String}, 3)',
+        's.time >= toDateTime64({since:String}, 3)',
+        's.time <  toDateTime64({until:String}, 3)',
     ]
     _hl_token_wallet_filters(params, where, wallets=wallets, wallet_groups=wallet_groups)
     sql = f"""
         SELECT {_time_us()}, wallet, direction, amount,
                toBool(is_finalized) AS is_finalized, block_number
-        FROM tradernick.hl_transfers FINAL
+        FROM tradernick.hl_transfers AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, wallet
     """
@@ -933,14 +933,14 @@ def hl_vaults(since: str, until: str, *,
     commission, fee, block_number)."""
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
-        'time >= toDateTime64({since:String}, 3)',
-        'time <  toDateTime64({until:String}, 3)',
+        's.time >= toDateTime64({since:String}, 3)',
+        's.time <  toDateTime64({until:String}, 3)',
     ]
     _hl_token_wallet_filters(params, where, wallets=wallets, wallet_groups=wallet_groups)
     sql = f"""
         SELECT {_time_us()}, vault, wallet, action, amount,
                commission, fee, block_number
-        FROM tradernick.hl_vaults FINAL
+        FROM tradernick.hl_vaults AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, wallet
     """
@@ -996,7 +996,7 @@ def hl_realized_performance(since: str, until: str, *,
             FROM (
                 SELECT {time_expr} AS time, token, pnl, fees, net_pnl, funding,
                        volume, buy_volume, sell_volume, trade_count
-                FROM tradernick.hl_trade_history FINAL
+                FROM tradernick.hl_trade_history AS s FINAL
                 WHERE {' AND '.join(where)}
             )
             GROUP BY time, token
@@ -1008,7 +1008,7 @@ def hl_realized_performance(since: str, until: str, *,
                wallet, token, pnl, fees, net_pnl, funding,
                volume, buy_volume, sell_volume,
                toInt64(trade_count) AS trade_count
-        FROM tradernick.hl_trade_history FINAL
+        FROM tradernick.hl_trade_history AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time, wallet, token
         {limit_clause}
@@ -1036,8 +1036,8 @@ def hl_realized_performance_windowed(since: str, until: str, window: str, *,
         raise ValueError("realized_performance window must be >= 15m")
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
-        'time >= toDateTime64({since:String}, 3)',
-        'time <  toDateTime64({until:String}, 3)',
+        's.time >= toDateTime64({since:String}, 3)',
+        's.time <  toDateTime64({until:String}, 3)',
     ]
     _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
     wsql = ' AND '.join(where)
@@ -1057,7 +1057,7 @@ def hl_realized_performance_windowed(since: str, until: str, window: str, *,
                    sumIf(price * size, side = 'B') AS buy_volume,
                    sumIf(price * size, side = 'A') AS sell_volume,
                    toInt64(count())                AS trade_count
-            FROM tradernick.hl_fills FINAL
+            FROM tradernick.hl_fills AS s FINAL
             WHERE {wsql}
             GROUP BY {grp}, w
           ),
@@ -1065,7 +1065,7 @@ def hl_realized_performance_windowed(since: str, until: str, window: str, *,
             SELECT {grp},
                    toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
                    sum(amount) AS funding
-            FROM tradernick.hl_funding FINAL
+            FROM tradernick.hl_funding AS s FINAL
             WHERE {wsql}
             GROUP BY {grp}, w
           )
@@ -1110,8 +1110,8 @@ def hl_positions(since: str, until: str, window: str, *,
     secs = _positions_window_secs(window)
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
-        'time >= toDateTime64({since:String}, 3)',
-        'time <  toDateTime64({until:String}, 3)',
+        's.time >= toDateTime64({since:String}, 3)',
+        's.time <  toDateTime64({until:String}, 3)',
     ]
     _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
     limit_clause = ''
@@ -1140,7 +1140,7 @@ def hl_positions(since: str, until: str, window: str, *,
                    toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
                    wallet, token, side, amount, avg_entry, opened_at,
                    mark_price, size, unrealized_pnl, funding, fee, exact_avg_price
-            FROM tradernick.hl_position_history FINAL
+            FROM tradernick.hl_position_history AS s FINAL
             WHERE {' AND '.join(where)}
         )
         GROUP BY wallet, token, w
@@ -1205,8 +1205,8 @@ def hl_positions_change_aggregate(since: str, until: str, window: str, *,
     secs = _positions_window_secs(window, 300)  # fills-native → 5m floor
     params: dict[str, Any] = {'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
     where = [
-        'time >= toDateTime64({since:String}, 3)',
-        'time <  toDateTime64({until:String}, 3)',
+        's.time >= toDateTime64({since:String}, 3)',
+        's.time <  toDateTime64({until:String}, 3)',
     ]
     _hl_token_wallet_filters(params, where, tokens=tokens, wallets=wallets, wallet_groups=wallet_groups)
     # `secs` is a validated int → safe to inline. 3 levels: classify fills → sum
@@ -1250,7 +1250,7 @@ def hl_positions_change_aggregate(since: str, until: str, window: str, *,
                        price * size AS v,
                        crossed,
                        {_HL_FILL_ACTION_SQL} AS ty
-                FROM tradernick.hl_fills FINAL
+                FROM tradernick.hl_fills AS s FINAL
                 WHERE {' AND '.join(where)}
             )
             GROUP BY token, w
@@ -1311,7 +1311,7 @@ def hl_positions_snapshot_aggregate(since: str, until: str, window: str, *,
             WITH ev AS (
                 SELECT token, wallet, bucket,
                     if(argMaxMerge(dir_state) >= 0, argMaxMerge(term_hi), argMaxMerge(term_lo)) AS pos
-                FROM tradernick.hl_positions_bucketed
+                FROM tradernick.hl_positions_bucketed AS s
                 WHERE bucket < toDateTime64({{until:String}}, 3){tw_and}
                 GROUP BY token, wallet, bucket
             ),
@@ -1343,9 +1343,9 @@ def hl_positions_snapshot_aggregate(since: str, until: str, window: str, *,
             mk AS (
                 SELECT token, toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
                        argMax(close, time) AS mark
-                FROM tradernick.hl_ohlcv_1m
-                WHERE time >= toDateTime64({{since:String}}, 3) AND time < toDateTime64({{until:String}}, 3)
-                  AND token IN (SELECT DISTINCT token FROM tradernick.hl_positions_bucketed
+                FROM tradernick.hl_ohlcv_1m AS s
+                WHERE s.time >= toDateTime64({{since:String}}, 3) AND s.time < toDateTime64({{until:String}}, 3)
+                  AND token IN (SELECT DISTINCT token FROM tradernick.hl_positions_bucketed AS s
                                 WHERE bucket < toDateTime64({{until:String}}, 3){tw_and})
                 GROUP BY token, w
             )
@@ -1369,8 +1369,8 @@ def hl_positions_snapshot_aggregate(since: str, until: str, window: str, *,
         return sql, params
 
     # ── source == 'position_history' (default / backup) ──
-    pos_where = ('time >= toDateTime64({since:String}, 3) '
-                 'AND time <  toDateTime64({until:String}, 3)' + tw_and)
+    pos_where = ('s.time >= toDateTime64({since:String}, 3) '
+                 'AND s.time <  toDateTime64({until:String}, 3)' + tw_and)
     # Downsample: the LAST snapshot per (wallet, token, window). `signed` = coin
     # amount signed by side; `sz` = $ notional; `snap_t` = that snapshot's time.
     pos_cte = f"""
@@ -1381,7 +1381,7 @@ def hl_positions_snapshot_aggregate(since: str, until: str, window: str, *,
         FROM (
             SELECT time AS t, toStartOfInterval(time, INTERVAL {secs} SECOND) AS w,
                    wallet, token, side, amount, size
-            FROM tradernick.hl_position_history FINAL
+            FROM tradernick.hl_position_history AS s FINAL
             WHERE {pos_where}
         )
         GROUP BY wallet, token, w
@@ -1389,14 +1389,14 @@ def hl_positions_snapshot_aggregate(since: str, until: str, window: str, *,
     """
     if pos_recency_hrs is not None:
         params['recency'] = int(pos_recency_hrs) * 3600
-        fills_where = ('time >= toDateTime64({since:String}, 3) - toIntervalSecond({recency:UInt32}) '
-                       'AND time < toDateTime64({until:String}, 3)' + tw_and)
+        fills_where = ('s.time >= toDateTime64({since:String}, 3) - toIntervalSecond({recency:UInt32}) '
+                       'AND s.time < toDateTime64({until:String}, 3)' + tw_and)
         src = f"""
             SELECT p.token AS token, p.w AS w, p.signed AS signed, p.sz AS sz
             FROM ( {pos_cte} ) p
             ASOF LEFT JOIN (
                 SELECT wallet, token, time AS ft
-                FROM tradernick.hl_fills FINAL
+                FROM tradernick.hl_fills AS s FINAL
                 WHERE {fills_where}
             ) fl ON p.wallet = fl.wallet AND p.token = fl.token AND fl.ft <= p.snap_t
             WHERE fl.ft >= p.snap_t - toIntervalSecond({{recency:UInt32}})
@@ -1478,8 +1478,8 @@ def evm_uniswap(
     }
     where = [
         'chain = {chain:String}',
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     # Uniswap pool naming is canonical — DeFiStream stores token pairs in
     # the order Uniswap itself ordered them (which is byte-address ordered,
@@ -1546,7 +1546,7 @@ def evm_uniswap(
 
     sql = f"""
         SELECT {_projection_clause(spec)}
-        FROM tradernick.{table} FINAL
+        FROM tradernick.{table} AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -1619,8 +1619,8 @@ def evm_lido(
     }
     where = [
         'chain = {chain:String}',
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     if involving:
         params['involving'] = involving.lower()
@@ -1630,7 +1630,7 @@ def evm_lido(
         where.append(f'lower({actor}) != {{exclude_involving:String}}')
     sql = f"""
         SELECT {_projection_clause(spec)}
-        FROM tradernick.{table} FINAL
+        FROM tradernick.{table} AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -1675,8 +1675,8 @@ def evm_spark(
     }
     where = [
         'chain = {chain:String}',
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     if involving:
         params['involving'] = involving.lower()
@@ -1686,7 +1686,7 @@ def evm_spark(
         where.append(f'lower({actor_col}) != {{exclude_involving:String}}')
     sql = f"""
         SELECT {_projection_clause(spec)}
-        FROM tradernick.{table} FINAL
+        FROM tradernick.{table} AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -1776,8 +1776,8 @@ def evm_morpho(
     }
     where = [
         'chain = {chain:String}',
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     if market_id:
         params['market_id'] = market_id.lower()
@@ -1792,7 +1792,7 @@ def evm_morpho(
         where.append('(' + ' AND '.join(clauses) + ')')
     sql = f"""
         SELECT {_projection_clause(spec)}
-        FROM tradernick.{table} FINAL
+        FROM tradernick.{table} AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -1860,8 +1860,8 @@ def evm_aero_concentrated(
     }
     where = [
         'chain = {chain:String}',
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     _aero_pair_filter(params, where, symbol0, symbol1)
     if tick_spacing is not None:
@@ -1918,7 +1918,7 @@ def evm_aero_concentrated(
 
     sql = f"""
         SELECT {_projection_clause(spec)}
-        FROM tradernick.{table} FINAL
+        FROM tradernick.{table} AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
@@ -1946,8 +1946,8 @@ def evm_aero_basic(
     }
     where = [
         'chain = {chain:String}',
-        'time >= toDateTime({since:String})',
-        'time <  toDateTime({until:String})',
+        's.time >= toDateTime({since:String})',
+        's.time <  toDateTime({until:String})',
     ]
     _aero_pair_filter(params, where, symbol0, symbol1)
     if stable is not None:
@@ -2004,7 +2004,7 @@ def evm_aero_basic(
 
     sql = f"""
         SELECT {_projection_clause(spec)}
-        FROM tradernick.{table} FINAL
+        FROM tradernick.{table} AS s FINAL
         WHERE {' AND '.join(where)}
         ORDER BY time
     """
