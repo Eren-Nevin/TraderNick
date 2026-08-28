@@ -18,7 +18,23 @@ from gap_fill import min_watermark_per_token
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [binance_open_interest] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 300
+# NOTE: upstream publishes on a strict 5-minute grid — verified against the
+# table (>99% of all rows since 2024-01-01 land exactly on a 300s boundary),
+# and Binance's openInterestHist / long-short-ratio endpoints expose no finer
+# period. 60s therefore polls ~5x per published point: four of every five
+# ticks fetch a window with nothing new in it. That's a deliberate trade —
+# it buys worst-case staleness of ~1 min instead of ~5 — not an oversight.
+# Both tables are small (~21M rows), so the redundant fetches are cheap.
+POLL_INTERVAL_SECONDS = 60
+
+# Sweep cadence pinned to an absolute 15 min rather than the default
+# live-cadence * sweep.SWEEP_MULTIPLIER. Retuning POLL_INTERVAL_SECONDS above
+# therefore leaves the gap-recovery interval alone — and since
+# sweep.sweep_since() uses the cadence as its minimum lookback, the sweep's
+# minimum window stays 15 min too.
+SWEEP_CADENCE_SECONDS = 900
+
+
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -51,7 +67,7 @@ async def main(stream_name: str | None = None):
     log.info("polling %d tokens every %ss + gap-fill from min-watermark — 1 multi-token call/tick",
              len(tokens), POLL_INTERVAL_SECONDS)
 
-    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS)
+    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS, SWEEP_CADENCE_SECONDS)
     async def live_loop():
         jitter = sweep.live_jitter_s(POLL_INTERVAL_SECONDS)
         log.info("live_loop: waiting %.0fs before first fire", jitter)

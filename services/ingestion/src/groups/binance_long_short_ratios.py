@@ -4,7 +4,7 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from defistream import AsyncDeFiStream
 
@@ -18,7 +18,34 @@ from gap_fill import min_watermark_per_token
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [binance_long_short_ratios] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 300
+# NOTE: upstream publishes on a strict 5-minute grid — verified against the
+# table (>99% of all rows since 2024-01-01 land exactly on a 300s boundary),
+# and Binance's openInterestHist / long-short-ratio endpoints expose no finer
+# period. 60s therefore polls ~5x per published point: four of every five
+# ticks fetch a window with nothing new in it. That's a deliberate trade —
+# it buys worst-case staleness of ~1 min instead of ~5 — not an oversight.
+# Both tables are small (~21M rows), so the redundant fetches are cheap.
+POLL_INTERVAL_SECONDS = 60
+
+# Sweep cadence pinned to an absolute 15 min rather than the default
+# live-cadence * sweep.SWEEP_MULTIPLIER. Retuning POLL_INTERVAL_SECONDS above
+# therefore leaves the gap-recovery interval alone — and since
+# sweep.sweep_since() uses the cadence as its minimum lookback, the sweep's
+# minimum window stays 15 min too.
+SWEEP_CADENCE_SECONDS = 900
+
+# Live window, overriding the 5-minute sweep.LIVE_OVERLAP default. DeFiStream
+# publishes this endpoint ~12-13 min behind real time (measured 2026-08-28:
+# 368 consecutive live ticks returned rows=0 while the 15-min sweep landed 450
+# rows a fire, because a 5-min window never reached back far enough to contain
+# a published point). 20 min clears that lag with margin, so the live loop
+# actually contributes instead of burning 60 empty calls an hour. RMT dedupes
+# the heavy overlap, and the table is small (~21M rows) so re-fetching 20 min
+# every 60s is cheap. If upstream lag ever exceeds this, the symptom returns as
+# rows=0 live ticks — widen here, not the cadence.
+LIVE_OVERLAP_LSR = timedelta(minutes=20)
+
+
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -51,7 +78,7 @@ async def main(stream_name: str | None = None):
     log.info("polling %d tokens every %ss + gap-fill from min-watermark — 1 multi-token call/tick",
              len(tokens), POLL_INTERVAL_SECONDS)
 
-    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS)
+    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS, SWEEP_CADENCE_SECONDS)
     async def live_loop():
         jitter = sweep.live_jitter_s(POLL_INTERVAL_SECONDS)
         log.info("live_loop: waiting %.0fs before first fire", jitter)
@@ -63,7 +90,7 @@ async def main(stream_name: str | None = None):
             _sweep_rows = 0
             _sweep_err: str | None = None
             _sweep_t0 = time.monotonic()
-            since = now - sweep.LIVE_OVERLAP
+            since = now - LIVE_OVERLAP_LSR
             n = 0
             err: str | None = None
             _live_t0 = time.monotonic()

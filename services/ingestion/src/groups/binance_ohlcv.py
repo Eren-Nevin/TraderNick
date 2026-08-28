@@ -27,6 +27,13 @@ from gap_fill import min_watermark_per_token
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [binance_ohlcv] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
+# Sweep cadence pinned to an absolute 15 min rather than the default
+# live-cadence * sweep.SWEEP_MULTIPLIER. Retuning POLL_INTERVAL_SECONDS above
+# therefore leaves the gap-recovery interval alone — and since
+# sweep.sweep_since() uses the cadence as its minimum lookback, the sweep's
+# minimum window stays 15 min too.
+SWEEP_CADENCE_SECONDS = 900
+
 
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -62,7 +69,7 @@ async def main(stream_name: str | None = None):
     log.info("polling %d tokens every %ss + gap-fill from min-watermark — 1 multi-token call/tick",
              len(tokens), config.POLL_INTERVAL_SECONDS)
 
-    sweep_cadence = sweep.sweep_cadence_s(config.POLL_INTERVAL_SECONDS)
+    sweep_cadence = sweep.sweep_cadence_s(config.POLL_INTERVAL_SECONDS, SWEEP_CADENCE_SECONDS)
     async def live_loop():
         jitter = sweep.live_jitter_s(config.POLL_INTERVAL_SECONDS)
         log.info("live_loop: waiting %.0fs before first fire", jitter)

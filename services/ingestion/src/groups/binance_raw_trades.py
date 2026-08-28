@@ -23,6 +23,22 @@ from gap_fill import min_watermark_per_token
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [binance_raw_trades] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
+POLL_INTERVAL_SECONDS = 30
+
+# Sweep cadence pinned to an absolute 15 min rather than the default
+# live-cadence * sweep.SWEEP_MULTIPLIER. Retuning POLL_INTERVAL_SECONDS above
+# therefore leaves the gap-recovery interval alone — and since
+# sweep.sweep_since() uses the cadence as its minimum lookback, the sweep's
+# minimum window stays 15 min too.
+SWEEP_CADENCE_SECONDS = 900
+
+# Live window, overriding the 5-minute sweep.LIVE_OVERLAP default. Raw trades
+# is the highest-volume binance endpoint (futures), and the live loop re-fetches
+# this whole window every POLL_INTERVAL_SECONDS — so the window length is the
+# direct multiplier on ingest bandwidth (2min/30s = 4x re-fetch, vs 10x at the
+# 5-minute default). Anything older than this is the 15-minute sweep's job.
+LIVE_OVERLAP_RAW_TRADES = timedelta(minutes=2)
+
 
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -70,21 +86,21 @@ async def main(stream_name: str | None = None):
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
     tokens = token_batches.get_live_tokens()
     log.info("polling %d tokens every %ss + gap-fill from min-watermark — 1 multi-token call/tick",
-             len(tokens), config.POLL_INTERVAL_SECONDS)
+             len(tokens), POLL_INTERVAL_SECONDS)
 
-    sweep_cadence = sweep.sweep_cadence_s(config.POLL_INTERVAL_SECONDS)
+    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS, SWEEP_CADENCE_SECONDS)
     async def live_loop():
-        jitter = sweep.live_jitter_s(config.POLL_INTERVAL_SECONDS)
+        jitter = sweep.live_jitter_s(POLL_INTERVAL_SECONDS)
         log.info("live_loop: waiting %.0fs before first fire", jitter)
         await asyncio.sleep(jitter)
         while True:
             tokens = token_batches.get_live_tokens()
-            tick_end = time.monotonic() + config.POLL_INTERVAL_SECONDS
+            tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
             now = datetime.now(timezone.utc).replace(tzinfo=None)
             _sweep_rows = 0
             _sweep_err: str | None = None
             _sweep_t0 = time.monotonic()
-            since = now - sweep.LIVE_OVERLAP
+            since = now - LIVE_OVERLAP_RAW_TRADES
             n = 0
             err: str | None = None
             _live_t0 = time.monotonic()

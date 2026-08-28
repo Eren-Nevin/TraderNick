@@ -2,7 +2,7 @@ import asyncio
 import logging
 import sys
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from defistream import AsyncDeFiStream
 
@@ -15,7 +15,20 @@ from gap_fill import latest_time
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [tron_native_transfers] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL_SECONDS = 300
+POLL_INTERVAL_SECONDS = 30
+
+# Live window, overriding the 5-minute sweep.LIVE_OVERLAP default. At a 30s
+# cadence this re-fetches each row ~4x; RMT dedupes the overlap. Anything older
+# than this is the sweep's job.
+LIVE_OVERLAP_TRANSFERS = timedelta(minutes=2)
+
+# Sweep fires every 30 min but always looks back 1 HOUR — the window is
+# deliberately 2x the cadence so consecutive sweeps overlap and a late-arriving
+# or reorged row can't fall between two fires. Pinned absolutely rather than
+# derived from live-cadence * sweep.SWEEP_MULTIPLIER, so retuning
+# POLL_INTERVAL_SECONDS above does not move either number.
+SWEEP_CADENCE_SECONDS = 1800
+SWEEP_WINDOW_SECONDS = 3600
 def _iso(dt: datetime) -> str:
     return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -47,7 +60,7 @@ async def main(stream_name: str | None = None):
     log.info("polling tron native transfers every %ss + gap-fill from watermark",
              POLL_INTERVAL_SECONDS)
 
-    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS)
+    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS, SWEEP_CADENCE_SECONDS)
     async def live_loop():
         jitter = sweep.live_jitter_s(POLL_INTERVAL_SECONDS)
         log.info("live_loop: waiting %.0fs before first fire", jitter)
@@ -58,7 +71,7 @@ async def main(stream_name: str | None = None):
             _sweep_rows = 0
             _sweep_err: str | None = None
             _sweep_t0 = time.monotonic()
-            since = now - sweep.LIVE_OVERLAP
+            since = now - LIVE_OVERLAP_TRANSFERS
             n = 0
             err: str | None = None
             _live_t0 = time.monotonic()
@@ -94,6 +107,7 @@ async def main(stream_name: str | None = None):
                 since = sweep.sweep_since(
                     now=now,
                     sweep_cadence_seconds=sweep_cadence,
+                    min_lookback_seconds=SWEEP_WINDOW_SECONDS,
                     last_seen=last_seen,
                     # DeFiStream EVM parquet event endpoints cap each request
                     # at 7 days (100k blocks). Leave 1 day of slack so the

@@ -15,16 +15,30 @@ from gap_fill import latest_time
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [btc_transfers] %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# BTC has low transfer volume relative to other chains — pull less often.
-# Live = 30 min, sweep = 300 min (sweep_cadence_s = POLL_INTERVAL × 10).
-POLL_INTERVAL_SECONDS = 1800
+POLL_INTERVAL_SECONDS = 30
 
-# BTC mines a block every ~10 minutes on average. The default 5-minute live
-# overlap (sweep.LIVE_OVERLAP) hits empty windows half the time, and
-# DeFiStream rejects those with "No Bitcoin blocks found for the specified
-# time range". 60 minutes guarantees ≥4 blocks per window; RMT dedupes the
-# overlap with the previous tick.
-LIVE_OVERLAP_BTC = timedelta(minutes=60)
+# Live window, overriding the 5-minute sweep.LIVE_OVERLAP default. At a 30s
+# cadence this re-fetches each row ~4x; RMT dedupes the overlap. Anything older
+# than this is the sweep's job.
+LIVE_OVERLAP_TRANSFERS = timedelta(minutes=2)
+
+# Sweep fires every 30 min but always looks back 1 HOUR — the window is
+# deliberately 2x the cadence so consecutive sweeps overlap and a late-arriving
+# or reorged row can't fall between two fires. Pinned absolutely rather than
+# derived from live-cadence * sweep.SWEEP_MULTIPLIER, so retuning
+# POLL_INTERVAL_SECONDS above does not move either number.
+SWEEP_CADENCE_SECONDS = 1800
+SWEEP_WINDOW_SECONDS = 3600
+
+# NOTE (2026-08-28): this stream previously used LIVE_OVERLAP_BTC = 60 min
+# because BTC mines a block every ~10 min on average, so a short live window
+# is empty most fires and DeFiStream answers "No Bitcoin blocks found for the
+# specified time range". It now shares the fleet-wide 2-minute window above by
+# request, which means MOST live ticks will find no block. That is handled
+# benignly — `_is_no_blocks_error` logs it at INFO and does not mark the tick
+# failed — and the 30-min/1-hour sweep still covers every block (~6/hour), so
+# no data is lost. The cost is noisy logs and mostly-empty calls; if that
+# becomes annoying, widen the live window here rather than slowing the cadence.
 
 
 def _is_no_blocks_error(exc: Exception) -> bool:
@@ -65,7 +79,7 @@ async def main(stream_name: str | None = None):
             await asyncio.sleep(3600)
 
     ds = AsyncDeFiStream(api_key=config.DEFISTREAM_API_KEY)
-    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS)
+    sweep_cadence = sweep.sweep_cadence_s(POLL_INTERVAL_SECONDS, SWEEP_CADENCE_SECONDS)
     log.info("btc transfers; live cadence=%ss, sweep cadence=%ss",
              POLL_INTERVAL_SECONDS, sweep_cadence)
 
@@ -76,7 +90,7 @@ async def main(stream_name: str | None = None):
         while True:
             tick_end = time.monotonic() + POLL_INTERVAL_SECONDS
             now = datetime.now(timezone.utc).replace(tzinfo=None)
-            since = now - LIVE_OVERLAP_BTC
+            since = now - LIVE_OVERLAP_TRANSFERS
             n = 0
             err: str | None = None
             _live_t0 = time.monotonic()
@@ -116,6 +130,7 @@ async def main(stream_name: str | None = None):
                 since = sweep.sweep_since(
                     now=now,
                     sweep_cadence_seconds=sweep_cadence,
+                    min_lookback_seconds=SWEEP_WINDOW_SECONDS,
                     last_seen=last_seen,
                     # DeFiStream EVM parquet event endpoints cap each request
                     # at 7 days (100k blocks). Leave 1 day of slack so the
