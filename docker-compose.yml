@@ -8,12 +8,21 @@ x-live-cpu-limit: &live_cpu_limit
 services:
   clickhouse:
     image: clickhouse/clickhouse-server:24.8
-    # Pin ClickHouse to 6 fixed cores (of 16): both a hard 6-core cap AND CPU
-    # affinity — CH always runs on cores 0-5, so its working set stays on the
-    # same physical cores (better cache locality) and can't monopolize the host.
+    # Pin ClickHouse to 12 fixed cores: both a hard 12-core cap AND CPU affinity —
+    # CH always runs on cores 0-11, so its working set stays on the same physical
+    # cores (better cache locality) and can't monopolize the host's other 52.
+    # Widened 0-5 -> 0-7 -> 0-11 on 2026-08-28: the sweep watermark query
+    # (gap_fill.min_watermark_per_token) full-scans binance_raw_trades (50B rows
+    # / ~150s) every 15 min and pegs the whole cpuset while it runs. 0-11 is
+    # exactly the pool the eth-reth / eth-lighthouse / arbitrum-one nodes already
+    # hold, so CH now shares all 12 with them rather than a 6-core subset — no
+    # new neighbours, but full overlap during those scans. The 12-14
+    # (trade-session) and 15-63 (horatio) ranges stay untouched.
     # (Applying this recreates the container → a brief CH outage; the ingestion /
-    # data_server / data_provider CH clients now reconnect+retry through it.)
-    cpuset: "0-5"
+    # data_server / data_provider CH clients now reconnect+retry through it.
+    # `docker update --cpuset-cpus 0-11 tradernick-clickhouse-1` applies it live
+    # with no restart.)
+    cpuset: "0-11"
     # Auto-recover a transient/accidental stop instead of staying down (it was the
     # only service without this — a stray SIGTERM on 2026-07-03 left it down ~12h).
     restart: unless-stopped
@@ -21,7 +30,7 @@ services:
       - ./clickhouse/init:/docker-entrypoint-initdb.d:ro
       # Named collection for the wallet_labels dictionary source (password from
       # CLICKHOUSE_PASSWORD via from_env) — see clickhouse/config.d.
-      - ./clickhouse/config.d:/etc/clickhouse-server/config.d:ro
+      - ./clickhouse/config.d/named_collections.xml:/etc/clickhouse-server/config.d/named_collections.xml:ro
       # Host path for ClickHouse data is system-specific — set CLICKHOUSE_DATA_DIR
       # in .env (defaults to a repo-local ./data/clickhouse for fresh setups).
       - ${CLICKHOUSE_DATA_DIR:-./data/clickhouse}:/var/lib/clickhouse
@@ -461,7 +470,7 @@ services:
       # docker network (admin_server:8000); firewall this port or bind it to
       # 127.0.0.1 if the host is internet-exposed and you don't need remote
       # admin-API clients.
-      - "10001:8000"
+      - "127.0.0.1:10001:8000"
     restart: unless-stopped
 
   # =============================================================
@@ -545,7 +554,7 @@ services:
       # without a reverse proxy. NOTE: the SvelteKit app has NO built-in auth,
       # so if the host is internet-exposed, either front it with nginx + basic
       # auth (see DEPLOY.md) or firewall port 10000 to trusted IPs.
-      - "10000:3000"
+      - "127.0.0.1:10000:3000"
     restart: unless-stopped
 
   # Horatio-parity read API backed by ClickHouse. Read-only — never
@@ -569,7 +578,7 @@ services:
       # out to the per-provider services.
       ADMIN_SERVER_URL: ${DATA_PROVIDER_ADMIN_URL:-http://admin_server:8000}
     ports:
-      - "10005:8000"
+      - "127.0.0.1:10005:8000"
     volumes:
       # Host snapshots dir is system-specific — set SNAPSHOTS_HOST_DIR in .env
       # (defaults to a repo-local ./data/snapshots for fresh setups). Container
