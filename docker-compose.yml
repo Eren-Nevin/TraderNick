@@ -20,9 +20,11 @@ services:
     # (trade-session) and 15-63 (horatio) ranges stay untouched.
     # (Applying this recreates the container → a brief CH outage; the ingestion /
     # data_server / data_provider CH clients now reconnect+retry through it.
-    # `docker update --cpuset-cpus 0-11 tradernick-clickhouse-1` applies it live
+    # `docker update --cpuset-cpus <range> tradernick-clickhouse-1` applies it live
     # with no restart.)
-    cpuset: "0-11"
+    # The range is host-specific — set CLICKHOUSE_CPUSET in .env. Default 0-11
+    # suits the large deployment host; smaller machines use e.g. 0-3.
+    cpuset: "${CLICKHOUSE_CPUSET:-0-11}"
     # Auto-recover a transient/accidental stop instead of staying down (it was the
     # only service without this — a stray SIGTERM on 2026-07-03 left it down ~12h).
     restart: unless-stopped
