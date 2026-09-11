@@ -49,14 +49,49 @@ def test_to_timestamp_rejects_bad_type():
 def test_binance_ohlcv_body(client):
     q = client.binance.ohlcv("BTC", "1h").time_range("2026-07-10", "2026-07-11")
     assert q._body == {
-        "token": "BTC", "window": "1h",
+        "tokens": ["BTC"], "window": "1h",
         "since": "2026-07-10T00:00:00Z", "until": "2026-07-11T00:00:00Z",
     }
 
 
 def test_binance_raw_trades_flags(client):
     q = client.binance.raw_trades("ETH").add_symbol().with_id()
-    assert q._body == {"token": "ETH", "add_symbol": True, "with_id": True}
+    assert q._body == {"tokens": ["ETH"], "add_symbol": True, "with_id": True}
+
+
+# --- multi-token: every binance endpoint takes one symbol or many ----------
+def test_binance_single_token_normalises_to_list(client):
+    """A bare string is still accepted (the original call form) and is sent as
+    a one-element `tokens` list."""
+    assert client.binance.raw_trades("BTC")._body == {"tokens": ["BTC"]}
+    assert client.binance.ohlcv("BTC", "1h")._body == {"tokens": ["BTC"], "window": "1h"}
+
+
+def test_binance_accepts_token_list(client):
+    assert client.binance.raw_trades(["BTC", "ETH"])._body == {"tokens": ["BTC", "ETH"]}
+    assert client.binance.ohlcv(["BTC", "ETH"], "1h")._body == {
+        "tokens": ["BTC", "ETH"], "window": "1h"}
+
+
+def test_binance_tokens_chainable_varargs_or_list(client):
+    """`.tokens()` mirrors hyperliquid's and REPLACES the positional selection."""
+    assert client.binance.raw_trades("BTC").tokens("BTC", "ETH")._body == {
+        "tokens": ["BTC", "ETH"]}
+    assert client.binance.raw_trades("BTC").tokens(["ETH", "SOL"])._body == {
+        "tokens": ["ETH", "SOL"]}
+
+
+@pytest.mark.parametrize("name", [
+    "raw_trades", "book_depth", "open_interest", "funding_rate", "long_short_ratios",
+])
+def test_every_binance_endpoint_takes_multiple_tokens(client, name):
+    q = getattr(client.binance, name)(["BTC", "ETH"])
+    assert q._body["tokens"] == ["BTC", "ETH"]
+
+
+def test_binance_spot_endpoints_take_multiple_tokens(client):
+    assert client.binance.spot.raw_trades(["BTC", "ETH"])._body["tokens"] == ["BTC", "ETH"]
+    assert client.binance.spot.ohlcv(["BTC", "ETH"], "1m")._body["tokens"] == ["BTC", "ETH"]
 
 
 # ---------------------------------------------------------------------------
@@ -69,7 +104,7 @@ def test_binance_spot_namespace_exists(client):
 @pytest.mark.asyncio
 async def test_binance_spot_ohlcv_path(client, monkeypatch):
     q = client.binance.spot.ohlcv("BTC", "1h")
-    assert q._body == {"token": "BTC", "window": "1h"}
+    assert q._body == {"tokens": ["BTC"], "window": "1h"}
     captured = {}
 
     async def fake_fetch(session, url, body):
@@ -83,7 +118,7 @@ async def test_binance_spot_ohlcv_path(client, monkeypatch):
 @pytest.mark.asyncio
 async def test_binance_spot_raw_trades_path_and_flags(client, monkeypatch):
     q = client.binance.spot.raw_trades("BTC").with_id().add_symbol()
-    assert q._body == {"token": "BTC", "with_id": True, "add_symbol": True}
+    assert q._body == {"tokens": ["BTC"], "with_id": True, "add_symbol": True}
     captured = {}
 
     async def fake_fetch(session, url, body):

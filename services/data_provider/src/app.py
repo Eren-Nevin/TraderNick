@@ -88,6 +88,32 @@ def _require(body: dict, *fields: str):
         raise ValueError(f"Missing required fields: {', '.join(missing)}")
 
 
+def _require_token(body: dict, *fields: str):
+    """`_require` for the binance reads, whose token selector may arrive as
+    EITHER `token` (a single symbol — the original wire form, still accepted so
+    existing clients keep working) OR `tokens` (a list). Exactly one is needed;
+    `tokens` wins if both are sent."""
+    _require(body, *fields)
+    if not body.get('tokens') and not body.get('token'):
+        raise ValueError("Missing required field: 'token' or 'tokens'")
+
+
+def _token_sel(body: dict):
+    """The token selector to hand the SQL builder — which accepts a str or a
+    list and normalises either. Call only after `_require_token`."""
+    return body['tokens'] if body.get('tokens') else body['token']
+
+
+def _token_slug(sel) -> str:
+    """Filename slug for a token selector: `BTC`, `BTC+ETH`, or `BTC+ETH+SOL+2more`
+    once the list gets long, so the download name stays readable and bounded."""
+    toks = [sel] if isinstance(sel, str) else [str(t) for t in sel]
+    if len(toks) == 1:
+        return toks[0]
+    head = '+'.join(toks[:3])
+    return head if len(toks) <= 3 else f'{head}+{len(toks) - 3}more'
+
+
 _SAFE_KEY_RE = re.compile(r'[^a-zA-Z0-9._-]')
 
 
@@ -435,30 +461,30 @@ async def health(_request: Request):
 async def binance_ohlcv(request: Request):
     body = request.json or {}
     try:
-        _require(body, 'token', 'window', 'since', 'until')
+        _require_token(body, 'window', 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    token, window = body['token'], body['window']
+    token, window = _token_sel(body), body['window']
     since, until = body['since'], body['until']
     try:
         sql, params = sql_b.binance_ohlcv(token, window, since, until)
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
     return await _save_or_return(
-        sql, params, body, f'binance_{token}_ohlcv_{window}.parquet', _EMPTY_OHLCV_FULL)
+        sql, params, body, f'binance_{_token_slug(token)}_ohlcv_{window}.parquet', _EMPTY_OHLCV_FULL)
 
 
 @app.post('/binance/funding_rate/read')
 async def binance_funding_rate(request: Request):
     body = request.json or {}
     try:
-        _require(body, 'token', 'since', 'until')
+        _require_token(body, 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    token, since, until = body['token'], body['since'], body['until']
+    token, since, until = _token_sel(body), body['since'], body['until']
     sql, params = sql_b.binance_funding_rate(token, since, until)
     return await _save_or_return(
-        sql, params, body, f'binance_{token}_funding_rate.parquet', _EMPTY_FUNDING_FULL)
+        sql, params, body, f'binance_{_token_slug(token)}_funding_rate.parquet', _EMPTY_FUNDING_FULL)
 
 
 @app.post('/evm/aave/read')
@@ -518,10 +544,10 @@ async def evm_erc20_transfers(request: Request):
 async def binance_raw_trades(request: Request):
     body = request.json or {}
     try:
-        _require(body, 'token', 'since', 'until')
+        _require_token(body, 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    token = body['token']
+    token = _token_sel(body)
     with_id = bool(body.get('with_id', False))
     add_symbol = bool(body.get('add_symbol', False))
     sql, params = sql_b.binance_raw_trades(
@@ -533,7 +559,7 @@ async def binance_raw_trades(request: Request):
     if add_symbol:
         empty = empty.with_columns(pl.lit(None).cast(pl.Utf8).alias('symbol'))
     return await _save_or_return(
-        sql, params, body, f'binance_{token}_raw_trades.parquet', empty)
+        sql, params, body, f'binance_{_token_slug(token)}_raw_trades.parquet', empty)
 
 
 # --- Binance SPOT reads --------------------------------------------------
@@ -543,27 +569,27 @@ async def binance_raw_trades(request: Request):
 async def binance_spot_ohlcv(request: Request):
     body = request.json or {}
     try:
-        _require(body, 'token', 'window', 'since', 'until')
+        _require_token(body, 'window', 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    token, window = body['token'], body['window']
+    token, window = _token_sel(body), body['window']
     since, until = body['since'], body['until']
     try:
         sql, params = sql_b.binance_spot_ohlcv(token, window, since, until)
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
     return await _save_or_return(
-        sql, params, body, f'binance_spot_{token}_ohlcv_{window}.parquet', _EMPTY_OHLCV_FULL)
+        sql, params, body, f'binance_spot_{_token_slug(token)}_ohlcv_{window}.parquet', _EMPTY_OHLCV_FULL)
 
 
 @app.post('/binance/spot/raw_trades/read')
 async def binance_spot_raw_trades(request: Request):
     body = request.json or {}
     try:
-        _require(body, 'token', 'since', 'until')
+        _require_token(body, 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    token = body['token']
+    token = _token_sel(body)
     with_id = bool(body.get('with_id', False))
     add_symbol = bool(body.get('add_symbol', False))
     sql, params = sql_b.binance_spot_raw_trades(
@@ -575,46 +601,46 @@ async def binance_spot_raw_trades(request: Request):
     if add_symbol:
         empty = empty.with_columns(pl.lit(None).cast(pl.Utf8).alias('symbol'))
     return await _save_or_return(
-        sql, params, body, f'binance_spot_{token}_raw_trades.parquet', empty)
+        sql, params, body, f'binance_spot_{_token_slug(token)}_raw_trades.parquet', empty)
 
 
 @app.post('/binance/book_depth/read')
 async def binance_book_depth(request: Request):
     body = request.json or {}
     try:
-        _require(body, 'token', 'since', 'until')
+        _require_token(body, 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    token = body['token']
+    token = _token_sel(body)
     sql, params = sql_b.binance_book_depth(token, body['since'], body['until'])
     return await _save_or_return(
-        sql, params, body, f'binance_{token}_book_depth.parquet', _EMPTY_BOOK_DEPTH_FULL)
+        sql, params, body, f'binance_{_token_slug(token)}_book_depth.parquet', _EMPTY_BOOK_DEPTH_FULL)
 
 
 @app.post('/binance/open_interest/read')
 async def binance_open_interest(request: Request):
     body = request.json or {}
     try:
-        _require(body, 'token', 'since', 'until')
+        _require_token(body, 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    token = body['token']
+    token = _token_sel(body)
     sql, params = sql_b.binance_open_interest(token, body['since'], body['until'])
     return await _save_or_return(
-        sql, params, body, f'binance_{token}_open_interest.parquet', _EMPTY_OPEN_INTEREST_FULL)
+        sql, params, body, f'binance_{_token_slug(token)}_open_interest.parquet', _EMPTY_OPEN_INTEREST_FULL)
 
 
 @app.post('/binance/long_short_ratios/read')
 async def binance_long_short_ratios(request: Request):
     body = request.json or {}
     try:
-        _require(body, 'token', 'since', 'until')
+        _require_token(body, 'since', 'until')
     except ValueError as e:
         return response.json({'error': str(e)}, status=400)
-    token = body['token']
+    token = _token_sel(body)
     sql, params = sql_b.binance_long_short_ratios(token, body['since'], body['until'])
     return await _save_or_return(
-        sql, params, body, f'binance_{token}_long_short_ratios.parquet', _EMPTY_LSR_FULL)
+        sql, params, body, f'binance_{_token_slug(token)}_long_short_ratios.parquet', _EMPTY_LSR_FULL)
 
 
 # ---------------------------------------------------------------------------

@@ -165,6 +165,28 @@ b.funding_rate(token)           # funding rate
 b.long_short_ratios(token)      # top-trader + global long/short ratios
 ```
 
+**Every binance endpoint reads one symbol or many.** `token` accepts a string
+or a list, and `.tokens()` is the varargs equivalent (same chainable
+hyperliquid uses). All three forms are equivalent:
+
+```python
+await b.raw_trades("BTC")                    # one
+await b.raw_trades(["BTC", "ETH", "SOL"])    # many, as a list
+await b.raw_trades("BTC").tokens("BTC", "ETH")   # many, varargs (REPLACES the positional)
+```
+
+Multi-token frames always carry a `token` column, and rows are ordered by
+`(time, token, ...)`, so splitting per symbol is a groupby:
+
+```python
+df = await b.ohlcv(["BTC", "ETH"], "1h").time_range("2026-07-01", "2026-07-08").as_polars()
+per_token = {t: g for t, g in df.group_by("token")}
+```
+
+One multi-token call replaces N single-token calls — one round trip, one
+ClickHouse scan, and the server prunes on `token IN (...)` against the primary
+key, so it stays cheap.
+
 Examples:
 
 ```python
@@ -196,7 +218,8 @@ trades  = await s.raw_trades("BTC").with_id().add_symbol() \
               .time_range("2026-07-10T00:00:00Z", "2026-07-10T00:01:00Z").as_polars()
 ```
 
-Column shapes are identical to their perp counterparts.
+Column shapes are identical to their perp counterparts, and both spot
+endpoints take one symbol or a list exactly like their perp equivalents.
 
 ---
 
@@ -816,14 +839,14 @@ Everything else in this guide returns real data against a populated server.
 
 | Call | Server route |
 |---|---|
-| `binance.ohlcv(t,w)` | `POST /binance/ohlcv/read` |
-| `binance.raw_trades(t)` | `POST /binance/raw_trades/read` |
-| `binance.book_depth(t)` | `POST /binance/book_depth/read` |
-| `binance.open_interest(t)` | `POST /binance/open_interest/read` |
-| `binance.funding_rate(t)` | `POST /binance/funding_rate/read` |
-| `binance.long_short_ratios(t)` | `POST /binance/long_short_ratios/read` |
-| `binance.spot.ohlcv(t,w)` | `POST /binance/spot/ohlcv/read` |
-| `binance.spot.raw_trades(t)` | `POST /binance/spot/raw_trades/read` |
+| `binance.ohlcv(t\|[t..],w)` | `POST /binance/ohlcv/read` |
+| `binance.raw_trades(t\|[t..])` | `POST /binance/raw_trades/read` |
+| `binance.book_depth(t\|[t..])` | `POST /binance/book_depth/read` |
+| `binance.open_interest(t\|[t..])` | `POST /binance/open_interest/read` |
+| `binance.funding_rate(t\|[t..])` | `POST /binance/funding_rate/read` |
+| `binance.long_short_ratios(t\|[t..])` | `POST /binance/long_short_ratios/read` |
+| `binance.spot.ohlcv(t\|[t..],w)` | `POST /binance/spot/ohlcv/read` |
+| `binance.spot.raw_trades(t\|[t..])` | `POST /binance/spot/raw_trades/read` |
 | `hyperliquid.<x>()` | `POST /hyperliquid/<x>/read` |
 | `evm.erc20.transfers([...])` | `POST /evm/erc20_transfers/read` (`/read/min` with `.min_amount()`) |
 | `evm.native_transfers()` | `POST /evm/native_transfers/read` (`/read/min`) |
@@ -887,6 +910,17 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **2.6.0** — **every binance endpoint now reads multiple tokens.** `ohlcv`,
+  `raw_trades`, `book_depth`, `open_interest`, `funding_rate`,
+  `long_short_ratios` and both `spot.*` endpoints take a symbol **or a list**
+  positionally, plus a `.tokens()` chainable matching hyperliquid's. The wire
+  body changed from `{"token": "BTC"}` to `{"tokens": ["BTC"]}`; the server
+  still accepts the old single-token form, so an older client keeps working
+  against a newer server. Multi-token frames carry the `token` column and are
+  ordered `(time, token, ...)`. Two server-side fixes came with it: bucketed
+  (non-1m) `ohlcv` now groups per token instead of collapsing them, and
+  `raw_trades(...).add_symbol()` emits each row's own token rather than a
+  constant.
 - **1.1.0** — `positions().aggregate_change()` gains an **`abs_flow`** column: the
   gross flow, i.e. the sum of all ten action columns (every change's `$` notional,
   direction-agnostic; `abs_flow ≥ |net_flow|`). Additive — no other change.

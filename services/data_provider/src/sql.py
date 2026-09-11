@@ -59,6 +59,16 @@ def chain_from_network(network: str) -> str | None:
 # explicit `toDateTime64(time, 3|6, 'UTC')` wrap forces `timestamp[ms|us, UTC]`.
 # ---------------------------------------------------------------------------
 
+def _tokens(value: Any) -> list[str]:
+    """Normalise the token selector to a list for the `tokens:Array(String)`
+    param. Accepts a bare string (the historical single-token form — every
+    existing caller keeps working) or a list/tuple. Also strips CCXT-style pair
+    suffixes: 'LINK/USDT:USDT' and 'LINK/USDT' both key on the bare base token
+    the tables actually store."""
+    vals = [value] if isinstance(value, str) else list(value)
+    return [str(v).split('/', 1)[0].split(':', 1)[0] for v in vals]
+
+
 def _time_ms(col: str = 'time') -> str:
     return f"toDateTime64({col}, 3, 'UTC') AS {col}"
 
@@ -91,7 +101,7 @@ def window_seconds(window: str) -> int:
 # Binance
 # ===========================================================================
 
-def binance_ohlcv(token: str, window: str, since: str, until: str,
+def binance_ohlcv(token: str | list[str], window: str, since: str, until: str,
                   *, table: str = 'binance_ohlcv_1m') -> tuple[str, dict[str, Any]]:
     """Horatio populated shape:
        time(ms,UTC), token, open, close, high, low, volume,
@@ -104,10 +114,9 @@ def binance_ohlcv(token: str, window: str, since: str, until: str,
     the bare token ('LINK') — the tables key on the bare base token, so we strip
     the '/QUOTE[:SETTLE]' suffix.
     """
-    token = token.split('/', 1)[0].split(':', 1)[0]
     secs = window_seconds(window)
     params: dict[str, Any] = {
-        'token': token,
+        'tokens': _tokens(token),
         'since': _ts_to_ch(since),
         'until': _ts_to_ch(until),
     }
@@ -118,10 +127,10 @@ def binance_ohlcv(token: str, window: str, since: str, until: str,
                 buyer_taker_volume, seller_taker_volume,
                 toInt64(trade_count) AS trade_count
             FROM tradernick.{table} AS s FINAL
-            WHERE token = {{token:String}}
+            WHERE s.token IN {{tokens:Array(String)}}
               AND s.time >= toDateTime({{since:String}})
               AND s.time <  toDateTime({{until:String}})
-            ORDER BY time
+            ORDER BY time, token
         """
     else:
         params['secs'] = secs
@@ -141,7 +150,7 @@ def binance_ohlcv(token: str, window: str, since: str, until: str,
                     toStartOfInterval(s.time, toIntervalSecond({{secs:UInt32}})),
                     3, 'UTC'
                 ) AS time,
-                {{token:String}}             AS token,
+                s.token                      AS token,
                 argMin(s.open,  s.time)      AS open,
                 argMax(s.close, s.time)      AS close,
                 max(s.high)                  AS high,
@@ -151,16 +160,16 @@ def binance_ohlcv(token: str, window: str, since: str, until: str,
                 sum(s.seller_taker_volume)   AS seller_taker_volume,
                 toInt64(sum(s.trade_count))  AS trade_count
             FROM tradernick.{table} AS s FINAL
-            WHERE s.token = {{token:String}}
+            WHERE s.token IN {{tokens:Array(String)}}
               AND s.time >= toDateTime({{since:String}})
               AND s.time <  toDateTime({{until:String}})
-            GROUP BY time
-            ORDER BY time
+            GROUP BY time, token
+            ORDER BY time, token
         """
     return sql, params
 
 
-def binance_funding_rate(token: str, since: str, until: str) -> tuple[str, dict[str, Any]]:
+def binance_funding_rate(token: str | list[str], since: str, until: str) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(ms,UTC), token, rate).
 
     Uses FINAL because backfills + the live sweep occasionally double-insert
@@ -171,15 +180,15 @@ def binance_funding_rate(token: str, since: str, until: str) -> tuple[str, dict[
     sql = f"""
         SELECT {_time_ms()}, token, toFloat64(rate) AS rate
         FROM tradernick.binance_funding_rate AS s FINAL
-        WHERE token = {{token:String}}
+        WHERE s.token IN {{tokens:Array(String)}}
           AND s.time >= toDateTime({{since:String}})
           AND s.time <  toDateTime({{until:String}})
-        ORDER BY time
+        ORDER BY time, token
     """
-    return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
+    return sql, {'tokens': _tokens(token), 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
 
 
-def binance_raw_trades(token: str, since: str, until: str,
+def binance_raw_trades(token: str | list[str], since: str, until: str,
                        *, with_id: bool = False, add_symbol: bool = False,
                        table: str = 'binance_raw_trades') -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(ms,UTC), token, amount, price, buy). When
@@ -192,26 +201,26 @@ def binance_raw_trades(token: str, since: str, until: str,
     extra = ', id' if with_id else ''
     # symbol is pushed into SQL (not added post-query) so the streaming save
     # path carries it too — a subquery wrapper would lose the ORDER BY.
-    sym = ', {token:String} AS symbol' if add_symbol else ''
+    sym = ', token AS symbol' if add_symbol else ''
     sql = f"""
         SELECT {_time_ms()}, token, amount, price, buy{extra}{sym}
         FROM tradernick.{table} AS s FINAL
-        WHERE token = {{token:String}}
+        WHERE s.token IN {{tokens:Array(String)}}
           AND s.time >= toDateTime64({{since:String}}, 3)
           AND s.time <  toDateTime64({{until:String}}, 3)
-        ORDER BY time, id
+        ORDER BY time, token, id
     """
-    return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
+    return sql, {'tokens': _tokens(token), 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
 
 
 # Binance SPOT — same builders, pointed at the spot tables. The spot schema is
 # byte-identical to perp (see clickhouse/init/01_schema.sql), so the SQL and
 # the empty-frame templates are shared; only the source table differs.
-def binance_spot_ohlcv(token: str, window: str, since: str, until: str) -> tuple[str, dict[str, Any]]:
+def binance_spot_ohlcv(token: str | list[str], window: str, since: str, until: str) -> tuple[str, dict[str, Any]]:
     return binance_ohlcv(token, window, since, until, table='binance_spot_ohlcv_1m')
 
 
-def binance_spot_raw_trades(token: str, since: str, until: str,
+def binance_spot_raw_trades(token: str | list[str], since: str, until: str,
                             *, with_id: bool = False,
                             add_symbol: bool = False) -> tuple[str, dict[str, Any]]:
     return binance_raw_trades(
@@ -220,34 +229,34 @@ def binance_spot_raw_trades(token: str, since: str, until: str,
     )
 
 
-def binance_book_depth(token: str, since: str, until: str) -> tuple[str, dict[str, Any]]:
+def binance_book_depth(token: str | list[str], since: str, until: str) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(ms,UTC), token, percentage, depth, value).
     Multi-row per snapshot — no aggregation. FINAL collapses re-ingests."""
     sql = f"""
         SELECT {_time_ms()}, token, percentage, depth, value
         FROM tradernick.binance_book_depth AS s FINAL
-        WHERE token = {{token:String}}
+        WHERE s.token IN {{tokens:Array(String)}}
           AND s.time >= toDateTime64({{since:String}}, 3)
           AND s.time <  toDateTime64({{until:String}}, 3)
-        ORDER BY time, percentage
+        ORDER BY time, token, percentage
     """
-    return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
+    return sql, {'tokens': _tokens(token), 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
 
 
-def binance_open_interest(token: str, since: str, until: str) -> tuple[str, dict[str, Any]]:
+def binance_open_interest(token: str | list[str], since: str, until: str) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(ms,UTC), token, open_interest, open_interest_value)."""
     sql = f"""
         SELECT {_time_ms()}, token, open_interest, open_interest_value
         FROM tradernick.binance_open_interest AS s FINAL
-        WHERE token = {{token:String}}
+        WHERE s.token IN {{tokens:Array(String)}}
           AND s.time >= toDateTime({{since:String}})
           AND s.time <  toDateTime({{until:String}})
-        ORDER BY time
+        ORDER BY time, token
     """
-    return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
+    return sql, {'tokens': _tokens(token), 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
 
 
-def binance_long_short_ratios(token: str, since: str, until: str) -> tuple[str, dict[str, Any]]:
+def binance_long_short_ratios(token: str | list[str], since: str, until: str) -> tuple[str, dict[str, Any]]:
     """Horatio shape: (time(ms,UTC), token, top_trader_count_ratio,
     top_trader_vol_ratio, long_short_count_ratio, taker_long_short_vol_ratio).
     Cast Float32 → Float64 to match Horatio's polars dtypes."""
@@ -260,12 +269,12 @@ def binance_long_short_ratios(token: str, since: str, until: str) -> tuple[str, 
             toFloat64(long_short_count_ratio)     AS long_short_count_ratio,
             toFloat64(taker_long_short_vol_ratio) AS taker_long_short_vol_ratio
         FROM tradernick.binance_long_short_ratios AS s FINAL
-        WHERE token = {{token:String}}
+        WHERE s.token IN {{tokens:Array(String)}}
           AND s.time >= toDateTime({{since:String}})
           AND s.time <  toDateTime({{until:String}})
-        ORDER BY time
+        ORDER BY time, token
     """
-    return sql, {'token': token, 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
+    return sql, {'tokens': _tokens(token), 'since': _ts_to_ch(since), 'until': _ts_to_ch(until)}
 
 
 # ===========================================================================

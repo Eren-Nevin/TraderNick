@@ -26,9 +26,31 @@ def _flatten(args: tuple) -> list[str]:
     return out
 
 
-class RawTradesQuery(CacheableQuery):
-    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
-        super().__init__(session, base_url, {"token": token})
+class _BinanceTokensMixin:
+    """Multi-token selection for the binance reads.
+
+    Every binance endpoint accepts one or many symbols. The positional argument
+    on the namespace method already takes either form —
+    ``binance.raw_trades("BTC")`` / ``binance.raw_trades(["BTC", "ETH"])`` — and
+    this chainable is the varargs equivalent, matching ``hyperliquid``'s
+    ``.tokens()``. Calling it REPLACES the current selection.
+
+    Results always carry a ``token`` column, so multi-token frames are split
+    with a groupby; rows are ordered by ``(time, token, ...)``.
+    """
+
+    _body: dict
+
+    def tokens(self: _T, *symbols: str | list[str]) -> _T:
+        """Select the token(s) to read — ``.tokens("BTC", "ETH")`` or
+        ``.tokens(["BTC", "ETH"])``. Replaces any earlier selection."""
+        self._body["tokens"] = _flatten(symbols)
+        return self
+
+
+class RawTradesQuery(CacheableQuery, _BinanceTokensMixin):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str | list[str]):
+        super().__init__(session, base_url, {"tokens": _flatten((token,))})
 
     def add_symbol(self: _T, enabled: bool = True) -> _T:
         self._body["add_symbol"] = enabled
@@ -43,17 +65,18 @@ class RawTradesQuery(CacheableQuery):
         return await fetch_table(self._session, self._base_url + "/binance/raw_trades/read", self._body)
 
 
-class OHLCVQuery(CacheableQuery):
-    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str, window: str):
-        super().__init__(session, base_url, {"token": token, "window": window})
+class OHLCVQuery(CacheableQuery, _BinanceTokensMixin):
+    def __init__(self, session: httpx.AsyncClient, base_url: str,
+                 token: str | list[str], window: str):
+        super().__init__(session, base_url, {"tokens": _flatten((token,)), "window": window})
 
     async def _fetch_table(self) -> pa.Table:
         return await fetch_table(self._session, self._base_url + "/binance/ohlcv/read", self._body)
 
 
-class BookDepthQuery(CacheableQuery):
-    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
-        super().__init__(session, base_url, {"token": token})
+class BookDepthQuery(CacheableQuery, _BinanceTokensMixin):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str | list[str]):
+        super().__init__(session, base_url, {"tokens": _flatten((token,))})
 
     async def _fetch_table(self) -> pa.Table:
         return await fetch_table(
@@ -61,9 +84,9 @@ class BookDepthQuery(CacheableQuery):
         )
 
 
-class OpenInterestQuery(CacheableQuery):
-    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
-        super().__init__(session, base_url, {"token": token})
+class OpenInterestQuery(CacheableQuery, _BinanceTokensMixin):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str | list[str]):
+        super().__init__(session, base_url, {"tokens": _flatten((token,))})
 
     async def _fetch_table(self) -> pa.Table:
         return await fetch_table(
@@ -71,9 +94,9 @@ class OpenInterestQuery(CacheableQuery):
         )
 
 
-class FundingRateQuery(CacheableQuery):
-    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
-        super().__init__(session, base_url, {"token": token})
+class FundingRateQuery(CacheableQuery, _BinanceTokensMixin):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str | list[str]):
+        super().__init__(session, base_url, {"tokens": _flatten((token,))})
 
     async def _fetch_table(self) -> pa.Table:
         return await fetch_table(
@@ -81,9 +104,9 @@ class FundingRateQuery(CacheableQuery):
         )
 
 
-class LongShortRatiosQuery(CacheableQuery):
-    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
-        super().__init__(session, base_url, {"token": token})
+class LongShortRatiosQuery(CacheableQuery, _BinanceTokensMixin):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str | list[str]):
+        super().__init__(session, base_url, {"tokens": _flatten((token,))})
 
     async def _fetch_table(self) -> pa.Table:
         return await fetch_table(
@@ -95,9 +118,10 @@ class LongShortRatiosQuery(CacheableQuery):
 # TN-exclusive: the spot market is a fully separate dataset from perp/futures.
 # Same populated shapes as the perp ohlcv / raw_trades, so these mirror the
 # perp query classes and only differ in the server path (/binance/spot/...).
-class SpotOHLCVQuery(CacheableQuery):
-    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str, window: str):
-        super().__init__(session, base_url, {"token": token, "window": window})
+class SpotOHLCVQuery(CacheableQuery, _BinanceTokensMixin):
+    def __init__(self, session: httpx.AsyncClient, base_url: str,
+                 token: str | list[str], window: str):
+        super().__init__(session, base_url, {"tokens": _flatten((token,)), "window": window})
 
     async def _fetch_table(self) -> pa.Table:
         return await fetch_table(
@@ -105,9 +129,9 @@ class SpotOHLCVQuery(CacheableQuery):
         )
 
 
-class SpotRawTradesQuery(CacheableQuery):
-    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str):
-        super().__init__(session, base_url, {"token": token})
+class SpotRawTradesQuery(CacheableQuery, _BinanceTokensMixin):
+    def __init__(self, session: httpx.AsyncClient, base_url: str, token: str | list[str]):
+        super().__init__(session, base_url, {"tokens": _flatten((token,))})
 
     def add_symbol(self: _T, enabled: bool = True) -> _T:
         self._body["add_symbol"] = enabled
@@ -131,10 +155,10 @@ class BinanceSpotNamespace:
         self._session = session
         self._base_url = base_url
 
-    def ohlcv(self, token: str, window: str) -> SpotOHLCVQuery:
+    def ohlcv(self, token: str | list[str], window: str) -> SpotOHLCVQuery:
         return SpotOHLCVQuery(self._session, self._base_url, token, window)
 
-    def raw_trades(self, token: str) -> SpotRawTradesQuery:
+    def raw_trades(self, token: str | list[str]) -> SpotRawTradesQuery:
         return SpotRawTradesQuery(self._session, self._base_url, token)
 
 
@@ -144,22 +168,22 @@ class BinanceNamespace:
         self._base_url = base_url
         self.spot = BinanceSpotNamespace(session, base_url)
 
-    def raw_trades(self, token: str) -> RawTradesQuery:
+    def raw_trades(self, token: str | list[str]) -> RawTradesQuery:
         return RawTradesQuery(self._session, self._base_url, token)
 
-    def ohlcv(self, token: str, window: str) -> OHLCVQuery:
+    def ohlcv(self, token: str | list[str], window: str) -> OHLCVQuery:
         return OHLCVQuery(self._session, self._base_url, token, window)
 
-    def book_depth(self, token: str) -> BookDepthQuery:
+    def book_depth(self, token: str | list[str]) -> BookDepthQuery:
         return BookDepthQuery(self._session, self._base_url, token)
 
-    def open_interest(self, token: str) -> OpenInterestQuery:
+    def open_interest(self, token: str | list[str]) -> OpenInterestQuery:
         return OpenInterestQuery(self._session, self._base_url, token)
 
-    def funding_rate(self, token: str) -> FundingRateQuery:
+    def funding_rate(self, token: str | list[str]) -> FundingRateQuery:
         return FundingRateQuery(self._session, self._base_url, token)
 
-    def long_short_ratios(self, token: str) -> LongShortRatiosQuery:
+    def long_short_ratios(self, token: str | list[str]) -> LongShortRatiosQuery:
         return LongShortRatiosQuery(self._session, self._base_url, token)
 
 

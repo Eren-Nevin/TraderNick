@@ -53,6 +53,14 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**2.6.0 — every binance endpoint reads multiple tokens.** `ohlcv`,
+`raw_trades`, `book_depth`, `open_interest`, `funding_rate`,
+`long_short_ratios` and both `spot.*` endpoints accept a symbol or a list —
+`b.raw_trades(["BTC", "ETH"])` — plus a `.tokens()` chainable matching
+hyperliquid's. One call replaces N; results carry the `token` column and are
+ordered `(time, token, ...)`. The server still accepts the old
+`{"token": "BTC"}` body, so older clients keep working.
+
 **2.5.0 — `scan()` trade filters now cover binance raw_trades.** The trade
 filters added in 2.3.0 are column-adaptive: `side('buy'|'sell')` matches the
 fills `side` col (B/A) **or** the binance raw_trades `buy` boolean;

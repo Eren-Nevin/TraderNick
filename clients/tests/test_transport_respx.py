@@ -64,7 +64,7 @@ async def test_binance_spot_ohlcv_hits_spot_path(client, respx_mock):
     assert df.height == 1
     assert route.called
     body = json.loads(route.calls.last.request.content)
-    assert body == {"token": "BTC", "window": "1h",
+    assert body == {"tokens": ["BTC"], "window": "1h",
                     "since": "2026-07-10T00:00:00Z", "until": "2026-07-11T00:00:00Z"}
 
 
@@ -74,7 +74,7 @@ async def test_binance_spot_raw_trades_hits_spot_path(client, respx_mock):
     await client.binance.spot.raw_trades("BTC").with_id().as_polars()
     assert route.called
     body = json.loads(route.calls.last.request.content)
-    assert body["token"] == "BTC" and body["with_id"] is True
+    assert body["tokens"] == ["BTC"] and body["with_id"] is True
 
 
 # ---------------------------------------------------------------------------
