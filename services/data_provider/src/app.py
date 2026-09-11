@@ -83,6 +83,44 @@ def _parquet_response(df: pl.DataFrame, filename: str):
     )
 
 
+# ClickHouse error codes we translate into meaningful HTTP instead of a bare
+# 500. 241 = MEMORY_LIMIT_EXCEEDED, which a client hits by asking for a range
+# whose result cannot be assembled within the per-query cap (see
+# ch._MAX_QUERY_BYTES). That is a request-shape problem, not a server fault,
+# and "Internal Server Error" sends people looking in the wrong place.
+_CH_MEMORY_LIMIT = 241
+
+
+def _ch_error_code(exc: BaseException) -> int | None:
+    """ClickHouse's numeric code from a clickhouse_connect error, if present.
+    The driver surfaces it in the message as `Code: NNN.`; it also sets .code
+    on some error types, so try that first."""
+    code = getattr(exc, 'code', None)
+    if isinstance(code, int):
+        return code
+    m = re.search(r'Code:\s*(\d+)', str(exc))
+    return int(m.group(1)) if m else None
+
+
+@app.exception(Exception)
+async def _translate_errors(request: Request, exc: Exception):
+    """Turn ClickHouse resource errors into actionable 4xx responses."""
+    if _ch_error_code(exc) == _CH_MEMORY_LIMIT:
+        log.warning("memory limit hit on %s: %s", request.path, str(exc)[:200])
+        return response.json({
+            'error': 'range_too_large',
+            'message': (
+                'The requested range produced a result too large to assemble in '
+                'memory. Narrow `since`/`until`, filter to fewer tokens, or pass '
+                '`save_key` to have the server write the result to a snapshot '
+                'instead of returning it inline.'
+            ),
+        }, status=413)
+    log.exception("unhandled error on %s", request.path)
+    return response.json({'error': 'internal_error', 'message': str(exc)[:500]},
+                         status=500)
+
+
 # Bytes per chunk when handing a spilled parquet back to the client.
 _STREAM_CHUNK = 1 << 20  # 1 MiB
 
