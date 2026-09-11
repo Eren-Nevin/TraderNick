@@ -21,6 +21,7 @@ existing SvelteKit proxy needs no changes.
 from __future__ import annotations
 
 import asyncio
+import time
 import base64
 import hmac
 import logging
@@ -186,6 +187,52 @@ async def basic_auth(request):
         )
 
 
+def _fanout_key(kind: str, auth: dict | None, *extra: str) -> str:
+    """Cache/dedup key. Includes the caller's credentials so two different
+    admin identities can never share a cached fan-out."""
+    who = (auth or {}).get("Authorization", "anon")
+    return ":".join((kind, str(hash(who)), *extra))
+
+
+class _SingleFlight:
+    """Collapse concurrent identical fan-outs into ONE upstream sweep.
+
+    `/streams` and `/jobs` each fan out to every per-provider service. The admin
+    dashboard polls them on a timer, so N pollers (or one poller whose previous
+    request has not returned) used to trigger N independent sweeps. Once a sweep
+    ran slower than the poll interval that compounded without bound: more
+    in-flight requests -> bigger httpx pool queue -> slower sweeps -> more
+    in-flight. Congestion collapse, and it never recovered on its own.
+
+    Here a key that is already being fetched returns the SAME awaited result,
+    and a completed result is reused for `ttl` seconds. Waiters `shield` the
+    shared task so one client disconnecting cannot cancel the sweep others are
+    waiting on. Bounds upstream load to ~1 sweep per ttl regardless of callers."""
+
+    def __init__(self, ttl: float = 2.0):
+        self._ttl = ttl
+        self._lock = asyncio.Lock()
+        self._inflight: dict[str, asyncio.Task] = {}
+        self._cache: dict[str, tuple[float, Any]] = {}
+
+    async def run(self, key: str, fn):
+        async with self._lock:
+            hit = self._cache.get(key)
+            if hit is not None and time.monotonic() - hit[0] < self._ttl:
+                return hit[1]
+            task = self._inflight.get(key)
+            if task is None:
+                task = asyncio.ensure_future(fn())
+                self._inflight[key] = task
+                task.add_done_callback(lambda t, k=key: self._settle(k, t))
+        return await asyncio.shield(task)
+
+    def _settle(self, key: str, task: asyncio.Task) -> None:
+        self._inflight.pop(key, None)
+        if not task.cancelled() and task.exception() is None:
+            self._cache[key] = (time.monotonic(), task.result())
+
+
 # --------------------------------------------------------------------------
 # HTTPX client lifecycle. One async client across all requests.
 # --------------------------------------------------------------------------
@@ -196,7 +243,18 @@ async def _startup(app_, _loop):
     # 971M-row table and >15s under 5-way concurrency from a single
     # FillBoardSection mount. 60s leaves headroom; the semaphore below
     # caps actual concurrency so we don't have to rely on it.
-    app_.ctx.http = httpx.AsyncClient(timeout=httpx.Timeout(60.0))
+    # Bound the pool explicitly. Left at httpx defaults this client had no
+    # keepalive_expiry, and under the dashboard's 1s poll the fan-out queued
+    # ~1000 requests against it — httpcore's _assign_requests_to_connections is
+    # O(connections x queued), so it pegged a core and every /streams took
+    # 80-140s (2026-09-11). Bounded pool + short keepalive keeps that scan cheap.
+    app_.ctx.http = httpx.AsyncClient(
+        timeout=httpx.Timeout(60.0),
+        limits=httpx.Limits(max_connections=64, max_keepalive_connections=32,
+                            keepalive_expiry=30.0),
+    )
+    # Collapses concurrent identical fan-outs (see _SingleFlight).
+    app_.ctx.fanout = _SingleFlight(ttl=2.0)
     # Per-provider semaphore for /gaps/calendar forwards. The dashboard
     # fires one fetch per FillBoard simultaneously on mount, which
     # blasts the backfill service with N concurrent gap_detection
@@ -448,6 +506,14 @@ async def list_streams(request):
     duplicates regardless of how many providers a URL serves."""
     client = request.app.ctx.http
     auth = _auth_header(request)
+    return response.json(
+        await request.app.ctx.fanout.run(_fanout_key("streams", auth),
+                                         lambda: _sweep_streams(client, auth)))
+
+
+async def _sweep_streams(client, auth) -> dict:
+    """One full /streams fan-out. Runs under _SingleFlight, so concurrent
+    callers share this sweep instead of each launching their own."""
     url_to_providers = _live_url_to_providers()
     urls = list(url_to_providers.keys())
     results = await asyncio.gather(
@@ -473,7 +539,7 @@ async def list_streams(request):
             if s.get("name") in owned:
                 streams.append(s)
     streams.sort(key=lambda r: (r.get("group", ""), r.get("name", "")))
-    return response.json({"streams": streams, "errors": errors})
+    return {"streams": streams, "errors": errors}
 
 
 @app.post("/streams/<name>/<action>")
@@ -501,6 +567,13 @@ async def list_jobs(request):
         limit = max(1, min(int(raw_limit), 500))
     except ValueError:
         limit = 100
+    return response.json(
+        await request.app.ctx.fanout.run(_fanout_key("jobs", auth, str(limit)),
+                                         lambda: _sweep_jobs(client, auth, limit)))
+
+
+async def _sweep_jobs(client, auth, limit: int) -> dict:
+    """One full /jobs fan-out, shared by concurrent callers (see _SingleFlight)."""
     query = urlencode({"limit": limit})
     url_to_providers = _backfill_url_to_providers()
     urls = list(url_to_providers.keys())
@@ -526,7 +599,7 @@ async def list_jobs(request):
                 jobs.append(j)
     jobs.sort(key=lambda r: r.get("started_at") or "", reverse=True)
     jobs = jobs[:limit]
-    return response.json({"jobs": jobs, "errors": errors})
+    return {"jobs": jobs, "errors": errors}
 
 
 @app.get("/jobs/<job_id>")

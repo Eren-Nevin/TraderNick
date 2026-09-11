@@ -92,7 +92,12 @@
   let refreshTimer: ReturnType<typeof setInterval> | null = null;
   onMount(() => {
     refresh();
-    refreshTimer = setInterval(refresh, 1000);
+    // 1s was too aggressive: each refresh fans admin_server out to every
+    // per-provider service, so once a sweep took longer than the interval the
+    // requests compounded until httpx's pool scan pegged a core and /streams
+    // took 80-140s (2026-09-11). admin_server now single-flights the fan-out,
+    // and 5s keeps the admin view responsive without re-creating the pile-up.
+    refreshTimer = setInterval(refresh, 5000);
   });
   onDestroy(() => {
     if (refreshTimer) clearInterval(refreshTimer);
