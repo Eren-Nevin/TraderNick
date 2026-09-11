@@ -15,6 +15,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
+from datetime import datetime, timedelta
 from typing import Any
 
 import polars as pl
@@ -206,6 +208,67 @@ async def query_polars(sql: str, params: dict[str, Any] | None = None) -> pl.Dat
 STREAM_ROWS_PER_GROUP = int(os.environ.get("SNAPSHOT_STREAM_ROWS_PER_GROUP", "10000000"))
 
 
+# ---------------------------------------------------------------------------
+# Range chunking
+#
+# A wide read dies on RESULT SIZE, which neither spilling nor per-partition
+# FINAL addresses: a global `ORDER BY time` cannot emit its first row until the
+# whole sort completes, so the sorted result is materialised in full. The
+# 3.7-year btc transfers pull (1.06B rows) hits max_memory_usage at 64 GiB with
+# ExternalSortWritePart=0 — nothing spillable is involved.
+#
+# Splitting the range fixes it. Each chunk is an ordinary small read; row
+# groups are appended to ONE parquet, so the client sees a single normal
+# response. Chunks are MONTH-ALIGNED because every table here is
+# PARTITION BY toYYYYMM(time): a chunk then lands in exactly one partition,
+# which also minimises the FINAL merge and maximises partition pruning.
+#
+# Ingestion already learned this lesson — see binance_raw_trades.FETCH_CHUNK,
+# added after an unchunked window "left ~20 GiB high-water-marked in swap".
+# ---------------------------------------------------------------------------
+
+CHUNK_THRESHOLD_DAYS = int(os.environ.get('READ_CHUNK_THRESHOLD_DAYS', '32'))
+
+# Constructs that make "split the range and concatenate" NOT equivalent to the
+# single query. GROUP BY / OVER aggregate across the range, so per-chunk
+# evaluation yields different rows. LIMIT would be applied per chunk. WITH may
+# hide any of the above in a CTE. Conservative on purpose: a false negative
+# only costs the old behaviour, a false positive returns WRONG DATA.
+_UNCHUNKABLE = re.compile(r'\bGROUP\s+BY\b|\bOVER\s*\(|\bLIMIT\b|\bWITH\b', re.I)
+
+# Concatenating chunks preserves global ordering only when the sort leads with
+# `time` (chunks are emitted in ascending time order).
+_ORDER_BY_TIME = re.compile(r'ORDER\s+BY\s+(?:[a-z]\.)?time\b', re.I)
+
+
+def _chunk_ranges(sql: str, params: dict | None) -> list[tuple[str, str]] | None:
+    """Month-aligned [since, until) sub-ranges, or None to run the query whole.
+
+    None is returned whenever chunking would be unsafe OR pointless — a query
+    without both bounds, an aggregating shape, a sort that is not time-leading,
+    or a range short enough that one query is fine."""
+    if not params or 'since' not in params or 'until' not in params:
+        return None
+    if _UNCHUNKABLE.search(sql) or not _ORDER_BY_TIME.search(sql):
+        return None
+    try:
+        since = datetime.fromisoformat(str(params['since']).replace('Z', ''))
+        until = datetime.fromisoformat(str(params['until']).replace('Z', ''))
+    except (TypeError, ValueError):
+        return None
+    if until <= since or (until - since) <= timedelta(days=CHUNK_THRESHOLD_DAYS):
+        return None
+    out: list[tuple[str, str]] = []
+    cur = since
+    while cur < until:
+        nxt = (cur.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+               + timedelta(days=32)).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        end = min(nxt, until)
+        out.append((cur.isoformat(sep='T'), end.isoformat(sep='T')))
+        cur = end
+    return out or None
+
+
 async def stream_query_to_parquet(
     sql: str,
     params: dict[str, Any] | None,
@@ -249,14 +312,32 @@ async def stream_query_to_parquet(
         buf = []
         buf_rows = 0
 
+    # One pass when the range is narrow or the shape is not chunk-safe;
+    # otherwise a month-aligned sequence of small reads appended into the SAME
+    # writer, so the caller still gets one parquet with one schema. Chunks run
+    # in ascending time order and each is internally sorted, so concatenation
+    # reproduces the single query's global ordering exactly.
+    chunks = _chunk_ranges(sql, params)
+    if chunks:
+        _log.info("chunked read: %d month-aligned chunks over %s..%s",
+                  len(chunks), chunks[0][0], chunks[-1][1])
+    passes = ([dict(params or {}, since=cs, until=cu) for cs, cu in chunks]
+              if chunks else [params or {}])
     try:
-        ctx = await client.query_arrow_stream(sql, parameters=params or {})
-        async with ctx as reader:
-            async for batch in reader:
-                buf.append(batch)
-                buf_rows += batch.num_rows
-                if buf_rows >= target:
-                    _flush()
+        for i, p_i in enumerate(passes):
+            ctx = await client.query_arrow_stream(sql, parameters=p_i)
+            async with ctx as reader:
+                async for batch in reader:
+                    buf.append(batch)
+                    buf_rows += batch.num_rows
+                    if buf_rows >= target:
+                        _flush()
+            if chunks:
+                # Flush at each chunk boundary: bounds peak memory to one
+                # chunk's tail and keeps row groups from straddling months.
+                _flush()
+                _log.debug("chunk %d/%d done (%s..%s) rows=%d",
+                           i + 1, len(chunks), p_i['since'], p_i['until'], total)
         _flush()
         if writer is None:
             # No rows streamed — write a schema-stable empty parquet.
