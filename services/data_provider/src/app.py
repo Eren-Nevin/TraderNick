@@ -13,6 +13,7 @@ import io
 import logging
 import os
 import re
+import uuid
 
 import polars as pl
 from dotenv import load_dotenv
@@ -77,6 +78,41 @@ def _parquet_response(df: pl.DataFrame, filename: str):
     df.write_parquet(buf)
     return response.raw(
         buf.getvalue(),
+        content_type='application/octet-stream',
+        headers={'Content-Disposition': f'attachment; filename={filename}'},
+    )
+
+
+# Bytes per chunk when handing a spilled parquet back to the client.
+_STREAM_CHUNK = 1 << 20  # 1 MiB
+
+
+async def _spilled_file_response(path: str, filename: str):
+    """Hand back a parquet that was streamed to disk, WITHOUT reading it into
+    memory: open it, immediately unlink it, then stream the open fd.
+
+    The unlink-while-open trick is deliberate — POSIX keeps the data alive for
+    the open descriptor while removing the directory entry, so the temp file
+    cannot leak if the client disconnects mid-download or the worker dies. No
+    reaper, no cleanup task."""
+    f = open(path, 'rb')
+    try:
+        os.unlink(path)
+    except OSError:  # noqa: BLE001 — already gone; the fd is still valid
+        pass
+
+    async def _stream(res):
+        try:
+            while True:
+                chunk = f.read(_STREAM_CHUNK)
+                if not chunk:
+                    break
+                await res.write(chunk)
+        finally:
+            f.close()
+
+    return response.ResponseStream(
+        _stream,
         content_type='application/octet-stream',
         headers={'Content-Disposition': f'attachment; filename={filename}'},
     )
@@ -160,13 +196,32 @@ async def _save_or_return(sql: str, params: dict, body: dict, filename: str,
         else:
             rows = await stream_query_to_parquet(sql, params, path, empty_df=empty_df)
         return response.json({'saved': True, 'key': safe, 'rows': rows})
+    # Interactive path — ALSO streams. It used to materialize the whole result
+    # (query_arrow -> polars -> in-RAM parquet buffer, three copies), on the
+    # assumption the caller wanted the full frame anyway. That holds until
+    # someone asks for a multi-year range: on 2026-09-11 a 3.7-year BTC
+    # transfers pull (~694M rows) drove this process to 123 GiB on a swapless
+    # box. Now the result is spilled to a temp parquet one row group at a time
+    # and streamed back from disk, so PEAK MEMORY IS BOUNDED BY THE ROW GROUP
+    # (SNAPSHOT_STREAM_ROWS_PER_GROUP) rather than the result size — a result
+    # far larger than the container's mem_limit still completes, trading RAM
+    # for disk and wall-clock. Small results are unaffected in practice: one
+    # row group is one file write.
     if sql is None:
-        df = empty_df
-    else:
-        df = await query_polars(sql, params)
-        if df.is_empty():
-            df = empty_df
-    return _parquet_response(df, filename)
+        return _parquet_response(empty_df, filename)
+    tmp_dir = os.path.join(app.ctx.snapshots_dir, '.stream_tmp')
+    os.makedirs(tmp_dir, exist_ok=True)
+    tmp = os.path.join(tmp_dir, f'{uuid.uuid4().hex}.parquet')
+    try:
+        await stream_query_to_parquet(sql, params, tmp, empty_df=empty_df)
+    except BaseException:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+        raise
+    return await _spilled_file_response(tmp, filename)
 
 
 # ---------------------------------------------------------------------------

@@ -565,6 +565,20 @@ services:
   # bind-mounted directory so they survive container restarts.
   data_provider:
     build: ./services/data_provider
+    # Cap this service's RAM. Its read path MATERIALISES the whole result set in
+    # memory (_parquet_response -> pl.from_arrow -> write_parquet buffer), so a
+    # single oversized request can eat the host: on 2026-09-11 a 3.7-year BTC
+    # transfers pull (~694M rows, no token filter) drove it to 123 GiB and was
+    # ~15 min from OOM-killing a box that has no swap — which would have taken
+    # ClickHouse or a blockchain node with it. With a limit, the container's own
+    # OOM killer claims only that request and `restart: unless-stopped` brings
+    # the service back; the blast radius stops at one client call.
+    # Legitimate peaks are ~5 GiB, so the default leaves ~6x headroom.
+    # Host-specific — override with DATA_PROVIDER_MEM_LIMIT in .env.
+    # NOTE: clients pulling very large ranges should pass `save_key`, which
+    # takes the streaming path (ch.stream_query_to_parquet) and is bounded to
+    # one row group instead of the whole result.
+    mem_limit: ${DATA_PROVIDER_MEM_LIMIT:-32g}
     depends_on:
       clickhouse:
         condition: service_healthy

@@ -26,6 +26,29 @@ _real_client = None
 _client_lock = asyncio.Lock()
 
 
+# Spill-to-disk thresholds sent with every data_provider query.
+#
+# ClickHouse defaults these to 0 = "never spill, sort/aggregate entirely in
+# RAM". A multi-year read then sorts the whole result in memory: on 2026-09-11
+# a 3.7-year BTC transfers pull (~694M rows, ORDER BY time) pushed the server
+# toward exhausting a swapless 251 GB host. Above these thresholds CH streams
+# intermediate blocks to /var/lib/clickhouse/tmp (LZ4-compressed) instead —
+# the query gets slower but COMPLETES, rather than ballooning until something
+# gets OOM-killed. Chosen well above any normal read (~hundreds of MB) so the
+# common path never pays the disk round-trip.
+#
+# Pairs with data_provider's own streaming response path: CH bounds ITS memory
+# here, `stream_query_to_parquet` bounds OURS to one parquet row group.
+_SPILL_BYTES = int(os.environ.get('CH_SPILL_BYTES', str(4 * 1024 ** 3)))  # 4 GiB
+
+
+def _spill_settings() -> dict[str, int]:
+    return {
+        'max_bytes_before_external_sort': _SPILL_BYTES,
+        'max_bytes_before_external_group_by': _SPILL_BYTES,
+    }
+
+
 async def _get_real_client():
     global _real_client
     if _real_client is None:
@@ -37,6 +60,7 @@ async def _get_real_client():
                     username=os.environ.get('CLICKHOUSE_USER', 'tradernick'),
                     password=os.environ.get('CLICKHOUSE_PASSWORD', ''),
                     database=os.environ.get('CLICKHOUSE_DB', 'tradernick'),
+                    settings=_spill_settings(),
                 )
     return _real_client
 
