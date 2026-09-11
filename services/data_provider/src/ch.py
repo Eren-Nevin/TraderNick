@@ -26,26 +26,44 @@ _real_client = None
 _client_lock = asyncio.Lock()
 
 
-# Spill-to-disk thresholds sent with every data_provider query.
+# Per-query memory policy sent with every data_provider query.
 #
-# ClickHouse defaults these to 0 = "never spill, sort/aggregate entirely in
-# RAM". A multi-year read then sorts the whole result in memory: on 2026-09-11
-# a 3.7-year BTC transfers pull (~694M rows, ORDER BY time) pushed the server
-# toward exhausting a swapless 251 GB host. Above these thresholds CH streams
-# intermediate blocks to /var/lib/clickhouse/tmp (LZ4-compressed) instead —
-# the query gets slower but COMPLETES, rather than ballooning until something
-# gets OOM-killed. Chosen well above any normal read (~hundreds of MB) so the
-# common path never pays the disk round-trip.
+# These ride on data_provider's OWN ClickHouse session, so they bound reads
+# only — the ingestion services use their own client and their inserts are
+# unaffected. That is deliberate: a user-level cap would couple reads to
+# writes and let a runaway read fail live ingestion.
 #
-# Pairs with data_provider's own streaming response path: CH bounds ITS memory
-# here, `stream_query_to_parquet` bounds OURS to one parquet row group.
-_SPILL_BYTES = int(os.environ.get('CH_SPILL_BYTES', str(4 * 1024 ** 3)))  # 4 GiB
+# Two layers:
+#
+#  * SPILL (max_bytes_before_external_{sort,group_by}) — ClickHouse defaults
+#    both to 0, meaning "never spill, sort/aggregate entirely in RAM". Above
+#    this threshold it streams intermediate blocks to /var/lib/clickhouse/tmp
+#    (LZ4) instead: slower, but the query COMPLETES. Measured 2026-09-11 over
+#    7 days / 2.3M queries, p99.9 memory was 813 MiB, so normal traffic is
+#    orders of magnitude below this and never pays the disk round-trip.
+#
+#  * CAP (max_memory_usage) — the backstop, because spilling only covers sort
+#    and group-by. Without it a read can climb toward the server-wide limit:
+#    on 2026-09-11 six queries between 08:30 and 12:04 used 98-210 GiB each on
+#    a swapless 251 GB host. Past the cap a query dies with
+#    MEMORY_LIMIT_EXCEEDED — one failed request instead of a threatened host.
+#
+# The cap is 2x the spill threshold on ClickHouse's own guidance: merging
+# spilled group-by state can roughly double peak usage, so a cap at or near
+# the spill point would kill queries exactly as they tried to save themselves.
+#
+# NB concurrency is NOT bounded by these: N simultaneous reads can each reach
+# the cap. At 64 GiB that means two concurrent large reads ~= 128 GiB. Lower
+# CH_MAX_QUERY_BYTES if heavy reads start overlapping.
+_SPILL_BYTES = int(os.environ.get('CH_SPILL_BYTES', str(32 * 1024 ** 3)))       # 32 GiB
+_MAX_QUERY_BYTES = int(os.environ.get('CH_MAX_QUERY_BYTES', str(64 * 1024 ** 3)))  # 64 GiB
 
 
-def _spill_settings() -> dict[str, int]:
+def _query_memory_settings() -> dict[str, int]:
     return {
         'max_bytes_before_external_sort': _SPILL_BYTES,
         'max_bytes_before_external_group_by': _SPILL_BYTES,
+        'max_memory_usage': _MAX_QUERY_BYTES,
     }
 
 
@@ -60,7 +78,7 @@ async def _get_real_client():
                     username=os.environ.get('CLICKHOUSE_USER', 'tradernick'),
                     password=os.environ.get('CLICKHOUSE_PASSWORD', ''),
                     database=os.environ.get('CLICKHOUSE_DB', 'tradernick'),
-                    settings=_spill_settings(),
+                    settings=_query_memory_settings(),
                 )
     return _real_client
 
