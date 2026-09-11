@@ -101,32 +101,40 @@ def test_binance_spot_namespace_exists(client):
     assert hasattr(client.binance, "spot")
 
 
-@pytest.mark.asyncio
-async def test_binance_spot_ohlcv_path(client, monkeypatch):
+def test_binance_spot_ohlcv_path(client):
     q = client.binance.spot.ohlcv("BTC", "1h")
     assert q._body == {"tokens": ["BTC"], "window": "1h"}
-    captured = {}
-
-    async def fake_fetch(session, url, body):
-        captured["url"] = url
-        return None
-    monkeypatch.setattr("tradernick_data_provider.binance.fetch_table", fake_fetch)
-    await q._fetch_table()
-    assert captured["url"] == BASE + "/binance/spot/ohlcv/read"
+    # Routing is a declared `_endpoint` now rather than a hand-written
+    # _fetch_table, so assert the resolved URL directly.
+    assert q._url() == BASE + "/binance/spot/ohlcv/read"
 
 
-@pytest.mark.asyncio
-async def test_binance_spot_raw_trades_path_and_flags(client, monkeypatch):
+def test_binance_spot_raw_trades_path_and_flags(client):
     q = client.binance.spot.raw_trades("BTC").with_id().add_symbol()
     assert q._body == {"tokens": ["BTC"], "with_id": True, "add_symbol": True}
-    captured = {}
+    assert q._url() == BASE + "/binance/spot/raw_trades/read"
 
-    async def fake_fetch(session, url, body):
-        captured["url"] = url
-        return None
-    monkeypatch.setattr("tradernick_data_provider.binance.fetch_table", fake_fetch)
-    await q._fetch_table()
-    assert captured["url"] == BASE + "/binance/spot/raw_trades/read"
+
+def test_every_binance_endpoint_resolves_a_url(client):
+    """Each binance builder must route somewhere — a missing `_endpoint` would
+    otherwise only surface at call time."""
+    b = client.binance
+    assert b.raw_trades("BTC")._url() == BASE + "/binance/raw_trades/read"
+    assert b.ohlcv("BTC", "1h")._url() == BASE + "/binance/ohlcv/read"
+    assert b.book_depth("BTC")._url() == BASE + "/binance/book_depth/read"
+    assert b.open_interest("BTC")._url() == BASE + "/binance/open_interest/read"
+    assert b.funding_rate("BTC")._url() == BASE + "/binance/funding_rate/read"
+    assert b.long_short_ratios("BTC")._url() == BASE + "/binance/long_short_ratios/read"
+
+
+def test_download_unavailable_on_multi_network_queries(client):
+    """Multi-network transfer builders issue one request PER network, so a
+    single streaming download is not meaningful — it must fail loudly rather
+    than silently send a body no endpoint accepts."""
+    from tradernick_data_provider.exceptions import DataProviderError
+    q = client.evm.erc20.transfers(["USDT"]).network(["ethereum", "arbitrum"])
+    with pytest.raises(DataProviderError):
+        q._url()
 
 
 # ---------------------------------------------------------------------------
@@ -449,3 +457,10 @@ def test_scan_fills_filters(client):
 
 def test_scan_tokens_accepts_str(client):
     assert client.snapshot.scan("snap").tokens("BTC")._body["tokens"] == ["BTC"]
+
+
+def test_download_available_on_single_network_and_btc(client):
+    """The shapes that CAN stream must resolve a URL — btc is the big-pull case."""
+    assert client.btc.native_transfers().network("bitcoin")._url().endswith(
+        "/btc/native_transfers/read")
+    assert hasattr(client.binance.raw_trades("BTC"), "download")

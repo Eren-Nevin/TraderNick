@@ -53,6 +53,12 @@ where Horatio has to pay a fresh upstream fetch.
 
 ## Status
 
+**2.7.0 — `download(path)` streams results to disk.** Wide ranges are now
+chunked server-side and can return tens of GB; `as_polars()` buffers the whole
+response plus the whole frame, so use `download(path)` (then `pl.scan_parquet`)
+or `as_parquet(key)` for large pulls. `DataProviderHTTPError` also gained
+`.error` / `.detail`, so a 413 explains how to narrow the request.
+
 **2.6.0 — every binance endpoint reads multiple tokens.** `ohlcv`,
 `raw_trades`, `book_depth`, `open_interest`, `funding_rate`,
 `long_short_ratios` and both `spot.*` endpoints accept a symbol or a list —

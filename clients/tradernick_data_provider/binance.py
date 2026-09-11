@@ -61,8 +61,7 @@ class RawTradesQuery(CacheableQuery, _BinanceTokensMixin):
         self._body["with_id"] = True
         return self
 
-    async def _fetch_table(self) -> pa.Table:
-        return await fetch_table(self._session, self._base_url + "/binance/raw_trades/read", self._body)
+    _endpoint = "/binance/raw_trades/read"
 
 
 class OHLCVQuery(CacheableQuery, _BinanceTokensMixin):
@@ -70,48 +69,35 @@ class OHLCVQuery(CacheableQuery, _BinanceTokensMixin):
                  token: str | list[str], window: str):
         super().__init__(session, base_url, {"tokens": _flatten((token,)), "window": window})
 
-    async def _fetch_table(self) -> pa.Table:
-        return await fetch_table(self._session, self._base_url + "/binance/ohlcv/read", self._body)
+    _endpoint = "/binance/ohlcv/read"
 
 
 class BookDepthQuery(CacheableQuery, _BinanceTokensMixin):
     def __init__(self, session: httpx.AsyncClient, base_url: str, token: str | list[str]):
         super().__init__(session, base_url, {"tokens": _flatten((token,))})
 
-    async def _fetch_table(self) -> pa.Table:
-        return await fetch_table(
-            self._session, self._base_url + "/binance/book_depth/read", self._body
-        )
+    _endpoint = "/binance/book_depth/read"
 
 
 class OpenInterestQuery(CacheableQuery, _BinanceTokensMixin):
     def __init__(self, session: httpx.AsyncClient, base_url: str, token: str | list[str]):
         super().__init__(session, base_url, {"tokens": _flatten((token,))})
 
-    async def _fetch_table(self) -> pa.Table:
-        return await fetch_table(
-            self._session, self._base_url + "/binance/open_interest/read", self._body
-        )
+    _endpoint = "/binance/open_interest/read"
 
 
 class FundingRateQuery(CacheableQuery, _BinanceTokensMixin):
     def __init__(self, session: httpx.AsyncClient, base_url: str, token: str | list[str]):
         super().__init__(session, base_url, {"tokens": _flatten((token,))})
 
-    async def _fetch_table(self) -> pa.Table:
-        return await fetch_table(
-            self._session, self._base_url + "/binance/funding_rate/read", self._body
-        )
+    _endpoint = "/binance/funding_rate/read"
 
 
 class LongShortRatiosQuery(CacheableQuery, _BinanceTokensMixin):
     def __init__(self, session: httpx.AsyncClient, base_url: str, token: str | list[str]):
         super().__init__(session, base_url, {"tokens": _flatten((token,))})
 
-    async def _fetch_table(self) -> pa.Table:
-        return await fetch_table(
-            self._session, self._base_url + "/binance/long_short_ratios/read", self._body
-        )
+    _endpoint = "/binance/long_short_ratios/read"
 
 
 # --- Binance SPOT ----------------------------------------------------------
@@ -123,10 +109,7 @@ class SpotOHLCVQuery(CacheableQuery, _BinanceTokensMixin):
                  token: str | list[str], window: str):
         super().__init__(session, base_url, {"tokens": _flatten((token,)), "window": window})
 
-    async def _fetch_table(self) -> pa.Table:
-        return await fetch_table(
-            self._session, self._base_url + "/binance/spot/ohlcv/read", self._body
-        )
+    _endpoint = "/binance/spot/ohlcv/read"
 
 
 class SpotRawTradesQuery(CacheableQuery, _BinanceTokensMixin):
@@ -142,10 +125,7 @@ class SpotRawTradesQuery(CacheableQuery, _BinanceTokensMixin):
         self._body["with_id"] = True
         return self
 
-    async def _fetch_table(self) -> pa.Table:
-        return await fetch_table(
-            self._session, self._base_url + "/binance/spot/raw_trades/read", self._body
-        )
+    _endpoint = "/binance/spot/raw_trades/read"
 
 
 class BinanceSpotNamespace:

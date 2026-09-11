@@ -147,6 +147,25 @@ exclusive on most endpoints.
 
 ---
 
+### Getting results out
+
+| Call | Where the data goes | Bounded by |
+|---|---|---|
+| `as_polars()` / `as_pandas()` | client memory | RAM — the whole frame |
+| `download(path)` | a local parquet file | disk |
+| `as_parquet(key)` | a server-side snapshot | never crosses the wire |
+
+For anything spanning months, prefer the bottom two. A wide range is split into
+month chunks server-side and can run for a long time and return a very large
+file — `as_polars()` will try to hold all of it.
+
+```python
+path = await (client.btc.native_transfers().network("bitcoin")
+              .time_range("2023-01-01", "2026-09-01")
+              .download("btc_transfers.parquet"))
+lf = pl.scan_parquet(path)        # lazy: nothing loaded into memory yet
+```
+
 ## 7. Binance
 
 Perp/futures market lives directly on `client.binance`; the **spot** market is a
@@ -910,6 +929,18 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **2.7.0** — **`download(path)`**: stream a result straight to a local parquet
+  file instead of buffering it. `as_polars()` / `as_pandas()` hold the whole
+  response AND the whole frame in memory; the server now splits wide ranges
+  into month chunks and will return tens of GB, which those paths cannot
+  receive. `download()` writes chunk-by-chunk and returns the path — read it
+  back with `pq.read_table(path)`, or `pl.scan_parquet(path)` when the result
+  is bigger than RAM. It refuses on multi-network transfer builders, which
+  issue one request per network; scope with `.network(one)` or use
+  `as_parquet(key)` to keep the result server-side entirely.
+  Also: `DataProviderHTTPError` now carries `.error` (slug) and `.detail` (the
+  server's guidance) and folds both into `str()`, so a 413 tells you how to
+  narrow the request instead of just naming the failure.
 - **2.6.0** — **every binance endpoint now reads multiple tokens.** `ohlcv`,
   `raw_trades`, `book_depth`, `open_interest`, `funding_rate`,
   `long_short_ratios` and both `spot.*` endpoints take a symbol **or a list**

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, TypeVar
 
@@ -8,7 +9,8 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 
-from ._http import fetch_table
+from ._http import fetch_table, stream_to_file
+from .exceptions import DataProviderError
 
 
 
@@ -112,10 +114,59 @@ class _WalletFilters:
 
 
 class BaseQuery(_WalletFilters):
+    # Endpoint path for the simple one-URL builders. Subclasses that need
+    # per-instance routing (hyperliquid) set `_hl_path`; ones that fan out over
+    # several URLs (multi-network transfers) override `_fetch_table` instead.
+    _endpoint: str | None = None
+
     def __init__(self, session: httpx.AsyncClient, base_url: str, body: dict):
         self._session = session
         self._base_url = base_url
         self._body = body
+
+    def _url(self) -> str:
+        # Multi-network builders send one request PER network (body key
+        # `network`, singular) and concatenate. A single streaming download
+        # cannot express that — and self._body carries `networks`, which no
+        # endpoint accepts — so refuse rather than silently send a bad body.
+        if self._body.get("networks"):
+            raise DataProviderError(
+                f"{type(self).__name__} fans out over "
+                f"{len(self._body['networks'])} networks, so a single streaming "
+                "download() is not possible. Call .network(<one>) to scope it, or "
+                "use as_polars()/as_pandas(), or as_parquet(key) to save "
+                "server-side.")
+        resolve = getattr(self, "_resolve_path", None)
+        path = ((resolve() if callable(resolve) else None)
+                or getattr(self, "_hl_path", None) or self._endpoint)
+        if not path:
+            raise DataProviderError(
+                f"{type(self).__name__} has no single endpoint — it fans out over "
+                "several URLs, so streaming download() is not available. Use "
+                "as_polars()/as_pandas(), or as_parquet(key) to save server-side.")
+        return self._base_url + path
+
+    async def _fetch_table(self) -> pa.Table:
+        return await fetch_table(self._session, self._url(), self._body)
+
+    async def download(self, dest: "str | os.PathLike") -> str:
+        """Stream the result to a local parquet FILE, bypassing memory.
+
+        ``as_polars()`` / ``as_pandas()`` buffer the whole response and then the
+        whole frame. Since the server started chunking wide ranges it can return
+        tens of GB — far more than those paths can hold. This writes straight to
+        disk, holding one chunk at a time, and returns the path.
+
+        Read it back eagerly with ``pq.read_table(path)``, or lazily for results
+        bigger than RAM::
+
+            path = await client.binance.raw_trades("BTC") \
+                       .time_range("2023-01-01", "2026-09-01").download("btc.parquet")
+            lf = pl.scan_parquet(path)            # nothing loaded yet
+
+        For very large pulls consider ``as_parquet(key)`` instead, which keeps
+        the result server-side entirely and never sends it over the wire."""
+        return await stream_to_file(self._session, self._url(), self._body, dest)
 
     def network(self: _T, n: str | list[str]) -> _T:
         # EVM-class endpoints accept a list to fan out per-network. The cache

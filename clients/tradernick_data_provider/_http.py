@@ -1,4 +1,5 @@
 import io
+import os
 
 import httpx
 import pyarrow as pa
@@ -14,9 +15,48 @@ async def fetch_table(session: httpx.AsyncClient, url: str, body: dict) -> pa.Ta
         data = response.json()
         if response.is_success and data.get("saved"):
             return None
-        raise DataProviderHTTPError(response.status_code, data.get("error", str(data)))
+        raise DataProviderHTTPError(
+            response.status_code, data.get("error", str(data)), data.get("message"))
     response.raise_for_status()
     return pq.read_table(io.BytesIO(response.content))
+
+
+async def stream_to_file(session: httpx.AsyncClient, url: str, body: dict,
+                         dest: "str | os.PathLike") -> str:
+    """POST a read and stream the parquet straight to ``dest`` on disk.
+
+    ``fetch_table`` buffers the whole response (``response.content``) and then
+    the whole Arrow table — two full copies in RAM. That is fine for ordinary
+    reads and fatal for large ones: the server now chunks wide ranges and will
+    happily return tens of GB, which the buffering path cannot receive.
+
+    This writes chunk-by-chunk and holds only the current chunk, so response
+    size is bounded by disk rather than memory. Read the file afterwards with
+    ``pyarrow.parquet.read_table`` (eager) or, for results too big for RAM,
+    ``polars.scan_parquet`` / ``pq.ParquetFile`` row-group iteration (lazy).
+
+    Returns the destination path. On any failure the partial file is removed."""
+    dest = str(dest)
+    tmp = dest + ".part"
+    try:
+        async with session.stream("POST", url, json=body) as response:
+            if "application/json" in response.headers.get("content-type", ""):
+                await response.aread()
+                data = response.json()
+                raise DataProviderHTTPError(
+                    response.status_code, data.get("error", str(data)), data.get("message"))
+            response.raise_for_status()
+            with open(tmp, "wb") as fh:
+                async for chunk in response.aiter_bytes(1 << 20):
+                    fh.write(chunk)
+        os.replace(tmp, dest)
+        return dest
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 
 async def save_parquet(session: httpx.AsyncClient, url: str, body: dict, key: str) -> None:
