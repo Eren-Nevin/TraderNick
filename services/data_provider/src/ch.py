@@ -64,6 +64,27 @@ def _query_memory_settings() -> dict[str, int]:
         'max_bytes_before_external_sort': _SPILL_BYTES,
         'max_bytes_before_external_group_by': _SPILL_BYTES,
         'max_memory_usage': _MAX_QUERY_BYTES,
+        # Merge each partition's parts INDEPENDENTLY for FINAL rather than
+        # across the whole selection. Measured on a 2.7-year btc transfers
+        # FINAL scan (sum(amount), so no result-set effects):
+        #     off: 170.1s / 505 MiB      on: 19.9s / 608 MiB
+        # i.e. ~8.5x FASTER for marginally more memory. It is a LATENCY win,
+        # not a memory one — it does NOT rescue a read that dies on result
+        # size (a wide range with a global ORDER BY still materialises the
+        # sorted result and will hit max_memory_usage; chunk the range
+        # instead).
+        #
+        # Safe because every partitioned ReplacingMergeTree here partitions on
+        # a column that is IN its sorting key (verified across all 98: 80
+        # partition on `time`, which is in the sort key; the other 18 are
+        # unpartitioned, where this is a no-op). Two rows sharing a sort key
+        # therefore share a partition, so duplicates can never span partitions
+        # and per-partition collapsing is equivalent. Cross-checked on a month
+        # of btc transfers: 18,118,583 rows with and without.
+        #
+        # If a future table partitions on something NOT derived from its
+        # sorting key, this must be revisited — it would then under-collapse.
+        'do_not_merge_across_partitions_select_final': 1,
     }
 
 
