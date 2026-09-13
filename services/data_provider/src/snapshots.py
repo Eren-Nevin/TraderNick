@@ -29,6 +29,7 @@ import io
 import logging
 import os
 import re
+import shutil
 import uuid
 from datetime import datetime, timezone
 
@@ -63,6 +64,12 @@ def _human_size(n: int) -> str:
         if size < 1024.0 or unit == 'PB':
             return f'{int(size)} {unit}' if unit == 'B' else f'{size:.1f} {unit}'
         size /= 1024.0
+
+
+# Memory ceiling handed to DuckDB for the multi-network merge. Deliberately
+# well under the container's mem_limit so DuckDB starts spilling to
+# temp_directory long before the cgroup OOM killer would fire.
+MERGE_MEMORY_LIMIT = os.environ.get('SNAPSHOT_MERGE_MEMORY_LIMIT', '8GB')
 
 
 def register(app: Sanic) -> None:
@@ -391,9 +398,39 @@ def register(app: Sanic) -> None:
                 # Each part already carries its network column and the
                 # zero-amount filter (both folded into the SQL), so all that is
                 # left is the interleave — a global time sort across networks.
-                merged = pl.concat([pl.scan_parquet(part) for _, part in parts],
-                                   how='diagonal_relaxed')
-                merged.sort('time').sink_parquet(dst)
+                #
+                # DuckDB, not polars, because this sort must go out-of-core.
+                # Measured on 266M rows (ETH+ARB native, 2026-09-13):
+                #     polars default              -> 32 GiB, OOM-killed
+                #     polars engine='streaming'   -> 32 GiB, OOM-killed
+                #     duckdb, memory_limit 8GB    -> ~10 GiB steady, 27 GB
+                #                                    spilled, finished in 639s
+                # polars materialises the sort regardless of the streaming
+                # flag, so this path killed the container twice (kernel log:
+                # "polars-15 invoked oom-killer", anon-rss 32.7 GB). Raising
+                # mem_limit was rejected: memory would still scale with result
+                # size, and two concurrent large merges would then threaten the
+                # host — exactly what the limit exists to prevent. DuckDB's
+                # ceiling is disk instead.
+                import duckdb
+                spill = os.path.join(tmp_dir, 'duckspill')
+                os.makedirs(spill, exist_ok=True)
+                con = duckdb.connect()
+                try:
+                    con.execute(f"SET memory_limit='{MERGE_MEMORY_LIMIT}'")
+                    con.execute(f"SET temp_directory='{spill}'")
+                    # Safe because the ORDER BY below is explicit; without this
+                    # DuckDB keeps input order and cannot stream the sort.
+                    con.execute('SET preserve_insertion_order=false')
+                    files = '[' + ','.join(f"'{part}'" for _, part in parts) + ']'
+                    # union_by_name tolerates per-network column drift, the job
+                    # `diagonal_relaxed` used to do.
+                    con.execute(
+                        f"COPY (SELECT * FROM read_parquet({files}, union_by_name=true) "
+                        f"ORDER BY time) TO '{dst}' (FORMAT PARQUET, COMPRESSION ZSTD)")
+                finally:
+                    con.close()
+                    shutil.rmtree(spill, ignore_errors=True)
             rows = pq.ParquetFile(dst).metadata.num_rows
         finally:
             for _, part in parts:
