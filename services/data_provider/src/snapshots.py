@@ -255,10 +255,40 @@ def register(app: Sanic) -> None:
                 {'error': f'{protocol} requires non-empty tokens list'}, status=400,
             )
 
-        def _build(network: str):
+        def _augment(sql: str, network: str | None, drop_zero: bool) -> str:
+            """Fold the two post-processing steps INTO the SQL.
+
+            Both used to be done afterwards in polars, which forced a full
+            rewrite of the streamed parquet — on a 40 GB single-network save
+            that is a second complete pass over the data, roughly doubling
+            wall-clock for a constant column and a trivial predicate. Done here
+            the streamed file is already final and the fast path becomes a
+            rename.
+
+            String surgery on generated SQL, so it asserts its markers rather
+            than silently no-opping: every transfers builder emits
+            `SELECT <cols> FROM tradernick.<t> AS s FINAL WHERE <preds> ORDER BY`.
+            `network` is a validated chain name, never user text."""
+            if network is not None:
+                assert network.replace('_', '').isalnum(), f'bad network {network!r}'
+                i = sql.index('FROM tradernick.')
+                # appended LAST, matching the column order the old
+                # with_columns(pl.lit(...)) produced — snapshots written before
+                # and after this change must stay scan-compatible.
+                sql = sql[:i] + f", '{network}' AS network\n        " + sql[i:]
+            if drop_zero:
+                j = sql.rindex('ORDER BY')
+                sql = sql[:j] + 'AND s.amount != 0\n        ' + sql[j:]
+            return sql
+
+        def _build(network: str, *, net_col: bool = False, drop_zero: bool = False):
             if needs_tokens:
-                return builder(network, tokens, since, until, **filters)
-            return builder(network, since, until, **filters)
+                sql, params = builder(network, tokens, since, until, **filters)
+            else:
+                sql, params = builder(network, since, until, **filters)
+            if sql is None:
+                return None, None
+            return _augment(sql, network if net_col else None, drop_zero), params
 
         # Each network is STREAMED to its own temp parquet rather than pulled
         # into a polars frame. query_polars() materialises the whole result, so
@@ -268,7 +298,7 @@ def register(app: Sanic) -> None:
         # fixed. stream_query_to_parquet also brings month-chunking for free,
         # so a wide range is split the same way /read splits it.
         async def _stream_one(network: str, path: str) -> int | None:
-            sql, params = _build(network)
+            sql, params = _build(network, net_col=with_network, drop_zero=drop_zero)
             if sql is None:
                 # Unsupported network on this protocol — skip silently;
                 # multi-net callers commonly probe a superset.
@@ -283,6 +313,7 @@ def register(app: Sanic) -> None:
         # SEQUENTIAL, not gather(): concurrent networks each hold their own
         # chunk buffers, which multiplies peak memory by the network count for
         # no latency win worth that risk on wide ranges.
+        drop_zero = not body.get('include_zero_amounts')
         tmp_dir = os.path.join(app.ctx.snapshots_dir, '.stream_tmp')
         os.makedirs(tmp_dir, exist_ok=True)
         parts: list[tuple[str, str]] = []   # (network, temp parquet path)
@@ -329,7 +360,11 @@ def register(app: Sanic) -> None:
         # concat/filter/sort without holding the union in memory, which is the
         # whole point of having streamed each part to disk. `diagonal_relaxed`
         # still tolerates per-network column drift (native has no token col).
-        drop_zero = not body.get('include_zero_amounts')
+        # Capture the roster BEFORE the single-network fast path clears
+        # `parts` (it renames rather than rewrites, so there is nothing
+        # left to clean up) — the response must still report which
+        # networks landed.
+        nets_seen = sorted({n for n, _ in parts})
         try:
             if len(parts) == 1:
                 # SINGLE network: the part is ALREADY globally time-ordered —
@@ -339,18 +374,12 @@ def register(app: Sanic) -> None:
                 # process at 31.9/32 GiB and 116 cores for >2h while the actual
                 # ClickHouse reads had finished long before (2026-09-13).
                 # Scan -> (add network) -> (filter) -> sink stays streaming.
-                n, part = parts[0]
-                lf = pl.scan_parquet(part)
-                if with_network:
-                    lf = lf.with_columns(pl.lit(n).alias('network'))
-                if drop_zero:
-                    lf = lf.filter(pl.col('amount') != 0)
-                if not with_network and not drop_zero:
-                    # Nothing to rewrite at all — just move the file.
-                    os.replace(part, dst)
-                    parts = []
-                else:
-                    lf.sink_parquet(dst)
+                # The network column and the zero-amount filter are now in
+                # the SQL, and the part is already globally time-ordered, so
+                # there is nothing left to do but move it into place.
+                _, part = parts[0]
+                os.replace(part, dst)
+                parts = []
             else:
                 # MULTI network: parts interleave in time, so a sort is genuinely
                 # required to preserve the documented global time ordering.
@@ -359,18 +388,11 @@ def register(app: Sanic) -> None:
                 # prefer one network per call for very wide ranges.
                 log.info('save_multi: merging %d networks with a global time '
                          'sort — the expensive path', len(parts))
-                lazy = [
-                    (pl.scan_parquet(part).with_columns(pl.lit(n).alias('network'))
-                     if with_network else pl.scan_parquet(part))
-                    for n, part in parts
-                ]
-                merged = pl.concat(lazy, how='diagonal_relaxed')
-                # Mirror the per-route default: hide amount==0 noise unless the
-                # caller explicitly opted in. Token-approval transfers etc.
-                if drop_zero:
-                    merged = merged.filter(pl.col('amount') != 0)
-                # Wallet-selection filters were already applied at the SQL level
-                # by `_build` (via _transfers_filters). No post-fetch step needed.
+                # Each part already carries its network column and the
+                # zero-amount filter (both folded into the SQL), so all that is
+                # left is the interleave — a global time sort across networks.
+                merged = pl.concat([pl.scan_parquet(part) for _, part in parts],
+                                   how='diagonal_relaxed')
                 merged.sort('time').sink_parquet(dst)
             rows = pq.ParquetFile(dst).metadata.num_rows
         finally:
@@ -380,7 +402,6 @@ def register(app: Sanic) -> None:
                 except OSError:
                     pass
 
-        nets_seen = sorted({n for n, _ in parts})
         return response.json({
             'saved': True, 'key': _safe_key(save_key),
             'rows': rows, 'networks': nets_seen,
