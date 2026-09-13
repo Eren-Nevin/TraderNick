@@ -9,7 +9,7 @@ import pandas as pd
 import polars as pl
 import pyarrow as pa
 
-from ._http import fetch_table, stream_to_file
+from ._http import fetch_table, stream_to_file, raise_for_status
 from .exceptions import DataProviderError
 
 
@@ -329,7 +329,7 @@ class BaseQuery(_WalletFilters):
                 json=body,
                 timeout=None,
             )
-            resp.raise_for_status()
+            raise_for_status(resp)
             return
         if len(nets) > 1:
             import os, tempfile
@@ -363,7 +363,7 @@ class BaseQuery(_WalletFilters):
                     },
                     timeout=None,
                 )
-                resp.raise_for_status()
+                raise_for_status(resp)
             finally:
                 try: os.unlink(tmp_path)
                 except FileNotFoundError: pass

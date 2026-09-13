@@ -464,3 +464,38 @@ def test_download_available_on_single_network_and_btc(client):
     assert client.btc.native_transfers().network("bitcoin")._url().endswith(
         "/btc/native_transfers/read")
     assert hasattr(client.binance.raw_trades("BTC"), "download")
+
+
+def test_raise_for_status_surfaces_server_detail():
+    """A JSON error body must reach the caller — the whole point of 2.7.1."""
+    import httpx
+    from tradernick_data_provider._http import raise_for_status
+    from tradernick_data_provider.exceptions import DataProviderHTTPError
+
+    resp = httpx.Response(
+        413,
+        json={"error": "range_too_large", "message": "Narrow since/until or use save_key."},
+        request=httpx.Request("POST", "http://x/snapshots/save_multi"),
+    )
+    with pytest.raises(DataProviderHTTPError) as ei:
+        raise_for_status(resp)
+    e = ei.value
+    assert e.status_code == 413
+    assert e.error == "range_too_large"
+    assert "save_key" in e.detail
+    assert "save_key" in str(e)          # visible from a bare print(e)
+
+
+def test_raise_for_status_passes_success_and_handles_non_json():
+    import httpx
+    from tradernick_data_provider._http import raise_for_status
+    from tradernick_data_provider.exceptions import DataProviderHTTPError
+
+    ok = httpx.Response(200, request=httpx.Request("POST", "http://x/y"))
+    raise_for_status(ok)                 # must not raise
+
+    plain = httpx.Response(500, text="boom",
+                           request=httpx.Request("POST", "http://x/y"))
+    with pytest.raises(DataProviderHTTPError) as ei:
+        raise_for_status(plain)
+    assert ei.value.status_code == 500 and ei.value.detail is None

@@ -29,6 +29,7 @@ import io
 import logging
 import os
 import re
+import uuid
 from datetime import datetime, timezone
 
 import polars as pl
@@ -36,7 +37,7 @@ import pyarrow.parquet as pq
 from sanic import Request, Sanic, response
 
 from . import sql as sql_b
-from .ch import query_polars
+from .ch import query_polars, stream_query_to_parquet
 
 log = logging.getLogger(__name__)
 
@@ -259,32 +260,55 @@ def register(app: Sanic) -> None:
                 return builder(network, tokens, since, until, **filters)
             return builder(network, since, until, **filters)
 
-        async def _read_one(network: str) -> pl.DataFrame | None:
+        # Each network is STREAMED to its own temp parquet rather than pulled
+        # into a polars frame. query_polars() materialises the whole result, so
+        # this endpoint was the last read path that could still exhaust memory:
+        # a 3.7-year btc native_transfers save died here with ClickHouse code
+        # 241 at 64 GiB (2026-09-12), long after the /read routes had been
+        # fixed. stream_query_to_parquet also brings month-chunking for free,
+        # so a wide range is split the same way /read splits it.
+        async def _stream_one(network: str, path: str) -> int | None:
             sql, params = _build(network)
             if sql is None:
                 # Unsupported network on this protocol — skip silently;
                 # multi-net callers commonly probe a superset.
                 log.info('save_multi: %s/%s unsupported, skipping', protocol, network)
                 return None
-            df = await query_polars(sql, params)
-            if df.is_empty():
-                return None
-            return df.with_columns(pl.lit(network).alias('network'))
+            return await stream_query_to_parquet(sql, params, path)
 
         with_network = body.get('with_network')
         if with_network is None:
             with_network = len(networks) > 1
 
+        # SEQUENTIAL, not gather(): concurrent networks each hold their own
+        # chunk buffers, which multiplies peak memory by the network count for
+        # no latency win worth that risk on wide ranges.
+        tmp_dir = os.path.join(app.ctx.snapshots_dir, '.stream_tmp')
+        os.makedirs(tmp_dir, exist_ok=True)
+        parts: list[tuple[str, str]] = []   # (network, temp parquet path)
         try:
-            results = await asyncio.gather(
-                *[_read_one(n) for n in networks], return_exceptions=False,
-            )
+            for n in networks:
+                part = os.path.join(tmp_dir, f'{uuid.uuid4().hex}.parquet')
+                rows_n = await _stream_one(n, part)
+                if rows_n:
+                    parts.append((n, part))
+                elif os.path.exists(part):
+                    os.remove(part)
         except Exception as e:
+            for _, part in parts:
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
             log.exception('save_multi fan-out failed')
-            return response.json({'error': f'fan-out failed: {e}'}, status=500)
+            status = 413 if 'Code: 241' in str(e) or 'MEMORY_LIMIT' in str(e) else 500
+            msg = ('The requested range produced a result too large to assemble '
+                   'in memory. Narrow since/until or fetch fewer networks per call.'
+                   ) if status == 413 else f'fan-out failed: {e}'
+            return response.json({'error': 'range_too_large' if status == 413
+                                  else 'fan_out_failed', 'message': msg}, status=status)
 
-        frames = [df for df in results if df is not None]
-        if not frames:
+        if not parts:
             # Empty union — emit the canonical empty-transfer schema so the
             # client gets a parquet it can read back without a column-shape
             # surprise. Optionally add the network column.
@@ -301,31 +325,65 @@ def register(app: Sanic) -> None:
                 'saved': True, 'key': _safe_key(save_key), 'rows': 0, 'networks': [],
             })
 
-        # Concat must tolerate per-network column drift (e.g. native vs
-        # erc20 token col). `diagonal_relaxed` widens missing columns to
-        # null and reconciles supertype differences.
-        combined = pl.concat(frames, how='diagonal_relaxed')
+        # Merge LAZILY and sink straight to the destination: polars streams the
+        # concat/filter/sort without holding the union in memory, which is the
+        # whole point of having streamed each part to disk. `diagonal_relaxed`
+        # still tolerates per-network column drift (native has no token col).
+        drop_zero = not body.get('include_zero_amounts')
+        try:
+            if len(parts) == 1:
+                # SINGLE network: the part is ALREADY globally time-ordered —
+                # every chunk is `ORDER BY time` and chunks are appended in
+                # ascending time order — so re-sorting is pure waste. It is not
+                # cheap waste either: sorting 1.06B rows here pinned this
+                # process at 31.9/32 GiB and 116 cores for >2h while the actual
+                # ClickHouse reads had finished long before (2026-09-13).
+                # Scan -> (add network) -> (filter) -> sink stays streaming.
+                n, part = parts[0]
+                lf = pl.scan_parquet(part)
+                if with_network:
+                    lf = lf.with_columns(pl.lit(n).alias('network'))
+                if drop_zero:
+                    lf = lf.filter(pl.col('amount') != 0)
+                if not with_network and not drop_zero:
+                    # Nothing to rewrite at all — just move the file.
+                    os.replace(part, dst)
+                    parts = []
+                else:
+                    lf.sink_parquet(dst)
+            else:
+                # MULTI network: parts interleave in time, so a sort is genuinely
+                # required to preserve the documented global time ordering.
+                # Each part is individually sorted, so this is a merge rather
+                # than a from-scratch sort, but it is still the expensive path —
+                # prefer one network per call for very wide ranges.
+                log.info('save_multi: merging %d networks with a global time '
+                         'sort — the expensive path', len(parts))
+                lazy = [
+                    (pl.scan_parquet(part).with_columns(pl.lit(n).alias('network'))
+                     if with_network else pl.scan_parquet(part))
+                    for n, part in parts
+                ]
+                merged = pl.concat(lazy, how='diagonal_relaxed')
+                # Mirror the per-route default: hide amount==0 noise unless the
+                # caller explicitly opted in. Token-approval transfers etc.
+                if drop_zero:
+                    merged = merged.filter(pl.col('amount') != 0)
+                # Wallet-selection filters were already applied at the SQL level
+                # by `_build` (via _transfers_filters). No post-fetch step needed.
+                merged.sort('time').sink_parquet(dst)
+            rows = pq.ParquetFile(dst).metadata.num_rows
+        finally:
+            for _, part in parts:
+                try:
+                    os.remove(part)
+                except OSError:
+                    pass
 
-        if not with_network and 'network' in combined.columns:
-            combined = combined.drop('network')
-
-        # Mirror the per-route default: hide amount==0 noise unless the
-        # caller explicitly opted in. Token-approval transfers etc.
-        if not body.get('include_zero_amounts') and 'amount' in combined.columns:
-            combined = combined.filter(pl.col('amount') != 0)
-
-        # Wallet-selection filters were already applied at the SQL level by
-        # `_build` (via _transfers_filters). No post-fetch step needed.
-        if 'time' in combined.columns:
-            combined = combined.sort('time')
-
-        combined.write_parquet(dst)
-        nets_seen = sorted({
-            n for n, f in zip(networks, results) if f is not None
-        })
+        nets_seen = sorted({n for n, _ in parts})
         return response.json({
             'saved': True, 'key': _safe_key(save_key),
-            'rows': combined.height, 'networks': nets_seen,
+            'rows': rows, 'networks': nets_seen,
         })
 
     @app.post('/snapshots/scan')

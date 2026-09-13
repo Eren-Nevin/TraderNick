@@ -8,6 +8,29 @@ import pyarrow.parquet as pq
 from .exceptions import DataProviderHTTPError
 
 
+def raise_for_status(response: httpx.Response) -> None:
+    """`response.raise_for_status()` that keeps the server's explanation.
+
+    httpx's version raises HTTPStatusError carrying only the status line, so a
+    caller sees "Server error '500'" and nothing else — data_provider's JSON
+    body, which names the failure and says how to fix it, is discarded. That
+    turned a 64 GiB memory-limit rejection into an opaque 500 for a user on
+    2026-09-12. This surfaces `error` and `message` as
+    DataProviderHTTPError.error / .detail, matching the read paths."""
+    if response.is_success:
+        return
+    err = detail = None
+    if "application/json" in response.headers.get("content-type", ""):
+        try:
+            data = response.json()
+            if isinstance(data, dict):
+                err, detail = data.get("error"), data.get("message")
+        except ValueError:
+            pass
+    raise DataProviderHTTPError(
+        response.status_code, err or f"HTTP {response.status_code}", detail)
+
+
 async def fetch_table(session: httpx.AsyncClient, url: str, body: dict) -> pa.Table | None:
     response = await session.post(url, json=body)
     content_type = response.headers.get("content-type", "")

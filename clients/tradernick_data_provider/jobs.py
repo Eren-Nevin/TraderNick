@@ -7,6 +7,8 @@ from typing import Optional
 
 import httpx
 
+from ._http import raise_for_status
+
 
 TERMINAL_STATUSES = {'succeeded', 'failed'}
 
@@ -14,7 +16,7 @@ TERMINAL_STATUSES = {'succeeded', 'failed'}
 async def _submit_job(session: httpx.AsyncClient, url: str, body: dict) -> dict:
     """POST to a job-submitting endpoint; return the parsed {job_id, status} handle."""
     resp = await session.post(url, json=body)
-    resp.raise_for_status()
+    raise_for_status(resp)
     return resp.json()
 
 
@@ -30,17 +32,17 @@ class JobsNamespace:
         if status is not None:
             params['status'] = status
         resp = await self._session.get(self._base_url + '/jobs', params=params)
-        resp.raise_for_status()
+        raise_for_status(resp)
         return resp.json().get('jobs', [])
 
     async def get(self, job_id: str) -> dict:
         resp = await self._session.get(self._base_url + f'/jobs/{job_id}')
-        resp.raise_for_status()
+        raise_for_status(resp)
         return resp.json()
 
     async def cancel(self, job_id: str) -> dict:
         resp = await self._session.post(self._base_url + f'/jobs/{job_id}/cancel', json={})
-        resp.raise_for_status()
+        raise_for_status(resp)
         return resp.json()
 
     async def wait(self, job_id: str, *, poll_interval: float = 2.0,
@@ -68,5 +70,5 @@ class JobsNamespace:
             report = await client.jobs.wait(handle["job_id"])
         """
         resp = await self._session.post(self._base_url + path, json=body or {})
-        resp.raise_for_status()
+        raise_for_status(resp)
         return resp.json()

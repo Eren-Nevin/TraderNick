@@ -929,6 +929,13 @@ asyncio.run(main())
 
 ## 19. Version notes
 
+- **2.7.1** — server error bodies now reach the caller everywhere. `as_parquet()`
+  and the `jobs` namespace called httpx's `raise_for_status()`, which keeps only
+  the status line, so data_provider's JSON `{error, message}` was discarded — a
+  64 GiB memory-limit rejection surfaced as a bare
+  `HTTPStatusError: Server error '500'` with no hint of the cause. All such call
+  sites now raise `DataProviderHTTPError` with `.error` / `.detail`, as the read
+  paths already did.
 - **2.7.0** — **`download(path)`**: stream a result straight to a local parquet
   file instead of buffering it. `as_polars()` / `as_pandas()` hold the whole
   response AND the whole frame in memory; the server now splits wide ranges
